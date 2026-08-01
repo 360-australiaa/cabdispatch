@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Captain Taxis — Driver Dashboard (Full Prototype)</title>
+<style>
+  :root{
+    --bg: #0D0A18;
+    --surface: #1C1730;
+    --surface-raised: #2A1C58;
+    --surface-sunken: #3A2774;
+    --text-primary: #FFFFFF;
+    --text-secondary: #9F94C9;
+    --text-muted: #7C7594;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.18);
+    --gold: #F4C300;
+    --gold-soft: #F8DA66;
+    --available: #2E9E4F;
+    --waiting: #E0932B;
+    --duress: #D8352E;
+    --led-red: #FF2A28;
+  }
+  * { box-sizing: border-box; }
+  html,body{ margin:0; background:#000; overflow:hidden; }
+  body{ font-family: -apple-system, "Inter", "Segoe UI", sans-serif; }
+  .frame{
+    width: 1280px; max-width: 100%; aspect-ratio: 1280/800;
+    background: var(--bg); color: var(--text-primary);
+    position: relative; overflow: hidden; margin: 0 auto;
+    border-radius: 20px;
+  }
+  .view{ position:absolute; inset:0; display:flex; flex-direction:column; }
+
+  /* ---------- shared chrome ---------- */
+  .status-bar{ height:32px; background:var(--surface); display:flex; align-items:center;
+    padding:0 20px; justify-content:space-between; flex-shrink:0; border-bottom:1px solid var(--border); z-index:5; }
+  .status-bar .time{ font-size:11px; color:var(--text-secondary); }
+  .chips{ display:flex; gap:18px; }
+  .chip{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary); font-weight:500; }
+  .dot{ width:7px; height:7px; border-radius:50%; }
+  .dot.ok{ background:var(--available); box-shadow:0 0 6px var(--available); }
+  .dot.warn{ background:var(--waiting); box-shadow:0 0 6px var(--waiting); }
+
+  /* ---------- DASHBOARD VIEW ---------- */
+  #dashboard{ z-index:2; }
+  .map-bg{ position:absolute; inset:0; background:
+    repeating-linear-gradient(-8deg, transparent 0 128px, rgba(255,255,255,.04) 128px 131px),
+    repeating-linear-gradient(96deg, transparent 0 258px, rgba(255,255,255,.04) 258px 261px),
+    var(--surface); }
+  .pin{ position:absolute; left:395px; top:420px; width:16px; height:16px; border-radius:50%;
+    background:var(--available); border:2px solid #fff; box-shadow:0 0 0 16px rgba(46,158,79,.18); }
+
+  .identity{ position:absolute; left:24px; top:52px; display:flex; align-items:center; gap:12px;
+    background:rgba(42,28,88,.85); border-radius:16px; padding:10px 16px 10px 12px; cursor:pointer; }
+  .avatar{ width:48px; height:48px; border-radius:50%; background:var(--gold);
+    display:flex; align-items:center; justify-content:center; font-weight:700; color:#2A1C58; }
+  .identity .name{ font-size:14px; font-weight:700; margin:0; }
+  .identity .sub{ font-size:11px; color:var(--text-secondary); margin:2px 0 0; }
+  .identity .chev{ font-size:18px; color:var(--text-secondary); font-weight:700; margin-left:4px; }
+
+  .quick-stats{ position:absolute; right:24px; top:52px; display:flex; gap:20px;
+    background:rgba(42,28,88,.85); border-radius:14px; padding:10px 18px; }
+  .stat{ text-align:right; }
+  .stat .v{ font-size:17px; font-weight:700; display:block; }
+  .stat .l{ font-size:10px; color:var(--text-secondary); }
+
+  .status-card{ position:absolute; left:24px; top:140px; background:rgba(42,28,88,.92);
+    border:1px solid var(--border); border-radius:16px; padding:16px 22px; transition:opacity .2s; }
+  .status-card .h{ font-size:13px; font-weight:700; color:var(--text-secondary); letter-spacing:1px; margin:0; }
+  .status-card .s{ font-size:13px; color:var(--text-secondary); margin:4px 0 0; }
+
+  .content-pane{ position:absolute; left:24px; top:210px; width:620px; }
+  .content-pane .eyebrow{ font-size:12px; letter-spacing:2px; color:var(--text-muted); font-weight:600; margin:0 0 8px; }
+  .content-pane h2{ font-size:34px; font-weight:700; margin:0 0 14px; transition:opacity .18s ease; }
+  .content-pane p{ font-size:14px; color:var(--text-secondary); margin:0; max-width:460px; line-height:1.5; }
+  #detailBody{ max-height:420px; overflow-y:auto; padding-right:6px; transition:opacity .18s ease; }
+  #detailBody::-webkit-scrollbar{ width:5px; }
+  #detailBody::-webkit-scrollbar-thumb{ background:var(--border-strong); border-radius:3px; }
+
+  .list-row{ display:flex; justify-content:space-between; align-items:center; gap:12px;
+    padding:13px 16px; background:rgba(42,28,88,.6); border:1px solid var(--border); border-radius:12px; margin-bottom:8px; }
+  .lr-title{ font-size:14px; font-weight:600; }
+  .lr-sub{ font-size:12px; color:var(--text-secondary); margin-top:2px; }
+  .lr-time{ font-size:11px; color:var(--text-muted); white-space:nowrap; }
+  .lr-amt{ font-size:15px; font-weight:700; color:var(--gold); white-space:nowrap; }
+
+  .stat-grid{ display:flex; gap:14px; flex-wrap:wrap; }
+  .stat-box{ background:rgba(42,28,88,.6); border:1px solid var(--border); border-radius:12px; padding:16px 20px; min-width:120px; }
+  .stat-box .v{ font-size:24px; font-weight:700; display:block; }
+  .stat-box .l{ font-size:11px; color:var(--text-secondary); margin-top:3px; }
+
+  .shift-btn{ margin-top:16px; background:var(--gold); color:#2A1C58; border:none; border-radius:12px;
+    padding:14px 26px; font-weight:800; font-size:14px; cursor:pointer; }
+
+  .badge{ position:absolute; right:24px; top:198px; display:flex; align-items:center; gap:9px;
+    background:rgba(42,28,88,.85); border:1px solid var(--border); padding:10px 15px; border-radius:11px; }
+  .badge span{ font-size:12px; color:var(--text-secondary); font-weight:500; }
+
+  .wheel-wrap{ position:absolute; right:80px; top:384px; width:352px; height:352px; touch-action:none; cursor:grab; }
+  .wheel-wrap.dragging{ cursor:grabbing; }
+  .rim{ position:absolute; inset:0; border-radius:50%; border:2px solid var(--border-strong); }
+  .wheel{ position:absolute; inset:0; }
+  .slot{ position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px;
+    display:flex; align-items:center; justify-content:center; }
+  .slot .dot-btn{ width:44px; height:44px; border-radius:50%; background:var(--surface-raised);
+    border:1px solid var(--border); display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:600; color:var(--text-secondary); transition:all .25s cubic-bezier(.34,1.56,.64,1); }
+  .slot.selected .dot-btn{ width:60px; height:60px; background:var(--surface-sunken);
+    border:2px solid var(--gold); color:var(--text-primary); box-shadow:0 0 22px rgba(244,195,0,.45); }
+  .slot .label{ position:absolute; font-size:12px; color:var(--text-secondary); white-space:nowrap; font-weight:500; pointer-events:none; }
+  .slot.selected .label{ color:var(--text-primary); font-weight:700; }
+  .pulse{ animation:pulse .4s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes pulse{ 0%{transform:scale(1);} 45%{transform:scale(1.18);} 100%{transform:scale(1);} }
+
+  .start-meter{ position:absolute; left:50%; bottom:36px; transform:translateX(-50%);
+    width:340px; height:88px; border-radius:18px; background:var(--gold); border:none;
+    display:flex; align-items:center; justify-content:center; font-size:21px; font-weight:800;
+    color:#2A1C58; letter-spacing:1px; cursor:pointer; box-shadow:0 0 0 0 rgba(244,195,0,.5);
+    animation:glow 2.4s ease-in-out infinite; transition:transform .12s ease; }
+  .start-meter:active{ transform:translateX(-50%) scale(.96); }
+  @keyframes glow{ 0%,100%{ box-shadow:0 0 20px 0 rgba(244,195,0,.35);} 50%{ box-shadow:0 0 34px 6px rgba(244,195,0,.55);} }
+
+  /* ---------- METER VIEW ---------- */
+  #meter{ z-index:3; opacity:0; pointer-events:none; transform:scale(.08); transform-origin: 640px 764px; }
+  #meter.active{ opacity:1; pointer-events:auto; transform:scale(1); transition: transform .55s cubic-bezier(.22,1,.36,1), opacity .3s ease; }
+  #dashboard.hidden-behind{ opacity:0; transition: opacity .25s ease .1s; }
+
+  .meter-badges{ display:flex; gap:12px; padding:16px 24px 0; }
+  .pill{ display:flex; align-items:center; gap:8px; background:var(--surface-raised); border:1px solid var(--border);
+    border-radius:10px; padding:10px 14px; font-size:12px; font-weight:500; }
+
+  .started-banner{ position:absolute; left:50%; top:88px; transform:translateX(-50%);
+    background:var(--available); color:#fff; font-size:13px; font-weight:700; padding:9px 18px; border-radius:10px;
+    display:flex; align-items:center; gap:8px; opacity:0; transition:opacity .3s ease, transform .3s ease; pointer-events:none; }
+  .started-banner.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .started-banner .d{ width:8px; height:8px; border-radius:50%; background:#fff; }
+
+  .fare-zone{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .fare-eyebrow{ font-size:14px; font-weight:700; letter-spacing:2px; color:var(--text-secondary); margin:0 0 6px; }
+  .fare-digits{ font-family:'Courier New', 'Consolas', monospace; font-weight:700; font-size:150px;
+    color:var(--led-red); text-shadow:0 0 18px rgba(255,42,40,.65), 0 0 4px rgba(255,42,40,.9); letter-spacing:4px; line-height:1; }
+  .fare-breakdown{ font-size:15px; color:var(--text-secondary); margin-top:18px; }
+
+  .toll-row{ position:absolute; left:60px; bottom:110px; }
+  .toll-row .label{ font-size:11px; font-weight:700; letter-spacing:1.5px; color:var(--text-secondary); margin-bottom:10px; }
+  .toll-chips{ display:flex; gap:10px; }
+  .toll-chip{ background:rgba(42,28,88,.8); border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:13px; font-weight:500; color:var(--text-secondary); }
+
+  .meter-actions{ position:absolute; right:60px; bottom:96px; display:flex; flex-direction:column; gap:12px; align-items:flex-end; }
+  .btn-pause{ width:200px; height:56px; border-radius:14px; background:var(--surface-raised); border:1px solid var(--border-strong);
+    color:var(--text-primary); font-size:15px; font-weight:700; cursor:pointer; }
+  .btn-stop{ width:300px; height:84px; border-radius:16px; background:var(--gold); border:none;
+    color:#2A1C58; font-size:19px; font-weight:800; cursor:pointer; transition:transform .12s; }
+  .btn-stop:active{ transform:scale(.97); }
+
+  .duress-zone{ position:absolute; right:24px; top:52px; width:90px; height:90px; border-radius:12px;
+    border:1.5px dashed var(--waiting); }
+  .duress-note{ position:absolute; right:24px; top:148px; width:160px; font-size:10px; font-weight:500; color:var(--waiting); text-align:right; }
+
+  /* ---------- PAYMENT VIEW ---------- */
+  #payment, #receipt{ z-index:4; opacity:0; pointer-events:none; transform:scale(.92); }
+  #payment.active, #receipt.active{ opacity:1; pointer-events:auto; transform:scale(1); transition:transform .4s cubic-bezier(.22,1,.36,1), opacity .3s ease; }
+  .pay-summary{ text-align:center; margin-top:64px; }
+  .pay-total{ font-size:64px; font-weight:800; }
+  .pay-sub{ font-size:13px; color:var(--text-secondary); margin-top:8px; }
+  .pay-methods{ display:flex; flex-direction:column; gap:12px; width:420px; margin:44px auto 0; }
+  .pay-btn{ height:60px; border-radius:14px; border:1px solid var(--border-strong); background:var(--surface-raised);
+    color:var(--text-primary); font-size:15px; font-weight:700; cursor:pointer; transition:transform .12s; }
+  .pay-btn:active{ transform:scale(.97); }
+  .pay-btn-primary{ background:var(--gold); color:#2A1C58; border:none; }
+  .processing{ position:absolute; inset:0; background:rgba(13,10,24,.92); display:none; align-items:center; justify-content:center; gap:14px;
+    flex-direction:column; opacity:0; transition:opacity .25s ease; }
+  .processing.show{ display:flex; opacity:1; }
+  .processing span{ font-size:15px; color:var(--text-secondary); font-weight:600; }
+  .spinner{ width:44px; height:44px; border-radius:50%; border:4px solid var(--border-strong); border-top-color:var(--gold); animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* ---------- RECEIPT VIEW ---------- */
+  .receipt-card{ width:460px; margin:70px auto 0; text-align:center; }
+  .receipt-check{ width:64px; height:64px; border-radius:50%; background:var(--available); color:#fff;
+    font-size:32px; display:flex; align-items:center; justify-content:center; margin:0 auto; }
+  .receipt-total{ font-size:48px; font-weight:800; color:var(--gold); }
+  .receipt-actions{ display:flex; gap:10px; }
+  .receipt-actions .pay-btn{ flex:1; height:52px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <div class="view" id="dashboard">
+    <div class="status-bar">
+      <div class="time">Fri 31 Jul · 10:42 AM</div>
+      <div class="chips">
+        <div class="chip"><span class="dot ok"></span>GPS</div>
+        <div class="chip"><span class="dot ok"></span>4G</div>
+        <div class="chip"><span class="dot warn"></span>Printer</div>
+        <div class="chip"><span class="dot ok"></span>Batt 92%</div>
+      </div>
+    </div>
+    <div class="map-bg"><div class="pin"></div></div>
+
+    <div class="identity">
+      <div class="avatar">FB</div>
+      <div>
+        <p class="name">Farid Benabdeslam</p>
+        <p class="sub">TCT-DR-04821 · ABC-123</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
+    <div class="quick-stats">
+      <div class="stat"><span class="v">8</span><span class="l">Trips today</span></div>
+      <div class="stat"><span class="v">4.2</span><span class="l">Hours</span></div>
+      <div class="stat"><span class="v">$186</span><span class="l">Earnings</span></div>
+    </div>
+
+    <div class="status-card" id="statusCard">
+      <p class="h" id="statusHead">OFF DUTY</p>
+      <p class="s" id="statusSub">Rotate the wheel to go Available</p>
+    </div>
+
+    <div class="content-pane" id="contentPane">
+      <p class="eyebrow" id="eyebrow">CURRENT SELECTION</p>
+      <h2 id="hero">Off Duty</h2>
+      <div id="detailBody"></div>
+    </div>
+
+    <div class="badge"><span class="dot ok"></span><span>Wheel unlocked — locks above 26 km/h</span></div>
+
+    <div class="wheel-wrap" id="wheelWrap">
+      <div class="rim"></div>
+      <div class="wheel" id="wheel"></div>
+    </div>
+
+    <button class="start-meter" id="startMeterBtn">START METER</button>
+  </div>
+
+  <div class="view" id="meter">
+    <div class="status-bar">
+      <div class="time">Trip started 10:42 AM</div>
+      <div class="chips">
+        <div class="chip"><span class="dot ok"></span>GPS</div>
+        <div class="chip"><span class="dot ok"></span>4G</div>
+        <div class="chip"><span class="dot warn"></span>Printer</div>
+        <div class="chip"><span class="dot ok"></span>Batt 92%</div>
+      </div>
+    </div>
+
+    <div class="duress-zone"></div>
+    <div class="duress-note">Hidden duress gesture — triple-tap this corner</div>
+
+    <div class="started-banner" id="startedBanner"><span class="d"></span>METER STARTED</div>
+
+    <div class="meter-badges">
+      <div class="pill"><span class="dot ok"></span>Tariff 1 · Day rate</div>
+      <div class="pill" id="modePill"><span class="dot ok"></span>0 km/h · Waiting mode</div>
+    </div>
+
+    <div class="fare-zone">
+      <p class="fare-eyebrow">FARE SO FAR</p>
+      <div class="fare-digits" id="fareDigits">$0.00</div>
+      <p class="fare-breakdown" id="fareBreakdown">Flag fall $5.00 · Distance $0.00 · Waiting $0.00 · Tolls $0.00</p>
+    </div>
+
+    <div class="toll-row">
+      <div class="label">ADD TOLL</div>
+      <div class="toll-chips">
+        <div class="toll-chip">+ M5 $4.50</div>
+        <div class="toll-chip">+ Harbour $0.00</div>
+        <div class="toll-chip">+ Airport $0.00</div>
+      </div>
+    </div>
+
+    <div class="meter-actions">
+      <button class="btn-pause" id="pauseBtn">PAUSE</button>
+      <button class="btn-stop" id="stopBtn">STOP METER</button>
+    </div>
+  </div>
+
+  <div class="view" id="payment">
+    <div class="status-bar">
+      <div class="time">Trip complete</div>
+      <div class="chips">
+        <div class="chip"><span class="dot ok"></span>GPS</div>
+        <div class="chip"><span class="dot ok"></span>4G</div>
+        <div class="chip"><span class="dot warn"></span>Printer</div>
+        <div class="chip"><span class="dot ok"></span>Batt 92%</div>
+      </div>
+    </div>
+    <div class="pay-summary">
+      <p class="fare-eyebrow" style="margin:0 0 6px;">TOTAL FARE</p>
+      <div class="pay-total" id="payTotal">$18.40</div>
+      <p class="pay-sub" id="paySub">Flag fall $5.00 · Distance $9.80 · Waiting $3.60 · Tolls $0.00</p>
+    </div>
+    <div class="pay-methods">
+      <button class="pay-btn pay-btn-primary" data-method="Tap to Pay">TAP TO PAY</button>
+      <button class="pay-btn" data-method="Cash">CASH</button>
+      <button class="pay-btn" data-method="Payment Link">PAYMENT LINK</button>
+      <button class="pay-btn" data-method="CabCharge / TTSS">CABCHARGE · TTSS</button>
+    </div>
+    <div class="processing" id="processing"><div class="spinner"></div><span id="processingLabel">Processing Tap to Pay…</span></div>
+  </div>
+
+  <div class="view" id="receipt">
+    <div class="status-bar">
+      <div class="time">Receipt</div>
+      <div class="chips">
+        <div class="chip"><span class="dot ok"></span>GPS</div>
+        <div class="chip"><span class="dot ok"></span>4G</div>
+        <div class="chip"><span class="dot warn"></span>Printer</div>
+        <div class="chip"><span class="dot ok"></span>Batt 92%</div>
+      </div>
+    </div>
+    <div class="receipt-card">
+      <div class="receipt-check">✓</div>
+      <h2 style="margin:14px 0 4px;">Payment received</h2>
+      <p style="color:var(--text-secondary); font-size:14px; margin:0 0 20px;" id="receiptMethod">Paid via Tap to Pay</p>
+      <div class="receipt-total" id="receiptTotal">$18.40</div>
+      <p style="color:var(--text-secondary); font-size:12px; margin:6px 0 22px;" id="receiptBreak">Flag fall $5.00 · Distance $9.80 · Waiting $3.60 · Tolls $0.00 · incl. GST $1.67</p>
+      <div class="receipt-actions">
+        <button class="pay-btn">EMAIL RECEIPT</button>
+        <button class="pay-btn">SMS RECEIPT</button>
+      </div>
+      <button class="pay-btn pay-btn-primary" id="doneBtn" style="margin-top:18px; width:100%;">DONE</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function row(title, sub, right){
+  return `<div class="list-row"><div><div class="lr-title">${title}</div><div class="lr-sub">${sub}</div></div><div class="lr-time">${right}</div></div>`;
+}
+function tripRow(route, time, method, amt){
+  return `<div class="list-row"><div><div class="lr-title">${route}</div><div class="lr-sub">${time} · ${method}</div></div><div class="lr-amt">$${amt}</div></div>`;
+}
+
+const data = [
+  { label:'Off duty', title:'Off Duty',
+    body: `<p style="font-size:14px;color:var(--text-secondary);max-width:460px;line-height:1.5;margin:0;">Rotate the wheel to browse, or tap Start Meter once you have a fare.</p>` },
+
+  { label:'Available Trips', title:'Available Trips', body:
+    row('Pyrmont → CBD','1.2 km away · Est. $18–22','2 min ago') +
+    row('Barangaroo → Airport','2.8 km away · Est. $55–65','4 min ago') +
+    row('Darling Harbour → North Sydney','0.9 km away · Est. $24–28','Just now') },
+
+  { label:'Messages', title:'Messages', body:
+    row('Dispatch','Job accepted — head to the Pyrmont pickup point.','2 min ago') +
+    row('Dispatch','Airport rank is backed up, expect a short delay.','14 min ago') +
+    row('Dispatch','Reminder: shift checklist due before 6pm.','1 hr ago') },
+
+  { label:'Trips', title:'Trip History', body:
+    tripRow('Darling Harbour → Circular Quay','9:14 AM','Card','14.20') +
+    tripRow('CBD → Newtown','8:40 AM','Cash','22.50') +
+    tripRow('Airport → CBD','7:55 AM','Card','58.00') +
+    tripRow('Glebe → CBD','7:20 AM','Card','16.90') },
+
+  { label:'Earnings', title:'Earnings', body:
+    `<div class="stat-grid">
+      <div class="stat-box"><span class="v">$186</span><span class="l">Today</span></div>
+      <div class="stat-box"><span class="v">$122</span><span class="l">Card</span></div>
+      <div class="stat-box"><span class="v">$64</span><span class="l">Cash</span></div>
+      <div class="stat-box"><span class="v">8</span><span class="l">Trips</span></div>
+    </div>` },
+
+  { label:'Shift', title:'Shift Report', body:
+    `<div class="stat-grid">
+      <div class="stat-box"><span class="v">4.2</span><span class="l">Hours on shift</span></div>
+      <div class="stat-box"><span class="v">8</span><span class="l">Trips</span></div>
+      <div class="stat-box"><span class="v">$64</span><span class="l">Cash to reconcile</span></div>
+      <div class="stat-box"><span class="v">$122</span><span class="l">Card settled</span></div>
+    </div>
+    <button class="shift-btn">SUBMIT SHIFT</button>` }
+];
+
+const wheel = document.getElementById('wheel');
+const wrap = document.getElementById('wheelWrap');
+const n = data.length, step = 360/n, radius = 130, labelRadius = 172;
+let rotation = 0, selectedIndex = 0, dragging = false, lastAngle = 0;
+
+function buildSlots(){
+  wheel.innerHTML = '';
+  data.forEach((d,i) => {
+    const baseAngle = i*step;
+    const slot = document.createElement('div');
+    slot.className = 'slot' + (i===selectedIndex ? ' selected' : '');
+    slot.style.transform = `rotate(${baseAngle}deg) translate(${radius}px) rotate(${-baseAngle}deg)`;
+    const btn = document.createElement('div'); btn.className='dot-btn';
+    btn.textContent = d.label.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    slot.appendChild(btn);
+    const label = document.createElement('div'); label.className='label'; label.textContent = d.label;
+    const lx = Math.sin(baseAngle*Math.PI/180)*(labelRadius-radius);
+    const ly = -Math.cos(baseAngle*Math.PI/180)*(labelRadius-radius);
+    label.style.transform = `translate(${lx}px, ${ly}px) rotate(${-baseAngle}deg)`;
+    slot.appendChild(label);
+    wheel.appendChild(slot);
+  });
+}
+buildSlots();
+
+function setRotation(deg, transition){
+  wheel.style.transition = transition ? 'transform .5s cubic-bezier(.34,1.56,.64,1)' : 'none';
+  wheel.style.transform = `rotate(${deg}deg)`;
+}
+
+function updateContent(index){
+  const d = data[index];
+  const hero = document.getElementById('hero'), eyebrow = document.getElementById('eyebrow'), body = document.getElementById('detailBody');
+  hero.style.opacity = 0; body.style.opacity = 0;
+  setTimeout(() => {
+    eyebrow.textContent = d.label === 'Off duty' ? 'CURRENT STATUS' : 'CURRENT SELECTION';
+    hero.textContent = d.title;
+    body.innerHTML = d.body;
+    hero.style.opacity = 1; body.style.opacity = 1;
+  }, 130);
+  document.querySelectorAll('.slot').forEach((s,i) => s.classList.toggle('selected', i===index));
+  const btn = document.querySelectorAll('.dot-btn')[index];
+  btn.classList.remove('pulse'); void btn.offsetWidth; btn.classList.add('pulse');
+}
+
+function angleFromCenter(x,y){
+  const r = wrap.getBoundingClientRect();
+  return Math.atan2(y-(r.top+r.height/2), x-(r.left+r.width/2)) * 180/Math.PI;
+}
+function snapAndSelect(){
+  const norm = ((rotation%360)+360)%360;
+  const nearest = Math.round(norm/step) % n;
+  let delta = (nearest*step) - norm;
+  if (delta>180) delta-=360; if (delta<-180) delta+=360;
+  rotation += delta;
+  setRotation(rotation, true);
+  selectedIndex = ((n-nearest)%n+n)%n;
+  setTimeout(()=>updateContent(selectedIndex), 420);
+}
+wrap.addEventListener('pointerdown', e => { dragging=true; wrap.classList.add('dragging'); wrap.setPointerCapture(e.pointerId); lastAngle = angleFromCenter(e.clientX,e.clientY); });
+wrap.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const cur = angleFromCenter(e.clientX,e.clientY);
+  let delta = cur-lastAngle; if (delta>180) delta-=360; if (delta<-180) delta+=360;
+  rotation += delta; lastAngle = cur; setRotation(rotation,false);
+});
+wrap.addEventListener('pointerup', () => { dragging=false; wrap.classList.remove('dragging'); snapAndSelect(); });
+wrap.addEventListener('pointercancel', () => { dragging=false; wrap.classList.remove('dragging'); snapAndSelect(); });
+updateContent(0);
+
+/* ---------- Start Meter → Meter view transition ---------- */
+const dashboard = document.getElementById('dashboard');
+const meter = document.getElementById('meter');
+const startBtn = document.getElementById('startMeterBtn');
+const startedBanner = document.getElementById('startedBanner');
+const fareDigits = document.getElementById('fareDigits');
+const fareBreakdown = document.getElementById('fareBreakdown');
+const modePill = document.getElementById('modePill');
+
+startBtn.addEventListener('click', () => {
+  const r = startBtn.getBoundingClientRect();
+  const frameR = document.querySelector('.frame').getBoundingClientRect();
+  meter.style.transformOrigin = `${r.left - frameR.left + r.width/2}px ${r.top - frameR.top + r.height/2}px`;
+  dashboard.classList.add('hidden-behind');
+  meter.classList.add('active');
+  fareDigits.textContent = '$0.00';
+  setTimeout(() => { startedBanner.classList.add('show'); animateFareCountUp(); }, 400);
+  setTimeout(() => startedBanner.classList.remove('show'), 2400);
+});
+
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  stopAccrual = !stopAccrual;
+  document.getElementById('pauseBtn').textContent = stopAccrual ? 'RESUME' : 'PAUSE';
+});
+document.getElementById('stopBtn').addEventListener('click', () => {
+  document.getElementById('payTotal').textContent = fareDigits.textContent;
+  document.getElementById('paySub').textContent = fareBreakdown.textContent;
+  meter.classList.remove('active');
+  payment.classList.add('active');
+  clearInterval(accrualTimer);
+});
+
+const payment = document.getElementById('payment');
+const receipt = document.getElementById('receipt');
+const processing = document.getElementById('processing');
+
+document.querySelectorAll('.pay-btn[data-method]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const method = btn.dataset.method;
+    document.getElementById('processingLabel').textContent = 'Processing ' + method + '…';
+    processing.classList.add('show');
+    setTimeout(() => {
+      processing.classList.remove('show');
+      payment.classList.remove('active');
+      document.getElementById('receiptMethod').textContent = 'Paid via ' + method;
+      document.getElementById('receiptTotal').textContent = document.getElementById('payTotal').textContent;
+      document.getElementById('receiptBreak').textContent = document.getElementById('paySub').textContent + ' · incl. GST $1.67';
+      receipt.classList.add('active');
+    }, 1200);
+  });
+});
+
+document.getElementById('doneBtn').addEventListener('click', () => {
+  receipt.classList.remove('active');
+  dashboard.classList.remove('hidden-behind');
+  // reset trip state
+  fareValue = 0; distKm = 0; waitMin = 0; stopAccrual = false;
+  document.getElementById('pauseBtn').textContent = 'PAUSE';
+  fareDigits.textContent = '$0.00';
+  rotation = 0; selectedIndex = 0; setRotation(0, false); updateContent(0);
+});
+
+let stopAccrual = false, accrualTimer = null, fareValue = 0, distKm = 0, waitMin = 0;
+function animateFareCountUp(){
+  // quick ramp from $0 to flag fall, then live accrual demo
+  const flagFall = 5.00;
+  let t = 0;
+  const rampSteps = 20;
+  const rampTimer = setInterval(() => {
+    t++;
+    fareValue = (flagFall * (t/rampSteps));
+    fareDigits.textContent = '$' + fareValue.toFixed(2);
+    if (t >= rampSteps) {
+      clearInterval(rampTimer);
+      startLiveAccrual(flagFall);
+    }
+  }, 25);
+}
+function startLiveAccrual(flagFall){
+  clearInterval(accrualTimer);
+  accrualTimer = setInterval(() => {
+    if (stopAccrual) return;
+    const distanceMode = Math.random() > 0.35;
+    if (distanceMode) { distKm += 0.05; fareValue += 0.05*2.52; modePill.innerHTML = '<span class="dot ok"></span>38 km/h · Distance mode'; }
+    else { waitMin += 1/60; fareValue += (109.2/100)/60; modePill.innerHTML = '<span class="dot warn"></span>8 km/h · Waiting mode'; }
+    fareDigits.textContent = '$' + fareValue.toFixed(2);
+    fareBreakdown.textContent = `Flag fall $${flagFall.toFixed(2)} · Distance $${(distKm*2.52).toFixed(2)} · Waiting $${(waitMin*109.2/100).toFixed(2)} · Tolls $0.00`;
+  }, 1000);
+}
+</script>
+</body>
+</html>

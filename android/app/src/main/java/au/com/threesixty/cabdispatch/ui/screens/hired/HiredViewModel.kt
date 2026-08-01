@@ -1,11 +1,16 @@
 package au.com.threesixty.cabdispatch.ui.screens.hired
 
+import android.Manifest
 import android.app.Application
-import android.util.Log
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
@@ -32,14 +37,29 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     val fareState: StateFlow<FareState> = fareEngine.state
 
+    /**
+     * True only when this ViewModel instance was created for a trip that's
+     * being opened right now (S2 handed off a [TripContext] via
+     * [SessionHolder.pendingTrip] — the same gate [init] below uses to decide
+     * whether to call [fareEngine]`.startTrip()`/[openTripInRoom]). Read once
+     * by [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] to gate
+     * the once-per-trip fare-ramp + "METER STARTED" banner sequence (spec §6
+     * step 3) so it doesn't replay on every recomposition or if this screen
+     * is ever re-entered without a fresh trip hand-off.
+     */
+    val isNewTripStart: Boolean = SessionHolder.pendingTrip.value != null
+
     private val _speechEnabled = MutableStateFlow(false)
     val speechEnabled: StateFlow<Boolean> = _speechEnabled.asStateFlow()
 
     private val _breakdownExpanded = MutableStateFlow(false)
     val breakdownExpanded: StateFlow<Boolean> = _breakdownExpanded.asStateFlow()
 
-    private val _duressTriggered = MutableStateFlow(false)
-    val duressTriggered: StateFlow<Boolean> = _duressTriggered.asStateFlow()
+    /** Shared with every other screen via [AppContainer.duressController] — see that class's doc
+     * for why the state machine lives there and not here. This is a straight passthrough so
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] has a single `StateFlow` to
+     * `collectAsState()`, same as every other field on this ViewModel. */
+    val duressState: StateFlow<DuressUiState> = AppContainer.duressController.state
 
     private val speechAnnouncer = TextToSpeechAnnouncer(application)
     private var lastAnnouncedDollar = -1
@@ -58,6 +78,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     private var persistedTripClientUuid: String? = null
 
     init {
+        // Best-effort GPS supplier for AppContainer.duressController's Active-phase relay — see
+        // [lastKnownFix]'s doc. Only ever *read* while a duress event is Active; harmless to
+        // leave wired for this VM's whole lifetime (cleared in [onCleared] regardless, so a
+        // later screen with no Context installed doesn't call back into a destroyed VM).
+        AppContainer.duressController.locationProvider = ::lastKnownFix
+
         val tripContext = SessionHolder.pendingTrip.value
         if (tripContext != null) {
             fareEngine.startTrip(tripContext.tariff, tripContext.startLat, tripContext.startLng)
@@ -128,6 +154,14 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 distanceM = state.distanceKm.movePointRight(3).setScale(0, RoundingMode.HALF_UP).toInt(),
                 movingS = state.movingSeconds,
                 waitingS = state.waitingSeconds,
+                // Real toll-wiring fix (see TripRepository.tick's doc): the
+                // live engine's cumulative toll total (from addToll() below)
+                // must reach the persisted TripEntity, not just this screen's
+                // own display, or S4/S5's reconstructFareState would silently
+                // charge $0 in tolls no matter how many chips the driver
+                // tapped. `.tolls` is the running total, not a delta — same
+                // overwrite convention as distanceM/movingS/waitingS above.
+                tolls = state.breakdown.tolls.toPlainString(),
             )
         }
     }
@@ -179,18 +213,61 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Hidden triple-tap-corner duress trigger, per spec B5 S3. Actual duress
-     * networking (Twilio SMS fallback when offline, per B7) is a backend
-     * concern wired later — TODO(backend/duress sibling agent): call the
-     * real duress endpoint / SMS fallback here.
+     * Hidden triple-tap-corner duress trigger, per spec B5 S3 / §6 step 8. Delegates the actual
+     * state machine (confirmation countdown, `POST /v1/duress/trigger` + retry, GPS relay,
+     * dispatcher-resolution poll) to [AppContainer.duressController] — see that class's doc for
+     * why it isn't owned here. Previously this just logged a TODO warning and flipped a local
+     * flag nothing rendered (see `android/README.md`'s mock-surface table, "Duress networking"
+     * row, now stale as of this pass — real backend endpoints exist per
+     * `backend/app/api/v1/duress.py` and are wired end to end from here).
+     *
+     * Twilio SMS fallback-when-offline (spec B7) is NOT part of this pass — that's a
+     * backend-triggered escalation stage (`ESCALATION_STAGE_SMS_EMERGENCY_CONTACTS` in
+     * `backend/app/models/duress.py`), not something this on-device trigger call drives directly;
+     * [AppContainer.duressController]'s trigger/cancel/gps calls are the full driver-device
+     * surface per the backend's role policy.
      */
     fun onDuressTriggered() {
-        Log.w("CabDispatch", "Duress gesture triggered — TODO: wire to real duress dispatch")
-        _duressTriggered.value = true
+        val session = SessionHolder.session.value
+        AppContainer.duressController.trigger(vehicleId = session?.vehicleId, driverId = session?.driverId)
+    }
+
+    /** Cancel affordance for [HiredScreen]'s "Duress triggered" confirmation overlay — see
+     * [DuressUiState.Triggered] and [au.com.threesixty.cabdispatch.domain.DuressController.cancel]. */
+    fun cancelDuress() = AppContainer.duressController.cancel()
+
+    /**
+     * Best-effort last-known-fix supplier for [AppContainer.duressController]'s GPS relay while
+     * [DuressUiState.Active] — same read pattern as
+     * `ui/screens/settings/SettingsViewModel.kt#pollGps` (last-known GPS/network fix, not a live
+     * subscription; see that function's own TODO about a real fused location provider). Wired
+     * in [init]/[onCleared] below since this VM is the only one in the batch holding a [Context]
+     * while a trip (and therefore a plausible duress event) is in progress.
+     */
+    private fun lastKnownFix(): Triple<Double, Double, Float?>? {
+        val context = getApplication<Application>()
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) return null
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val fix = listOfNotNull(
+            runCatching { locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER) }.getOrNull(),
+            runCatching { locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull(),
+        ).minByOrNull { it.accuracy } ?: return null
+        return Triple(fix.latitude, fix.longitude, fix.accuracy)
     }
 
     override fun onCleared() {
         super.onCleared()
         speechAnnouncer.shutdown()
+        // Unconditional clear: this VM instance is nav-scoped (recreated per trip, per this
+        // file's existing TODO on [fareEngine]) and normal navigation always tears the old
+        // instance down before a new one is created, so there is no real window where a newer
+        // instance's [lastKnownFix] is live when this fires. If that assumption ever breaks
+        // (e.g. two HiredViewModel instances briefly coexisting across a nav transition), the
+        // failure mode is GPS relay silently stopping for an in-flight duress event until the
+        // next screen with a Context re-installs a supplier — acceptable degradation for a
+        // best-effort relay (see [DuressController.locationProvider]'s doc), not a correctness bug.
+        AppContainer.duressController.locationProvider = null
     }
 }

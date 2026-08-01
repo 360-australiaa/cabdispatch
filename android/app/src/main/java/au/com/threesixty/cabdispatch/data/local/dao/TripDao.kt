@@ -34,6 +34,17 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE shiftId = :shiftId ORDER BY startAt DESC")
     fun observeTripsForShift(shiftId: String): Flow<List<TripEntity>>
 
+    /**
+     * Finalized (closed or synced — anything but the single in-progress trip)
+     * trips, most recent first. Backs the wheel's "Trips" content pane (spec
+     * §4: "trip history rows — route, time, payment method, fare amount") and
+     * the "Earnings" pane's today-aggregate, both of which need every
+     * finalized trip regardless of which shift it belonged to, not just the
+     * active shift ([observeTripsForShift]'s scope).
+     */
+    @Query("SELECT * FROM trips WHERE status != :openStatus ORDER BY startAt DESC LIMIT :limit")
+    fun observeRecentTrips(openStatus: String = TripStatus.OPEN, limit: Int = 50): Flow<List<TripEntity>>
+
     @Query("UPDATE trips SET status = :status, serverId = :serverId, updatedAt = :updatedAt WHERE clientUuid = :clientUuid")
     suspend fun markSynced(
         clientUuid: String,

@@ -12,13 +12,113 @@ meter app (Kotlin/Compose, offline-first). Full product spec: `../docs/TCT-METER
 behaviour). Repo: https://github.com/360-australiaa/cabdispatch
 
 **Honest current status:** every file in this module has been written and *read carefully* by a
-prior agent pass, including a reconciliation pass that fixed one real bug (S3 not persisting
-trip ticks to Room — see `ui/screens/hired/HiredViewModel.kt`'s doc comment if you want the
-history). But **it has never been compiled**. The environment that wrote it had no Android SDK.
-This machine (yours) is the first place this code will ever hit a real compiler. Expect and
-budget time for real compile errors — signature mismatches between sibling files that were
-written in parallel without ever type-checking against each other are the most likely failure
-mode, not conceptual bugs.
+prior agent pass, including two reconciliation passes (2026-08-01's wheel-redesign pass — see
+below — and an earlier one that fixed S3 not persisting trip ticks to Room, see
+`ui/screens/hired/HiredViewModel.kt`'s doc comment if you want that history). But **it has never
+been compiled**. The environment that wrote it had no Android SDK. This machine (yours) is the
+first place this code will ever hit a real compiler. Expect and budget time for real compile
+errors — signature mismatches between sibling files that were written in parallel without ever
+type-checking against each other are the most likely failure mode, not conceptual bugs.
+
+## 2026-08-01 — Wheel-redesign reconciliation pass
+
+Eight sibling agents built the wheel-nav dashboard redesign in parallel against a shared
+foundation contract, never compiling against each other. This pass read every file each agent
+touched, resolved every `TODO: verify against sibling ...` marker they'd deliberately left behind,
+and traced the one deliberate real-gap-fix (toll-chip wiring) end to end. No Android SDK here
+either, so this is a careful manual/textual pass, not a compiler-verified one — see "still not
+fully confident about" below.
+
+**What shipped this pass:**
+
+- **Wheel-slot content wiring (the one real gap found).** `ui/screens/dashboard/WheelDashboardScreen.kt`
+  had all five non-status wheel slots (Available Trips, Messages, Trips, Earnings, Shift) falling
+  through to a `PlaceholderSlotContent` stub — every sibling agent had built and correctly
+  documented their own slot composable, but nothing ever swapped the placeholder branches out.
+  Wired `AvailableTripsWheelContent`, `MessagesWheelContent`, `TripsWheelContent`,
+  `EarningsWheelContent`, and `ShiftWheelContent` into `wheelSlotContentProviderFor` via small
+  per-slot `WheelSlotContentProvider` wrappers (`AvailableTripsSlotContent` etc., same file), each
+  passed the shared `NavHostController` or a navigation callback exactly as that slot's own doc
+  comment had already specified. This was the only place code actually needed to change — every
+  sibling composable's own signature/contract was already correct.
+- **NavHost.** Confirmed the full flow is wired as specified: Splash → Login/QR/pre-shift
+  inspection → Shift-start confirmation → WheelDashboard (registered under the pre-existing `IDLE`
+  route key so every old S2 `navigate(IDLE)` call kept working) → Start Meter → Hired (S3) →
+  Close & Pay (S4) → Receipt → back to WheelDashboard. Available Trips/Messages/Trips/
+  Earnings/Shift are wheel-slot content, not separate destinations, exactly per the brief; their
+  detail screens (job-offer accept/decline, message thread, trip detail, submit-shift
+  confirmation) are real routes and are all reachable now that the wheel-slot content wiring above
+  landed (previously unreachable in practice, since nothing rendered the list rows that navigate to
+  them). Profile is reachable from the dashboard's identity card; the duress overlays
+  (`Duress triggered`/`Duress active`) render on both the dashboard and Hired; the Navigate overlay
+  landed as a direct `openInMaps()` call from the job-offer detail screen rather than the
+  `NavigateOverlay` composable itself (a legitimate design choice the sibling agent made — see that
+  file's doc — `NavigateOverlay` has no call site as a result, kept as ready-made UI, not deleted).
+- **Naming/signature reconciliation.** Every `// TODO: verify against sibling ... once merged`
+  comment across the module (14 occurrences, across `CabDispatchNavHost.kt`, `NavigateOverlay.kt`,
+  `WheelDashboardScreen.kt`, and every wheel-slot content/detail screen) was checked against what
+  the sibling actually built. All 14 turned out to already be correct guesses — no caller/callee
+  signature actually disagreed — so each was resolved by rewording the comment from "TODO: verify"
+  to "Verified (reconciliation pass)" with a note of what was checked, not by changing any
+  behaviour. The one exception was the dead `PlaceholderSlotContent` fallback class in
+  `WheelDashboardScreen.kt`, removed since nothing references it after the wiring above.
+- **AppContainer.** Audited every repository/gateway/controller singleton — `tripRepository`,
+  `tariffCache`, `pureFareEngine`, `cardPaymentGateway`, `receiptPrinterGateway`,
+  `smsReceiptGateway`, `emailReceiptGateway`, `tariffSignatureVerifier`, `qrScanner`,
+  `tripStatsRepository`, `shiftRepository`, `speedSource`, `realtimeSocket`, `jobsRepository`,
+  `messagesRepository`, `duressRepository`, `duressController` — each registered exactly once, no
+  duplicates, nothing constructed a second competing instance elsewhere. `SharedPreferencesDriverAuthRepository`
+  is the one repository *not* in `AppContainer` (constructed inline in
+  `LoginVehicleBindViewModel`) — legitimate, not a miss: it needs an `Application` `Context` for
+  `SharedPreferences` that `AppContainer` doesn't hold onto after `init()`.
+- **Toll-chip wiring, traced end to end.** Confirmed this is a real fix into the trip domain
+  model, not a local UI counter: `HiredScreen`'s toll chips call `HiredViewModel.addToll()` →
+  the live `domain.FareEngineImpl` updates its running `FareState.breakdown.tolls` → every engine
+  tick, `HiredViewModel.doPersistTick()` writes that cumulative total into
+  `TripRepository.tick(tolls = ...)` → persisted onto `TripEntity.tolls` in Room → S4
+  (`CloseAndPayViewModel`) reads it back via `domain/fare/TripFareReconstruction.kt`'s
+  `reconstructFareState()` (`FareState.tolls = trip.tolls`) → fed into the golden-vector-proven
+  `domain.fare.FareEngine.close()` → `FareBreakdown.tolls` is part of `grandTotal`, which is what's
+  charged (`deviceTotal`), shown on the receipt, and shown on the Trip Detail screen. Confirmed
+  correct; no changes needed here, just verification.
+
+**What's still genuinely stubbed or scoped down** (unchanged by this pass, listed here since the
+brief asked for it alongside what shipped):
+
+- No proximity/ETA job matching — job offers are first-accept-wins only, no distance-from-driver
+  shown on any job card (GPS is still stubbed, see below).
+- "Navigate" (row 28) is a `geo:`/Google Maps deep link into the device's default maps app, not
+  custom turn-by-turn — a deliberate spec decision (§7: "explicitly NOT custom turn-by-turn"), not
+  a shortcut taken this pass.
+- No true 7-segment font for the meter's LED fare digits — monospace + red glow + text-shadow is
+  the documented fallback (spec §11 sanctions this; no licensed font available/sourced).
+- The dashboard's map background is a plain drawn diagonal grid + a static illustrative position
+  pin, not real map tiles — matches the fleet dashboard's own no-paid-maps-SDK approach
+  (`FleetMapCanvas.tsx`'s doc), and is blocked on the same stubbed-GPS gap as everything else
+  location-related.
+- GPS is still stubbed project-wide (`StubSpeedSource`, GPS status-strip dot approximated from
+  permission+provider-enabled checks, not a live fix) — every "TODO(location sibling agent)" left
+  in the tree by prior passes is still open; this pass didn't touch location.
+- Driver login still maps Driver ID/PIN onto the staff email/password contract (`DriverAuthRepository`'s
+  known gap, unchanged) — a dedicated driver-PIN backend endpoint is still undecided-on, not built.
+- `TariffSignatureVerifier`'s public key is still a placeholder; `SettingsViewModel`'s admin
+  factory-reset PIN is still a hardcoded, explicitly-flagged-non-secure placeholder. Neither was
+  in scope for this pass.
+- Hardware gateways (`CardPaymentGateway`, `ReceiptPrinterGateway`, SMS/email receipt gateways)
+  remain mock/no-op behind real interfaces, per the existing "leave stubbed until a physical pilot"
+  guidance below — not touched.
+
+**Found but not fully reconciled without a compiler:** nothing outstanding as of this pass — every
+signature this pass could trace by reading both the caller and callee agreed exactly (see the 14
+resolved TODOs above). The residual risk is the same one the rest of this file already flags
+loudly: **none of this has ever been run through `javac`/`kotlinc`**, so there could still be a
+real type mismatch, a missing import, or a Compose API misuse this manual pass simply didn't spot
+by eye — `./gradlew assembleDebug` (Step 0 below) is still the first real test. A few pre-existing
+`TODO(integration agent)` comments (not the "verify against sibling" kind this pass targeted)
+remain genuinely open — `domain/Session.kt` (session persistence across process death) and
+`domain/FareEngine.kt`/`HiredViewModel.kt` (the live fare-engine instance being nav-scoped, not
+process-scoped) — both pre-existing, scoped-out design decisions flagged for a future pass, not
+things this pass introduced or was asked to close.
 
 ## Step 0 — get it compiling (do this before anything else)
 
@@ -85,9 +185,12 @@ list.
 - **Availability broadcast not wired** — `IdleViewModel.kt`'s "For Hire" toggle doesn't tell the
   backend anything yet. Backend already has `POST /v1/fleet/positions` for this (see
   `../shared/API_SUMMARY.md`).
-- **Duress gesture is a no-op** — `HiredViewModel.kt`'s triple-tap handler just logs a warning.
-  Backend duress endpoints already exist and work (`POST /v1/duress/trigger` etc.) — wire this up,
-  it's a real safety feature, not cosmetic.
+- ~~Duress gesture is a no-op~~ **Fixed (wheel-redesign Profile/overlays pass):** the hidden
+  triple-tap gesture (S3/Hired and the wheel-dashboard shell) now calls the real backend duress
+  endpoints via `domain/DuressController.kt` + `domain/DuressRepository.kt`, driving the
+  "Duress triggered"/"Duress active" overlays in `ui/overlays/DuressOverlays.kt`. GPS relay while
+  active is still best-effort last-known-fix (see the `SpeedSource` gap below) rather than a true
+  continuous stream — a real fused/live location provider would upgrade both at once.
 - **QR vehicle-pairing scanner is a stub** (`domain/QrScanner.kt`) — manual-entry fallback works,
   but real camera scanning (CameraX + ML Kit) isn't implemented.
 - **Pre-shift inspection checklist items are placeholders** (`LoginVehicleBindViewModel.kt`) —

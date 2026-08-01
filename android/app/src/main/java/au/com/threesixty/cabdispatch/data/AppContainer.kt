@@ -6,8 +6,16 @@ import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.DuressController
+import au.com.threesixty.cabdispatch.domain.DuressRepository
+import au.com.threesixty.cabdispatch.domain.JobsRepository
+import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
+import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
+import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
+import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
@@ -29,6 +37,9 @@ import au.com.threesixty.cabdispatch.security.TariffSignatureVerifier
 import au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger
 import au.com.threesixty.cabdispatch.sync.SyncWorker
 import au.com.threesixty.cabdispatch.sync.TariffCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -71,6 +82,13 @@ object AppContainer {
     lateinit var apiService: ApiService
         private set
 
+    /** Shared OkHttp client [apiService]'s Retrofit instance is built on — also reused by
+     * [realtimeSocket] so the jobs/messages WS connections share the same connection pool,
+     * dispatcher, and logging interceptor as every HTTP call, rather than spinning up a second
+     * client. */
+    lateinit var okHttpClient: OkHttpClient
+        private set
+
     /**
      * Mutable holder for the current session's bearer token, read by
      * [authInterceptor] on every request. The auth/session sibling agent
@@ -100,7 +118,7 @@ object AppContainer {
             }
         }
 
-        val okHttpClient = OkHttpClient.Builder()
+        okHttpClient = OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
             .addInterceptor(loggingInterceptor)
             .build()
@@ -206,6 +224,31 @@ object AppContainer {
     val tripStatsRepository: TripStatsRepository by lazy { StubTripStatsRepository() }
     val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
     val speedSource: SpeedSource by lazy { StubSpeedSource() }
+
+    // --- Wheel redesign shared foundation (jobs/offers + messages, spec §9) ---
+    //
+    // [realtimeSocket] is the WS counterpart to [apiService] — Retrofit has no first-class
+    // websocket support, so `WS /v1/jobs/live` / `WS /v1/messages/live` go through this instead
+    // (see RealtimeSocket's doc for why frames are untyped raw JSON strings).
+    val realtimeSocket: RealtimeSocket by lazy { RealtimeSocket(okHttpClient) }
+    val jobsRepository: JobsRepository by lazy {
+        RemoteBackedJobsRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
+    }
+    val messagesRepository: MessagesRepository by lazy {
+        RemoteBackedMessagesRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
+    }
+
+    // --- Duress (contextual overlays S28-S30, spec §8) ---
+    //
+    // [duressController] is a process-lifetime singleton (own SupervisorJob-backed
+    // CoroutineScope, not tied to any single screen's ViewModel scope) precisely because a
+    // duress event must keep relaying GPS / polling for dispatcher resolution across screen
+    // navigation (S3 -> S4 -> S2 etc.) — see [DuressController]'s doc for why it isn't just
+    // another `by lazy` hung off HiredViewModel.
+    val duressRepository: DuressRepository by lazy { RemoteBackedDuressRepository(apiService) }
+    val duressController: DuressController by lazy {
+        DuressController(duressRepository, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+    }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:
     // val fooDao: FooDao by lazy { database.fooDao() }

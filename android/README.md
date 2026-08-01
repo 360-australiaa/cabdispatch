@@ -109,7 +109,7 @@ the mocks below for a working integration.**
 | `ReceiptPrinterGateway` | `hardware/printing/ReceiptPrinterGateway.kt` | Mock (`MockReceiptPrinterGateway`) | `discover()` returns two synthetic BT printer entries; `printReceipt()` just logs the receipt content. No BT permissions/vendor ESC/POS SDK wired in. |
 | `SmsReceiptGateway` | `hardware/receipt/SmsReceiptGateway.kt` | Mock (`MockSmsReceiptGateway`) | Logs instead of calling a backend SMS endpoint — no `/v1/receipts/sms` route exists yet in `ApiService.kt`. |
 | `EmailReceiptGateway` | `hardware/receipt/EmailReceiptGateway.kt` | Mock (`MockEmailReceiptGateway`) | Logs instead of calling a backend endpoint that would render/send a branded PDF — no `/v1/receipts/email` route or PDF template exists yet. |
-| Duress networking | `ui/screens/hired/HiredViewModel.kt#onDuressTriggered` | **Not implemented, not even mocked behind an interface** | The hidden triple-tap duress gesture on S3 (spec B5 S3 / B7 "Twilio SMS fallback when offline") currently only logs (`Log.w`) and flips a local `duressTriggered` StateFlow the UI doesn't yet act on — there is no gateway interface, no Twilio wiring, and no backend `/v1/duress`-style endpoint to call. This is the least-built piece of hardware/safety integration in the app; treat any "duress works" claim as false until a real interface + backend endpoint land. |
+| Duress networking | `domain/DuressController.kt` / `domain/DuressRepository.kt` | **REAL** | The hidden triple-tap gesture (S3/Hired and the wheel-dashboard shell, spec §2 "active throughout") now calls the real backend `POST /v1/duress/trigger` (+ `cancel`/`gps`/get) via `AppContainer.duressController` — see that class's doc for the confirmation-countdown/retry/GPS-relay/resolution-poll state machine, and `ui/overlays/DuressOverlays.kt` for the "Duress triggered"/"Duress active" UI it drives. Twilio SMS fallback-when-offline (spec B7) is still backend/dispatcher-side only, not driven from this device — see `DuressController`'s doc for the exact driver-vs-dispatcher split. GPS relay itself is best-effort last-known-fix (`LocationManager`, same as `SettingsViewModel#pollGps`), not a real fused/live location stream — see the `SpeedSource` row below for the same underlying gap. |
 | `QrScanner` | `domain/QrScanner.kt` | Mock (`StubQrScanner`) | Always returns `null` (scan "unavailable") — S1 always falls back to its manual vehicle-ID text field. No CameraX/ML Kit wired in; no camera-equipped device/emulator to verify against here. |
 | `SpeedSource` (fare-engine GPS input) | `domain/FareEngine.kt` | Stub (`StubSpeedSource`) | Fixed at 0 km/h, so S3's live meter defaults to WAITING mode until a real fused/Kalman-filtered location provider is wired (play-services-location is already a build dependency, just unused). |
 | Kiosk/lock-task mode | `MainActivity.kt` | Not implemented | Spec B1 calls for device-owner kiosk mode; out of scope for this pass, noted in `MainActivity`'s doc comment. |
@@ -165,7 +165,9 @@ toolchain is available.
 - `OutboxDrainer` (sync engine) only drains `entityType == "trip"` rows today — the `"shift"` row
   S5 queues on submit will sit unprocessed until the drainer is extended for shifts too, but
   nothing is lost in the meantime (see `SyncOutboxEntity`'s doc).
-- Duress networking (see table above) — log-only, no real dispatch path.
+- Duress networking (see table above) is now real, but the GPS relay it does while
+  `DuressUiState.Active` is best-effort last-known-fix, not a true continuous live stream — same
+  underlying `SpeedSource`/location-provider gap as the fare engine (see the next bullet).
 - Peak-hiring / day-night-holiday time-class detection in the S3 live engine
   (`FareEngineImpl.resolveTimeClass`/`resolveIsPeak`) is a simplified 6am-8pm day / Fri-Sat
   10pm-6am peak heuristic with no public-holiday calendar — flagged as a TODO in that file.

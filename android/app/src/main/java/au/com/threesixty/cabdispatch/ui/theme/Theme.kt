@@ -19,6 +19,51 @@ object CabDispatchColors {
     val Purple = Color(0xFF3A2774)
 }
 
+/**
+ * Wheel-redesign dark-mode design tokens — verbatim port of the reference prototype's CSS custom
+ * properties (docs/driver-dashboard-full-prototype.html `:root{...}`), matching design spec
+ * TCT-DRIVER-APP-01.md §10 and the CLAUDE-instructions color list 1:1. Property names match the
+ * CSS var names (kebab-case -> camelCase) so there's no translation ambiguity for the 8
+ * screen-owning sibling agents building the wheel/dashboard/meter/payment screens on top of this.
+ *
+ * Note on what was actually already present vs. added this pass: checked [CabDispatchColors]
+ * first as instructed — three of these fifteen values are numerically identical to existing brand
+ * constants (`gold`==`Gold`, `surfaceRaised`==`Indigo`, `surfaceSunken`==`Purple`) and are reused
+ * below rather than re-declared as duplicate `Color(...)` literals. The other twelve — including
+ * `meterLedRed`/`goldSoft` — did not exist under any name before this pass; they're added in full
+ * (not just the two the task named) because the wheel/meter/payment screens reference the whole
+ * set by these exact semantic names (see the HTML prototype's CSS), and leaving 10 of them for
+ * each sibling agent to separately re-derive/re-guess from the spec doc would just invite drift.
+ *
+ * Deliberately a flat object, not merged into Material3's `ColorScheme` — per [CabDispatchTheme]'s
+ * existing doc comment, screens needing the exact high-contrast look should read color constants
+ * directly, and the wheel redesign (all-dark per spec §10, "almost all screens ... built and
+ * reviewed in Dark mode") is exactly that case.
+ */
+object WheelColors {
+    val bg = Color(0xFF0D0A18)
+    val surface = Color(0xFF1C1730)
+    val surfaceRaised = CabDispatchColors.Indigo // #2A1C58 — same value, existing name
+    val surfaceSunken = CabDispatchColors.Purple // #3A2774 — same value, existing name
+    val textPrimary = Color(0xFFFFFFFF)
+    val textSecondary = Color(0xFF9F94C9)
+    val textMuted = Color(0xFF7C7594)
+    val border = Color(0x14FFFFFF) // rgba(255,255,255,0.08)
+    val borderStrong = Color(0x2EFFFFFF) // rgba(255,255,255,0.18)
+    val gold = CabDispatchColors.Gold // #F4C300 — same value, existing name
+    val goldSoft = Color(0xFFF8DA66)
+    val available = Color(0xFF2E9E4F)
+    val waiting = Color(0xFFE0932B)
+    val duress = Color(0xFFD8352E)
+
+    /**
+     * Fare-meter LED digit color — #FF2A28. Distinct from [duress] (#D8352E): this is the
+     * physical-taxi-meter-style red for the passenger-facing fare display (spec §6), duress is
+     * the panic-alarm red. Never conflate the two, they mean completely different things.
+     */
+    val meterLedRed = Color(0xFFFF2A28)
+}
+
 private val LightColors = lightColorScheme(
     primary = CabDispatchColors.Indigo,
     onPrimary = Color.White,

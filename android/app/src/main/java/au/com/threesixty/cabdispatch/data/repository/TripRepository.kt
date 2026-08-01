@@ -99,6 +99,24 @@ class TripRepository(
      * so the fare-engine sibling can call this the same way whether the
      * device is online or offline — this method never touches the network
      * either way.
+     *
+     * [tolls] mirrors the [distanceM]/[movingS]/[waitingS] convention: pass
+     * the *cumulative* toll total so far (decimal-as-string), not a delta —
+     * this call overwrites, it doesn't append. Nullable/defaulted to `null`
+     * (meaning "leave [TripEntity.tolls] as it is") rather than required so
+     * existing call sites that don't track tolls keep compiling unchanged.
+     *
+     * HANDOFF.md fix: this parameter used to not exist, which meant toll
+     * chips tapped during S3 (see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.addToll])
+     * only ever updated the *live, in-memory* UI fare display
+     * ([au.com.threesixty.cabdispatch.domain.FareEngineImpl]) — nothing wrote
+     * the toll total to this Room row, so
+     * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] (what
+     * S4/S5 actually charge/show) always read [TripEntity.tolls]'s "0"
+     * default, silently dropping every toll the driver added. See
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.doPersistTick]
+     * for the call site that now passes the real cumulative total.
      */
     suspend fun tick(
         clientUuid: String,
@@ -106,6 +124,7 @@ class TripRepository(
         distanceM: Int,
         movingS: Int,
         waitingS: Int,
+        tolls: String? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("tick() called for unknown trip clientUuid=$clientUuid")
@@ -119,6 +138,7 @@ class TripRepository(
             distanceM = distanceM,
             movingS = movingS,
             waitingS = waitingS,
+            tolls = tolls ?: existing.tolls,
             updatedAt = System.currentTimeMillis(),
         )
         tripDao.update(updated)

@@ -10,9 +10,11 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 
 | Part | Files | Real status |
 |---|---|---|
-| Backend (FastAPI) | 78 | **Done and verified.** 207 tests passing (incl. the golden fare-vector compliance suite), exercised live end-to-end over real HTTP (login → create vehicle/driver → open/tick/close a trip → fare math checked by hand). |
-| Dashboard (React) | 77 | **Done and verified.** All 10 ops modules built, wired to the real API, checked live in-browser (login, Trips, Tariff Studio all rendering real backend data). |
-| Android meter (Kotlin) | 52 | **Source-complete, unverified.** Every screen/offline-sync/fare-engine file is written and has been read carefully, including one real bug fix (S3 wasn't persisting to Room). **Never compiled** — see `android/HANDOFF.md` for the detailed continuation checklist; this doc only summarizes it. |
+| Backend (FastAPI) | 84 | **Done and verified.** 232 tests passing (incl. the golden fare-vector compliance suite), exercised live end-to-end over real HTTP — meter flow (login → create vehicle/driver → open/tick/close a trip → fare math checked by hand) and dispatch flow (toggle driver available → job broadcasts an offer → accept → sibling offers auto-expire → messages thread). |
+| Dashboard (React) | 77 | **Done and verified.** All 10 ops modules built, wired to the real API, checked live in-browser (login, Trips, Tariff Studio all rendering real backend data). Does not yet have UI for the new jobs/messages domain (backend-only so far). |
+| Android driver app (Kotlin) | ~70 | **Source-complete, unverified.** Now a wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Every file has been read carefully across two reconciliation passes (one fixed S3 not persisting to Room; the newest fixed the wheel's 5 non-status slots never actually rendering their content — see `android/HANDOFF.md`'s 2026-08-01 section for the full list of what shipped). **Still never compiled** — no Android SDK in the environment that built any of this. |
+
+**2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
 
 Nothing here has been deployed, load-tested, or security-reviewed for production. Treat all three
 as a working local-dev-verified MVP, not a production system, until the "Not done anywhere" list
@@ -64,10 +66,23 @@ Full CRUD across tenants, users (staff + drivers), fleet (vehicles/devices), tar
 global Fares Order 2025 no.2 reference + effective-dating + an immutable change log), trips (incl.
 the offline-sync contract: `POST /v1/trips/sync` is idempotent on a client-generated UUID and
 flags >±1% fare variance on server-side recompute), shifts, payments, PSL ledger, duress
-(trigger/escalate/cancel/close + a live WS GPS stream), billing, compliance-document vault, and an
-append-only audit log. Every query is tenant-scoped via `get_current_tenant_id`
-(`app/core/security.py`) — that's the entire row-level isolation mechanism, there's no DB-level
-RLS.
+(trigger/escalate/cancel/close + a live WS GPS stream), billing, compliance-document vault, an
+append-only audit log, and (new) jobs/dispatch + messaging. Every query is tenant-scoped via
+`get_current_tenant_id` (`app/core/security.py`) — that's the entire row-level isolation
+mechanism, there's no DB-level RLS.
+
+**Jobs/dispatch (`app/api/v1/jobs.py`) — verified live, not just unit-tested:** `POST /v1/jobs`
+broadcasts a 20s `JobOffer` to every driver who is simultaneously toggled available
+(`POST /v1/jobs/availability`), on an open shift, and not mid-trip; `WS /v1/jobs/live` pushes the
+offer to that driver in real time. First `.../accept` wins — I confirmed by hand that accepting
+immediately (not just on TTL expiry) flips every sibling offer for the same job to `expired` and
+sets the job's `accepted_by_driver_id`. **v1 scope, deliberately cut down:** no proximity/ETA
+ranking — every available driver gets the same broadcast regardless of distance, flagged as
+future work, not an oversight.
+
+**Messages (`app/api/v1/messages.py`) — also verified live:** one thread per driver
+(`thread_id == driver_id`), `sender_type` `dispatch`/`driver`, `WS /v1/messages/live?driver_id=`
+for real-time delivery. Simple by design — no multi-party threads, no attachments.
 
 **Grounded in the actual code, not guesses** (`grep -rn "TODO\|mock" app` in `backend/`):
 
@@ -111,20 +126,32 @@ list here, update that file when gaps close):
   backend's golden vectors — but there are deliberately *two* `FareEngine` classes (a live
   UI-ticking one and the proven one used for the actual charged amount); the handoff doc explains
   how to verify money always routes through the proven one.
+- **New (2026-08-01): the wheel-nav dashboard is now the app's home screen**, replacing the old
+  simple available-toggle screen — a driver-facing rotating 6-slot wheel (drag/snap mechanics
+  ported exactly from `docs/driver-dashboard-full-prototype.html`), Available Trips (job offers),
+  Messages, and restyled Trip/Earnings/Shift content panes. The meter and payment screens got a
+  visual restyle (LED-style fare digits) and one real gap-fix (toll quick-add chips now actually
+  add to the fare — the reference prototype itself never wired these, Android does).
 - Known real gaps, priority-ordered: hardcoded admin factory-reset PIN (`913572`, explicitly
   flagged not-a-real-security-control), placeholder tariff-signature public key, the meter's
   "Driver ID" field currently just being the backend `email` (not a real driver-PIN system),
-  stubbed GPS/region-detection/duress-gesture/QR-scanner, and hardware integrations (Stripe
-  Terminal, BT printer) that are real interfaces behind mock implementations — reasonable to
-  leave stubbed until there's physical hardware to test against.
+  stubbed GPS/region-detection/duress-gesture/QR-scanner (GPS being stubbed also means the wheel's
+  speed-lock, job-card distances, and the map background's live position are all approximated,
+  not real, until that's fixed), and hardware integrations (Stripe Terminal, BT printer) that are
+  real interfaces behind mock implementations — reasonable to leave stubbed until there's physical
+  hardware to test against. "Navigate" is a deliberate deep-link to the phone's maps app, not
+  custom turn-by-turn — that's a spec decision, not a shortcut.
 
 ## Not done anywhere (flagged, not silently dropped)
 
 Real Stripe/Twilio/Mapbox keys, an actual Docker/Postgres/Redis run (compose file exists,
-untested), Redis-backed pub/sub for duress/live-position at >1 backend process, PDF generation,
-S3 storage, ESP32 duress hardware + BLE pairing, physical field fare-accuracy testing, Android
-build/device verification, App Store/Play Store packaging, CI/CD, and any kind of security/pen
-test pass. This is a local-dev-verified MVP, not a production deployment.
+untested), Redis-backed pub/sub for duress/live-position/jobs/messages at >1 backend process, PDF
+generation, S3 storage, ESP32 duress hardware + BLE pairing, physical field fare-accuracy testing,
+Android build/device verification, App Store/Play Store packaging, CI/CD, any kind of security/pen
+test pass, proximity/ETA-ranked job matching (v1 is broadcast-to-everyone, first-accept-wins), a
+true 7-segment LED font for the meter digits, and real map tiles anywhere (dashboard or Android
+both use plain canvas/illustrative backgrounds, no paid maps SDK key available). This is a
+local-dev-verified MVP, not a production deployment.
 
 ## Keeping this file honest
 

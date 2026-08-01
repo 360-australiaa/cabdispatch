@@ -72,6 +72,8 @@ call them).
 | `/v1/billing` | Billing | `GET,POST /subscriptions`, `GET,PATCH,DELETE /subscriptions/{id}` (delete = cancel), `GET /invoices`, `POST /connect/onboard` |
 | `/v1/compliance` | Compliance Vault | `GET,POST /documents` (multipart upload), `GET,PATCH,DELETE /documents/{id}`, `GET /documents/{id}/download`, `GET /vehicles/{id}/dossier` |
 | `/v1/audit-log` | Audit Log | `POST /`, `GET /` — append-only, no update/delete |
+| `/v1/jobs` | Jobs (dispatch/job-offer broadcast+accept) | `POST /`, `GET /`, `GET /{id}`, `DELETE /{id}` (cancel, admin/dispatcher only), `GET /{id}/offers`, `POST /{id}/offers/{offer_id}/accept`, `POST /{id}/offers/{offer_id}/decline`, `POST /availability` (driver self-toggle), `WS /live` |
+| `/v1/messages` | Messages (dispatch<->driver threads) | `POST /`, `GET /?driver_id=`, `POST /{id}/read`, `WS /live?driver_id=` |
 
 Full per-field request/response shapes: `shared/openapi.json`.
 
@@ -81,7 +83,13 @@ Full per-field request/response shapes: `shared/openapi.json`.
   parse as float.
 - Websocket auth: browsers can't set custom headers on the handshake, so both `WS /v1/fleet/live`
   and `WS /v1/duress/{id}/live` accept the access token as `?token=` query param instead of a
-  header.
+  header. Same pattern for `WS /v1/jobs/live` and `WS /v1/messages/live?driver_id=`.
+- Jobs: `POST /v1/jobs` fans out a 20s `JobOffer` per currently-available driver (available toggle
+  AND open shift AND not mid-trip); first `.../accept` wins and expires every sibling offer for
+  that job. `WS /v1/jobs/live` pushes `job_offer` events to the offer's own driver only.
+- Messages: one thread per driver (`thread_id == driver_id`); a `driver`-role sender always posts
+  as themselves, everyone else must supply `driver_id` in the body. `WS /v1/messages/live` requires
+  `?driver_id=`; a `driver`-role caller may only subscribe to their own thread.
 - `PLATFORM_TENANT_ID` (`00000000-0000-0000-0000-000000000000`) is the only tenant_id whose
   `owner`-role token may cross-tenant via `?tenant_id=<id>` on any request; every other
   role/tenant is hard-locked server-side to its own token's tenant_id.

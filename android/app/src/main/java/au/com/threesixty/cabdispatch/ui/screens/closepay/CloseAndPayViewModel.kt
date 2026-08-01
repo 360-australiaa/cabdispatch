@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
 import au.com.threesixty.cabdispatch.hardware.receipt.ReceiptLine
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -78,6 +79,10 @@ sealed interface CloseAndPayUiState {
         val includePsl: Boolean,
         val cashTendered: String,
         val docketNumber: String,
+        // CabCharge/TTSS manual entry — spec §8 row 22-27 sub-screen. Local-only, same as
+        // [docketNumber] (see the CABCHARGE enum entry's TODO — backend paymentMethod enum has
+        // no CabCharge-specific fields yet), surfaced on the receipt via [buildReceipt].
+        val docketNotes: String,
         val breakdown: FareBreakdown,
         val paymentInFlight: Boolean,
         val paymentError: String?,
@@ -123,6 +128,11 @@ class CloseAndPayViewModel : ViewModel() {
 
     private val tripRepository = AppContainer.tripRepository
     private val fareEngine = AppContainer.pureFareEngine
+
+    private companion object {
+        /** Minimum on-screen duration of the "Processing…" spinner — spec §7 step 2 ("brief"). */
+        const val PROCESSING_MIN_MS = 1200L
+    }
 
     private val _uiState = MutableStateFlow<CloseAndPayUiState>(CloseAndPayUiState.Loading)
     val uiState: StateFlow<CloseAndPayUiState> = _uiState.asStateFlow()
@@ -177,6 +187,7 @@ class CloseAndPayViewModel : ViewModel() {
             includePsl = false,
             cashTendered = "",
             docketNumber = "",
+            docketNotes = "",
             breakdown = breakdown,
             paymentInFlight = false,
             paymentError = null,
@@ -251,6 +262,7 @@ class CloseAndPayViewModel : ViewModel() {
     fun setCashTendered(value: String) = updateReady { it.copy(cashTendered = value) }
 
     fun setDocketNumber(value: String) = updateReady { it.copy(docketNumber = value) }
+    fun setDocketNotes(value: String) = updateReady { it.copy(docketNotes = value) }
 
     fun confirmPayment() {
         val state = _uiState.value as? CloseAndPayUiState.ReadyToClose ?: return
@@ -258,17 +270,35 @@ class CloseAndPayViewModel : ViewModel() {
         when (state.paymentMethod) {
             PaymentMethodOption.TAP_TO_PAY -> collectCardPayment(state)
             PaymentMethodOption.PAYMENT_LINK -> createLink(state)
-            PaymentMethodOption.CASH, PaymentMethodOption.CABCHARGE -> finalizeClose(state)
+            PaymentMethodOption.CASH, PaymentMethodOption.CABCHARGE -> finalizeCloseWithProcessingDelay(state)
         }
     }
 
     private fun amountCents(breakdown: FareBreakdown): Long =
         breakdown.grandTotal.movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
 
+    /**
+     * Ensures [block] appears to take at least [PROCESSING_MIN_MS] — spec §7 step 2: "Selecting a
+     * method → brief processing state (spinner + 'Processing [method]…')". The mock card gateway
+     * already runs long enough on its own (1.5s collect / 0.5s link — see
+     * [au.com.threesixty.cabdispatch.hardware.payments.MockCardPaymentGateway]) that this is a
+     * no-op there, but a real/fast implementation (or a fast network) must still show the spinner
+     * for a perceptible, consistent beat rather than flashing through instantly.
+     */
+    private suspend fun <T> withMinimumProcessingDelay(block: suspend () -> T): T {
+        val start = System.currentTimeMillis()
+        val result = block()
+        val elapsed = System.currentTimeMillis() - start
+        if (elapsed < PROCESSING_MIN_MS) delay(PROCESSING_MIN_MS - elapsed)
+        return result
+    }
+
     private fun collectCardPayment(state: CloseAndPayUiState.ReadyToClose) {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
-            val result = AppContainer.cardPaymentGateway.collectPayment(amountCents(state.breakdown))
+            val result = withMinimumProcessingDelay {
+                AppContainer.cardPaymentGateway.collectPayment(amountCents(state.breakdown))
+            }
             result.onSuccess {
                 finalizeClose(state)
             }.onFailure { error ->
@@ -280,12 +310,27 @@ class CloseAndPayViewModel : ViewModel() {
     private fun createLink(state: CloseAndPayUiState.ReadyToClose) {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
-            val result = AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state.breakdown))
+            val result = withMinimumProcessingDelay {
+                AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state.breakdown))
+            }
             result.onSuccess { link ->
                 updateReady { it.copy(paymentInFlight = false, paymentLinkUrl = link.url) }
             }.onFailure { error ->
                 updateReady { it.copy(paymentInFlight = false, paymentError = error.message ?: "Could not create payment link") }
             }
+        }
+    }
+
+    /**
+     * Cash and CabCharge/TTSS never round-trip a real gateway (see [PaymentMethodOption.CABCHARGE]
+     * doc), so without this they'd close instantly and skip the processing beat every other method
+     * gets. Simulates the same driver-perceived pause per spec §7 step 2.
+     */
+    private fun finalizeCloseWithProcessingDelay(state: CloseAndPayUiState.ReadyToClose) {
+        updateReady { it.copy(paymentInFlight = true, paymentError = null) }
+        viewModelScope.launch {
+            delay(PROCESSING_MIN_MS)
+            finalizeClose(state)
         }
     }
 
@@ -330,6 +375,19 @@ class CloseAndPayViewModel : ViewModel() {
             if (b.cleaningFee.signum() > 0) add(ReceiptLine("Cleaning fee", b.cleaningFee.money()))
             if (b.extras.signum() > 0) add(ReceiptLine("Extras", b.extras.money()))
             if (b.surcharge.signum() > 0) add(ReceiptLine("Non-cash payment surcharge", b.surcharge.money()))
+            when (state.paymentMethod) {
+                PaymentMethodOption.CASH -> {
+                    state.cashTendered.toBigDecimalOrNull()?.let { tendered ->
+                        add(ReceiptLine("Amount tendered", tendered.money()))
+                        state.changeDue?.let { change -> add(ReceiptLine("Change given", change.money())) }
+                    }
+                }
+                PaymentMethodOption.CABCHARGE -> {
+                    add(ReceiptLine("CabCharge / TTSS docket", state.docketNumber))
+                    if (state.docketNotes.isNotBlank()) add(ReceiptLine("Notes", state.docketNotes))
+                }
+                PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> Unit
+            }
         }
         return Receipt(
             tripId = trip.clientUuid,
