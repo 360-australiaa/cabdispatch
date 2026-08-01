@@ -1,0 +1,161 @@
+"""Pydantic v2 schemas for the fleet domain (vehicles + devices)."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Generic, Literal, TypeVar
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+VehicleClass = Literal["standard", "premium", "maxi", "wat"]
+VehicleStatus = Literal["active", "maintenance", "suspended", "retired"]
+
+
+# --- Pagination (local to this domain, same shape as app.schemas.tariffs.Page,
+# until a shared one exists in app.core) -----------------------------------------
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    skip: int
+    limit: int
+
+
+# --- Vehicle ----------------------------------------------------------------------
+
+
+class VehicleBase(BaseModel):
+    rego: str = Field(min_length=1, max_length=20)
+    vin: str | None = Field(default=None, max_length=32)
+    vehicle_class: VehicleClass = "standard"
+    camera_serial: str | None = Field(default=None, max_length=100)
+    tracking_device_id: str | None = Field(default=None, max_length=100)
+    meter_device_id: str | None = Field(default=None, max_length=100)
+    status: VehicleStatus = "active"
+
+    @field_validator("rego")
+    @classmethod
+    def _normalize_rego(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not v:
+            raise ValueError("rego must not be blank")
+        return v
+
+
+class VehicleCreate(VehicleBase):
+    pass
+
+
+class VehicleUpdate(BaseModel):
+    """Partial update — every field optional."""
+
+    rego: str | None = Field(default=None, min_length=1, max_length=20)
+    vin: str | None = None
+    vehicle_class: VehicleClass | None = None
+    camera_serial: str | None = None
+    tracking_device_id: str | None = None
+    meter_device_id: str | None = None
+    status: VehicleStatus | None = None
+
+    @field_validator("rego")
+    @classmethod
+    def _normalize_rego(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v:
+            raise ValueError("rego must not be blank")
+        return v
+
+
+class VehicleRead(VehicleBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Device -----------------------------------------------------------------------
+
+
+class DeviceBase(BaseModel):
+    android_id: str = Field(min_length=1, max_length=100)
+    model: str | None = Field(default=None, max_length=100)
+    app_version: str | None = Field(default=None, max_length=30)
+    vehicle_id: str | None = None
+    kiosk_locked: bool = False
+
+
+class DeviceCreate(DeviceBase):
+    pass
+
+
+class DeviceUpdate(BaseModel):
+    """Partial update — every field optional. `android_id` is not changeable
+    after creation (it identifies the physical unit); re-pair via
+    `POST /v1/fleet/devices/register` instead."""
+
+    model: str | None = None
+    app_version: str | None = None
+    vehicle_id: str | None = None
+    kiosk_locked: bool | None = None
+
+
+class DeviceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    android_id: str
+    model: str | None
+    app_version: str | None
+    vehicle_id: str | None
+    kiosk_locked: bool
+    force_update_pending: bool
+    last_seen_at: datetime | None
+    battery: int | None
+    network: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Device pairing / heartbeat / admin flag endpoints -----------------------------
+
+
+class PairingCodeRead(BaseModel):
+    """Response for `POST /v1/fleet/vehicles/{id}/pairing-code` — encode this
+    (or a QR of it) for the device to scan/enter."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    vehicle_id: str
+    tenant_id: str
+    expires_at: datetime
+
+
+class DeviceRegisterRequest(BaseModel):
+    """What the device presents to bind itself to a vehicle via QR-pairing."""
+
+    android_id: str = Field(min_length=1, max_length=100)
+    pairing_code: str = Field(min_length=4, max_length=12)
+    model: str | None = Field(default=None, max_length=100)
+    app_version: str | None = Field(default=None, max_length=30)
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    battery: int | None = Field(default=None, ge=0, le=100)
+    network: str | None = Field(default=None, max_length=20)
+    app_version: str | None = Field(default=None, max_length=30)
+
+
+class KioskLockRequest(BaseModel):
+    enabled: bool = True
+
+
+class ForceUpdateRequest(BaseModel):
+    enabled: bool = True

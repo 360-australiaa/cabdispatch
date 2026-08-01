@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Minimal launch/system theme; all real theming (colors, typography)
+         lives in ui/theme/Theme.kt as Compose Material3 — this XML theme only
+         needs to exist so the manifest has a valid android:theme reference
+         before Compose content is set (splash-screen background, status bar). -->
+    <style name="Theme.CabDispatch" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#2A1C58</item>
+        <item name="android:windowBackground">#EFEAF8</item>
+    </style>
+</resources>

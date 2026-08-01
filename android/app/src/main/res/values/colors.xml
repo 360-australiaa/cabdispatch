@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand palette (see ui/theme/Theme.kt CabDispatchColors for the
+         Compose-side source of truth; these XML copies exist only for the
+         launcher icon background, which Compose cannot supply). -->
+    <color name="brand_indigo">#2A1C58</color>
+    <color name="brand_gold">#F4C300</color>
+    <color name="ic_launcher_background">#2A1C58</color>
+</resources>

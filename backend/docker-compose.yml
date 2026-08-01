@@ -1,0 +1,54 @@
+# Production/staging compose file. Docker is NOT installed in the dev environment
+# this was authored in — this file is written for later use, not run here.
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cabdispatch
+      POSTGRES_PASSWORD: cabdispatch
+      POSTGRES_DB: cabdispatch
+    ports:
+      - "5433:5432"
+    volumes:
+      - cabdispatch_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cabdispatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://cabdispatch:cabdispatch@db:5432/cabdispatch
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGINS: '["http://localhost:5174"]'
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  cabdispatch_pgdata:

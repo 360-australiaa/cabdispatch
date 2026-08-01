@@ -1,0 +1,39 @@
+# --- Backend (Python / FastAPI / uv) ----------------------------------------
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+backend/dev.db
+backend/tests/test_dev.db
+backend/uploads/
+backend/.pytest_cache/
+backend/.ruff_cache/
+*.egg-info/
+
+# Real secrets — only .env.example is tracked
+.env
+backend/.env
+
+# --- Dashboard (Vite / React / TS) ------------------------------------------
+dashboard/node_modules/
+dashboard/dist/
+dashboard/tsconfig.app.tsbuildinfo
+dashboard/tsconfig.node.tsbuildinfo
+dashboard/.vite/
+npm-debug.log*
+
+# --- Android (Gradle / Kotlin) -----------------------------------------------
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.idea/
+android/captures/
+android/.cxx/
+
+# --- OS / editor ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+*.log

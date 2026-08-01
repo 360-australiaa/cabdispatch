@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder mark: a gold "C" glyph on transparent, standing in for the
+     Cab Dispatch brand mark until real launcher artwork is supplied. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/brand_gold"
+        android:pathData="M54,24 C38,24 27,36 27,54 C27,72 38,84 54,84 C63,84 70,80 75,73 L65,64 C62,68 58,70 54,70 C46,70 41,63 41,54 C41,45 46,38 54,38 C58,38 62,40 65,44 L75,35 C70,28 63,24 54,24 Z" />
+</vector>
