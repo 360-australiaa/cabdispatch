@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.WheelColors
 
@@ -206,6 +207,17 @@ private fun DriverLoginStep(uiState: LoginVehicleBindUiState, viewModel: LoginVe
         }
         Spacer(Modifier.height(20.dp))
         PrimaryGoldButton(label = "LOG IN", loading = uiState.isLoggingIn, onClick = viewModel::login)
+
+        // Debug-build only — never renders in a release build. Fills + submits the seeded demo
+        // driver's credentials in one tap, so testing on-device doesn't mean retyping the same
+        // PIN after every rebuild/reinstall. See LoginVehicleBindViewModel.quickLoginDemoDriver.
+        if (BuildConfig.DEBUG) {
+            Spacer(Modifier.height(12.dp))
+            SecondaryOutlineButton(
+                label = "QUICK LOGIN (DEMO DRIVER)",
+                onClick = viewModel::quickLoginDemoDriver,
+            )
+        }
     }
 }
 

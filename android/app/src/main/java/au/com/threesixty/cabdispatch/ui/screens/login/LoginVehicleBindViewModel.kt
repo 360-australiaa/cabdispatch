@@ -15,6 +15,12 @@ import kotlinx.coroutines.launch
 
 enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
+/** Matches `backend/scripts/seed.py`'s seeded demo driver — debug-only quick-login, see
+ * [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a secret (it's committed to the repo's
+ * own seed script), but still gated to debug builds so it never renders in a release build. */
+const val DEMO_DRIVER_ID = "driver@lillycabs.test"
+const val DEMO_DRIVER_PIN = "ChangeMe123!"
+
 /**
  * Standard pre-shift check items, per spec B5 S1 ("pre-shift inspection
  * checklist form"). TODO(compliance agent): confirm this list against the
@@ -61,6 +67,17 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     fun onDriverIdChanged(value: String) = _uiState.update { it.copy(driverIdInput = value, loginError = null) }
     fun onPinChanged(value: String) = _uiState.update { it.copy(pinInput = value, loginError = null) }
     fun onVehicleIdChanged(value: String) = _uiState.update { it.copy(vehicleIdInput = value) }
+
+    /**
+     * Debug-build convenience only (see [DEMO_DRIVER_ID]/[DEMO_DRIVER_PIN] and the button's
+     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills the seeded demo driver's
+     * credentials (`backend/scripts/seed.py`'s `driver@lillycabs.test`) and submits immediately,
+     * so testing on-device doesn't mean retyping the same PIN every rebuild/reinstall.
+     */
+    fun quickLoginDemoDriver() {
+        _uiState.update { it.copy(driverIdInput = DEMO_DRIVER_ID, pinInput = DEMO_DRIVER_PIN) }
+        login()
+    }
 
     fun login() {
         val state = _uiState.value
