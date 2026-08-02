@@ -11,9 +11,13 @@ Creates:
     the reference rates (a tenant tariff must never exceed the Fares Order
     cap — see app.services.tariffs.validate_tariff_or_422).
   - one platform admin user (admin@cabdispatch.test / ChangeMe123!, role
-    owner, tenant TCT) and one demo tenant admin (owner@lillycabs.test /
-    ChangeMe123!, role owner, tenant Lilly Cabs) so both the API and the
-    dashboard can be logged into afterward via POST /v1/auth/login.
+    owner, tenant TCT), one demo tenant admin (owner@lillycabs.test /
+    ChangeMe123!, role owner, tenant Lilly Cabs), and one demo driver
+    (driver@lillycabs.test / ChangeMe123!, role driver, tenant Lilly Cabs —
+    this is what the meter/driver app's "Driver ID"/"PIN" fields map to,
+    see app.domain.DriverAuthRepository on the Android side) so the API,
+    dashboard, and driver app can all be logged into afterward via
+    POST /v1/auth/login.
 
 Idempotent: safe to re-run — every row is looked up by its natural key first
 and only created if missing.
@@ -33,7 +37,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.security import PLATFORM_TENANT_ID, hash_password
 from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
-from app.models.user import ROLE_OWNER, User
+from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
 from app.services import fare_engine as fe
 
 DEMO_PASSWORD = "ChangeMe123!"
@@ -200,13 +204,22 @@ async def seed() -> None:
             name="Lilly Cabs Owner",
             password=DEMO_PASSWORD,
         )
+        await get_or_create_user(
+            session,
+            email="driver@lillycabs.test",
+            tenant_id=demo_tenant.id,
+            role=ROLE_DRIVER,
+            name="Demo Driver",
+            password=DEMO_PASSWORD,
+        )
 
         print("\nSeed complete.")
         print(f"  Platform tenant : {platform_tenant.id} ({platform_tenant.name})")
         print(f"  Demo tenant     : {demo_tenant.id} ({demo_tenant.name})")
-        print("  Login as either user via POST /v1/auth/login with password 'ChangeMe123!':")
+        print("  Login as any of these via POST /v1/auth/login with password 'ChangeMe123!':")
         print("    admin@cabdispatch.test    (platform owner, cross-tenant)")
         print("    owner@lillycabs.test      (Lilly Cabs owner)")
+        print("    driver@lillycabs.test     (Lilly Cabs driver — meter/app 'Driver ID' login)")
 
 
 if __name__ == "__main__":
