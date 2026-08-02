@@ -50,14 +50,27 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import coil.compose.AsyncImagePainter
+import com.mapbox.geojson.Point
+import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.MapView
+import com.mapbox.maps.Style
+import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
+import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
@@ -300,27 +313,107 @@ fun WheelDashboardScreen(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Map background — plain drawn grid + position pin, no paid maps SDK (matches the fleet
-// dashboard's own approach: dashboard/src/pages/live-map/FleetMapCanvas.tsx's doc comment "no
-// paid maps SDK available offline... plain lat/lng plot, not real map tiles").
+// Map background — real, interactive Mapbox map (added 2026-08-02 once a secret
+// MAPBOX_DOWNLOADS_TOKEN became available, see settings.gradle.kts + data/remote/
+// MapboxOfflineRegion.kt) via a classic `MapView` wrapped in Compose's `AndroidView` interop
+// (more robust/predictable than betting on the exact API shape of Mapbox's separate Compose
+// extension artifact, which this project does not depend on). Falls back to the previous Static
+// Images API approach ([MapboxStaticImage], a plain HTTPS GET needing only the public token) if
+// [BuildConfig.MAPBOX_ACCESS_TOKEN] is blank — i.e. this degrades gracefully through THREE tiers:
+// real interactive+offline map -> static image -> [IllustrativeGridFallback], never a blank
+// surface. Once a region has been downloaded via [au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion],
+// this same MapView serves it from the local tile cache automatically with zero network — no
+// separate offline-mode code path needed here.
+//
+// Centered on a fixed Sydney CBD coordinate ([SydneyCbdFallback]), not the driver's real
+// position: the only location-adjacent data source actually wired into this app
+// (`AppContainer.speedSource`, a `SpeedSource` exposing `speedKmh` only — see
+// `domain/FareEngine.kt`) has no lat/lng, and GPS is a documented still-open gap (HANDOFF.md,
+// "GPS is stubbed, not real"). Swap [SydneyCbdFallback] for a real fix once a location provider
+// lands, on both this MapView's camera AND the static-image fallback's URL center.
 // ---------------------------------------------------------------------------------------------
 
 @Composable
 private fun MapBackground(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.background(WheelColors.surface)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawDiagonalGrid(angleDeg = -8f, spacingPx = 84f)
-            drawDiagonalGrid(angleDeg = 96f, spacingPx = 168f)
+    var sizePx by remember { mutableStateOf(IntSize.Zero) }
+
+    Box(
+        modifier = modifier
+            .background(WheelColors.surface)
+            .onGloballyPositioned { sizePx = it.size },
+    ) {
+        if (BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank()) {
+            RealMapboxMapView(modifier = Modifier.fillMaxSize())
+        } else if (sizePx.width > 0 && sizePx.height > 0) {
+            // No token at all — Static Images API fallback (needs a real pixel size, hence the
+            // sizePx gate; MapView above doesn't need this, it lays itself out normally).
+            val mapUrl = remember(sizePx) {
+                MapboxStaticImage.url(
+                    centerLat = SydneyCbdFallback.LAT,
+                    centerLng = SydneyCbdFallback.LNG,
+                    zoom = SydneyCbdFallback.ZOOM,
+                    widthPx = sizePx.width,
+                    heightPx = sizePx.height,
+                )
+            }
+            SubcomposeAsyncImage(
+                model = mapUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            ) {
+                when (painter.state) {
+                    is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+                    else -> IllustrativeGridFallback()
+                }
+            }
+        } else {
+            // First composition, before onGloballyPositioned has reported a real size yet, AND
+            // no token configured (if a token exists, the MapView branch above doesn't need a
+            // pre-measured size and renders immediately).
+            IllustrativeGridFallback()
         }
+
         // Driver position pin. TODO(location sibling agent): this is a fixed illustrative
         // position, not a real fix — HANDOFF.md's "GPS is stubbed, not real" gap applies here
-        // too. Once a real FusedLocationProviderClient location lands, project it the same way
-        // FleetMapCanvas.tsx projects lat/lng into its bounding box, rather than a static offset.
+        // too. Once a real FusedLocationProviderClient location lands, project it against the
+        // same center the map is centered on, rather than a static offset.
         DriverPositionPin(
             modifier = Modifier
                 .align(Alignment.Center)
                 .offset(x = (-160).dp, y = (-30).dp),
         )
+    }
+}
+
+@Composable
+private fun RealMapboxMapView(modifier: Modifier = Modifier) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            MapView(context).apply {
+                mapboxMap.loadStyle(Style.DARK)
+                mapboxMap.setCamera(
+                    CameraOptions.Builder()
+                        .center(Point.fromLngLat(SydneyCbdFallback.LNG, SydneyCbdFallback.LAT))
+                        .zoom(SydneyCbdFallback.ZOOM)
+                        .build(),
+                )
+                // Background map, not a navigation tool — the wheel/dashboard chrome sits on top
+                // of this, so gestures reaching the map underneath a control would be confusing.
+                // Leave pan/zoom enabled for the driver to glance around, per spec §5 ("live map
+                // is the permanent background... nothing is ever a blank screen, there's always
+                // spatial context") — this is deliberate, not an oversight to lock it down later.
+            }
+        },
+    )
+}
+
+@Composable
+private fun IllustrativeGridFallback(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.fillMaxSize()) {
+        drawDiagonalGrid(angleDeg = -8f, spacingPx = 84f)
+        drawDiagonalGrid(angleDeg = 96f, spacingPx = 168f)
     }
 }
 

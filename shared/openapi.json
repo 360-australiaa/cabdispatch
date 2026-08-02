@@ -44,6 +44,56 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MfaRequiredResponse"
+                    }
+                  ],
+                  "title": "Response Login V1 Auth Login Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/mfa/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Mfa Login",
+        "description": "Second step of login for mfa_enabled accounts: exchanges the\nshort-lived `mfa_token` from POST /v1/auth/login plus a 6-digit TOTP code\nfor real access/refresh tokens.",
+        "operationId": "mfa_login_v1_auth_mfa_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
                   "$ref": "#/components/schemas/TokenResponse"
                 }
               }
@@ -137,6 +187,127 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/app__schemas__auth__UserRead"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/mfa/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Mfa Setup",
+        "description": "Generates a new TOTP secret and stores it as *pending* on the user\n(mfa_enabled stays False until confirmed via POST /mfa/verify). Calling\nthis again before verifying overwrites the previous pending secret \u2014 the\nold one, and any code scanned from it, simply stops working.",
+        "operationId": "mfa_setup_v1_auth_mfa_setup_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaSetupResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/mfa/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Mfa Verify",
+        "description": "Confirms a 6-digit code against the pending secret from /mfa/setup and\nflips mfa_enabled=True on success.",
+        "operationId": "mfa_verify_v1_auth_mfa_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/mfa/disable": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Mfa Disable",
+        "description": "Requires re-entering the current password (not a TOTP code) so a\nhijacked-but-still-logged-in session can't silently strip MFA off an\naccount.",
+        "operationId": "mfa_disable_v1_auth_mfa_disable_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaDisableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1134,7 +1305,7 @@
           "fleet"
         ],
         "summary": "Device Heartbeat",
-        "description": "Updates last_seen_at/battery/network and returns the current device row \u2014\nincluding `kiosk_locked` / `force_update_pending`, which is how the device\nlearns an admin has flagged it for kiosk-lock or a forced app update.",
+        "description": "Updates last_seen_at/battery/network and returns the current device row \u2014\nincluding `kiosk_locked` / `force_update_pending` / `locate_requested` /\n`reboot_requested`, which is how the device learns an admin has flagged it\nfor kiosk-lock, a forced app update, a locate request, or a reboot request.",
         "operationId": "device_heartbeat_v1_fleet_devices__device_id__heartbeat_post",
         "security": [
           {
@@ -1288,6 +1459,383 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fleet/devices/{device_id}/locate": {
+      "post": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "Set Device Locate",
+        "description": "Admin-only. Sets/clears the locate_requested flag the device reads back\non its next heartbeat \u2014 the on-device app is expected to respond to a set\nflag by reporting a fresh location fix out of band; building that\nreporting path is the mobile app's responsibility, not this endpoint's.",
+        "operationId": "set_device_locate_v1_fleet_devices__device_id__locate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fleet/devices/{device_id}/reboot": {
+      "post": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "Set Device Reboot",
+        "description": "Admin-only. Sets/clears the reboot_requested flag the device reads back\non its next heartbeat.\n\nHONESTY NOTE (blueprint 4.1.3/6.2.1): this is a real command QUEUE, not a\nclaim that the device actually reboots. See `Device.reboot_requested`'s\ndoc comment \u2014 actually rebooting the OS needs device-owner-level Android\npermissions this codebase does not provision, so nothing currently acts\non this flag on the device side. It is still useful as-is: an admin can\nqueue the request and see it pending, ready for a future device-owner-\naware app build to consume.",
+        "operationId": "set_device_reboot_v1_fleet_devices__device_id__reboot_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebootRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/geofences": {
+      "get": {
+        "tags": [
+          "geofences"
+        ],
+        "summary": "List Geofences",
+        "operationId": "list_geofences_v1_geofences_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_GeofenceRead_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "geofences"
+        ],
+        "summary": "Create Geofence",
+        "operationId": "create_geofence_v1_geofences_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeofenceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeofenceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/geofences/{geofence_id}": {
+      "get": {
+        "tags": [
+          "geofences"
+        ],
+        "summary": "Get Geofence",
+        "operationId": "get_geofence_v1_geofences__geofence_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "geofence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Geofence Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeofenceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "geofences"
+        ],
+        "summary": "Update Geofence",
+        "operationId": "update_geofence_v1_geofences__geofence_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "geofence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Geofence Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeofenceUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeofenceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "geofences"
+        ],
+        "summary": "Delete Geofence",
+        "operationId": "delete_geofence_v1_geofences__geofence_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "geofence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Geofence Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -2497,6 +3045,7 @@
           "trips"
         ],
         "summary": "Tick Trip",
+        "description": "Also runs driver-fatigue checks (blueprint 12.3) as a side effect of\nevery tick, via `app.services.fatigue`: a per-point speed_exceeded check\nagainst each telemetry point in this batch, and (if the trip is attached\nto a shift) a shift_duration_exceeded check against that shift's elapsed\nopen time. Both write FatigueAlert rows into the same transaction as the\ntick itself \u2014 see that module for thresholds/simplifications and\n`app/api/v1/fatigue_alerts.py` for how they're surfaced/acknowledged.",
         "operationId": "tick_trip_v1_trips__trip_id__tick_patch",
         "security": [
           {
@@ -2588,6 +3137,120 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TripRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/trips/{trip_id}/receipt/email": {
+      "post": {
+        "tags": [
+          "trips"
+        ],
+        "summary": "Email Receipt",
+        "operationId": "email_receipt_v1_trips__trip_id__receipt_email_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trip_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trip Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiptEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptEmailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/trips/{trip_id}/receipt/sms": {
+      "post": {
+        "tags": [
+          "trips"
+        ],
+        "summary": "Sms Receipt",
+        "operationId": "sms_receipt_v1_trips__trip_id__receipt_sms_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trip_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trip Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiptSmsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptSmsResponse"
                 }
               }
             }
@@ -3486,6 +4149,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PaymentRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/payments/cabcharge/authorize": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "Authorize Cabcharge Payment",
+        "description": "Authorization -> Docket creation step of blueprint 5.2.5's CabCharge\nflow (real-or-mock, see app.services.payments.authorize_cabcharge).\nSettlement batching is a later, separate process out of scope here.\nStatus starts `pending` (mirroring tap-to-pay/link/manual) since\nsettlement hasn't happened yet.",
+        "operationId": "authorize_cabcharge_payment_v1_payments_cabcharge_authorize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabChargeAuthorizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabChargeAuthorizeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/payments/ttss/claim": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "Submit Ttss Claim Payment",
+        "description": "Subsidy calculation -> Claim submission step of blueprint 5.2.5's\nTTSS flow. Subsidy is always computed server-side (50% of `amount`,\ncapped at $60.00 per blueprint 11.1) \u2014 never client-supplied. Status\nstarts `pending` since reimbursement hasn't happened yet.",
+        "operationId": "submit_ttss_claim_payment_v1_payments_ttss_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TTSSClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TTSSClaimResponse"
                 }
               }
             }
@@ -6056,6 +6813,33 @@
         }
       }
     },
+    "/v1/audit-log/verify": {
+      "get": {
+        "tags": [
+          "audit-log"
+        ],
+        "summary": "Verify Audit Log Chain",
+        "description": "Admin/owner-only. Walks the CALLING TENANT's full hash chain, oldest\nrow first, recomputing every row's hash from its own stored fields plus\nthe preceding row's stored hash, to confirm the `previous_hash` linkage\nis intact end to end \u2014 see app.services.audit_log.verify_chain and the\nhash-chain section of app/models/audit_log.py's module docstring for the\ntamper-evidence design this checks. A row edited directly at the DB\nlayer (bypassing this router/service entirely, so the append-only\nconvention alone wouldn't catch it) breaks the chain at that row's id.",
+        "operationId": "verify_audit_log_chain_v1_audit_log_verify_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogVerifyResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/jobs": {
       "post": {
         "tags": [
@@ -6642,6 +7426,443 @@
           }
         }
       }
+    },
+    "/v1/reports/nsw-ptp-export": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Nsw Ptp Export",
+        "description": "One-click NSW Point to Point Transport compliance export (blueprint\nsection 6.2.1 / Appendix B). Every trip in the inclusive [from, to]\ncalendar-day range, with driver/vehicle/tariff names resolved, fare\nbreakdown, payment method, GPS trace reference, and any linked\n`compliance_audit_log` (audit_log) entries.\n\n`format=json` (default) returns `NswPtpExportResponse`.\n`format=csv` returns a `text/csv` attachment built with Python's stdlib\n`csv` module \u2014 no new dependency.",
+        "operationId": "nsw_ptp_export_v1_reports_nsw_ptp_export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "To"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "csv",
+                "json"
+              ],
+              "type": "string",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/reports/revenue": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Revenue Report",
+        "description": "Aggregated revenue totals over closed trips in the inclusive [from,\nto] calendar-day range, grouped as requested. All SUM/COUNT/GROUP BY runs\nin SQL via SQLAlchemy (see app.services.reports.revenue_report).",
+        "operationId": "revenue_report_v1_reports_revenue_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "To"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "driver",
+                "vehicle",
+                "tariff",
+                "payment_method"
+              ],
+              "type": "string",
+              "default": "day",
+              "title": "Group By"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevenueReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/reports/gst-summary": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Gst Summary",
+        "description": "Sum of `gst_component` across closed trips in the inclusive [from, to]\ncalendar-day range, broken down by month. Clearly-labeled internal\ntotals only \u2014 NOT an ATO BAS-format lodgment (see\nGstSummaryResponse.disclaimer).",
+        "operationId": "gst_summary_v1_reports_gst_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GstSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fatigue-alerts": {
+      "get": {
+        "tags": [
+          "fatigue-alerts"
+        ],
+        "summary": "List Fatigue Alerts",
+        "operationId": "list_fatigue_alerts_v1_fatigue_alerts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Skip"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "driver_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Driver Id"
+            }
+          },
+          {
+            "name": "shift_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Shift Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "acknowledged",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Acknowledged"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_FatigueAlertRead_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fatigue-alerts/{alert_id}": {
+      "get": {
+        "tags": [
+          "fatigue-alerts"
+        ],
+        "summary": "Get Fatigue Alert",
+        "operationId": "get_fatigue_alert_v1_fatigue_alerts__alert_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FatigueAlertRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fatigue-alerts/{alert_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "fatigue-alerts"
+        ],
+        "summary": "Acknowledge Fatigue Alert",
+        "operationId": "acknowledge_fatigue_alert_v1_fatigue_alerts__alert_id__acknowledge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FatigueAlertAcknowledge"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FatigueAlertRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6792,6 +8013,14 @@
             "type": "string",
             "format": "date-time",
             "title": "At"
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash"
+          },
+          "previous_hash": {
+            "type": "string",
+            "title": "Previous Hash"
           }
         },
         "type": "object",
@@ -6804,9 +8033,42 @@
           "entity_id",
           "before_json",
           "after_json",
-          "at"
+          "at",
+          "hash",
+          "previous_hash"
         ],
         "title": "AuditLogRead"
+      },
+      "AuditLogVerifyResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "broken_at_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broken At Id"
+          },
+          "checked": {
+            "type": "integer",
+            "title": "Checked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid",
+          "broken_at_id",
+          "checked"
+        ],
+        "title": "AuditLogVerifyResponse",
+        "description": "Response for `GET /v1/audit-log/verify` \u2014 see\napp.services.audit_log.verify_chain for what each field means."
       },
       "Body_upload_document_v1_compliance_documents_post": {
         "properties": {
@@ -6842,6 +8104,95 @@
           "file"
         ],
         "title": "Body_upload_document_v1_compliance_documents_post"
+      },
+      "CabChargeAuthorizeRequest": {
+        "properties": {
+          "trip_id": {
+            "type": "string",
+            "title": "Trip Id"
+          },
+          "card_identifier": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Card Identifier",
+            "description": "CabCharge card/NFC identifier"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Amount"
+          },
+          "surcharge": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Surcharge",
+            "default": "0.00"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trip_id",
+          "card_identifier",
+          "amount"
+        ],
+        "title": "CabChargeAuthorizeRequest",
+        "description": "Authorization -> Docket creation step of blueprint 5.2.5's CabCharge\nflow (Settlement batch is a later, separate process outside this\nendpoint's scope)."
+      },
+      "CabChargeAuthorizeResponse": {
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentRead"
+          },
+          "mock": {
+            "type": "boolean",
+            "title": "Mock"
+          },
+          "authorization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorization Id"
+          },
+          "cabcharge_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cabcharge Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payment",
+          "mock"
+        ],
+        "title": "CabChargeAuthorizeResponse"
       },
       "CashPaymentRequest": {
         "properties": {
@@ -7299,6 +8650,14 @@
             "type": "boolean",
             "title": "Force Update Pending"
           },
+          "locate_requested": {
+            "type": "boolean",
+            "title": "Locate Requested"
+          },
+          "reboot_requested": {
+            "type": "boolean",
+            "title": "Reboot Requested"
+          },
           "last_seen_at": {
             "anyOf": [
               {
@@ -7354,6 +8713,8 @@
           "vehicle_id",
           "kiosk_locked",
           "force_update_pending",
+          "locate_requested",
+          "reboot_requested",
           "last_seen_at",
           "battery",
           "network",
@@ -8189,6 +9550,98 @@
         "type": "object",
         "title": "ExtraUpdate"
       },
+      "FatigueAlertAcknowledge": {
+        "properties": {
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "FatigueAlertAcknowledge"
+      },
+      "FatigueAlertRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "driver_id": {
+            "type": "string",
+            "title": "Driver Id"
+          },
+          "shift_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shift Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "shift_duration_exceeded",
+              "no_break_taken",
+              "speed_exceeded"
+            ],
+            "title": "Kind"
+          },
+          "triggered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Triggered At"
+          },
+          "details_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details Json"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "driver_id",
+          "shift_id",
+          "kind",
+          "triggered_at",
+          "details_json",
+          "acknowledged",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FatigueAlertRead"
+      },
       "ForceUpdateRequest": {
         "properties": {
           "enabled": {
@@ -8199,6 +9652,353 @@
         },
         "type": "object",
         "title": "ForceUpdateRequest"
+      },
+      "GeofenceCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "toll",
+              "region"
+            ],
+            "title": "Kind"
+          },
+          "center_lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Center Lat"
+          },
+          "center_lng": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Center Lng"
+          },
+          "radius_m": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Radius M"
+          },
+          "toll_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toll Amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "center_lat",
+          "center_lng",
+          "radius_m"
+        ],
+        "title": "GeofenceCreate"
+      },
+      "GeofenceRead": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "toll",
+              "region"
+            ],
+            "title": "Kind"
+          },
+          "center_lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Center Lat"
+          },
+          "center_lng": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Center Lng"
+          },
+          "radius_m": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Radius M"
+          },
+          "toll_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toll Amount"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "center_lat",
+          "center_lng",
+          "radius_m",
+          "id",
+          "tenant_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "GeofenceRead"
+      },
+      "GeofenceUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "toll",
+                  "region"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "center_lat": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Lat"
+          },
+          "center_lng": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Lng"
+          },
+          "radius_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius M"
+          },
+          "toll_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toll Amount"
+          }
+        },
+        "type": "object",
+        "title": "GeofenceUpdate",
+        "description": "Partial update \u2014 every field optional."
+      },
+      "GstMonthRow": {
+        "properties": {
+          "month": {
+            "type": "string",
+            "title": "Month",
+            "description": "YYYY-MM"
+          },
+          "trip_count": {
+            "type": "integer",
+            "title": "Trip Count"
+          },
+          "gross_revenue": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gross Revenue",
+            "description": "SUM(trips.total), GST-inclusive"
+          },
+          "gst_component": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Component",
+            "description": "SUM(trips.gst_component)"
+          },
+          "net_of_gst": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Net Of Gst",
+            "description": "gross_revenue - gst_component"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month",
+          "trip_count",
+          "gross_revenue",
+          "gst_component",
+          "net_of_gst"
+        ],
+        "title": "GstMonthRow"
+      },
+      "GstSummaryResponse": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "from_date": {
+            "type": "string",
+            "format": "date",
+            "title": "From Date"
+          },
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "title": "To Date"
+          },
+          "disclaimer": {
+            "type": "string",
+            "title": "Disclaimer",
+            "default": "Internal GST totals derived from trips.gst_component, grouped by month. This is a clearly-labeled preparation aid ONLY \u2014 it is NOT an ATO BAS-format lodgment and does not constitute tax advice. Only status='closed' trips are included."
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/GstMonthRow"
+            },
+            "type": "array",
+            "title": "Months"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/GstTotals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "from_date",
+          "to_date",
+          "months",
+          "totals"
+        ],
+        "title": "GstSummaryResponse"
+      },
+      "GstTotals": {
+        "properties": {
+          "trip_count": {
+            "type": "integer",
+            "title": "Trip Count"
+          },
+          "gross_revenue": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gross Revenue"
+          },
+          "gst_component": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Component"
+          },
+          "net_of_gst": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Net Of Gst"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trip_count",
+          "gross_revenue",
+          "gst_component",
+          "net_of_gst"
+        ],
+        "title": "GstTotals"
       },
       "HTTPValidationError": {
         "properties": {
@@ -8572,6 +10372,17 @@
         "type": "object",
         "title": "KioskLockRequest"
       },
+      "LocateRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "LocateRequest"
+      },
       "LoginRequest": {
         "properties": {
           "email": {
@@ -8758,6 +10569,101 @@
           "read_at"
         ],
         "title": "MessageRead"
+      },
+      "MfaDisableRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "MfaDisableRequest"
+      },
+      "MfaLoginRequest": {
+        "properties": {
+          "mfa_token": {
+            "type": "string",
+            "title": "Mfa Token"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mfa_token",
+          "code"
+        ],
+        "title": "MfaLoginRequest"
+      },
+      "MfaRequiredResponse": {
+        "properties": {
+          "mfa_required": {
+            "type": "boolean",
+            "title": "Mfa Required",
+            "default": true
+          },
+          "mfa_token": {
+            "type": "string",
+            "title": "Mfa Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mfa_token"
+        ],
+        "title": "MfaRequiredResponse",
+        "description": "Returned by POST /v1/auth/login instead of TokenResponse when the\naccount has mfa_enabled=True. `mfa_token` is short-lived and only good\nfor POST /v1/auth/mfa/login."
+      },
+      "MfaSetupResponse": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "title": "Secret"
+          },
+          "otpauth_uri": {
+            "type": "string",
+            "title": "Otpauth Uri"
+          }
+        },
+        "type": "object",
+        "required": [
+          "secret",
+          "otpauth_uri"
+        ],
+        "title": "MfaSetupResponse",
+        "description": "secret is also embedded in otpauth_uri, but returned separately so the\nfrontend can show it as manual-entry text alongside (or instead of) a\nrendered QR code."
+      },
+      "MfaStatusResponse": {
+        "properties": {
+          "mfa_enabled": {
+            "type": "boolean",
+            "title": "Mfa Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mfa_enabled"
+        ],
+        "title": "MfaStatusResponse"
+      },
+      "MfaVerifyRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "MfaVerifyRequest"
       },
       "PSLLedgerCreate": {
         "properties": {
@@ -9278,6 +11184,68 @@
         ],
         "title": "Page[ExtraRead]"
       },
+      "Page_FatigueAlertRead_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FatigueAlertRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "skip": {
+            "type": "integer",
+            "title": "Skip"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "skip",
+          "limit"
+        ],
+        "title": "Page[FatigueAlertRead]"
+      },
+      "Page_GeofenceRead_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GeofenceRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "skip": {
+            "type": "integer",
+            "title": "Skip"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "skip",
+          "limit"
+        ],
+        "title": "Page[GeofenceRead]"
+      },
       "Page_JobRead_": {
         "properties": {
           "items": {
@@ -9730,6 +11698,30 @@
             ],
             "title": "Notes"
           },
+          "subsidy_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subsidy Amount"
+          },
+          "passenger_paid_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passenger Paid Amount"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -9936,6 +11928,194 @@
         "title": "PositionRead",
         "description": "Shape of one cached/broadcast position \u2014 this is also exactly the JSON\nmessage shape sent over `WS /v1/fleet/live`."
       },
+      "RebootRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "RebootRequest",
+        "description": "See the HONESTY NOTE on `Device.reboot_requested` \u2014 setting `enabled`\nqueues a reboot request the device can read back; it does not itself\nreboot anything."
+      },
+      "ReceiptEmailRequest": {
+        "properties": {
+          "to_email": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 3,
+            "title": "To Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_email"
+        ],
+        "title": "ReceiptEmailRequest"
+      },
+      "ReceiptEmailResponse": {
+        "properties": {
+          "mock": {
+            "type": "boolean",
+            "title": "Mock"
+          },
+          "would_send_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Would Send To"
+          },
+          "to_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Email"
+          },
+          "sendgrid_status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sendgrid Status Code"
+          },
+          "receipt_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Ref"
+          },
+          "pdf_relative_path": {
+            "type": "string",
+            "title": "Pdf Relative Path"
+          },
+          "pdf_generated_now": {
+            "type": "boolean",
+            "title": "Pdf Generated Now"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mock",
+          "pdf_relative_path",
+          "pdf_generated_now"
+        ],
+        "title": "ReceiptEmailResponse",
+        "description": "Same mock-fallback shape/spirit as app.schemas.payments.TapToPayIntentResponse:\n`mock` always present; `would_send_to` is populated only in the mock path,\n`to_email` + `sendgrid_status_code` only on a real send."
+      },
+      "ReceiptSmsRequest": {
+        "properties": {
+          "to_phone": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 3,
+            "title": "To Phone"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_phone"
+        ],
+        "title": "ReceiptSmsRequest"
+      },
+      "ReceiptSmsResponse": {
+        "properties": {
+          "mock": {
+            "type": "boolean",
+            "title": "Mock"
+          },
+          "would_send_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Would Send To"
+          },
+          "to_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Phone"
+          },
+          "twilio_sid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Sid"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "receipt_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Ref"
+          },
+          "pdf_relative_path": {
+            "type": "string",
+            "title": "Pdf Relative Path"
+          },
+          "pdf_generated_now": {
+            "type": "boolean",
+            "title": "Pdf Generated Now"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mock",
+          "pdf_relative_path",
+          "pdf_generated_now"
+        ],
+        "title": "ReceiptSmsResponse"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -9971,6 +12151,185 @@
           "refresh_token"
         ],
         "title": "RefreshResponse"
+      },
+      "RevenueGroupRow": {
+        "properties": {
+          "group_key": {
+            "type": "string",
+            "title": "Group Key"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
+          },
+          "trip_count": {
+            "type": "integer",
+            "title": "Trip Count"
+          },
+          "gross_revenue": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gross Revenue",
+            "description": "SUM(trips.total) \u2014 GST-inclusive amount actually charged"
+          },
+          "subtotal": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Subtotal",
+            "description": "SUM(trips.subtotal) \u2014 fare before surcharge"
+          },
+          "surcharge": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Surcharge"
+          },
+          "gst_component": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Component"
+          },
+          "tolls": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Tolls"
+          },
+          "psl": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Psl"
+          },
+          "extras": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Extras"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_key",
+          "group_label",
+          "trip_count",
+          "gross_revenue",
+          "subtotal",
+          "surcharge",
+          "gst_component",
+          "tolls",
+          "psl",
+          "extras"
+        ],
+        "title": "RevenueGroupRow",
+        "description": "One aggregated bucket. `group_key` is the raw grouping value (e.g. an\nISO date string for day/week/month, or the driver/vehicle/tariff/\npayment_method id); `group_label` is a resolved display name where one\nexists (driver name / vehicle rego / tariff name) and otherwise mirrors\n`group_key`."
+      },
+      "RevenueReportResponse": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "from_date": {
+            "type": "string",
+            "format": "date",
+            "title": "From Date"
+          },
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "title": "To Date"
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month",
+              "driver",
+              "vehicle",
+              "tariff",
+              "payment_method"
+            ],
+            "title": "Group By"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": "Only status='closed' trips are included \u2014 open trips have no final totals yet."
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/RevenueGroupRow"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/RevenueTotals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "from_date",
+          "to_date",
+          "group_by",
+          "groups",
+          "totals"
+        ],
+        "title": "RevenueReportResponse"
+      },
+      "RevenueTotals": {
+        "properties": {
+          "trip_count": {
+            "type": "integer",
+            "title": "Trip Count"
+          },
+          "gross_revenue": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gross Revenue"
+          },
+          "subtotal": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Subtotal"
+          },
+          "surcharge": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Surcharge"
+          },
+          "gst_component": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Gst Component"
+          },
+          "tolls": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Tolls"
+          },
+          "psl": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Psl"
+          },
+          "extras": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Extras"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trip_count",
+          "gross_revenue",
+          "subtotal",
+          "surcharge",
+          "gst_component",
+          "tolls",
+          "psl",
+          "extras"
+        ],
+        "title": "RevenueTotals"
       },
       "ShiftCreate": {
         "properties": {
@@ -10775,6 +13134,94 @@
         "type": "object",
         "title": "SubscriptionUpdate",
         "description": "Plan change only. `vehicle_id` is immutable after creation (create a\nnew subscription for a different vehicle instead); `price_aud` is\nre-derived server-side from the new plan, never client-supplied."
+      },
+      "TTSSClaimRequest": {
+        "properties": {
+          "trip_id": {
+            "type": "string",
+            "title": "Trip Id"
+          },
+          "concession_identifier": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Concession Identifier",
+            "description": "Passenger TTSS card/concession identifier"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Amount",
+            "description": "Full fare amount before the TTSS subsidy is applied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trip_id",
+          "concession_identifier",
+          "amount"
+        ],
+        "title": "TTSSClaimRequest",
+        "description": "Subsidy calculation -> Claim submission step of blueprint 5.2.5's TTSS\nflow (Eligibility check is assumed done upstream; Reimbursement happens\nlater, outside this endpoint's scope). Subsidy is always computed\nserver-side (50% of `amount`, capped at $60.00 per blueprint 11.1) \u2014\nnever client-supplied."
+      },
+      "TTSSClaimResponse": {
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentRead"
+          },
+          "mock": {
+            "type": "boolean",
+            "title": "Mock"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id"
+          },
+          "ttss_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttss Status"
+          },
+          "subsidy_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Subsidy Amount"
+          },
+          "passenger_paid_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Passenger Paid Amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payment",
+          "mock",
+          "subsidy_amount",
+          "passenger_paid_amount"
+        ],
+        "title": "TTSSClaimResponse"
       },
       "TapToPayIntentRequest": {
         "properties": {
@@ -12147,6 +14594,20 @@
             ],
             "title": "Receipt Ref"
           },
+          "auto_tolls_applied": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Tolls Applied"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -13289,6 +15750,10 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "mfa_enabled": {
+            "type": "boolean",
+            "title": "Mfa Enabled"
           }
         },
         "type": "object",
@@ -13298,7 +15763,8 @@
           "role",
           "name",
           "email",
-          "status"
+          "status",
+          "mfa_enabled"
         ],
         "title": "UserRead"
       },

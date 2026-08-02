@@ -23,6 +23,7 @@ class UserRead(BaseModel):
     name: str
     email: str
     status: str
+    mfa_enabled: bool
 
 
 class TokenResponse(BaseModel):
@@ -40,3 +41,41 @@ class RefreshResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+# --- MFA (blueprint 12.2) ----------------------------------------------------
+
+
+class MfaRequiredResponse(BaseModel):
+    """Returned by POST /v1/auth/login instead of TokenResponse when the
+    account has mfa_enabled=True. `mfa_token` is short-lived and only good
+    for POST /v1/auth/mfa/login."""
+
+    mfa_required: bool = True
+    mfa_token: str
+
+
+class MfaSetupResponse(BaseModel):
+    """secret is also embedded in otpauth_uri, but returned separately so the
+    frontend can show it as manual-entry text alongside (or instead of) a
+    rendered QR code."""
+
+    secret: str
+    otpauth_uri: str
+
+
+class MfaVerifyRequest(BaseModel):
+    code: str
+
+
+class MfaStatusResponse(BaseModel):
+    mfa_enabled: bool
+
+
+class MfaDisableRequest(BaseModel):
+    password: str
+
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str
+    code: str

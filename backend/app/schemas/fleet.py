@@ -116,6 +116,8 @@ class DeviceRead(BaseModel):
     vehicle_id: str | None
     kiosk_locked: bool
     force_update_pending: bool
+    locate_requested: bool
+    reboot_requested: bool
     last_seen_at: datetime | None
     battery: int | None
     network: str | None
@@ -158,4 +160,16 @@ class KioskLockRequest(BaseModel):
 
 
 class ForceUpdateRequest(BaseModel):
+    enabled: bool = True
+
+
+class LocateRequest(BaseModel):
+    enabled: bool = True
+
+
+class RebootRequest(BaseModel):
+    """See the HONESTY NOTE on `Device.reboot_requested` — setting `enabled`
+    queues a reboot request the device can read back; it does not itself
+    reboot anything."""
+
     enabled: bool = True

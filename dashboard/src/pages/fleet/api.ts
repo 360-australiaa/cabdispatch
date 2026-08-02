@@ -4,6 +4,7 @@ import type {
   Device,
   DeviceFormValues,
   Driver,
+  FatigueAlert,
   Page,
   PairingCode,
   Vehicle,
@@ -226,6 +227,32 @@ export function useForceUpdate() {
   });
 }
 
+export function useLocateDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<Device>(`/v1/fleet/devices/${id}/locate`, {
+        enabled: true,
+      });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
+export function useRebootDevice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<Device>(`/v1/fleet/devices/${id}/reboot`, {
+        enabled: true,
+      });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Drivers — READ-ONLY rollup from /v1/drivers. The backend exposes no
 // create/update/delete for the user domain (see API_SUMMARY.md router map),
@@ -247,5 +274,40 @@ export function useDrivers(skip: number, filters: DriverFilters) {
       return data;
     },
     placeholderData: (prev) => prev,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fatigue alerts — READ + acknowledge rollup from /v1/fatigue-alerts. Alerts
+// themselves are raised server-side as a side effect of PATCH /v1/trips/{id}/tick;
+// there is no create endpoint here.
+// ---------------------------------------------------------------------------
+
+/** Small unpaginated-ish pull of open (unacknowledged) fatigue alerts, used to
+ * surface a lightweight warning badge on the Fleet & Drivers page. */
+export function useOpenFatigueAlerts() {
+  return useQuery({
+    queryKey: ["fleet", "fatigue-alerts", "open"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<FatigueAlert>>("/v1/fatigue-alerts", {
+        params: { skip: 0, limit: LOOKUP_LIMIT, acknowledged: false },
+      });
+      return data;
+    },
+    refetchInterval: 60_000,
+  });
+}
+
+export function useAcknowledgeFatigueAlert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<FatigueAlert>(
+        `/v1/fatigue-alerts/${id}/acknowledge`,
+        { acknowledged: true },
+      );
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "fatigue-alerts"] }),
   });
 }

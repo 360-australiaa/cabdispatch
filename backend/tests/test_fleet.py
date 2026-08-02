@@ -402,3 +402,93 @@ async def test_force_update_is_admin_only_and_visible_on_heartbeat(client, sessi
         f"/v1/fleet/devices/{device_id}/force-update", json={"enabled": False}, headers=admin_headers
     )
     assert resp.json()["force_update_pending"] is False
+
+
+# --- MDM-lite remote commands: locate / reboot (blueprint 4.1.3/6.2.1) -----------
+
+
+async def test_locate_is_admin_only_and_visible_on_heartbeat(client, session):
+    admin_headers = await auth_headers(client, session, role="admin", tenant_name="Locate Tenant")
+    driver_headers = await auth_headers(client, session, role="driver", tenant_id=None)
+
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-locate-1"}, headers=admin_headers
+    )
+    device = resp.json()
+    assert device["locate_requested"] is False
+    device_id = device["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate", json={"enabled": True}, headers=driver_headers
+    )
+    assert resp.status_code == 403
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate", json={"enabled": True}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["locate_requested"] is True
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["locate_requested"] is True
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate", json={"enabled": False}, headers=admin_headers
+    )
+    assert resp.json()["locate_requested"] is False
+
+
+async def test_reboot_is_admin_only_and_visible_on_heartbeat(client, session):
+    admin_headers = await auth_headers(client, session, role="admin", tenant_name="Reboot Tenant")
+    driver_headers = await auth_headers(client, session, role="driver", tenant_id=None)
+
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-reboot-1"}, headers=admin_headers
+    )
+    device = resp.json()
+    assert device["reboot_requested"] is False
+    device_id = device["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": True}, headers=driver_headers
+    )
+    assert resp.status_code == 403
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": True}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reboot_requested"] is True
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reboot_requested"] is True
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": False}, headers=admin_headers
+    )
+    assert resp.json()["reboot_requested"] is False
+
+
+async def test_locate_and_reboot_flags_are_independent(client, session):
+    """Setting one MDM-lite command flag must not disturb the other, or the
+    pre-existing kiosk_locked/force_update_pending flags."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Independent Flags Tenant")
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-independent-1"}, headers=headers
+    )
+    device_id = resp.json()["id"]
+
+    await client.post(f"/v1/fleet/devices/{device_id}/locate", json={"enabled": True}, headers=headers)
+
+    resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    body = resp.json()
+    assert body["locate_requested"] is True
+    assert body["reboot_requested"] is False
+    assert body["kiosk_locked"] is False
+    assert body["force_update_pending"] is False

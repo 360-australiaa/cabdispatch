@@ -21,6 +21,20 @@ independently against the same conventions as the other 12 domains and both
 were verified at integration time to use path prefixes (`jobs`, `messages`)
 that do not collide with any existing domain's routes, literal or
 prefixed — including live_ops's literal paths above.
+
+reports (`/v1/reports`) is a pure reporting/export layer added on top of the
+existing `trips` table (NSW PtP compliance export, revenue dashboard,
+GST/BAS-prep summary) — it owns no table of its own and its `reports_router`
+path prefix does not collide with any existing domain's routes.
+
+fatigue_alerts (`/v1/fatigue-alerts`, blueprint 12.3) was added in the
+MDM-lite/fatigue-monitoring pass on top of this already-integrated tree. It
+owns the `FatigueAlert` table (list/acknowledge only via this router) but
+alerts themselves are raised as a side effect of `PATCH /v1/trips/{id}/tick`
+in the existing `trips` router — see `app.services.fatigue` and
+`app/api/v1/trips.py`'s `tick_trip` docstring. That same pass also extended
+the `fleet` domain's `Device` model/router with `locate_requested` /
+`reboot_requested` MDM-lite command flags (no new router or path prefix).
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,13 +44,16 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
 from app.api.v1.compliance import router as compliance_router
 from app.api.v1.duress import router as duress_router
+from app.api.v1.fatigue_alerts import router as fatigue_alerts_router
 from app.api.v1.fleet import router as fleet_router
+from app.api.v1.geofences import router as geofences_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.live_ops import router as live_ops_router
 from app.api.v1.messages import router as messages_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.payments import webhook_router as payments_webhook_router
 from app.api.v1.psl_ledger import router as psl_ledger_router
+from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
 from app.api.v1.tariffs import fares_order_router
 from app.api.v1.tariffs import router as tariffs_router
@@ -63,6 +80,7 @@ async def health():
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(fleet_router)
+app.include_router(geofences_router)
 app.include_router(tariffs_router)
 app.include_router(fares_order_router)
 app.include_router(trips_router)
@@ -77,3 +95,5 @@ app.include_router(compliance_router)
 app.include_router(audit_log_router)
 app.include_router(jobs_router)
 app.include_router(messages_router)
+app.include_router(reports_router)
+app.include_router(fatigue_alerts_router)

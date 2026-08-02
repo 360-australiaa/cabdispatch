@@ -64,6 +64,14 @@ class Payment(Base, TenantScopedMixin, TimestampMixin):
     # --- cash-specific (POST /v1/payments/cash) ---
     change_given: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
-    # --- cabcharge/ttss-specific (POST /v1/payments/manual) ---
+    # --- cabcharge/ttss-specific (POST /v1/payments/manual, .../cabcharge/authorize,
+    # .../ttss/claim) ---
     docket_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- ttss-specific (POST /v1/payments/ttss/claim) ---
+    # subsidy_amount: TTSS contribution, 50% of the fare capped at $60.00
+    # (blueprint 11.1). passenger_paid_amount: the remainder the passenger
+    # owes (amount - subsidy_amount). Both NULL for every other method.
+    subsidy_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    passenger_paid_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)

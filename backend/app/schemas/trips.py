@@ -163,6 +163,7 @@ class TripRead(BaseModel):
     max_fare_check_passed: bool
     variance_pct: Decimal | None
     receipt_ref: str | None
+    auto_tolls_applied: list[str] | None = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -182,3 +183,42 @@ class TripSyncResultItem(BaseModel):
 
 class TripSyncResponse(BaseModel):
     results: list[TripSyncResultItem]
+
+
+# --- Receipt delivery (blueprint 5.2.6/8.5) ----------------------------------
+# Trip carries no customer-contact column (no email/phone field on the model —
+# it's an offline-first meter journey record, not a booking), so the
+# recipient is supplied per-request rather than read off the trip row.
+
+
+class ReceiptEmailRequest(BaseModel):
+    to_email: str = Field(..., min_length=3, max_length=255)
+
+
+class ReceiptEmailResponse(BaseModel):
+    """Same mock-fallback shape/spirit as app.schemas.payments.TapToPayIntentResponse:
+    `mock` always present; `would_send_to` is populated only in the mock path,
+    `to_email` + `sendgrid_status_code` only on a real send."""
+
+    mock: bool
+    would_send_to: str | None = None
+    to_email: str | None = None
+    sendgrid_status_code: int | None = None
+    receipt_ref: str | None = None
+    pdf_relative_path: str
+    pdf_generated_now: bool
+
+
+class ReceiptSmsRequest(BaseModel):
+    to_phone: str = Field(..., min_length=3, max_length=32)
+
+
+class ReceiptSmsResponse(BaseModel):
+    mock: bool
+    would_send_to: str | None = None
+    to_phone: str | None = None
+    twilio_sid: str | None = None
+    message: str | None = None
+    receipt_ref: str | None = None
+    pdf_relative_path: str
+    pdf_generated_now: bool

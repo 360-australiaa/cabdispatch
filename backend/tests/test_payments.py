@@ -166,6 +166,135 @@ async def test_manual_payment_rejects_surcharge_over_cap(client, session):
     assert resp.status_code == 422
 
 
+# --- CabCharge authorize ---------------------------------------------------------
+
+
+async def test_cabcharge_authorize_falls_back_to_mock_without_real_credentials(client, session):
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/cabcharge/authorize",
+        json={
+            "trip_id": _trip_id(),
+            "card_identifier": "4111-CABCHARGE-0001",
+            "amount": "42.00",
+            "surcharge": "2.10",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mock"] is True
+    assert body["authorization_id"].startswith("mock_cabcharge_")
+    assert body["cabcharge_status"] == "authorized"
+    assert body["payment"]["method"] == "cabcharge"
+    assert body["payment"]["status"] == "pending"
+    assert Decimal(body["payment"]["amount"]) == Decimal("42.00")
+    assert Decimal(body["payment"]["surcharge"]) == Decimal("2.10")
+    assert body["payment"]["docket_number"].startswith("CBC-")
+
+
+async def test_cabcharge_authorize_rejects_surcharge_over_5_percent_cap(client, session):
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/cabcharge/authorize",
+        json={
+            "trip_id": _trip_id(),
+            "card_identifier": "4111-CABCHARGE-0001",
+            "amount": "20.00",
+            "surcharge": "1.01",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_cabcharge_authorize_requires_card_identifier(client, session):
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/cabcharge/authorize",
+        json={"trip_id": _trip_id(), "card_identifier": "", "amount": "20.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+# --- TTSS claim --------------------------------------------------------------------
+
+
+async def test_ttss_claim_falls_back_to_mock_and_computes_50_percent_subsidy(client, session):
+    """A $40.00 fare is well under the $60 cap: subsidy is exactly 50%."""
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/ttss/claim",
+        json={"trip_id": _trip_id(), "concession_identifier": "TTSS-CARD-0042", "amount": "40.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["mock"] is True
+    assert body["claim_id"].startswith("mock_ttss_")
+    assert body["ttss_status"] == "submitted"
+    assert Decimal(body["subsidy_amount"]) == Decimal("20.00")
+    assert Decimal(body["passenger_paid_amount"]) == Decimal("20.00")
+
+    payment = body["payment"]
+    assert payment["method"] == "ttss"
+    assert payment["status"] == "pending"
+    assert Decimal(payment["amount"]) == Decimal("40.00")
+    assert Decimal(payment["subsidy_amount"]) == Decimal("20.00")
+    assert Decimal(payment["passenger_paid_amount"]) == Decimal("20.00")
+    assert payment["docket_number"].startswith("TTSS-")
+
+
+async def test_ttss_claim_caps_subsidy_at_60_dollars_for_a_200_dollar_fare(client, session):
+    """Blueprint 11.1: 50% of $200.00 would be $100.00, but the subsidy is
+    hard-capped at $60.00 — the passenger pays the remaining $140.00."""
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/ttss/claim",
+        json={"trip_id": _trip_id(), "concession_identifier": "TTSS-CARD-0099", "amount": "200.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert Decimal(body["subsidy_amount"]) == Decimal("60.00")
+    assert Decimal(body["subsidy_amount"]) != Decimal("100.00")
+    assert Decimal(body["passenger_paid_amount"]) == Decimal("140.00")
+    assert Decimal(body["payment"]["subsidy_amount"]) == Decimal("60.00")
+    assert Decimal(body["payment"]["passenger_paid_amount"]) == Decimal("140.00")
+
+
+async def test_ttss_claim_at_exactly_120_dollars_is_the_cap_boundary(client, session):
+    """$120.00 fare * 50% = exactly $60.00 — right at the cap, not over it."""
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/ttss/claim",
+        json={"trip_id": _trip_id(), "concession_identifier": "TTSS-CARD-0100", "amount": "120.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert Decimal(body["subsidy_amount"]) == Decimal("60.00")
+    assert Decimal(body["passenger_paid_amount"]) == Decimal("60.00")
+
+
+async def test_ttss_claim_requires_concession_identifier(client, session):
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/payments/ttss/claim",
+        json={"trip_id": _trip_id(), "concession_identifier": "", "amount": "20.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 # --- list / get / update / tenant isolation ------------------------------------
 
 

@@ -28,11 +28,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user
+from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.audit_log import AuditLog
 from app.models.user import User
-from app.schemas.audit_log import AuditLogCreate, AuditLogListResponse, AuditLogRead
-from app.services.audit_log import record_audit
+from app.schemas.audit_log import (
+    AuditLogCreate,
+    AuditLogListResponse,
+    AuditLogRead,
+    AuditLogVerifyResponse,
+)
+from app.services.audit_log import record_audit, verify_chain
 
 router = APIRouter(prefix="/v1/audit-log", tags=["audit-log"])
 
@@ -99,6 +104,25 @@ async def list_audit_log_entries(
     items = result.scalars().all()
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/verify", response_model=AuditLogVerifyResponse)
+async def verify_audit_log_chain(
+    tenant_id: str = Depends(get_current_tenant_id),
+    _admin: User = Depends(require_role("owner", "admin")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Admin/owner-only. Walks the CALLING TENANT's full hash chain, oldest
+    row first, recomputing every row's hash from its own stored fields plus
+    the preceding row's stored hash, to confirm the `previous_hash` linkage
+    is intact end to end — see app.services.audit_log.verify_chain and the
+    hash-chain section of app/models/audit_log.py's module docstring for the
+    tamper-evidence design this checks. A row edited directly at the DB
+    layer (bypassing this router/service entirely, so the append-only
+    convention alone wouldn't catch it) breaks the chain at that row's id.
+    """
+    valid, broken_at_id, checked = await verify_chain(session, tenant_id=tenant_id)
+    return {"valid": valid, "broken_at_id": broken_at_id, "checked": checked}
 
 
 # NOTE: no PATCH/PUT/DELETE endpoints anywhere in this file — deliberate, see

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { CheckCircle2, Download, Pencil, Plus, Trash2, XCircle } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { CheckCircle2, Download, FileSpreadsheet, Pencil, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import {
   Badge,
   Button,
@@ -14,6 +14,7 @@ import {
   Table,
   type TableColumn,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import {
   downloadComplianceDocument,
   useComplianceDocumentsQuery,
@@ -24,13 +25,80 @@ import {
   type DocType,
 } from "@/hooks/useComplianceVault";
 import { DocumentFormModal } from "./DocumentFormModal";
+import { NswPtpExportCard } from "./NswPtpExportCard";
+import { RevenueSection } from "./RevenueSection";
 import { DOC_TYPE_LABELS, DOC_TYPE_OPTIONS, extractErrorMessage, formatDateTime } from "./format";
 
 const PAGE_SIZE = 10;
 
 const DOC_TYPE_FILTER_OPTIONS = [{ value: "", label: "All document types" }, ...DOC_TYPE_OPTIONS];
 
+type ViewTab = "vault" | "reports";
+
 export default function CompliancePage() {
+  const [tab, setTab] = useState<ViewTab>("vault");
+
+  return (
+    <div>
+      <PageHeader
+        title="Compliance Vault"
+        description="Per-vehicle regulatory documents, NSW PtP export, and revenue/GST reporting."
+      />
+
+      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
+        <TabButton active={tab === "vault"} onClick={() => setTab("vault")} icon={<ShieldCheck className="h-4 w-4" />}>
+          Document Vault
+        </TabButton>
+        <TabButton
+          active={tab === "reports"}
+          onClick={() => setTab("reports")}
+          icon={<FileSpreadsheet className="h-4 w-4" />}
+        >
+          Reports
+        </TabButton>
+      </div>
+
+      {tab === "vault" ? <VaultView /> : <ReportsView />}
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  icon?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
+        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+function ReportsView() {
+  return (
+    <div className="flex flex-col gap-4">
+      <NswPtpExportCard />
+      <RevenueSection />
+    </div>
+  );
+}
+
+function VaultView() {
   const vehiclesQuery = useVehiclesQuery();
   const vehicles = vehiclesQuery.data?.items ?? [];
 
@@ -142,16 +210,6 @@ export default function CompliancePage() {
 
   return (
     <div>
-      <PageHeader
-        title="Compliance Vault"
-        description="Per-vehicle regulatory documents — calibration, mounting, camera/duress/tracking registers — checked against the cl.14 checklist."
-        actions={
-          <Button onClick={() => setCreateOpen(true)} disabled={!vehicleId}>
-            <Plus className="h-4 w-4" /> Upload document
-          </Button>
-        }
-      />
-
       <Card className="mb-4">
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="flex flex-col gap-1.5">
@@ -173,6 +231,9 @@ export default function CompliancePage() {
               onChange={(e) => resetPageAnd(setDocTypeFilter)(e.target.value as DocType | "")}
             />
           </div>
+          <Button className="ml-auto" onClick={() => setCreateOpen(true)} disabled={!vehicleId}>
+            <Plus className="h-4 w-4" /> Upload document
+          </Button>
         </CardContent>
       </Card>
 

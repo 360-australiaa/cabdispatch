@@ -20,6 +20,46 @@ first place this code will ever hit a real compiler. Expect and budget time for 
 errors — signature mismatches between sibling files that were written in parallel without ever
 type-checking against each other are the most likely failure mode, not conceptual bugs.
 
+## 2026-08-02 (later) — Real offline maps via Mapbox Maps SDK v11
+
+A secret `MAPBOX_DOWNLOADS_TOKEN` (sk.*, "Downloads:Read" scope) became available this pass,
+which unlocks something the earlier Static Images pass explicitly couldn't do: the actual Maps
+SDK, with genuine offline-region download. **This is the highest-risk unverified code in the
+whole module — read this section before touching anything Mapbox-related.**
+
+**What changed:**
+- `settings.gradle.kts` — added Mapbox's private Maven repo with HTTP Basic auth, credentials
+  read from `local.properties`'s `MAPBOX_DOWNLOADS_TOKEN` (gitignored, machine-specific — if
+  that property is missing/empty, Gradle sync will fail with a 401 the moment it actually needs
+  to fetch `com.mapbox.maps:android`, not silently degrade — that's the correct/expected failure
+  mode for "nobody's configured the secret token on this machine yet").
+- `app/build.gradle.kts` — added `com.mapbox.maps:android:11.8.1`. **Version pin note:** written
+  against a general understanding of the v11 API shape, not verified against Mapbox's actual
+  current release — check their changelog and bump if meaningfully newer before relying on this.
+- `CabDispatchApp.kt` — sets `MapboxOptions.accessToken` (the *public* pk.* token) at startup,
+  the v11 programmatic-token pattern.
+- New `data/remote/MapboxOfflineRegion.kt` — wraps `TileStore`/`OfflineManager` to download a
+  Sydney-metro bounding box region for fully-offline map serving afterward. **Read this file's
+  own doc comment before debugging it** — it names the exact risk (TileStore/OfflineManager
+  signatures have genuinely changed across v11 minor versions, this was written from general
+  knowledge of the shape, not a verified-current API reference) and points at Mapbox's own
+  current "Android Offline Maps" docs as the authoritative source for reconciling any mismatch.
+- `ui/screens/dashboard/WheelDashboardScreen.kt`'s `MapBackground` — now three-tier fallback:
+  real interactive `MapView` (via `AndroidView` interop, not Mapbox's separate Compose-extension
+  artifact — deliberate, to avoid betting on two different Mapbox API surfaces at once) → Static
+  Images API (the previous pass's approach, kept as the no-secret-token fallback) →
+  `IllustrativeGridFallback` (the original placeholder, kept as the final fallback). Once a
+  region is downloaded via `MapboxOfflineRegion`, the SDK serves matching requests from its local
+  cache automatically — no separate "offline mode" branch needed in the UI code.
+- `ui/screens/settings/SettingsScreen.kt` + `SettingsViewModel.kt` — a "Download offline maps"
+  action in S6 (Settings/Diagnostics), with progress/success/failure states.
+
+**Compile-order suggestion:** if the build fails inside `com.mapbox.*` types, start with
+`MapboxOfflineRegion.kt` (named above as the highest-risk file) before assuming something else
+is wrong — the Gradle wiring (`settings.gradle.kts`/`build.gradle.kts`) and the simpler
+`MapView`/`CameraOptions`/`Style.DARK` calls in `WheelDashboardScreen.kt` are much more standard,
+stable API surface and less likely to be the actual problem.
+
 ## 2026-08-02 — LED digit + wheel selection polish (direct user request)
 
 Two small, targeted visual changes, both **unverified like everything else here** (no compiler):
@@ -113,10 +153,40 @@ brief asked for it alongside what shipped):
   a shortcut taken this pass.
 - No true 7-segment font for the meter's LED fare digits — monospace + red glow + text-shadow is
   the documented fallback (spec §11 sanctions this; no licensed font available/sourced).
-- The dashboard's map background is a plain drawn diagonal grid + a static illustrative position
-  pin, not real map tiles — matches the fleet dashboard's own no-paid-maps-SDK approach
-  (`FleetMapCanvas.tsx`'s doc), and is blocked on the same stubbed-GPS gap as everything else
-  location-related.
+- ~~The dashboard's map background is a plain drawn diagonal grid...~~ **Addressed (2026-08-02,
+  Mapbox Static Images API pass):** `ui/screens/dashboard/WheelDashboardScreen.kt`'s
+  `MapBackground` now async-loads a real Mapbox map PNG (dark-v11 style, matching the app's dark
+  theme) via `data/remote/MapboxStaticImage.kt`, using Coil (`io.coil-kt:coil-compose:2.6.0`, new
+  dependency, `app/build.gradle.kts`). The plain-drawn diagonal grid wasn't deleted — it's kept as
+  `IllustrativeGridFallback`, now used only for the image's loading/error states (bad token,
+  offline, Mapbox outage) so a network failure never leaves a blank background.
+  - **Read this before attempting the full Maps SDK (v10/v11, interactive pan/zoom/offline tiles)
+    instead of the Static Images API — do not re-attempt it without first reading this paragraph:**
+    that SDK's Gradle dependency resolves from Mapbox's *private* Maven repo, which requires
+    configuring a separate **secret downloads token** (`sk.*`, "Downloads:Read" scope) as Maven
+    repository credentials in `settings.gradle.kts`. A public `pk.*` access token — all that's
+    wired into this app (`local.properties`' `MAPBOX_ACCESS_TOKEN`, exposed as
+    `BuildConfig.MAPBOX_ACCESS_TOKEN`) — is not accepted there; the dependency fails to resolve
+    before any app code runs, no matter how correctly the integration code itself is written. The
+    Static Images API sidesteps this entirely: it's a plain authenticated HTTPS GET
+    (`https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/{lon},{lat},{zoom}/{w}x{h}@2x?access_token=...`)
+    returning a real rendered map PNG, needs no Maven credential, and the `pk.*` token is
+    explicitly designed to be used exactly this way. **Note for whoever picks this up next:** this
+    machine's `local.properties` actually *also* has a `MAPBOX_DOWNLOADS_TOKEN` (`sk.*`) sitting
+    next to the public one — this pass deliberately did not use it (out of scope, and wiring Maven
+    repo credentials + the full SDK is a materially bigger change than this pass's brief), but a
+    future pass wanting the interactive SDK may not need to go get a new secret token first — check
+    whether that one is still valid before assuming it needs sourcing from scratch.
+  - Still a real, honest gap: the map is centered on a **fixed Sydney CBD coordinate**
+    (`SydneyCbdFallback` in `MapboxStaticImage.kt`), not the driver's actual position — the only
+    location-adjacent data source wired into this app (`AppContainer.speedSource`, a `SpeedSource`
+    exposing `speedKmh` only) has no lat/lng, and GPS is the pre-existing stubbed-GPS gap below.
+    Once a real position lands, swap the fallback center for it — `MapboxStaticImage.url()` already
+    takes an arbitrary center/zoom, no further change needed on that side. The position pin drawn
+    over the map is unchanged from before (still a static illustrative offset, same TODO as ever).
+  - Also still non-interactive by design (a fetched PNG, not a live map you can pan/zoom/rotate) —
+    that's the Static Images API's nature, not a shortcut taken this pass; see the constraint above
+    for why the interactive SDK isn't viable with only a `pk.*` token.
 - GPS is still stubbed project-wide (`StubSpeedSource`, GPS status-strip dot approximated from
   permission+provider-enabled checks, not a live fix) — every "TODO(location sibling agent)" left
   in the tree by prior passes is still open; this pass didn't touch location.

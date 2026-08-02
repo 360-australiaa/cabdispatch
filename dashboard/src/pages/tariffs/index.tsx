@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { History, Pencil, Plus, Trash2 } from "lucide-react";
+import { History, MapPinned, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -11,6 +11,7 @@ import {
   Table,
   type TableColumn,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import {
   useDeleteTariffMutation,
   useTariffsQuery,
@@ -19,6 +20,7 @@ import {
 } from "@/hooks/useTariffStudio";
 import { ChangeLogModal } from "./ChangeLogModal";
 import { TariffFormModal } from "./TariffFormModal";
+import { TollZonesPanel } from "./TollZonesPanel";
 import { extractErrorMessage, formatDateTime, formatMoney, REGION_OPTIONS, regionBadgeVariant } from "./format";
 
 const PAGE_SIZE = 15;
@@ -30,7 +32,15 @@ const BOOKED_FILTER_OPTIONS = [
   { value: "false", label: "Rank / hail only" },
 ];
 
+type TariffStudioTab = "tariffs" | "toll-zones";
+
+const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
+  { key: "tariffs", label: "Rate cards", icon: Receipt },
+  { key: "toll-zones", label: "Toll Zones", icon: MapPinned },
+];
+
 export default function TariffsPage() {
+  const [tab, setTab] = useState<TariffStudioTab>("tariffs");
   const [regionFilter, setRegionFilter] = useState<Region | "">("");
   const [bookedFilter, setBookedFilter] = useState<"" | "true" | "false">("");
   const [page, setPage] = useState(0);
@@ -116,14 +126,39 @@ export default function TariffsPage() {
     <div>
       <PageHeader
         title="Tariff Studio"
-        description="Effective-dated rate cards. Rank/hail urban & country tariffs are validated against the NSW Fares Order reference on save."
+        description="Effective-dated rate cards and toll zones. Rank/hail urban & country tariffs are validated against the NSW Fares Order reference on save."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New tariff
-          </Button>
+          tab === "tariffs" ? (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> New tariff
+            </Button>
+          ) : undefined
         }
       />
 
+      <div className="mb-6 flex gap-1 border-b border-border">
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={cn(
+              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+              tab === key
+                ? "border-brand-primary text-brand-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "toll-zones" && <TollZonesPanel />}
+
+      {tab === "tariffs" && (
+        <>
       <Card className="mb-4">
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="flex flex-col gap-1.5">
@@ -198,6 +233,8 @@ export default function TariffsPage() {
             </Button>
           </div>
         </div>
+      )}
+        </>
       )}
 
       <TariffFormModal open={createOpen} onClose={() => setCreateOpen(false)} mode="create" />

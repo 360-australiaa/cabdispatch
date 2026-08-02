@@ -22,6 +22,10 @@ from app.core.database import get_session
 from app.core.security import get_current_tenant_id
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
 from app.schemas.trips import (
+    ReceiptEmailRequest,
+    ReceiptEmailResponse,
+    ReceiptSmsRequest,
+    ReceiptSmsResponse,
     TripCloseRequest,
     TripCreate,
     TripListResponse,
@@ -32,6 +36,8 @@ from app.schemas.trips import (
     TripTickRequest,
     TripUpdate,
 )
+from app.services import fatigue as fatigue_service
+from app.services import receipts as receipts_service
 from app.services.trips import (
     CloseParams,
     UnknownTariffError,
@@ -309,6 +315,13 @@ async def tick_trip(
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
+    """Also runs driver-fatigue checks (blueprint 12.3) as a side effect of
+    every tick, via `app.services.fatigue`: a per-point speed_exceeded check
+    against each telemetry point in this batch, and (if the trip is attached
+    to a shift) a shift_duration_exceeded check against that shift's elapsed
+    open time. Both write FatigueAlert rows into the same transaction as the
+    tick itself — see that module for thresholds/simplifications and
+    `app/api/v1/fatigue_alerts.py` for how they're surfaced/acknowledged."""
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
     if trip.status != TRIP_STATUS_OPEN:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is not open")
@@ -317,6 +330,21 @@ async def tick_trip(
         await apply_tick(session, tenant_id=tenant_id, trip=trip, points=payload.points)
     except UnknownTariffError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    for point in payload.points:
+        await fatigue_service.check_speed(
+            session,
+            tenant_id=tenant_id,
+            driver_id=trip.driver_id,
+            shift_id=trip.shift_id,
+            speed_kmh=point.speed_kmh,
+            ts=point.ts,
+        )
+
+    if trip.shift_id is not None:
+        shift = await fatigue_service.get_shift_or_none(session, tenant_id=tenant_id, shift_id=trip.shift_id)
+        if shift is not None:
+            await fatigue_service.check_shift_duration(session, tenant_id=tenant_id, shift=shift)
 
     await session.commit()
     await session.refresh(trip)
@@ -355,3 +383,76 @@ async def close_trip_endpoint(
     await session.commit()
     await session.refresh(trip)
     return trip
+
+
+# --- Receipt delivery (blueprint 5.2.6/8.5) ----------------------------------
+# Real PDF generation (app.services.receipts) + email/SMS delivery, each with
+# the same mock-fallback contract as the Stripe integration in
+# app.services.payments — see that module's docstring for the pattern this
+# mirrors. Both endpoints require the trip to be closed (the fare breakdown
+# columns this renders from are only final after POST .../close).
+
+
+@router.post("/{trip_id}/receipt/email", response_model=ReceiptEmailResponse)
+async def email_receipt(
+    trip_id: str,
+    payload: ReceiptEmailRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> ReceiptEmailResponse:
+    trip = await _get_trip_or_404(trip_id, tenant_id, session)
+
+    try:
+        absolute_path, relative_path, generated_now = await receipts_service.ensure_receipt_pdf(
+            session, tenant_id=tenant_id, trip=trip
+        )
+    except receipts_service.TripNotClosedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    pdf_bytes = absolute_path.read_bytes()
+    result = receipts_service.send_receipt_email(
+        to_email=payload.to_email,
+        trip=trip,
+        pdf_bytes=pdf_bytes,
+        pdf_filename=absolute_path.name,
+    )
+
+    return ReceiptEmailResponse(
+        mock=result["mock"],
+        would_send_to=result.get("would_send_to"),
+        to_email=result.get("to_email"),
+        sendgrid_status_code=result.get("sendgrid_status_code"),
+        receipt_ref=trip.receipt_ref,
+        pdf_relative_path=relative_path,
+        pdf_generated_now=generated_now,
+    )
+
+
+@router.post("/{trip_id}/receipt/sms", response_model=ReceiptSmsResponse)
+async def sms_receipt(
+    trip_id: str,
+    payload: ReceiptSmsRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> ReceiptSmsResponse:
+    trip = await _get_trip_or_404(trip_id, tenant_id, session)
+
+    try:
+        _absolute_path, relative_path, generated_now = await receipts_service.ensure_receipt_pdf(
+            session, tenant_id=tenant_id, trip=trip
+        )
+    except receipts_service.TripNotClosedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    result = receipts_service.send_receipt_sms(to_phone=payload.to_phone, trip=trip)
+
+    return ReceiptSmsResponse(
+        mock=result["mock"],
+        would_send_to=result.get("would_send_to"),
+        to_phone=result.get("to_phone"),
+        twilio_sid=result.get("twilio_sid"),
+        message=result.get("message"),
+        receipt_ref=trip.receipt_ref,
+        pdf_relative_path=relative_path,
+        pdf_generated_now=generated_now,
+    )

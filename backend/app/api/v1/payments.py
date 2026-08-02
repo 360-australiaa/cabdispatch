@@ -1,5 +1,6 @@
 """Payments domain: CRUD + the Stripe Tap-to-Pay/payment-link/cash/manual
-creation flows, and the Stripe webhook receiver.
+creation flows, the real-or-mock CabCharge authorization and TTSS subsidy
+claim flows, and the Stripe webhook receiver.
 
 Two routers are exported because `/v1/stripe/webhook` lives OUTSIDE the
 `/v1/payments` prefix (per the domain contract): `router` (prefix
@@ -7,12 +8,15 @@ Two routers are exported because `/v1/stripe/webhook` lives OUTSIDE the
 step must `app.include_router()` BOTH.
 
 Payment *creation* has no generic `POST /v1/payments` — every payment is
-created through one of the four method-specific flows below (tap-to-pay
-intent, payment link, cash, manual cabcharge/ttss docket) so the right
-validation/state-machine for that rail always runs, per the domain brief.
-List/get/update are generic. There is deliberately no DELETE: payments are a
-financial audit trail and must not be hard-deleted — transition to
-`refunded`/`canceled` via PATCH instead.
+created through one of the method-specific flows below (tap-to-pay intent,
+payment link, cash, manual cabcharge/ttss docket, cabcharge authorize, ttss
+claim) so the right validation/state-machine for that rail always runs, per
+the domain brief. `manual` remains available as a fallback for both
+CabCharge and TTSS when the real-or-mock flow below isn't used (e.g. a
+driver keying in a paper docket after the fact). List/get/update are
+generic. There is deliberately no DELETE: payments are a financial audit
+trail and must not be hard-deleted — transition to `refunded`/`canceled` via
+PATCH instead.
 
 Tenant isolation: every endpoint below except the webhook resolves
 `tenant_id` via `get_current_tenant_id` and filters every query by it, per
@@ -35,14 +39,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id
 from app.models.payment import (
+    METHOD_CABCHARGE,
     METHOD_CASH,
     METHOD_LINK,
     METHOD_TAP_TO_PAY,
+    METHOD_TTSS,
     STATUS_PENDING,
     STATUS_SUCCEEDED,
     Payment,
 )
 from app.schemas.payments import (
+    CabChargeAuthorizeRequest,
+    CabChargeAuthorizeResponse,
     CashPaymentRequest,
     ManualPaymentRequest,
     PaymentLinkRequest,
@@ -55,6 +63,8 @@ from app.schemas.payments import (
     StripeWebhookResponse,
     TapToPayIntentRequest,
     TapToPayIntentResponse,
+    TTSSClaimRequest,
+    TTSSClaimResponse,
 )
 from app.services import payments as payments_service
 
@@ -247,6 +257,92 @@ async def create_manual_payment(
     await session.commit()
     await session.refresh(payment)
     return payment
+
+
+@router.post(
+    "/cabcharge/authorize",
+    response_model=CabChargeAuthorizeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def authorize_cabcharge_payment(
+    body: CabChargeAuthorizeRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> CabChargeAuthorizeResponse:
+    """Authorization -> Docket creation step of blueprint 5.2.5's CabCharge
+    flow (real-or-mock, see app.services.payments.authorize_cabcharge).
+    Settlement batching is a later, separate process out of scope here.
+    Status starts `pending` (mirroring tap-to-pay/link/manual) since
+    settlement hasn't happened yet."""
+    _raise_if_surcharge_exceeds_cap(body.amount, body.surcharge)
+
+    result = payments_service.authorize_cabcharge(card_identifier=body.card_identifier, amount=body.amount)
+
+    payment = Payment(
+        tenant_id=tenant_id,
+        trip_id=body.trip_id,
+        method=METHOD_CABCHARGE,
+        amount=body.amount,
+        surcharge=body.surcharge,
+        status=STATUS_PENDING,
+        docket_number=result["docket_number"],
+        notes=f"CabCharge authorization {result['authorization_id']} (card {body.card_identifier})",
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+
+    return CabChargeAuthorizeResponse(
+        payment=payment,
+        mock=result["mock"],
+        authorization_id=result["authorization_id"],
+        cabcharge_status=result["cabcharge_status"],
+    )
+
+
+@router.post("/ttss/claim", response_model=TTSSClaimResponse, status_code=status.HTTP_201_CREATED)
+async def submit_ttss_claim_payment(
+    body: TTSSClaimRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> TTSSClaimResponse:
+    """Subsidy calculation -> Claim submission step of blueprint 5.2.5's
+    TTSS flow. Subsidy is always computed server-side (50% of `amount`,
+    capped at $60.00 per blueprint 11.1) — never client-supplied. Status
+    starts `pending` since reimbursement hasn't happened yet."""
+    subsidy_amount = payments_service.compute_ttss_subsidy(body.amount)
+    passenger_paid_amount = body.amount - subsidy_amount
+
+    result = payments_service.submit_ttss_claim(
+        concession_identifier=body.concession_identifier,
+        fare_amount=body.amount,
+        subsidy_amount=subsidy_amount,
+    )
+
+    payment = Payment(
+        tenant_id=tenant_id,
+        trip_id=body.trip_id,
+        method=METHOD_TTSS,
+        amount=body.amount,
+        surcharge=Decimal("0.00"),
+        status=STATUS_PENDING,
+        docket_number=result["docket_number"],
+        notes=f"TTSS claim {result['claim_id']} (concession {body.concession_identifier})",
+        subsidy_amount=subsidy_amount,
+        passenger_paid_amount=passenger_paid_amount,
+    )
+    session.add(payment)
+    await session.commit()
+    await session.refresh(payment)
+
+    return TTSSClaimResponse(
+        payment=payment,
+        mock=result["mock"],
+        claim_id=result["claim_id"],
+        ttss_status=result["ttss_status"],
+        subsidy_amount=subsidy_amount,
+        passenger_paid_amount=passenger_paid_amount,
+    )
 
 
 # --- Stripe webhook (no tenant scoping — see module docstring) --------------

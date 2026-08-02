@@ -23,6 +23,20 @@ this codebase: this table has no `updated_at` (rows are never updated) and
 uses the domain-specified `at` column as its single, purpose-built
 timestamp — the exact same pattern already established by the sibling
 `app.models.tariffs.TariffChangeLog` append-only audit table.
+
+TAMPER-EVIDENCE HASH CHAIN (`hash` / `previous_hash`): append-only-by-convention
+(no update/delete route) proves nothing on its own — a row edited directly at
+the DB layer would be invisible to anyone reading through the API. `hash` is
+the SHA-256 hex digest of a canonical serialization of this row's own fields
+PLUS `previous_hash`; `previous_hash` is the `hash` of the immediately
+preceding row for the SAME tenant (the chain is per-tenant, not global), or a
+fixed 64-zero genesis value for a tenant's first row. Both are computed once,
+at write time, in `app.services.audit_log.record_audit` — never recomputed or
+edited afterwards. Any in-place edit to a row (this column set included)
+changes what its `hash` recomputes to, which breaks the `previous_hash` link
+the next row recorded — `GET /v1/audit-log/verify` walks the chain and
+recomputes every row's hash to detect exactly that. See
+`app.services.audit_log.compute_audit_hash` / `verify_chain`.
 """
 from __future__ import annotations
 
@@ -70,3 +84,9 @@ class AuditLog(Base, TenantScopedMixin):
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
+
+    # Hash chain — see module docstring. server_default is the same
+    # belt-and-suspenders as `at` above (never relied on in practice):
+    # app.services.audit_log.record_audit always sets both explicitly.
+    hash: Mapped[str] = mapped_column(String(64), nullable=False, server_default="0" * 64)
+    previous_hash: Mapped[str] = mapped_column(String(64), nullable=False, server_default="0" * 64)

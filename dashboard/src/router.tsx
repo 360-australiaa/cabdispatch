@@ -13,6 +13,7 @@ import FleetPage from "@/pages/fleet";
 import CompliancePage from "@/pages/compliance";
 import BillingPage from "@/pages/billing";
 import WhiteLabelPage from "@/pages/settings/white-label";
+import SecuritySettingsPage from "@/pages/settings/security";
 
 /**
  * Route table for the fleet-ops dashboard. Public: /login. Everything else
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
+      { path: "settings/security", element: <SecuritySettingsPage /> },
       { path: "*", element: <Navigate to="/live-map" replace /> },
     ],
   },

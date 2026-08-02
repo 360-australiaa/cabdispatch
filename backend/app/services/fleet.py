@@ -213,3 +213,19 @@ async def set_force_update(session: AsyncSession, device: Device, *, enabled: bo
     await session.commit()
     await session.refresh(device)
     return device
+
+
+async def set_locate_requested(session: AsyncSession, device: Device, *, enabled: bool) -> Device:
+    device.locate_requested = enabled
+    await session.commit()
+    await session.refresh(device)
+    return device
+
+
+async def set_reboot_requested(session: AsyncSession, device: Device, *, enabled: bool) -> Device:
+    """See the HONESTY NOTE on `Device.reboot_requested` — this only flips the
+    flag the device reads back on heartbeat; nothing here reboots anything."""
+    device.reboot_requested = enabled
+    await session.commit()
+    await session.refresh(device)
+    return device

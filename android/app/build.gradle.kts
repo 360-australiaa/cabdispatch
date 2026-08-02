@@ -1,9 +1,27 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
 }
+
+// Mapbox public access token (pk.*), read from local.properties (gitignored, machine-specific —
+// see that file's own comment). Exposed as a BuildConfig field below, same pattern as
+// API_BASE_URL. This is the RUNTIME token (map styling/tiles) — the separate SECRET
+// MAPBOX_DOWNLOADS_TOKEN (sk.*) that unlocks the SDK dependency itself is wired in
+// settings.gradle.kts instead (Maven repo credentials, not a BuildConfig field — it must never
+// end up in the compiled app, only in the build-time Gradle process). Falls back to an empty
+// string (not a crash) if someone's local.properties doesn't have it yet, so a missing token
+// degrades to the illustrative grid fallback at runtime rather than failing the build.
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+val mapboxAccessToken: String = localProperties.getProperty("MAPBOX_ACCESS_TOKEN", "")
 
 android {
     namespace = "au.com.threesixty.cabdispatch"
@@ -22,6 +40,10 @@ android {
         // a real device on the same LAN/VPN can point at the host's LAN IP or a
         // staging URL without code changes.
         buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8001\"")
+        // Runtime map token — set programmatically at startup via MapboxOptions.accessToken
+        // (CabDispatchApp.kt), which is what the actual Maps SDK v11 API expects (not a manifest
+        // meta-data entry, that was the older v9/v10 pattern).
+        buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
     }
 
     buildTypes {
@@ -113,6 +135,23 @@ dependencies {
 
     // -- Location (fare engine GPS fusion, sibling agent) --
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // -- Image loading — Coil, used by MapboxStaticImage.kt's fallback path (kept as the
+    // loading/error-state and no-secret-token fallback, see WheelDashboardScreen.kt's
+    // MapBackground) and by any other async-image needs elsewhere in the app. --
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // -- Mapbox Maps SDK (real interactive map + genuine offline region download, added
+    // 2026-08-02 once a secret MAPBOX_DOWNLOADS_TOKEN became available — see
+    // settings.gradle.kts's Maven-credentials block for why this specific dependency needs that
+    // separate secret token to resolve at all, and HANDOFF.md's offline-maps section for the
+    // full writeup). PIN NOTE: 11.8.1 was the most recent version this was written against
+    // Mapbox's documented v11 API surface for — check Mapbox's actual release notes and bump if
+    // meaningfully newer by the time this is first compiled; the offline-region API in
+    // particular (TileStore/OfflineManager) has had real signature changes across v11 minor
+    // versions historically, so this dependency (more than anything else in this project) may
+    // need small adjustments once someone can actually build against it. --
+    implementation("com.mapbox.maps:android:11.8.1")
 
     testImplementation("junit:junit:4.13.2")
     // JVM unit tests for the offline sync engine (OutboxDrainerTest) — pure

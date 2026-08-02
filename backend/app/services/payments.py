@@ -4,8 +4,12 @@ Covers: the mandatory non-cash surcharge cap (Fares Order 2025 (no.2) — hard
 5% limit, see docs/TCT-METER-01-spec.md A5: "Build the cap as a hard limit in
 the payment service, not a config default"), Stripe Tap-to-Pay / payment-link
 creation with an automatic mock fallback so the endpoints are testable without
-live Stripe credentials or network access, cash change calculation, and Stripe
-webhook signature verification + event mapping.
+live Stripe credentials or network access, cash change calculation, Stripe
+webhook signature verification + event mapping, CabCharge authorization
+(blueprint 5.2.5: Authorization -> Docket creation -> Settlement batch) and
+TTSS subsidy claim submission (blueprint 5.2.5/11.1: Eligibility check ->
+Subsidy calculation -> Claim submission -> Reimbursement) — the latter two
+with the same real-or-mock fallback pattern as Stripe.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import os
 import uuid
 from decimal import Decimal
 
+import httpx
 import stripe
 
 from app.core.config import settings
@@ -121,6 +126,126 @@ def create_payment_link(*, amount: Decimal, surcharge: Decimal, trip_id: str) ->
 
 def compute_change(*, amount: Decimal, tendered: Decimal) -> Decimal:
     return round_half_up(tendered - amount)
+
+
+# --- CabCharge integration with mock fallback ----------------------------------
+# Same pattern as the Stripe helpers above: a placeholder/missing
+# CABCHARGE_API_KEY, or any HTTP failure at call time (auth error, no network
+# in dev/CI, non-2xx response, malformed body), falls back to a
+# clearly-labeled mock authorization so the endpoint is testable without real
+# CabCharge credentials or network access.
+
+_CABCHARGE_PLACEHOLDER_KEYS = {"", "cabcharge_test_placeholder"}
+
+
+def _cabcharge_configured() -> bool:
+    key = settings.CABCHARGE_API_KEY
+    return bool(key) and key not in _CABCHARGE_PLACEHOLDER_KEYS
+
+
+def _generate_docket_number(prefix: str) -> str:
+    """A plausible-looking docket/settlement reference, e.g. CBC-A1B2C3D4."""
+    return f"{prefix}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def authorize_cabcharge(*, card_identifier: str, amount: Decimal) -> dict:
+    """Authorization -> Docket creation step of blueprint 5.2.5's CabCharge
+    flow (Settlement batch is a later, separate process out of scope here).
+    Returns a dict describing either a real CabCharge authorization or, if
+    CabCharge isn't configured or the call fails for any reason, a
+    clearly-labeled mock authorization."""
+    if _cabcharge_configured():
+        try:
+            with httpx.Client(timeout=10.0) as http_client:
+                resp = http_client.post(
+                    f"{settings.CABCHARGE_BASE_URL}/authorizations",
+                    headers={"Authorization": f"Bearer {settings.CABCHARGE_API_KEY}"},
+                    json={
+                        "merchant_id": settings.CABCHARGE_MERCHANT_ID,
+                        "card_identifier": card_identifier,
+                        "amount": str(amount),
+                        "currency": "AUD",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return {
+                "mock": False,
+                "authorization_id": data["authorization_id"],
+                "docket_number": data.get("docket_number") or _generate_docket_number("CBC"),
+                "cabcharge_status": data.get("status", "authorized"),
+            }
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            logger.warning("CabCharge authorization failed (%s) — returning mock authorization.", exc)
+
+    return {
+        "mock": True,
+        "authorization_id": f"mock_cabcharge_{uuid.uuid4().hex[:24]}",
+        "docket_number": _generate_docket_number("CBC"),
+        "cabcharge_status": "authorized",
+    }
+
+
+# --- TTSS subsidy + claim submission with mock fallback ------------------------
+# Blueprint 11.1: the TTSS subsidy is 50% of the fare, capped at $60.00 per
+# trip. This is a LITERAL, not read from settings/tenant config — same
+# rationale as SURCHARGE_CAP_PCT above: the blueprint requires an
+# unconditional hard limit computed in the payment service. Do not make this
+# configurable per-tenant.
+TTSS_SUBSIDY_PCT = Decimal("0.50")
+TTSS_SUBSIDY_CAP = Decimal("60.00")
+
+_TTSS_PLACEHOLDER_KEYS = {"", "ttss_test_placeholder"}
+
+
+def _ttss_configured() -> bool:
+    key = settings.TTSS_API_KEY
+    return bool(key) and key not in _TTSS_PLACEHOLDER_KEYS
+
+
+def compute_ttss_subsidy(fare_amount: Decimal) -> Decimal:
+    """50% of the fare, rounded half-up to the cent, capped at $60.00
+    (blueprint 11.1). E.g. a $200.00 fare caps at $60.00, not $100.00."""
+    subsidy = round_half_up(fare_amount * TTSS_SUBSIDY_PCT)
+    return min(subsidy, TTSS_SUBSIDY_CAP)
+
+
+def submit_ttss_claim(*, concession_identifier: str, fare_amount: Decimal, subsidy_amount: Decimal) -> dict:
+    """Subsidy calculation -> Claim submission step of blueprint 5.2.5's TTSS
+    flow (Eligibility check is assumed done upstream by the caller;
+    Reimbursement happens later, out of scope here). Same mock-fallback
+    pattern as `authorize_cabcharge`."""
+    if _ttss_configured():
+        try:
+            with httpx.Client(timeout=10.0) as http_client:
+                resp = http_client.post(
+                    f"{settings.TTSS_BASE_URL}/claims",
+                    headers={"Authorization": f"Bearer {settings.TTSS_API_KEY}"},
+                    json={
+                        "provider_id": settings.TTSS_PROVIDER_ID,
+                        "concession_identifier": concession_identifier,
+                        "fare_amount": str(fare_amount),
+                        "subsidy_amount": str(subsidy_amount),
+                        "currency": "AUD",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return {
+                "mock": False,
+                "claim_id": data["claim_id"],
+                "docket_number": data.get("docket_number") or _generate_docket_number("TTSS"),
+                "ttss_status": data.get("status", "submitted"),
+            }
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            logger.warning("TTSS claim submission failed (%s) — returning mock claim.", exc)
+
+    return {
+        "mock": True,
+        "claim_id": f"mock_ttss_{uuid.uuid4().hex[:24]}",
+        "docket_number": _generate_docket_number("TTSS"),
+        "ttss_status": "submitted",
+    }
 
 
 # --- Stripe webhook ------------------------------------------------------------

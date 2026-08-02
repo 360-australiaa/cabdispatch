@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { VehiclesPanel } from "./VehiclesPanel";
 import { DriversPanel } from "./DriversPanel";
 import { DevicesPanel } from "./DevicesPanel";
+import { FatigueAlertsBanner } from "./FatigueAlertsBanner";
 
 type FleetTab = "vehicles" | "drivers" | "devices";
 
@@ -25,6 +26,8 @@ export default function FleetPage() {
         title="Fleet & Drivers"
         description="Manage vehicles, their linked kiosk devices, and view driver live-status."
       />
+
+      <FatigueAlertsBanner />
 
       <div className="mb-6 flex gap-1 border-b border-border">
         {TABS.map(({ key, label, icon: Icon }) => (

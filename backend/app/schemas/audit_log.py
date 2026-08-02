@@ -35,6 +35,8 @@ class AuditLogRead(BaseModel):
     before_json: dict[str, Any] | None
     after_json: dict[str, Any] | None
     at: datetime
+    hash: str
+    previous_hash: str
 
 
 class AuditLogListResponse(BaseModel):
@@ -42,3 +44,12 @@ class AuditLogListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AuditLogVerifyResponse(BaseModel):
+    """Response for `GET /v1/audit-log/verify` — see
+    app.services.audit_log.verify_chain for what each field means."""
+
+    valid: bool
+    broken_at_id: str | None
+    checked: int

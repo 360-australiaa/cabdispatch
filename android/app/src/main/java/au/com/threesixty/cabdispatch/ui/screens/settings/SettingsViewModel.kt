@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
+import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
@@ -30,6 +31,15 @@ enum class GpsQuality { NO_FIX, POOR, FAIR, GOOD, PERMISSION_DENIED }
 enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
 enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, REQUIRED }
 
+/** Mirrors [MapboxOfflineRegion.DownloadState] but as a UI-friendly type (no Mapbox SDK types
+ * leaking into the state a Composable reads) — see that class's doc for the actual download. */
+sealed interface OfflineMapDownloadState {
+    data object NotStarted : OfflineMapDownloadState
+    data class Downloading(val progressPercent: Int) : OfflineMapDownloadState
+    data object Completed : OfflineMapDownloadState
+    data class Failed(val message: String) : OfflineMapDownloadState
+}
+
 data class SettingsUiState(
     val gpsQuality: GpsQuality = GpsQuality.NO_FIX,
     val gpsAccuracyM: Float? = null,
@@ -44,6 +54,7 @@ data class SettingsUiState(
     val factoryResetError: String? = null,
     val factoryResetInProgress: Boolean = false,
     val factoryResetComplete: Boolean = false,
+    val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,
 )
 
 /**
@@ -196,6 +207,31 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun clearFactoryResetError() = _uiState.update { it.copy(factoryResetError = null) }
+
+    // --- Offline maps (spec: meter must keep working with zero connectivity; the wheel
+    // dashboard's map background is part of that — see MapboxOfflineRegion's class doc) ---
+    fun downloadOfflineMaps() {
+        val token = BuildConfig.MAPBOX_ACCESS_TOKEN
+        if (token.isBlank()) {
+            _uiState.update {
+                it.copy(offlineMapDownload = OfflineMapDownloadState.Failed("No Mapbox token configured on this device"))
+            }
+            return
+        }
+        _uiState.update { it.copy(offlineMapDownload = OfflineMapDownloadState.Downloading(0)) }
+        viewModelScope.launch {
+            MapboxOfflineRegion.downloadSydneyMetroRegion(token).collect { state ->
+                val mapped = when (state) {
+                    is MapboxOfflineRegion.DownloadState.Started -> OfflineMapDownloadState.Downloading(0)
+                    is MapboxOfflineRegion.DownloadState.InProgress ->
+                        OfflineMapDownloadState.Downloading(state.progressPercent)
+                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed
+                    is MapboxOfflineRegion.DownloadState.Failed -> OfflineMapDownloadState.Failed(state.message)
+                }
+                _uiState.update { it.copy(offlineMapDownload = mapped) }
+            }
+        }
+    }
 
     companion object {
         private const val GPS_NETWORK_POLL_INTERVAL_MS = 4000L

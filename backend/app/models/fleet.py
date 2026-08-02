@@ -73,6 +73,22 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     # set that the device can actually read back on its next heartbeat. See
     # deviation note in the domain summary.
     force_update_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # MDM-lite remote command flags (blueprint 4.1.3/6.2.1), same "admin sets it,
+    # device reads it back on next heartbeat" convention as kiosk_locked /
+    # force_update_pending above — no new transport, this just extends the
+    # existing flag-polling pattern.
+    locate_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # HONESTY NOTE: this is a real, useful command QUEUE — an admin can set it
+    # via POST /devices/{id}/reboot, it's visible on the device row, and a
+    # dashboard can show it pending — but nothing in this codebase (and nothing
+    # a normal, non-device-owner Android app can do) actually reboots the OS on
+    # seeing this flag set. A genuine remote reboot needs the on-device app
+    # enrolled as Android Device Owner (DevicePolicyManager.reboot()), which
+    # requires zero-touch/QR provisioning at device setup — that provisioning
+    # is out of scope for this pass. Do not represent this flag as "the device
+    # will reboot"; it queues the request only, for a future device-owner-aware
+    # app build to act on.
+    reboot_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-100
     network: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "wifi", "4g", "offline"

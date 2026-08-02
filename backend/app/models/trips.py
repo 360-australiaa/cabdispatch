@@ -46,7 +46,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -133,3 +133,13 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     max_fare_check_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     variance_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
     receipt_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # --- geofence toll auto-detection (blueprint 5.2.4), added by a later
+    # feature step on top of the domain brief's original field list. Tracks
+    # which toll-kind Geofence ids (app.models.geofence.Geofence) have
+    # already had their toll_amount folded into `tolls` above, so a vehicle
+    # lingering inside — or re-crossing — the same zone across multiple
+    # PATCH .../tick calls is never charged twice. Not exposed for direct
+    # editing via TripUpdate — it's maintained exclusively by
+    # app.services.trips.apply_tick.
+    auto_tolls_applied: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)

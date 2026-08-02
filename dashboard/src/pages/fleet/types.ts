@@ -66,6 +66,8 @@ export interface Device {
   vehicle_id: string | null;
   kiosk_locked: boolean;
   force_update_pending: boolean;
+  locate_requested: boolean;
+  reboot_requested: boolean;
   last_seen_at: string | null;
   battery: number | null;
   network: string | null;
@@ -121,4 +123,30 @@ export interface Page<T> {
   total: number;
   skip: number;
   limit: number;
+}
+
+/**
+ * `FatigueAlertRead` — driving-hours monitoring alerts raised as a side effect
+ * of `PATCH /v1/trips/{id}/tick` (see `app.services.fatigue`). List/acknowledge
+ * only via `GET /v1/fatigue-alerts` and `POST /v1/fatigue-alerts/{id}/acknowledge`.
+ */
+export type FatigueAlertKind = "shift_duration_exceeded" | "no_break_taken" | "speed_exceeded";
+
+export const FATIGUE_ALERT_KIND_LABELS: Record<FatigueAlertKind, string> = {
+  shift_duration_exceeded: "Shift duration exceeded",
+  no_break_taken: "No break taken",
+  speed_exceeded: "Speed exceeded",
+};
+
+export interface FatigueAlert {
+  id: string;
+  tenant_id: string;
+  driver_id: string;
+  shift_id: string | null;
+  kind: FatigueAlertKind;
+  triggered_at: string;
+  details_json: Record<string, unknown> | null;
+  acknowledged: boolean;
+  created_at: string;
+  updated_at: string;
 }

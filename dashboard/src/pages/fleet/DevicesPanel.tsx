@@ -1,5 +1,18 @@
 import { useMemo, useState } from "react";
-import { BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Lock, Pencil, Plus, RefreshCw, Trash2, Unlock } from "lucide-react";
+import {
+  BatteryFull,
+  BatteryLow,
+  BatteryMedium,
+  BatteryWarning,
+  Lock,
+  MapPin,
+  Pencil,
+  Plus,
+  Power,
+  RefreshCw,
+  Trash2,
+  Unlock,
+} from "lucide-react";
 import {
   Badge,
   Button,
@@ -17,6 +30,8 @@ import {
   useDevices,
   useForceUpdate,
   useKioskLock,
+  useLocateDevice,
+  useRebootDevice,
   useUpdateDevice,
   useVehicleOptions,
   type DeviceFilters,
@@ -84,6 +99,8 @@ export function DevicesPanel() {
   const deleteDevice = useDeleteDevice();
   const kioskLock = useKioskLock();
   const forceUpdate = useForceUpdate();
+  const locateDevice = useLocateDevice();
+  const rebootDevice = useRebootDevice();
 
   function openCreate() {
     setEditing(null);
@@ -148,6 +165,24 @@ export function DevicesPanel() {
     }
   }
 
+  async function triggerLocate(d: Device) {
+    setPendingActionId(d.id);
+    try {
+      await locateDevice.mutateAsync(d.id);
+    } finally {
+      setPendingActionId(null);
+    }
+  }
+
+  async function triggerReboot(d: Device) {
+    setPendingActionId(d.id);
+    try {
+      await rebootDevice.mutateAsync(d.id);
+    } finally {
+      setPendingActionId(null);
+    }
+  }
+
   const columns: TableColumn<Device>[] = [
     { key: "android_id", header: "Android ID", render: (d) => <span className="font-medium">{d.android_id}</span> },
     { key: "model", header: "Model", render: (d) => d.model || "—" },
@@ -179,6 +214,16 @@ export function DevicesPanel() {
       render: (d) => (d.force_update_pending ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">Up to date</span>),
     },
     {
+      key: "locate_requested",
+      header: "Locate",
+      render: (d) => (d.locate_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+    },
+    {
+      key: "reboot_requested",
+      header: "Reboot",
+      render: (d) => (d.reboot_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+    },
+    {
       key: "actions",
       header: "",
       render: (d) => (
@@ -208,6 +253,32 @@ export function DevicesPanel() {
             disabled={pendingActionId === d.id || d.force_update_pending}
           >
             <RefreshCw className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Locate device"
+            title={d.locate_requested ? "Locate request already pending" : "Request a fresh location fix"}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerLocate(d);
+            }}
+            disabled={pendingActionId === d.id || d.locate_requested}
+          >
+            <MapPin className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Reboot device"
+            title={d.reboot_requested ? "Reboot already pending" : "Queue a remote reboot"}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerReboot(d);
+            }}
+            disabled={pendingActionId === d.id || d.reboot_requested}
+          >
+            <Power className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"

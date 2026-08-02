@@ -16,6 +16,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +71,7 @@ fun SettingsScreen(
             onOpenPrinterPairing = { subScreen = SettingsSubScreen.PRINTER_PAIRING },
             onOpenFareSchedule = { subScreen = SettingsSubScreen.FARE_SCHEDULE },
             onFactoryResetClick = { showResetDialog = true },
+            onDownloadOfflineMaps = viewModel::downloadOfflineMaps,
         )
         SettingsSubScreen.PRINTER_PAIRING -> PrinterPairingContent(
             state = state,
@@ -133,6 +135,7 @@ private fun MainSettingsContent(
     onOpenPrinterPairing: () -> Unit,
     onOpenFareSchedule: () -> Unit,
     onFactoryResetClick: () -> Unit,
+    onDownloadOfflineMaps: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -180,6 +183,43 @@ private fun MainSettingsContent(
         item {
             OutlinedButton(onClick = onOpenFareSchedule, modifier = Modifier.fillMaxWidth()) {
                 Text("Fare schedule (passenger display)")
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Offline maps", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Download the Sydney metro region so the dashboard's map background keeps " +
+                            "working with zero signal — the meter itself already works fully offline, " +
+                            "this just covers the map imagery too.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    when (val dl = state.offlineMapDownload) {
+                        is OfflineMapDownloadState.NotStarted ->
+                            OutlinedButton(onClick = onDownloadOfflineMaps, modifier = Modifier.fillMaxWidth()) {
+                                Text("Download offline maps")
+                            }
+                        is OfflineMapDownloadState.Downloading -> {
+                            LinearProgressIndicator(
+                                progress = { dl.progressPercent / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text("Downloading… ${dl.progressPercent}%", style = MaterialTheme.typography.bodySmall)
+                        }
+                        is OfflineMapDownloadState.Completed -> Text(
+                            "Offline maps ready",
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        is OfflineMapDownloadState.Failed -> Column {
+                            Text("Download failed: ${dl.message}", color = MaterialTheme.colorScheme.error)
+                            OutlinedButton(onClick = onDownloadOfflineMaps, modifier = Modifier.fillMaxWidth()) {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                }
             }
         }
 

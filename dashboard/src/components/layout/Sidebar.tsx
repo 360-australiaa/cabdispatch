@@ -11,6 +11,7 @@ import {
   FileCheck2,
   CreditCard,
   Palette,
+  ShieldCheck,
   LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
   { to: "/settings/white-label", label: "White-label", icon: Palette },
+  { to: "/settings/security", label: "Security", icon: ShieldCheck },
 ];
 
 export function Sidebar() {

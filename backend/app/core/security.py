@@ -14,6 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pyotp
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -50,6 +51,13 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_REFRESH = "refresh"
+# Short-lived, single-purpose token type issued by POST /v1/auth/login when
+# the account has mfa_enabled=True: proves email+password already succeeded,
+# but is only accepted by POST /v1/auth/mfa/login (never by the regular
+# get_current_user dependency — see get_current_user's docstring below) and
+# only good for MFA_TOKEN_EXPIRE_MINUTES.
+TOKEN_TYPE_MFA = "mfa_pending"
+MFA_TOKEN_EXPIRE_MINUTES = 5
 
 
 def _create_token(
@@ -88,9 +96,49 @@ def create_refresh_token(*, user_id: str, tenant_id: str | None, role: str) -> s
     )
 
 
+def create_mfa_pending_token(*, user_id: str, tenant_id: str | None, role: str) -> str:
+    """Issued by POST /v1/auth/login in place of real tokens when the account
+    has mfa_enabled=True. Only POST /v1/auth/mfa/login accepts this token
+    type; see get_token_payload's docstring for why it's rejected everywhere
+    else."""
+    return _create_token(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+        token_type=TOKEN_TYPE_MFA,
+        expires_delta=timedelta(minutes=MFA_TOKEN_EXPIRE_MINUTES),
+    )
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """Raises jose.JWTError on invalid signature/expiry."""
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+
+
+# --- TOTP MFA (blueprint 12.2) ----------------------------------------------
+# Local computation only (pyotp), no external API — the payments.py-style
+# real-vs-mock credential fallback doesn't apply here, there's nothing to call
+# out to.
+
+MFA_ISSUER_NAME = "Cab Dispatch"
+
+
+def generate_mfa_secret() -> str:
+    """A new base32 TOTP secret, suitable for pyotp.TOTP(secret)."""
+    return pyotp.random_base32()
+
+
+def mfa_provisioning_uri(*, secret: str, email: str) -> str:
+    """An otpauth:// URI for the frontend to render as a QR code (or show as
+    manual-entry text) in an authenticator app."""
+    return pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name=MFA_ISSUER_NAME)
+
+
+def verify_totp_code(*, secret: str, code: str) -> bool:
+    """valid_window=1 tolerates one 30s step of clock drift either side,
+    matching the reference pattern used elsewhere in this workspace
+    (captaindash/backend's app.core.security.verify_mfa)."""
+    return pyotp.TOTP(secret).verify(code, valid_window=1)
 
 
 # --- jti revocation set: Redis-backed with in-memory fallback ---------------
@@ -175,10 +223,23 @@ _CREDENTIALS_EXCEPTION = HTTPException(
 async def get_token_payload(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ) -> dict[str, Any]:
-    """Decodes + verifies the bearer token and rejects revoked jtis."""
+    """Decodes + verifies the bearer token, rejects revoked jtis, and rejects
+    anything that isn't a full access token.
+
+    That last check matters for MFA (blueprint 12.2): POST /v1/auth/login
+    issues a TOKEN_TYPE_MFA token to accounts with mfa_enabled=True instead of
+    a real access token — without this check, that short-lived token would
+    work as a bearer credential on every protected endpoint below, letting
+    anyone who knows the password skip the TOTP step entirely for its 5-minute
+    lifetime. (POST /v1/auth/refresh already self-checks TOKEN_TYPE_REFRESH
+    before this dependency ever sees a refresh token, so it's unaffected.)
+    """
     try:
         payload = decode_token(credentials.credentials)
     except JWTError:
+        raise _CREDENTIALS_EXCEPTION
+
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
         raise _CREDENTIALS_EXCEPTION
 
     jti = payload.get("jti")

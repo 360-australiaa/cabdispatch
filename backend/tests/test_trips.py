@@ -29,6 +29,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import Trip  # noqa: F401 — see module docstring
 from app.services.fare_engine import round_half_up
@@ -356,6 +357,96 @@ async def test_tick_on_closed_trip_is_409(client: AsyncClient, session: AsyncSes
         headers=headers,
     )
     assert resp.status_code == 409
+
+
+async def test_tick_through_toll_geofence_auto_adds_toll_once(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    toll_lat, toll_lng = -33.8523, 151.2108  # Sydney Harbour Bridge, per scripts/seed.py's approx coords
+    geofence = Geofence(
+        tenant_id=None,  # global reference row, same visibility as scripts/seed.py's seeded set
+        name="Test Harbour Bridge toll",
+        kind=GEOFENCE_KIND_TOLL,
+        center_lat=toll_lat,
+        center_lng=toll_lng,
+        radius_m=400,
+        toll_amount=Decimal("4.82"),
+    )
+    session.add(geofence)
+    await session.commit()
+    await session.refresh(geofence)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=toll_lat, start_lng=toll_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    first = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": toll_lat, "lng": toll_lng, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=10)).isoformat()}
+            ]
+        },
+        headers=headers,
+    )
+    assert first.status_code == 200
+    body = first.json()
+    assert Decimal(body["tolls"]) == Decimal("4.82")
+    assert body["auto_tolls_applied"] == [geofence.id]
+
+    # Lingering inside the same zone across a second, later tick call must NOT
+    # double-charge the toll.
+    second = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": toll_lat, "lng": toll_lng, "speed_kmh": 0, "ts": (t0 + timedelta(seconds=20)).isoformat()}
+            ]
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200
+    body2 = second.json()
+    assert Decimal(body2["tolls"]) == Decimal("4.82")
+    assert body2["auto_tolls_applied"] == [geofence.id]
+
+    # And it survives through to the final close() breakdown.
+    close_resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert close_resp.status_code == 200
+    assert Decimal(close_resp.json()["tolls"]) == Decimal("4.82")
+
+
+async def test_tick_outside_toll_geofence_adds_no_toll(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    geofence = Geofence(
+        tenant_id=None,
+        name="Test far-away toll",
+        kind=GEOFENCE_KIND_TOLL,
+        center_lat=-33.8523,
+        center_lng=151.2108,
+        radius_m=100,
+        toll_amount=Decimal("4.82"),
+    )
+    session.add(geofence)
+    await session.commit()
+
+    far_lat, far_lng = -33.70, 151.00  # well outside the 100m radius above
+    trip = await _create_trip(client, headers, tariff.id, start_lat=far_lat, start_lng=far_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={"points": [{"lat": far_lat, "lng": far_lng, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=10)).isoformat()}]},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tolls"] == "0.00"
+    assert body["auto_tolls_applied"] == []
 
 
 async def test_tick_unknown_tariff_is_422(client: AsyncClient, session: AsyncSession):

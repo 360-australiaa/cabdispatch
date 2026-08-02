@@ -16,6 +16,7 @@ from math import asin, cos, radians, sin, sqrt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.geofence import GEOFENCE_KIND_TOLL
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_TYPE_AIRPORT_FIXED, Trip
 from app.schemas.trips import TelemetryPoint
@@ -28,6 +29,7 @@ from app.services.fare_engine import (
     airport_fixed_fare,
     round_half_up,
 )
+from app.services.geofence import detect_geofences
 from app.services.tariffs import to_fare_engine_tariff
 
 engine = FareEngine()
@@ -105,6 +107,11 @@ async def apply_tick(
 
     moving_delta = Decimal(0)
     waiting_delta = Decimal(0)
+    # Geofence ids whose toll has already been folded into trip.tolls, seeded
+    # from what earlier tick() calls already persisted so a vehicle lingering
+    # in (or re-entering) the same toll zone across multiple PATCH .../tick
+    # requests is never double-charged (blueprint 5.2.4).
+    applied_toll_geofence_ids: set[str] = set(trip.auto_tolls_applied or [])
 
     for point in points:
         distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
@@ -128,12 +135,25 @@ async def apply_tick(
 
         prev_lat, prev_lng, prev_ts = point.lat, point.lng, point.ts
 
+        # --- toll geofence auto-detection (blueprint 5.2.4) --------------
+        entered_tolls = await detect_geofences(
+            session, tenant_id=tenant_id, lat=point.lat, lng=point.lng, kind=GEOFENCE_KIND_TOLL
+        )
+        for geofence in entered_tolls:
+            if geofence.id in applied_toll_geofence_ids or geofence.toll_amount is None:
+                continue
+            trip.tolls = (trip.tolls or Decimal(0)) + geofence.toll_amount
+            applied_toll_geofence_ids.add(geofence.id)
+
     trip.distance_m = round(state.cumulative_distance_km * Decimal(1000))
     trip.dist_amount = round_half_up(state.accrued_distance_charge)
     trip.wait_amount = round_half_up(state.accrued_waiting_charge)
     trip.moving_s += int(moving_delta)
     trip.waiting_s += int(waiting_delta)
     trip.last_lat, trip.last_lng, trip.last_ts = prev_lat, prev_lng, prev_ts
+    # Reassign (not mutate in place) so SQLAlchemy's change-tracking on this
+    # plain JSON column reliably marks it dirty for the flush.
+    trip.auto_tolls_applied = list(applied_toll_geofence_ids)
 
     return trip
 

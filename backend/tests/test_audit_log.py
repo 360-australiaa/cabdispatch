@@ -13,6 +13,8 @@ already used by the sibling fleet/compliance domain test files.
 """
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from app.models import Tenant, User
 from app.models.audit_log import AuditLog  # noqa: F401 — registers table on Base.metadata
 from app.services.audit_log import record_audit
@@ -254,3 +256,105 @@ async def test_record_audit_self_test_shows_up_in_list(client, session):
     assert item["actor_user_id"] == actor.id
     assert item["before_json"] == {"status": "requested"}
     assert item["after_json"] == {"status": "dispatched"}
+
+
+# --- hash chain: verify -----------------------------------------------------
+
+
+async def test_verify_reports_valid_golden_chain(client, session):
+    """Insert 3 rows for the same tenant, then confirm GET /verify walks the
+    whole chain and reports it intact."""
+    headers = await auth_headers(client, session, role="admin")
+
+    for i in range(3):
+        resp = await client.post(
+            "/v1/audit-log",
+            json={"action": "create", "entity_type": "trip", "entity_id": f"chain-trip-{i}"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    resp = await client.get("/v1/audit-log/verify", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"valid": True, "broken_at_id": None, "checked": 3}
+
+
+async def test_verify_requires_admin_or_owner_role(client, session):
+    headers = await auth_headers(client, session, role="dispatcher")
+
+    resp = await client.get("/v1/audit-log/verify", headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_verify_detects_tampered_row(client, session):
+    """Hand-modify a row's `action` directly via the DB session (bypassing
+    both this router and app.services.audit_log entirely, the way a rogue DB
+    admin or a compromised process might) and confirm /verify now reports the
+    chain invalid at exactly that row's id."""
+    headers = await auth_headers(client, session, role="admin")
+
+    created_ids = []
+    for i in range(3):
+        resp = await client.post(
+            "/v1/audit-log",
+            json={"action": "create", "entity_type": "trip", "entity_id": f"tamper-trip-{i}"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        created_ids.append(resp.json()["id"])
+
+    # Sanity check: untampered chain is valid before we touch anything.
+    pre = await client.get("/v1/audit-log/verify", headers=headers)
+    assert pre.json()["valid"] is True
+
+    tampered_id = created_ids[1]  # the middle row
+    result = await session.execute(select(AuditLog).where(AuditLog.id == tampered_id))
+    row = result.scalar_one()
+    row.action = "tampered"
+    await session.commit()
+
+    resp = await client.get("/v1/audit-log/verify", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["valid"] is False
+    assert body["broken_at_id"] == tampered_id
+    assert body["checked"] == 2  # stops at the 2nd row walked (oldest-first)
+
+
+async def test_verify_is_scoped_per_tenant(client, session):
+    """The hash chain is per-tenant — a second tenant's untouched chain must
+    still verify as valid even after another tenant's chain is tampered."""
+    tenant_a = Tenant(name="Chain Tenant A")
+    tenant_b = Tenant(name="Chain Tenant B")
+    session.add_all([tenant_a, tenant_b])
+    await session.commit()
+    await session.refresh(tenant_a)
+    await session.refresh(tenant_b)
+
+    headers_a = await auth_headers(client, session, role="admin", tenant_id=tenant_a.id)
+    headers_b = await auth_headers(client, session, role="admin", tenant_id=tenant_b.id)
+
+    resp_a = await client.post(
+        "/v1/audit-log",
+        json={"action": "create", "entity_type": "trip", "entity_id": "a-trip"},
+        headers=headers_a,
+    )
+    assert resp_a.status_code == 201
+    await client.post(
+        "/v1/audit-log",
+        json={"action": "create", "entity_type": "trip", "entity_id": "b-trip"},
+        headers=headers_b,
+    )
+
+    tampered_id = resp_a.json()["id"]
+    result = await session.execute(select(AuditLog).where(AuditLog.id == tampered_id))
+    row = result.scalar_one()
+    row.action = "tampered"
+    await session.commit()
+
+    verify_a = await client.get("/v1/audit-log/verify", headers=headers_a)
+    assert verify_a.json()["valid"] is False
+
+    verify_b = await client.get("/v1/audit-log/verify", headers=headers_b)
+    assert verify_b.json() == {"valid": True, "broken_at_id": None, "checked": 1}

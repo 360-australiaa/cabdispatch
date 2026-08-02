@@ -35,6 +35,7 @@ from sqlalchemy import select
 import app.models  # noqa: F401 — populate Base.metadata before any query runs
 from app.core.database import AsyncSessionLocal
 from app.core.security import PLATFORM_TENANT_ID, hash_password
+from app.models.geofence import GEOFENCE_KIND_REGION, GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
 from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
@@ -71,6 +72,73 @@ _RATE_FIELDS = (
 
 def _rate_kwargs(engine_tariff: fe.Tariff) -> dict[str, Decimal]:
     return {f: getattr(engine_tariff, f) for f in _RATE_FIELDS}
+
+
+# --- global (tenant_id IS NULL) reference geofences — blueprint 5.2.4/7.2.5 --
+#
+# Coordinates are APPROXIMATE real-world landmark locations (a few hundred
+# metres of slop is expected/acceptable — this is dev/demo seed data for a
+# "near this landmark" circle check, not a survey-grade toll-gantry position),
+# hand-picked from public knowledge of each location, not from any live
+# tolling-authority feed. `toll_amount` values are similarly ILLUSTRATIVE
+# round figures for dev/demo purposes, not live Transurban/tolling-authority
+# rates — a real deployment would source both from an authoritative feed
+# before going live.
+GLOBAL_GEOFENCES: list[dict] = [
+    {
+        "name": "M5 East Motorway — Sydney entry (approx.)",
+        "kind": GEOFENCE_KIND_TOLL,
+        "center_lat": -33.9333,
+        "center_lng": 151.0900,
+        "radius_m": 300,
+        "toll_amount": Decimal("3.21"),
+    },
+    {
+        "name": "Sydney Harbour Bridge / Tunnel (approx.)",
+        "kind": GEOFENCE_KIND_TOLL,
+        "center_lat": -33.8523,
+        "center_lng": 151.2108,
+        "radius_m": 400,
+        "toll_amount": Decimal("4.82"),
+    },
+    {
+        # A "region" example (not a toll) — the airport precinct fits blueprint
+        # 7.2.5's tariff-zone use case (see app.models.trips.TRIP_TYPE_AIRPORT_FIXED)
+        # more naturally than 5.2.4's toll-detection use case.
+        "name": "Sydney (Kingsford Smith) Airport precinct (approx.)",
+        "kind": GEOFENCE_KIND_REGION,
+        "center_lat": -33.9399,
+        "center_lng": 151.1753,
+        "radius_m": 1500,
+        "toll_amount": None,
+    },
+]
+
+
+async def get_or_create_global_geofence(
+    session, *, name: str, kind: str, center_lat: float, center_lng: float, radius_m: float, toll_amount: Decimal | None
+) -> Geofence:
+    result = await session.execute(
+        select(Geofence).where(Geofence.tenant_id.is_(None), Geofence.name == name)
+    )
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    geofence = Geofence(
+        tenant_id=None,
+        name=name,
+        kind=kind,
+        center_lat=center_lat,
+        center_lng=center_lng,
+        radius_m=radius_m,
+        toll_amount=toll_amount,
+    )
+    session.add(geofence)
+    await session.commit()
+    await session.refresh(geofence)
+    print(f"  created global geofence {name!r} (kind={kind}, {geofence.id})")
+    return geofence
 
 
 async def get_or_create_tenant(session, *, tenant_id: str | None, name: str, **extra) -> Tenant:
@@ -176,6 +244,10 @@ async def seed() -> None:
         )
         await get_or_create_global_reference_tariff(session, region="urban", engine_tariff=fe.URBAN_TARIFF)
         await get_or_create_global_reference_tariff(session, region="country", engine_tariff=fe.COUNTRY_TARIFF)
+
+        print("Seeding global toll/region reference geofences...")
+        for spec in GLOBAL_GEOFENCES:
+            await get_or_create_global_geofence(session, **spec)
 
         print("Seeding demo tenant + tariff...")
         demo_tenant = await get_or_create_tenant(session, tenant_id=None, name=DEMO_TENANT_NAME, plan="standard")

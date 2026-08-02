@@ -22,8 +22,10 @@ from app.schemas.fleet import (
     DeviceUpdate,
     ForceUpdateRequest,
     KioskLockRequest,
+    LocateRequest,
     Page,
     PairingCodeRead,
+    RebootRequest,
     VehicleCreate,
     VehicleRead,
     VehicleUpdate,
@@ -317,8 +319,9 @@ async def device_heartbeat(
     session: AsyncSession = Depends(get_session),
 ):
     """Updates last_seen_at/battery/network and returns the current device row —
-    including `kiosk_locked` / `force_update_pending`, which is how the device
-    learns an admin has flagged it for kiosk-lock or a forced app update."""
+    including `kiosk_locked` / `force_update_pending` / `locate_requested` /
+    `reboot_requested`, which is how the device learns an admin has flagged it
+    for kiosk-lock, a forced app update, a locate request, or a reboot request."""
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
@@ -367,3 +370,49 @@ async def set_device_force_update(
         raise _fleet_error_to_http(exc) from exc
 
     return await fleet_service.set_force_update(session, device, enabled=payload.enabled)
+
+
+@router.post("/devices/{device_id}/locate", response_model=DeviceRead)
+async def set_device_locate(
+    device_id: str,
+    payload: LocateRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
+):
+    """Admin-only. Sets/clears the locate_requested flag the device reads back
+    on its next heartbeat — the on-device app is expected to respond to a set
+    flag by reporting a fresh location fix out of band; building that
+    reporting path is the mobile app's responsibility, not this endpoint's."""
+    try:
+        device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return await fleet_service.set_locate_requested(session, device, enabled=payload.enabled)
+
+
+@router.post("/devices/{device_id}/reboot", response_model=DeviceRead)
+async def set_device_reboot(
+    device_id: str,
+    payload: RebootRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
+):
+    """Admin-only. Sets/clears the reboot_requested flag the device reads back
+    on its next heartbeat.
+
+    HONESTY NOTE (blueprint 4.1.3/6.2.1): this is a real command QUEUE, not a
+    claim that the device actually reboots. See `Device.reboot_requested`'s
+    doc comment — actually rebooting the OS needs device-owner-level Android
+    permissions this codebase does not provision, so nothing currently acts
+    on this flag on the device side. It is still useful as-is: an admin can
+    queue the request and see it pending, ready for a future device-owner-
+    aware app build to consume."""
+    try:
+        device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return await fleet_service.set_reboot_requested(session, device, enabled=payload.enabled)

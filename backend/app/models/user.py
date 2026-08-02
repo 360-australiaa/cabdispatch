@@ -38,3 +38,12 @@ class User(Base, TimestampMixin):
     wat_endorsed: Mapped[bool] = mapped_column(default=False, nullable=False)
     pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # MFA (blueprint 12.2): opt-in TOTP, not forced — mfa_enabled defaults to
+    # False so every existing seeded/test account keeps logging in with just
+    # email+password. mfa_secret is populated by POST /v1/auth/mfa/setup and
+    # only takes effect (mfa_enabled=True) once confirmed via
+    # POST /v1/auth/mfa/verify. A setup that's never verified leaves a secret
+    # sitting here unused, which is fine — it's re-generated on the next setup
+    # call and never activates login until verified.
+    mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mfa_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
