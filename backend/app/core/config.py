@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = [
         "http://localhost:5174",
         "http://127.0.0.1:5174",
+        # ../.claude/launch.json's "cab-dispatch-dashboard" config runs on 5180 — that combination
+        # never actually worked until this was added (discovered testing the dispatch page live).
+        "http://localhost:5180",
+        "http://127.0.0.1:5180",
     ]
 
     # --- Stripe ---

@@ -4,6 +4,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -784,6 +786,28 @@ private fun BoxScope.WheelSlotDot(
         animationSpec = tween(WheelGeometry.SNAP_DURATION_MS, easing = WheelSnapEasing),
         label = "wheelDotSize",
     )
+
+    // Lock-in pulse: the instant this slot BECOMES the selected one (not on every recomposition —
+    // gated on the false->true edge of [selected]), bounce it past full size and back, matching
+    // the HTML reference's `.pulse` keyframe (scale 1 -> 1.18 -> 1, back-out ease, ~400ms). The
+    // size/color/border crossfade alone reads as passive; this makes landing on a section feel
+    // like a felt "click", the way a real detent does.
+    val pulseScale = remember(slot) { Animatable(1f) }
+    LaunchedEffect(selected) {
+        if (selected) {
+            pulseScale.snapTo(1f)
+            pulseScale.animateTo(
+                targetValue = 1f,
+                animationSpec = keyframes {
+                    durationMillis = 400
+                    1f at 0
+                    1.18f at 180 using WheelSnapEasing
+                    1f at 400 using WheelSnapEasing
+                },
+            )
+        }
+    }
+
     val (dotX, dotY) = WheelGeometry.offsetForAngle(angleDeg, WheelGeometry.ICON_RING_RADIUS_DP)
     val (labelX, labelY) = WheelGeometry.offsetForAngle(angleDeg, WheelGeometry.LABEL_RING_RADIUS_DP)
 
@@ -792,6 +816,25 @@ private fun BoxScope.WheelSlotDot(
             .align(Alignment.Center)
             .offset(x = dotX.dp, y = dotY.dp)
             .size(dotSize)
+            .graphicsLayer {
+                scaleX = pulseScale.value
+                scaleY = pulseScale.value
+            }
+            .then(
+                // Gold glow behind the locked-in slot, matching the reference's
+                // `box-shadow:0 0 22px rgba(244,195,0,.45)` — Compose's shadow modifier is the
+                // nearest equivalent for a colored glow (vs. a plain elevation shadow).
+                if (selected) {
+                    Modifier.shadow(
+                        elevation = 14.dp,
+                        shape = CircleShape,
+                        ambientColor = WheelColors.gold,
+                        spotColor = WheelColors.gold,
+                    )
+                } else {
+                    Modifier
+                },
+            )
             .clip(CircleShape)
             .background(if (selected) WheelColors.surfaceSunken else WheelColors.surfaceRaised)
             .border(

@@ -57,11 +57,22 @@ object WheelColors {
     val duress = Color(0xFFD8352E)
 
     /**
-     * Fare-meter LED digit color — #FF2A28. Distinct from [duress] (#D8352E): this is the
-     * physical-taxi-meter-style red for the passenger-facing fare display (spec §6), duress is
-     * the panic-alarm red. Never conflate the two, they mean completely different things.
+     * Fare-meter LED digit color — #FF2A28. No longer used for the digits themselves (see
+     * [meterLedWhite]), kept defined since it's still referenced by name in doc comments
+     * elsewhere (e.g. [au.com.threesixty.cabdispatch.ui.overlays.DuressOverlays]) explaining why
+     * duress uses [duress] and not this. Distinct from [duress] (#D8352E) either way — a
+     * physical-taxi-meter red is not a panic-alarm red, never conflate the two.
      */
     val meterLedRed = Color(0xFFFF2A28)
+
+    /**
+     * Fare-meter LED digit color, current — bright white with a soft glow (not [textPrimary]'s
+     * flat white; this one is meant to read as illuminated, matching a real LED display), swapped
+     * in from [meterLedRed] for back-seat-passenger legibility: white reads as more prominent and
+     * higher-contrast against the dark dashboard than red at a glance, especially at the larger
+     * size the digits now render at (see `HiredScreen.LedFareDigits`).
+     */
+    val meterLedWhite = Color(0xFFF4FAFF)
 }
 
 private val LightColors = lightColorScheme(

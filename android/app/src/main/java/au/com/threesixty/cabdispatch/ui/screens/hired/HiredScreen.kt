@@ -267,13 +267,19 @@ fun HiredScreen(
 }
 
 /**
- * LED-style fare digits (spec §6 step 5): monospace + red + glow, as an
+ * LED-style fare digits (spec §6 step 5): monospace + glowing white + glow, as an
  * explicit fallback for a true 7-segment font (none available/licensed — see
- * spec §11's own caveat; do not block on sourcing one). The glow is a single
- * [Shadow] on the [TextStyle] — Compose's nearest equivalent to CSS
- * `text-shadow` for a `Text` composable, matching what the prototype's CSS
- * (`text-shadow:0 0 18px ..., 0 0 4px ...`) achieves. Dims (per spec §6 step
- * 6, "frozen fare shown dimmer red") when [dimmed] (i.e. paused).
+ * spec §11's own caveat; do not block on sourcing one). Originally the
+ * prototype's LED red ([WheelColors.meterLedRed]); switched to
+ * [WheelColors.meterLedWhite] and sized up for back-seat-passenger legibility
+ * — white glows more prominently against the dark dashboard than red at a
+ * glance, and the passenger reading this is often at an angle/distance, not
+ * looking straight at the tablet. The glow is a single [Shadow] on the
+ * [TextStyle] — Compose's nearest equivalent to CSS `text-shadow` for a
+ * `Text` composable, matching what the prototype's CSS
+ * (`text-shadow:0 0 18px ..., 0 0 4px ...`) achieves, just brighter/wider to
+ * suit white-on-dark rather than red-on-dark. Dims (per spec §6 step 6,
+ * "frozen fare shown dimmer") when [dimmed] (i.e. paused).
  */
 @Composable
 private fun LedFareDigits(amount: BigDecimal, dimmed: Boolean) {
@@ -282,14 +288,14 @@ private fun LedFareDigits(amount: BigDecimal, dimmed: Boolean) {
         text = amount.toMoneyString(),
         style = TextStyle(
             fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 72.sp,
+            fontWeight = FontWeight.Black,
+            fontSize = 104.sp,
             letterSpacing = 2.sp,
-            color = WheelColors.meterLedRed.copy(alpha = alpha),
+            color = WheelColors.meterLedWhite.copy(alpha = alpha),
             shadow = Shadow(
-                color = WheelColors.meterLedRed.copy(alpha = alpha * 0.7f),
+                color = WheelColors.meterLedWhite.copy(alpha = alpha * 0.85f),
                 offset = Offset.Zero,
-                blurRadius = if (dimmed) 10f else 26f,
+                blurRadius = if (dimmed) 14f else 36f,
             ),
         ),
     )

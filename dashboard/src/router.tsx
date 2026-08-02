@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import LoginPage from "@/pages/login";
 import LiveMapPage from "@/pages/live-map";
+import DispatchPage from "@/pages/dispatch";
 import DuressPage from "@/pages/duress";
 import TripsPage from "@/pages/trips";
 import ShiftsPage from "@/pages/shifts";
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/live-map" replace /> },
       { path: "live-map", element: <LiveMapPage /> },
+      { path: "dispatch", element: <DispatchPage /> },
       { path: "duress", element: <DuressPage /> },
       { path: "trips", element: <TripsPage /> },
       { path: "shifts", element: <ShiftsPage /> },
