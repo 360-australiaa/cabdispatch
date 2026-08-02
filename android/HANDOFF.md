@@ -20,6 +20,27 @@ first place this code will ever hit a real compiler. Expect and budget time for 
 errors — signature mismatches between sibling files that were written in parallel without ever
 type-checking against each other are the most likely failure mode, not conceptual bugs.
 
+## 2026-08-02 — LED digit + wheel selection polish (direct user request)
+
+Two small, targeted visual changes, both **unverified like everything else here** (no compiler):
+
+- `ui/screens/hired/HiredScreen.kt`'s `LedFareDigits`: color `WheelColors.meterLedRed` →
+  `WheelColors.meterLedWhite` (new token, `ui/theme/Theme.kt`, `#F4FAFF`), size `72.sp` → `104.sp`,
+  wider glow blur — requested for back-seat-passenger legibility. `meterLedRed` is kept defined
+  (still named in doc comments elsewhere explaining why duress uses a different red) but is no
+  longer used for the digits themselves.
+- `ui/screens/dashboard/WheelDashboardScreen.kt`'s `WheelSlotDot`: added a lock-in pulse
+  (`Animatable` + `keyframes`, scale 1 → 1.18 → 1 on the back-out ease, gated on the `selected`
+  false→true edge via `LaunchedEffect(selected)`) and a gold `Modifier.shadow` glow on the
+  selected dot. Previously the dot only crossfaded size/color/border on selection, which reads as
+  passive — this matches the reference prototype's `.pulse` keyframe, which nothing had ported
+  before.
+
+If you're picking this up fresh: **check both render correctly before doing anything else with
+them** — the LED digit font size in particular (104.sp) was chosen by eye against the 1280×800
+reference canvas ratio, not measured against a real device, so it may need adjusting once you can
+actually see it on a tablet.
+
 ## 2026-08-01 — Wheel-redesign reconciliation pass
 
 Eight sibling agents built the wheel-nav dashboard redesign in parallel against a shared

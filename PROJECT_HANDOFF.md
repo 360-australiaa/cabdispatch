@@ -11,8 +11,8 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 | Part | Files | Real status |
 |---|---|---|
 | Backend (FastAPI) | 84 | **Done and verified.** 232 tests passing (incl. the golden fare-vector compliance suite), exercised live end-to-end over real HTTP — meter flow (login → create vehicle/driver → open/tick/close a trip → fare math checked by hand) and dispatch flow (toggle driver available → job broadcasts an offer → accept → sibling offers auto-expire → messages thread). |
-| Dashboard (React) | 77 | **Done and verified.** All 10 ops modules built, wired to the real API, checked live in-browser (login, Trips, Tariff Studio all rendering real backend data). Does not yet have UI for the new jobs/messages domain (backend-only so far). |
-| Android driver app (Kotlin) | ~70 | **Source-complete, unverified.** Now a wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Every file has been read carefully across two reconciliation passes (one fixed S3 not persisting to Room; the newest fixed the wheel's 5 non-status slots never actually rendering their content — see `android/HANDOFF.md`'s 2026-08-01 section for the full list of what shipped). **Still never compiled** — no Android SDK in the environment that built any of this. |
+| Dashboard (React) | 83 | **Done and verified.** 11 ops modules built, wired to the real API, checked live in-browser — including the new Dispatch page, which closed the loop with the backend jobs domain (create a job → both available drivers get a real-time offer, confirmed live). |
+| Android driver app (Kotlin) | ~70 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Latest pass: fare-meter LED digits switched red → glowing white and enlarged for back-seat legibility, and the wheel got a lock-in pulse + gold glow on selection settle (previously just a size/color crossfade). **Still never compiled** — no Android SDK in the environment that built any of this — so none of the Android-side changes across any pass have been visually confirmed, only reasoned through against the existing code. |
 
 **2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
 
@@ -104,9 +104,22 @@ for real-time delivery. Simple by design — no multi-party threads, no attachme
 
 ## Dashboard — what's real, what's mocked
 
-All 10 modules (Live Map, Duress Desk, Trips, Shifts & Reconciliation, Tariff Studio, PSL Centre,
-Fleet & Drivers, Compliance Vault, Billing, White-label Settings) are built against the real API —
-no mock data layer in the dashboard itself, `react-query` hooks call the live backend directly.
+11 modules now (Live Map, **Dispatch**, Duress Desk, Trips, Shifts & Reconciliation, Tariff
+Studio, PSL Centre, Fleet & Drivers, Compliance Vault, Billing, White-label Settings) — all built
+against the real API, no mock data layer in the dashboard itself, `react-query` hooks call the
+live backend directly.
+
+**2026-08-02 addition — Dispatch (`/dispatch`):** the previously-missing link between the
+backend's jobs domain and the Android app's Available Trips screen — before this, jobs/messages
+was backend-only, with no dashboard UI to actually create a job to test the driver-side
+accept/decline flow against. Create-job form → `POST /v1/jobs` → broadcasts to every available
+driver; job list + detail panel poll every 2-3s while non-terminal (no dispatcher-scoped WS
+exists — `WS /v1/jobs/live` is deliberately driver-scoped, see that endpoint's docstring — polling
+is the correct simple call here, same as every other non-safety-critical list page). **Verified
+live**, not just built: created a job through the actual UI, confirmed both test drivers got
+real-time "pending" offers on the backend. Also fixed a real bug found while testing this: backend
+`CORS_ORIGINS` only listed port 5174, but `.claude/launch.json`'s own dashboard config runs on
+5180 — that combination had never actually worked.
 
 - **Live Map has no real map tiles** — renders vehicle positions on a custom canvas component
   (`src/pages/live-map/FleetMapCanvas.tsx`), not Mapbox/Google Maps (no paid maps SDK key was
