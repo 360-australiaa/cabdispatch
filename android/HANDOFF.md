@@ -20,6 +20,36 @@ first place this code will ever hit a real compiler. Expect and budget time for 
 errors — signature mismatches between sibling files that were written in parallel without ever
 type-checking against each other are the most likely failure mode, not conceptual bugs.
 
+## 2026-08-02 (latest) — Wheel visual redesign: dimensional rim/spokes/hub + glowing icons
+
+Direct request, working from a Gemini-generated concept image (not real code/screenshot — the
+garbled overlapping text visible in that image was an AI-image-gen artifact, not a real layout
+bug to chase; ignored). The ask was aesthetic direction only: move the wheel from a flat ring of
+plain dots toward a literal steering-wheel read (rim, spokes, center hub) with glowing icon
+badges, matching the concept image's mood — not a pixel-accurate copy (that image also has
+inconsistent icon choices, e.g. the same clock icon on two different slots, that weren't worth
+replicating).
+
+**What changed, all in `ui/screens/dashboard/WheelDashboardScreen.kt`:**
+- New `WheelRimAndSpokes` (a `Canvas`) — a soft radial-gradient rim fill + a highlighted edge
+  ring + thin gradient spoke lines from center to each icon position, drawn at the exact same
+  angle math `WheelSlotDot` already uses so spokes always point precisely at their icon
+  regardless of wheel rotation.
+- New `WheelHub` — small decorative circular hub at dead center, no interaction, just completes
+  the steering-wheel read.
+- `WheelSlotDot`: replaced the 2-letter text abbreviation with a real icon glyph per slot
+  (`slotIcon()`) — **emoji, not a Material icon set, on purpose**: this codebase already uses
+  emoji for iconography elsewhere (`LoginVehicleBindScreen.kt`'s step icons) and has no
+  `material-icons-extended` dependency, so named icons like `Icons.Filled.Email` would risk an
+  unresolved-reference error this environment can't compile-check. Also added a glow to
+  **every** icon now, not just the selected one (white/faint when unselected, gold/strong when
+  selected) — matches the concept image's "all spokes lit" look; previously only the selected
+  dot had any glow at all.
+- Uses only core, well-established `androidx.compose.foundation.Canvas`/`drawCircle`/`drawLine`
+  APIs (brush gradients, stroke caps) — this is standard, stable Compose Graphics surface, much
+  lower risk than the Mapbox offline integration above; if something in this specific change
+  doesn't compile it's more likely a typo than an API-shape mismatch.
+
 ## 2026-08-02 (later) — Real offline maps via Mapbox Maps SDK v11
 
 A secret `MAPBOX_DOWNLOADS_TOKEN` (sk.*, "Downloads:Read" scope) became available this pass,

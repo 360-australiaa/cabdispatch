@@ -45,9 +45,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -851,11 +854,13 @@ private fun WheelArea(
                 .graphicsLayer { alpha = if (controller.enabled) 1f else 0.45f }
                 .wheelGesture(controller, onSettled),
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .border(2.dp, WheelColors.borderStrong, CircleShape),
-            )
+            // Dimensional rim + spokes — a 2026-08-02 design pass moving away from the plain
+            // flat ring-of-dots toward a literal steering-wheel read (rim/spokes/hub), per a
+            // reference mockup. Purely a rendering layer — geometry/interaction below is
+            // unchanged, spokes are drawn at the exact same angles WheelSlotDot places its icons
+            // at, so they always point precisely at each icon regardless of wheel rotation.
+            WheelRimAndSpokes(rotationDegrees = controller.rotationDegrees)
+
             WheelSlot.entries.forEach { slot ->
                 val angleDeg = WheelGeometry.slotScreenAngleDeg(slot.index, controller.rotationDegrees)
                 WheelSlotDot(
@@ -864,8 +869,86 @@ private fun WheelArea(
                     angleDeg = angleDeg,
                 )
             }
+
+            WheelHub(modifier = Modifier.align(Alignment.Center))
         }
     }
+}
+
+/**
+ * Rim (outer ring with a soft radial fill + a highlighted edge, suggesting a moulded/
+ * leather-wrapped wheel rather than a flat line) + spokes (thin gradient lines from center to
+ * each icon position). Drawn once as a single [Canvas] covering the whole wheel, rather than
+ * per-slot, since the rim needs the full circle geometry in one pass anyway.
+ */
+@Composable
+private fun WheelRimAndSpokes(rotationDegrees: Float) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val radius = size.minDimension / 2f
+        val center = Offset(size.width / 2f, size.height / 2f)
+
+        // Rim: a soft radial fill (subtle depth, not flat) plus a brighter ring right at the
+        // edge so it reads as a moulded rim, not a flat disc with a stroke.
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(WheelColors.surfaceRaised.copy(alpha = 0.35f), Color.Transparent),
+                center = center,
+                radius = radius,
+            ),
+            radius = radius,
+            center = center,
+        )
+        drawCircle(
+            color = WheelColors.borderStrong,
+            radius = radius,
+            center = center,
+            style = Stroke(width = 3.dp.toPx()),
+        )
+        drawCircle(
+            color = WheelColors.gold.copy(alpha = 0.14f),
+            radius = radius - 3.dp.toPx(),
+            center = center,
+            style = Stroke(width = 1.dp.toPx()),
+        )
+
+        // Spokes: one line per slot, center -> icon position, at the slot's CURRENT (rotated)
+        // screen angle — reuses the exact same angle math WheelSlotDot positions icons with, so
+        // a spoke always points straight at its icon.
+        WheelSlot.entries.forEach { slot ->
+            val angleDeg = WheelGeometry.slotScreenAngleDeg(slot.index, rotationDegrees)
+            val (dx, dy) = WheelGeometry.offsetForAngle(angleDeg, WheelGeometry.ICON_RING_RADIUS_DP)
+            val end = Offset(center.x + dx.dp.toPx(), center.y + dy.dp.toPx())
+            drawLine(
+                brush = Brush.linearGradient(
+                    colors = listOf(WheelColors.border, WheelColors.borderStrong),
+                    start = center,
+                    end = end,
+                ),
+                start = center,
+                end = end,
+                strokeWidth = 2.5.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/** Small decorative hub at the wheel's center — purely visual (no interaction), completes the
+ * steering-wheel read the rim/spokes above establish. */
+@Composable
+private fun WheelHub(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(34.dp)
+            .shadow(elevation = 8.dp, shape = CircleShape, ambientColor = WheelColors.gold, spotColor = WheelColors.gold)
+            .clip(CircleShape)
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(WheelColors.surfaceSunken, WheelColors.bg),
+                ),
+            )
+            .border(1.dp, WheelColors.gold.copy(alpha = 0.5f), CircleShape),
+    )
 }
 
 @Composable
@@ -913,20 +996,14 @@ private fun BoxScope.WheelSlotDot(
                 scaleX = pulseScale.value
                 scaleY = pulseScale.value
             }
-            .then(
-                // Gold glow behind the locked-in slot, matching the reference's
-                // `box-shadow:0 0 22px rgba(244,195,0,.45)` — Compose's shadow modifier is the
-                // nearest equivalent for a colored glow (vs. a plain elevation shadow).
-                if (selected) {
-                    Modifier.shadow(
-                        elevation = 14.dp,
-                        shape = CircleShape,
-                        ambientColor = WheelColors.gold,
-                        spotColor = WheelColors.gold,
-                    )
-                } else {
-                    Modifier
-                },
+            // Every icon glows, not just the selected one (per the reference mockup's "all spoke
+            // icons lit" look) — selected gets a stronger gold glow, unselected a faint white
+            // one so the wheel doesn't look "dead" between selections.
+            .shadow(
+                elevation = if (selected) 14.dp else 4.dp,
+                shape = CircleShape,
+                ambientColor = if (selected) WheelColors.gold else WheelColors.meterLedWhite,
+                spotColor = if (selected) WheelColors.gold else WheelColors.meterLedWhite,
             )
             .clip(CircleShape)
             .background(if (selected) WheelColors.surfaceSunken else WheelColors.surfaceRaised)
@@ -938,10 +1015,14 @@ private fun BoxScope.WheelSlotDot(
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            slotAbbreviation(slot),
-            color = if (selected) WheelColors.textPrimary else WheelColors.textSecondary,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+            slotIcon(slot),
+            fontSize = if (selected) 26.sp else 20.sp,
+            style = androidx.compose.ui.text.TextStyle(
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = (if (selected) WheelColors.gold else WheelColors.meterLedWhite).copy(alpha = 0.8f),
+                    blurRadius = if (selected) 18f else 8f,
+                ),
+            ),
         )
     }
 
@@ -959,9 +1040,23 @@ private fun BoxScope.WheelSlotDot(
     )
 }
 
-private fun slotAbbreviation(slot: WheelSlot): String =
-    slot.label.split(Regex("[\\s/]+")).filter { it.isNotEmpty() }
-        .joinToString("") { it.first().uppercase() }.take(2)
+/**
+ * One glyph per wheel slot — emoji rather than a Material icon set on purpose: this codebase
+ * already uses emoji for iconography elsewhere (see `LoginVehicleBindScreen.kt`'s "🔑"/"🚗"/"📋"
+ * step icons, `LoginTopBar`'s "⚙") and this project has no `material-icons-extended` dependency
+ * (only the small core set ships with material3 by default), so reaching for named icons like
+ * `Icons.Filled.Email` here would risk an unresolved-reference compile error this environment
+ * can't check. Zero new dependency, consistent with the rest of the app, matches the reference
+ * mockup's "one icon per spoke" idea closely enough without betting on exact icon availability.
+ */
+private fun slotIcon(slot: WheelSlot): String = when (slot) {
+    WheelSlot.OFF_DUTY_AVAILABLE -> "🚕"
+    WheelSlot.AVAILABLE_TRIPS -> "📋"
+    WheelSlot.MESSAGES -> "✉️"
+    WheelSlot.TRIPS -> "🧾"
+    WheelSlot.EARNINGS -> "💰"
+    WheelSlot.SHIFT -> "⏱️"
+}
 
 // ---------------------------------------------------------------------------------------------
 // Start Meter button
