@@ -33,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -391,12 +392,29 @@ private fun MapBackground(modifier: Modifier = Modifier) {
 
 @Composable
 private fun RealMapboxMapView(modifier: Modifier = Modifier) {
+    // Root-cause fix (2026-08-02, found via a real device/emulator report — "map area renders
+    // solid black"): a View-based Mapbox `MapView` embedded via `AndroidView` does NOT get
+    // Activity/Fragment lifecycle callbacks automatically the way it would if inflated via XML in
+    // an Activity that itself forwards onStart/onResume/etc. Without those forwarded calls, the
+    // MapView allocates its rendering surface but never actually starts its GL render loop — the
+    // symptom is exactly a solid black view, not a crash, not an error, nothing in Logcat pointing
+    // at "you forgot this". This is a well-known Mapbox-in-Compose gotcha, not a token/network
+    // issue (a bad/missing token would show as a grey/placeholder tile pattern or a style-load
+    // error, not solid black). Fixed by observing the local lifecycle and forwarding every stage.
+    val mapView = remember { mutableStateOf<MapView?>(null) }
+    // androidx.compose.ui.platform.LocalLifecycleOwner (not the newer androidx.lifecycle.compose
+    // one, which lives in a separate lifecycle-runtime-compose artifact this project doesn't
+    // declare) — this one ships with core androidx.compose.ui:ui, already a dependency via the
+    // compose-bom, so no new artifact needed.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            MapView(context).apply {
-                mapboxMap.loadStyle(Style.DARK)
-                mapboxMap.setCamera(
+            MapView(context).also { view ->
+                mapView.value = view
+                view.mapboxMap.loadStyle(Style.DARK)
+                view.mapboxMap.setCamera(
                     CameraOptions.Builder()
                         .center(Point.fromLngLat(SydneyCbdFallback.LNG, SydneyCbdFallback.LAT))
                         .zoom(SydneyCbdFallback.ZOOM)
@@ -407,9 +425,34 @@ private fun RealMapboxMapView(modifier: Modifier = Modifier) {
                 // Leave pan/zoom enabled for the driver to glance around, per spec §5 ("live map
                 // is the permanent background... nothing is ever a blank screen, there's always
                 // spatial context") — this is deliberate, not an oversight to lock it down later.
+                //
+                // No manual onStart()/onResume() call needed here — androidx.lifecycle.Lifecycle
+                // brings a freshly-added LifecycleEventObserver (below) up to the CURRENT state
+                // automatically (documented behavior), so the DisposableEffect's observer alone
+                // covers both "already resumed when this view is created" and every future
+                // pause/resume/destroy.
             }
         },
     )
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val view = mapView.value ?: return@LifecycleEventObserver
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> view.onStart()
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> view.onResume()
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> view.onPause()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> view.onStop()
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> view.onDestroy()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapView.value?.onDestroy()
+        }
+    }
 }
 
 @Composable

@@ -20,6 +20,34 @@ first place this code will ever hit a real compiler. Expect and budget time for 
 errors — signature mismatches between sibling files that were written in parallel without ever
 type-checking against each other are the most likely failure mode, not conceptual bugs.
 
+## 2026-08-02 (even later) — Fixed: real map rendering solid black
+
+Reported directly from a real build ("app runs, map area is blank/black") — this is the first
+real-device/emulator bug report against any of this module's code, and a genuinely diagnosable
+one (unlike the offline-region API, which is a "might not match the real SDK" risk flag, this had
+an identifiable root cause).
+
+**Root cause:** `RealMapboxMapView` (`WheelDashboardScreen.kt`) embedded a View-based Mapbox
+`MapView` via `AndroidView` but never forwarded Activity lifecycle events to it. A `MapView` used
+this way (as opposed to inflated via XML inside an Activity that itself calls
+`mapView.onStart()`/`onResume()`/etc., the "normal" Mapbox integration path) needs those calls
+forwarded manually, or it allocates its rendering surface but never starts its GL render loop —
+symptom is a solid black view, no crash, nothing in Logcat naming the problem. Not a token/network
+issue (that would show as a style-load error or placeholder tiles, not solid black).
+
+**Fix:** a `DisposableEffect` observing `LocalLifecycleOwner` (the core
+`androidx.compose.ui.platform` one, not the separate `androidx.lifecycle.compose` artifact this
+project doesn't depend on) that forwards `ON_START`/`ON_RESUME`/`ON_PAUSE`/`ON_STOP`/`ON_DESTROY`
+to the `MapView`. No manual "fire it once immediately" call needed — `Lifecycle.addObserver`
+automatically brings a freshly-added observer up to the current state, which covers the
+already-resumed-when-created case too.
+
+**If the map is still black after pulling this fix**, it's very unlikely to be the same bug —
+check (in this order): `local.properties` actually has a real `MAPBOX_ACCESS_TOKEN` on your
+machine (it's gitignored, never synced by `git pull` — you have to set your own), Logcat for any
+`Mapbox`-tagged error around the time the dashboard screen opens, and basic network connectivity
+on the device/emulator.
+
 ## 2026-08-02 (latest) — Wheel visual redesign: dimensional rim/spokes/hub + glowing icons
 
 Direct request, working from a Gemini-generated concept image (not real code/screenshot — the
