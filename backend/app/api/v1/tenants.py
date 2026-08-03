@@ -1,8 +1,12 @@
 """Tenant domain router.
 
-Currently owns exactly one thing: the per-tenant admin PIN that gates
-destructive on-device actions (e.g. the Android app's factory-reset flow —
-see au...SettingsViewModel.kt's ADMIN_PIN_PLACEHOLDER, which this replaces).
+Owns the per-tenant admin PIN that gates destructive on-device actions (e.g. the Android app's
+factory-reset flow — see au...SettingsViewModel.kt's ADMIN_PIN_PLACEHOLDER, which this replaces),
+plus a "current tenant" self-service surface (`GET`/`PATCH /v1/tenants/me`) for reading tenant
+identity and updating white-label branding (blueprint 7.2.10/9.1/13.1) — the dashboard's
+White-label Settings page (`dashboard/src/pages/settings/white-label/`) has called these exact
+paths since it was first built, but the endpoints themselves never landed until now (see that
+page's own `useWhite-labelSettings.ts` doc comment, which explicitly flagged the 404 this closes).
 
 Only an owner can set/update the PIN, and only for their own tenant (path
 tenant_id is checked against the token-resolved tenant scope from
@@ -19,12 +23,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, require_role
-from app.schemas.tenant import AdminPinSetRequest, AdminPinSetResponse
+from app.schemas.tenant import AdminPinSetRequest, AdminPinSetResponse, TenantRead, TenantThemeUpdate
 from app.services import tenant as tenant_service
 
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
 
 _require_owner = require_role("owner")
+_require_owner_or_admin = require_role("owner", "admin")
+
+
+@router.get("/me", response_model=TenantRead)
+async def get_my_tenant(
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Any authenticated tenant user (view-only for non-owner/admin roles — the dashboard's own
+    White-label page gates editing client-side on `role === "owner" || "admin"`, matching
+    `_require_owner_or_admin`'s PATCH gate below)."""
+    try:
+        return await tenant_service.get_tenant_or_404(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+
+@router.patch("/me", response_model=TenantRead)
+async def update_my_tenant_theme(
+    payload: TenantThemeUpdate,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _owner_or_admin=Depends(_require_owner_or_admin),
+):
+    """Owner/admin-only. Updates white-label branding — see `TenantThemeUpdate`'s own doc for why
+    this always overwrites `theme_json` wholesale (including resetting it to `null`) rather than
+    merging a partial update."""
+    try:
+        tenant = await tenant_service.get_tenant_or_404(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+    theme_json = payload.theme_json.model_dump() if payload.theme_json is not None else None
+    return await tenant_service.update_theme(session, tenant, theme_json=theme_json)
 
 
 @router.post("/{tenant_id}/admin-pin", response_model=AdminPinSetResponse)

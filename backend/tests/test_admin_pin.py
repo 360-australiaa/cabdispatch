@@ -156,3 +156,102 @@ async def test_setting_pin_again_overwrites_previous_pin(client, session):
         f"/v1/fleet/devices/{device_id}/verify-admin-pin", json={"pin": "2222"}, headers=headers
     )
     assert resp.json() == {"valid": True, "configured": True}
+
+
+# --- GET/PATCH /v1/tenants/me (white-label branding, blueprint 7.2.10/9.1/13.1) ----------------
+# The dashboard's White-label Settings page has called these exact paths since it was first built
+# (see dashboard/src/hooks/useWhite-labelSettings.ts's own doc), but the endpoints never landed
+# until now — closing a real 404 the page's own React Query error state was surfacing.
+
+
+async def test_get_my_tenant_returns_identity_and_null_theme_by_default(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="White Label Tenant")
+    tenant_id = _tenant_id_of(headers)
+
+    resp = await client.get("/v1/tenants/me", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == tenant_id
+    assert body["name"] == "White Label Tenant"
+    assert body["theme_json"] is None
+
+
+async def test_owner_can_update_theme(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Theme Owner Tenant")
+
+    resp = await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"logo_url": "https://example.com/logo.png", "primary_color": "#D6336C", "accent_color": "#FFB3C6"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["theme_json"] == {
+        "logo_url": "https://example.com/logo.png",
+        "primary_color": "#D6336C",
+        "accent_color": "#FFB3C6",
+    }
+
+    # Persists across a fresh GET, not just echoed back.
+    resp = await client.get("/v1/tenants/me", headers=headers)
+    assert resp.json()["theme_json"]["primary_color"] == "#D6336C"
+
+
+async def test_admin_can_update_theme(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Theme Admin Tenant")
+
+    resp = await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"primary_color": "#123456", "accent_color": "#abcdef"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+
+async def test_driver_cannot_update_theme(client, session):
+    headers = await auth_headers(client, session, role="driver", tenant_name="Theme Driver Tenant")
+
+    resp = await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"primary_color": "#123456", "accent_color": "#abcdef"}},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
+async def test_invalid_hex_color_is_422(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Theme Invalid Tenant")
+
+    resp = await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"primary_color": "not-a-color", "accent_color": "#FFB3C6"}},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_reset_theme_to_default_sets_null(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Theme Reset Tenant")
+
+    await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"primary_color": "#D6336C", "accent_color": "#FFB3C6"}},
+        headers=headers,
+    )
+    resp = await client.patch("/v1/tenants/me", json={"theme_json": None}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["theme_json"] is None
+
+
+async def test_tenant_theme_is_isolated_per_tenant(client, session):
+    tenant_a_headers = await auth_headers(client, session, role="owner", tenant_name="Theme Tenant A")
+    tenant_b_headers = await auth_headers(client, session, role="owner", tenant_name="Theme Tenant B")
+
+    await client.patch(
+        "/v1/tenants/me",
+        json={"theme_json": {"primary_color": "#111111", "accent_color": "#222222"}},
+        headers=tenant_a_headers,
+    )
+
+    resp = await client.get("/v1/tenants/me", headers=tenant_b_headers)
+    assert resp.json()["theme_json"] is None

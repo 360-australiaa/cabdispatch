@@ -20,9 +20,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.models.tariffs import Tariff as TariffRow
+from app.models.tenant import Tenant
 from app.models.trips import Trip  # noqa: F401 — registers the table, see test_trips.py
-from app.services.receipts import BACKEND_ROOT
+from app.services.receipts import BACKEND_ROOT, _lookup_tenant_branding
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -273,3 +276,28 @@ async def test_sms_receipt_rejects_open_trip(client: AsyncClient, session: Async
 async def test_sms_receipt_requires_auth(client: AsyncClient):
     resp = await client.post(f"/v1/trips/{uuid.uuid4()}/receipt/sms", json={"to_phone": "+61400000000"})
     assert resp.status_code in (401, 403)
+
+
+# --- receipt branding uses the real tenant, not a hardcoded placeholder (blueprint 7.2.10) -------
+
+
+async def test_receipt_branding_uses_real_tenant_name_and_abn(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver", tenant_name="Lilly Cabs Pty Ltd")
+    tenant_id = await _tenant_of(headers)
+
+    # auth_headers creates the tenant with a null ABN — set a real one directly, same shape as any
+    # tenant that filled in its company profile via a future Settings page.
+    result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one()
+    tenant.abn = "12 345 678 901"
+    await session.commit()
+
+    name, abn = await _lookup_tenant_branding(session, tenant_id=tenant_id)
+    assert name == "Lilly Cabs Pty Ltd"
+    assert abn == "12 345 678 901"
+
+
+async def test_receipt_branding_falls_back_for_unknown_tenant(session: AsyncSession):
+    name, abn = await _lookup_tenant_branding(session, tenant_id="does-not-exist")
+    assert name == "Cab Dispatch"
+    assert abn is None

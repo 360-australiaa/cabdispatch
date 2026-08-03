@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.fleet import Vehicle
+from app.models.tenant import Tenant
 from app.models.trips import TRIP_STATUS_CLOSED, Trip
 from app.models.user import User
 
@@ -107,14 +108,36 @@ async def _lookup_vehicle_label(session: AsyncSession, *, tenant_id: str, vehicl
     return vehicle.rego if vehicle is not None else f"Vehicle {vehicle_id[:8]}"
 
 
+async def _lookup_tenant_branding(session: AsyncSession, *, tenant_id: str) -> tuple[str, str | None]:
+    """Real white-label branding (blueprint 7.2.10/9.1/13.1) for the receipt header — was a fixed
+    "CAB DISPATCH" placeholder until now (see git history on this function if you need it). Same
+    "unconstrained ref, missing row is expected not an error" reasoning as `_lookup_driver_name`/
+    `_lookup_vehicle_label` above, even though `tenant_id` should always resolve in practice (a
+    trip can't exist without its own tenant row) — falls back to the platform default name rather
+    than crashing receipt generation over a data-integrity edge case that isn't this function's
+    job to enforce. Does NOT return `theme_json.logo_url` — embedding a remote-hosted image into a
+    server-rendered PDF (fetch + decode + fpdf2's `image()`) is real, separate work; only the
+    tenant's real name/ABN are wired into the PDF for now, flagged here rather than silently
+    assumed done. `dashboard/src/pages/settings/white-label/` is the one place `logo_url` is
+    actually rendered today (dashboard sidebar + its own live preview)."""
+    result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        return "Cab Dispatch", None
+    return tenant.name, tenant.abn
+
+
 def _fmt(amount) -> str:
     return f"${amount:.2f}"
 
 
-def _render_pdf_bytes(*, trip: Trip, driver_name: str, vehicle_label: str) -> bytes:
+def _render_pdf_bytes(
+    *, trip: Trip, driver_name: str, vehicle_label: str, tenant_name: str, tenant_abn: str | None
+) -> bytes:
     """Pure rendering step (no I/O) — kept separate from ensure_receipt_pdf so
-    it's trivially unit-testable. Layout per blueprint 5.2.6: operator
-    branding placeholder, receipt number, driver/vehicle, pickup/dropoff
+    it's trivially unit-testable. Layout per blueprint 5.2.6: real tenant
+    name/ABN (see _lookup_tenant_branding's own doc on why logo_url isn't
+    embedded here), receipt number, driver/vehicle, pickup/dropoff
     (addresses if the trip carries them — it currently only carries lat/lng,
     see app/models/trips.py, so those are shown instead of a fabricated
     address), fare breakdown, payment method."""
@@ -122,16 +145,12 @@ def _render_pdf_bytes(*, trip: Trip, driver_name: str, vehicle_label: str) -> by
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # --- Operator branding placeholder ---
+    # --- Operator branding (real tenant name/ABN, blueprint 7.2.10) ---
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, "CAB DISPATCH", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, tenant_name.upper(), new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(120, 120, 120)
-    pdf.cell(
-        0, 5,
-        "Operator logo / trading name / ABN placeholder - populated per-tenant at print time",
-        new_x="LMARGIN", new_y="NEXT",
-    )
+    pdf.cell(0, 5, f"ABN: {tenant_abn}" if tenant_abn else "Tax invoice / receipt", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
@@ -230,7 +249,14 @@ async def ensure_receipt_pdf(session: AsyncSession, *, tenant_id: str, trip: Tri
 
     driver_name = await _lookup_driver_name(session, tenant_id=tenant_id, driver_id=trip.driver_id)
     vehicle_label = await _lookup_vehicle_label(session, tenant_id=tenant_id, vehicle_id=trip.vehicle_id)
-    pdf_bytes = _render_pdf_bytes(trip=trip, driver_name=driver_name, vehicle_label=vehicle_label)
+    tenant_name, tenant_abn = await _lookup_tenant_branding(session, tenant_id=tenant_id)
+    pdf_bytes = _render_pdf_bytes(
+        trip=trip,
+        driver_name=driver_name,
+        vehicle_label=vehicle_label,
+        tenant_name=tenant_name,
+        tenant_abn=tenant_abn,
+    )
 
     if not pdf_bytes:
         raise ReceiptError("PDF renderer produced empty output")

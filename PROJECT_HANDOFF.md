@@ -10,8 +10,8 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 
 | Part | Files | Real status |
 |---|---|---|
-| Backend (FastAPI) | 82 app + 27 tests | **Done and verified.** 395 tests passing (up from 325 — new `test_compliance_expiry.py`, plus dispute/payment/preset/duress coverage across `test_trips.py`/`test_tariffs.py`/`test_duress.py`), incl. the golden fare-vector compliance suite. Every Alembic migration (10 revisions) applies cleanly to a fresh sqlite DB. This pass's new endpoints were each independently re-exercised live over real HTTP, not just "tests pass": tariff presets/suggest, driver/vehicle compliance-expiry (including the real login-block on an actually-expired license), trip dispute flagging (422 without a reason, 200 with one), and split-fare close validation (422 on a mismatched sum). |
-| Dashboard (React) | 95+ | **Done and verified.** 14 ops modules, all built against the real API. `npm run build` is clean and this pass's new UI (Trips "Review" filter + dispute panel, Fleet compliance-expiry banner, Tariff Studio preset picker) was exercised live in a real browser against real data — not just compiled. |
+| Backend (FastAPI) | 84 app + 27 tests | **Done and verified.** 404 tests passing (up from 325), incl. the golden fare-vector compliance suite. Every Alembic migration (10 revisions) applies cleanly to a fresh sqlite DB. This pass's new endpoints were each independently re-exercised live over real HTTP, not just "tests pass": tariff presets/suggest, driver/vehicle compliance-expiry (including the real login-block on an actually-expired license), trip dispute flagging, split-fare validation, and `GET`/`PATCH /v1/tenants/me` (white-label — see below, this one was a real 404 until now). |
+| Dashboard (React) | 95+ | **Done and verified.** 14 ops modules, all built against the real API. `npm run build` is clean and this pass's new UI — Trips "Review" filter + dispute panel, Fleet compliance-expiry banner, Tariff Studio preset picker, and White-label Settings (now actually functional, and actually re-themes the whole app, not just its own preview) — was exercised live in a real browser against real data. |
 | Android driver app (Kotlin) | ~80 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens. This pass added: an ambient 30s live-position heartbeat while on shift (closing the "Live Map shows no moving dot" gap — blueprint §6.2.2's own literal spec), duress audio recording (60s, real if mic permission granted) with upload, and voucher/account/split-fare payment methods + a trip-dispute button on Close & Pay / Trip Detail. **Two real bugs were found and fixed during reconciliation, not left for a future compile** — see `android/HANDOFF.md`'s top entry: a backend schema gap that was silently dropping the new payment fields on the app's actual offline-sync path, and a likely pre-existing `isActive`-without-a-CoroutineScope-receiver compile error in `RealLocationProvider.kt`. **Still never compiled** — no Android SDK in this environment — so nothing here has been visually confirmed, only reasoned through and cross-checked file-by-file. |
 
 **2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
@@ -83,6 +83,34 @@ future work, not an oversight.
 **Messages (`app/api/v1/messages.py`) — also verified live:** one thread per driver
 (`thread_id == driver_id`), `sender_type` `dispatch`/`driver`, `WS /v1/messages/live?driver_id=`
 for real-time delivery. Simple by design — no multi-party threads, no attachments.
+
+**2026-08-03 addition (latest) — White-label branding was completely non-functional; now real,
+verified live end-to-end.** The dashboard's White-label Settings page (logo/color pickers, live
+preview, presets, reset-to-default) had been fully built for a while, but the two endpoints it
+called (`GET`/`PATCH /v1/tenants/me`) never existed server-side — the page 404'd immediately on
+load, and even fixing that alone wouldn't have been enough: nothing else in the app actually read
+the saved theme, and receipts showed a hardcoded "CAB DISPATCH" placeholder regardless of tenant.
+Closed all three pieces:
+- **Backend:** `GET`/`PATCH /v1/tenants/me` added (`app/api/v1/tenants.py`), backed by `Tenant`'s
+  already-existing `theme_json` column (no migration needed) — owner/admin can update, anyone on
+  the tenant can read, `theme_json=null` resets to the platform default. 8 new tests.
+- **Dashboard — the app now actually re-themes, not just the settings page's own preview card.**
+  `AppShell.tsx` applies the tenant's `primary_color`/`accent_color` to the two CSS custom
+  properties (`--brand-primary`/`--brand-accent`) that literally every themed surface in this app
+  already reads (`tailwind.config.js`'s `brand.primary/accent` mapping) — one small hook,
+  zero changes needed to any individual page. `Sidebar.tsx` also now shows the tenant's real
+  `logo_url`/`name` instead of a fixed "Cab Dispatch" label. **Verified live, not just built:**
+  saved the dashboard's own "Lilly Cabs preset" (pink theme + a placeholder logo image), confirmed
+  via `getComputedStyle` that the CSS variables actually changed, then navigated to a completely
+  different page (Trips) and confirmed the whole UI — sidebar, buttons, active-nav highlight — was
+  genuinely pink, not just the settings page.
+- **Receipts:** `app/services/receipts.py`'s PDF header now renders the real tenant name/ABN
+  (`_lookup_tenant_branding`) instead of a hardcoded "CAB DISPATCH" placeholder. 2 new tests.
+- **Deliberately not done this pass, flagged rather than silently assumed complete:** the tenant's
+  `logo_url` is not embedded as an actual image in the generated receipt PDF (real, separate work —
+  fetch + decode + fpdf2's image API — the dashboard/sidebar are the only places a logo image
+  renders today); the Android meter app has zero tenant-branding awareness; and there's no custom
+  domain support (blueprint §13.1) — that needs real DNS/infrastructure, not code.
 
 **2026-08-03 addition (later) — duress voice/audio, trip dispute + new payment methods, tariff
 presets, driver/vehicle compliance-expiry — a 9-agent pass, independently re-verified live

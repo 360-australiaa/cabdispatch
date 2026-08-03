@@ -43,6 +43,16 @@ async def set_admin_pin(session: AsyncSession, tenant: Tenant, *, pin: str) -> T
     return tenant
 
 
+async def update_theme(session: AsyncSession, tenant: Tenant, *, theme_json: dict | None) -> Tenant:
+    """White-label branding (blueprint 7.2.10/9.1/13.1). Wholesale overwrite, same "set/update are
+    the same operation" precedent as set_admin_pin above — `theme_json=None` is a deliberate reset
+    to the platform default, not "no change" (see TenantThemeUpdate's own doc)."""
+    tenant.theme_json = theme_json
+    await session.commit()
+    await session.refresh(tenant)
+    return tenant
+
+
 async def check_admin_pin(session: AsyncSession, *, tenant_id: str) -> Tenant:
     """Loads the tenant for a PIN check. Separate from get_tenant_or_404 only
     in name, kept distinct so call sites read clearly; raises
@@ -70,5 +80,6 @@ __all__ = [
     "check_admin_pin",
     "get_tenant_or_404",
     "set_admin_pin",
+    "update_theme",
     "verify_admin_pin",
 ]

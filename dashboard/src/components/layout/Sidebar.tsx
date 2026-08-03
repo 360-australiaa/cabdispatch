@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 
 interface NavItem {
   to: string;
@@ -43,14 +44,34 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  // White-label branding (blueprint 7.2.10/9.1/13.1) — the same tenant record
+  // AppShell's useApplyTenantTheme() reads for --brand-primary/--brand-accent; React Query's
+  // cache means this second useTenantQuery() call here doesn't refetch, just re-reads the same
+  // cached result. A real `logo_url` replaces the "CD" placeholder badge + fixed "Cab Dispatch"
+  // label with the tenant's actual name; falls back to the platform default when unset, same
+  // "no customization -> platform default" convention as the theme colors themselves.
+  const { data: tenant } = useTenantQuery();
+  const logoUrl = tenant?.theme_json?.logo_url;
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col bg-brand-primary text-brand-primary-foreground">
       <div className="flex items-center gap-2 px-5 py-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-accent text-brand-accent-foreground font-bold">
-          CD
-        </div>
-        <span className="text-sm font-semibold tracking-wide">Cab Dispatch</span>
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt={`${tenant?.name ?? "Fleet"} logo`}
+            className="h-8 max-w-[140px] object-contain"
+          />
+        ) : (
+          <>
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand-accent text-brand-accent-foreground font-bold">
+              CD
+            </div>
+            <span className="text-sm font-semibold tracking-wide">
+              {tenant?.name ?? "Cab Dispatch"}
+            </span>
+          </>
+        )}
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-2">
