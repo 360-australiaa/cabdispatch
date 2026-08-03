@@ -16,15 +16,15 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -197,56 +197,43 @@ fun WheelDashboardScreen(
         Box(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = dashboardAlpha.value }) {
             MapBackground(fix = locationFix, modifier = Modifier.fillMaxSize())
 
-            Column(modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()) {
-                TopStatusStrip(status = uiState.status)
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WheelColors.border))
+            // Permanent split-panel body (per direct request): a LEFT content panel that hosts
+            // identity/stats/status chrome plus whichever wheel slot's real screen is currently
+            // selected, and a RIGHT instrument-console panel that always shows the wheel itself —
+            // fixed in place regardless of which slot is displayed, rather than one of several
+            // independently-floating overlays on the map the way this screen used to be laid
+            // out. The live map stays full-bleed behind both panels (spec §5: "nothing is ever a
+            // blank screen") — [LeftContentPanel]/[RightWheelPanel] use a semi-opaque surface so
+            // map imagery underneath doesn't fight with card/wheel readability.
+            Column(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    TopStatusStrip(status = uiState.status)
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WheelColors.border))
+                }
+
+                Row(modifier = Modifier.fillMaxSize()) {
+                    LeftContentPanel(
+                        uiState = uiState,
+                        displayedSlot = displayedSlot,
+                        navController = navController,
+                        onAvailableChange = viewModel::setAvailable,
+                        onIdentityClick = {
+                            // Profile (Compliance + Settings, spec §5/§8 rows 20-21) has landed —
+                            // see ui/screens/profile/ProfileScreen.kt. Was routed to the
+                            // standalone Settings (S6) screen as a stand-in until then.
+                            navController.navigate(CabDispatchRoutes.PROFILE)
+                        },
+                        modifier = Modifier.weight(0.42f).fillMaxHeight(),
+                    )
+
+                    RightWheelPanel(
+                        controller = wheelController,
+                        displayedSlotIndex = displayedSlotIndex,
+                        onSettled = { index -> displayedSlotIndex = index },
+                        modifier = Modifier.weight(0.58f).fillMaxHeight(),
+                    )
+                }
             }
-
-            IdentityCard(
-                session = uiState.session,
-                onClick = {
-                    // Profile (Compliance + Settings, spec §5/§8 rows 20-21) has landed —
-                    // see ui/screens/profile/ProfileScreen.kt. Was routed to the standalone
-                    // Settings (S6) screen as a stand-in until then.
-                    navController.navigate(CabDispatchRoutes.PROFILE)
-                },
-                modifier = Modifier.align(Alignment.TopStart).padding(top = 52.dp, start = 24.dp),
-            )
-
-            QuickStatsCard(
-                stats = uiState.todayStats,
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 52.dp, end = 24.dp),
-            )
-
-            StatusCard(
-                isAvailable = uiState.isAvailable,
-                modifier = Modifier.align(Alignment.TopStart).padding(top = 140.dp, start = 24.dp),
-            )
-
-            Crossfade(
-                targetState = displayedSlot,
-                animationSpec = tween(WheelGeometry.CONTENT_FADE_MS),
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(top = 210.dp, start = 24.dp)
-                    .widthIn(max = 460.dp),
-                label = "wheelContentPane",
-            ) { slot ->
-                val provider = wheelSlotContentProviderFor(
-                    slot = slot,
-                    uiState = uiState,
-                    navController = navController,
-                    onAvailableChange = viewModel::setAvailable,
-                )
-                ContentPane(provider = provider)
-            }
-
-            WheelArea(
-                controller = wheelController,
-                displayedSlotIndex = displayedSlotIndex,
-                onSettled = { index -> displayedSlotIndex = index },
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 80.dp),
-            )
 
             StartMeterButton(
                 enabled = startMeterEnabled,
@@ -859,6 +846,81 @@ private class OffDutyAvailableContent(
     }
 }
 
+/**
+ * Permanent LEFT panel (per direct request replacing the old map-overlay-cards layout): identity
+ * + quick stats header row, the off-duty/available status card, then whichever wheel slot's real
+ * screen is currently selected ([ContentPane], via the same [wheelSlotContentProviderFor] this
+ * screen already used) filling the rest of the panel's height. `bottom = 130.dp` on the outer
+ * padding keeps content clear of [StartMeterButton], which floats over BOTH panels at
+ * [Alignment.BottomCenter] of the whole screen, not just this one.
+ */
+@Composable
+private fun LeftContentPanel(
+    uiState: WheelDashboardUiState,
+    displayedSlot: WheelSlot,
+    navController: NavHostController,
+    onAvailableChange: (Boolean) -> Unit,
+    onIdentityClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(WheelColors.surfaceRaised.copy(alpha = 0.92f))
+            .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 130.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IdentityCard(session = uiState.session, onClick = onIdentityClick)
+            QuickStatsCard(stats = uiState.todayStats)
+        }
+        Spacer(Modifier.height(14.dp))
+        StatusCard(isAvailable = uiState.isAvailable)
+        Spacer(Modifier.height(20.dp))
+
+        Crossfade(
+            targetState = displayedSlot,
+            animationSpec = tween(WheelGeometry.CONTENT_FADE_MS),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            label = "wheelContentPane",
+        ) { slot ->
+            val provider = wheelSlotContentProviderFor(
+                slot = slot,
+                uiState = uiState,
+                navController = navController,
+                onAvailableChange = onAvailableChange,
+            )
+            ContentPane(provider = provider, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * Permanent RIGHT panel: just [WheelArea], centered in its own dedicated region regardless of
+ * which slot [LeftContentPanel] is currently showing — this is what makes the wheel "always
+ * visible on the right" a real structural guarantee rather than an incidental effect of where it
+ * happened to be drawn. Centered (not bottom-anchored) per the two options in the request
+ * ("bottom or centre right") — trivial to change [Alignment.Center] to
+ * `Alignment.BottomCenter` here if bottom-anchored is preferred instead.
+ */
+@Composable
+private fun RightWheelPanel(
+    controller: WheelController,
+    displayedSlotIndex: Int,
+    onSettled: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        WheelArea(
+            controller = controller,
+            displayedSlotIndex = displayedSlotIndex,
+            onSettled = onSettled,
+        )
+    }
+}
+
 @Composable
 private fun ContentPane(provider: WheelSlotContentProvider, modifier: Modifier = Modifier) {
     Column(modifier = modifier) {
@@ -876,7 +938,7 @@ private fun ContentPane(provider: WheelSlotContentProvider, modifier: Modifier =
             fontSize = 30.sp,
         )
         Spacer(Modifier.height(14.dp))
-        Box(modifier = Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
             provider.Body()
         }
     }

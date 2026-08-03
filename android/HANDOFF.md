@@ -23,6 +23,57 @@ time for real compile errors — signature mismatches between sibling files that
 parallel without ever type-checking against each other are the most likely failure mode, not
 conceptual bugs.
 
+## 2026-08-03 (newest) — Dashboard restructured into a permanent split panel: wheel fixed right, all content left
+
+Direct request, working from a Gemini-generated reference HTML (`Dispatch Tablet - Exact Metallic
+Meter Wheel` — a 42%/58% grid, static wheel dial on the right, a content panel on the left that
+swaps per selected sector). The ask: the wheel should show *permanently* on the right side, and
+"all data and pages or screens" should show on the left — not the previous layout, where the
+wheel, identity card, quick-stats card, status card, and the active slot's content pane were each
+independently `.align(...)`-positioned floating cards over the full-bleed map background (visually
+similar in spirit, since the wheel already defaulted to `CenterEnd`, but never a real structural
+guarantee — nothing stopped a future change from drawing something else on top of it).
+
+**What changed, all in `ui/screens/dashboard/WheelDashboardScreen.kt`:**
+- The screen's body is now a real `Row` split: `LeftContentPanel` (`weight(0.42f)`, matching the
+  reference's left-panel proportion) and `RightWheelPanel` (`weight(0.58f)`) — each
+  `fillMaxHeight()`, both sitting below a full-width `TopStatusStrip` header. The live map
+  background is deliberately KEPT full-bleed behind both panels (spec §5: "nothing is ever a
+  blank screen" — this reference has no map at all, but removing it wasn't part of the actual
+  ask), with both panels using a semi-opaque `WheelColors.surfaceRaised` background so map imagery
+  underneath doesn't fight with card/wheel readability.
+- **`LeftContentPanel`** consolidates what used to be four independently-floating overlays
+  (`IdentityCard` top-left, `QuickStatsCard` top-right, `StatusCard`, the slot `ContentPane`) into
+  one panel: identity + quick-stats as a `SpaceBetween` header row (preserving their original
+  left/right relative positions, just now scoped inside this one panel instead of the whole
+  screen), then `StatusCard`, then the active wheel slot's real content (`ContentPane`, via the
+  exact same `wheelSlotContentProviderFor` this screen already used — no slot-content composable
+  itself needed any change) filling the rest of the panel's height via `weight(1f)` instead of the
+  old fixed `heightIn(max = 380.dp)` cap. `bottom = 130.dp` padding on the panel keeps its content
+  clear of `StartMeterButton`, which still floats over BOTH panels at the whole screen's
+  `Alignment.BottomCenter` (a global action, not scoped to either panel).
+- **`RightWheelPanel`** is just `WheelArea` centered in its own dedicated region — this is what
+  makes "always visible on the right" an actual structural guarantee (nothing else can ever render
+  in that Row cell) rather than an artifact of one Z-order among several overlays. Centered, not
+  bottom-anchored — the request offered "bottom or centre right" as options; centered was chosen as
+  the smaller change from the previous `CenterEnd` default. **Flagged for whoever picks this up:**
+  swapping to bottom-anchored is a one-line change (`RightWheelPanel`'s `Box`'s
+  `contentAlignment = Alignment.Center` → `Alignment.BottomCenter`) if bottom-right is preferred
+  instead once someone can actually see this on a device.
+- No wheel-slot content composable (`AvailableTripsWheelContent`, `MessagesWheelContent`, etc.)
+  needed any change — they all still just implement `WheelSlotContentProvider.Body()`, which
+  `ContentPane` renders identically to before (same `Box(...).verticalScroll(...)` wrapper, just
+  sized by `weight(1f)` against the panel's real available height instead of a fixed 380dp cap).
+- **Genuinely unverified, flagged loudly:** this is a real layout restructuring (a `Row` with two
+  `weight`-based panels replacing several `Box`-scoped `.align(...)` overlays) that has never been
+  measured on a real screen. The two biggest real risks to check first on a device: (1) whether
+  `WheelGeometry.WHEEL_DIAMETER_DP` (the fixed wheel size) actually fits comfortably inside
+  `RightWheelPanel`'s `weight(0.58f)` region on whatever real tablet this runs on — if the wheel
+  visually crowds or clips against the panel edge, either shrink `WHEEL_DIAMETER_DP` or shift the
+  `0.42f`/`0.58f` split; (2) whether `LeftContentPanel`'s `130.dp` bottom-padding reservation is
+  actually enough clearance from `StartMeterButton` at whatever real device height this renders at
+  — both were sized by reading the numbers, not by seeing them rendered.
+
 ## 2026-08-03 (reconciliation pass) — GPS core + map/region + driver-PIN + admin-PIN/tariff-signing + MDM-locate cross-checked
 
 A core GPS-provider agent (`domain/location/RealLocationProvider.kt`, the `SpeedSource.locationFix`
