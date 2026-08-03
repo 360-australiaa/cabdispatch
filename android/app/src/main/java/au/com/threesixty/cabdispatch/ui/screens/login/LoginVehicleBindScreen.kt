@@ -183,6 +183,17 @@ private fun StepIndicator(step: LoginStep) {
 
 @Composable
 private fun DriverLoginStep(uiState: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
+    // Two sub-views sharing one StepCard/step slot rather than a distinct LoginStep: the MFA
+    // challenge is a continuation of the same login attempt (same driverIdInput/pinInput still
+    // live in state), not a new step in the driver-login -> vehicle-bind -> inspection sequence
+    // the class doc describes — same reasoning as why shift-start got its own screen but this
+    // didn't. Only reachable for driver accounts with MFA enabled (shared/API_SUMMARY.md's
+    // driver-login doc); most drivers never see this card.
+    if (uiState.mfaToken != null) {
+        MfaCodeStep(uiState, viewModel)
+        return
+    }
+
     StepCard(
         icon = "🔑",
         title = "Driver PIN login",
@@ -218,6 +229,30 @@ private fun DriverLoginStep(uiState: LoginVehicleBindUiState, viewModel: LoginVe
                 onClick = viewModel::quickLoginDemoDriver,
             )
         }
+    }
+}
+
+@Composable
+private fun MfaCodeStep(uiState: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
+    StepCard(
+        icon = "🔐",
+        title = "Verification code",
+        subtitle = "Enter the 6-digit code from your authenticator app.",
+    ) {
+        DarkTextField(
+            value = uiState.mfaCodeInput,
+            onValueChange = viewModel::onMfaCodeChanged,
+            label = "6-digit code",
+            keyboardType = KeyboardType.NumberPassword,
+        )
+        uiState.loginError?.let {
+            Spacer(Modifier.height(10.dp))
+            ErrorText(it)
+        }
+        Spacer(Modifier.height(20.dp))
+        PrimaryGoldButton(label = "VERIFY", loading = uiState.isLoggingIn, onClick = viewModel::verifyMfaCode)
+        Spacer(Modifier.height(12.dp))
+        SecondaryOutlineButton(label = "BACK", onClick = viewModel::cancelMfaChallenge)
     }
 }
 

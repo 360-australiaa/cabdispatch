@@ -20,10 +20,10 @@ import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
 import au.com.threesixty.cabdispatch.domain.StubQrScanner
-import au.com.threesixty.cabdispatch.domain.StubSpeedSource
 import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
+import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
 import au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway
 import au.com.threesixty.cabdispatch.hardware.payments.MockCardPaymentGateway
 import au.com.threesixty.cabdispatch.hardware.printing.MockReceiptPrinterGateway
@@ -32,14 +32,14 @@ import au.com.threesixty.cabdispatch.hardware.receipt.EmailReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.MockEmailReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.MockSmsReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.SmsReceiptGateway
-import au.com.threesixty.cabdispatch.security.RsaTariffSignatureVerifier
-import au.com.threesixty.cabdispatch.security.TariffSignatureVerifier
 import au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger
 import au.com.threesixty.cabdispatch.sync.SyncWorker
 import au.com.threesixty.cabdispatch.sync.TariffCache
+import au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -101,8 +101,16 @@ object AppContainer {
     lateinit var connectivitySyncTrigger: ConnectivitySyncTrigger
         private set
 
+    /** Application [Context], captured once in [init] — [speedSource]'s real
+     * [RealLocationProvider] needs it (runtime permission checks + the
+     * `FusedLocationProviderClient` instance), same reasoning as every other lateinit field on
+     * this object: fail loudly at first use if [init] was never called, rather than silently
+     * constructing something Context-shaped without a real application Context. */
+    lateinit var appContext: Context
+        private set
+
     fun init(context: Context) {
-        val appContext = context.applicationContext
+        appContext = context.applicationContext
 
         database = Room.databaseBuilder(
             appContext,
@@ -138,7 +146,20 @@ object AppContainer {
         // Eager: drain the instant connectivity returns, instead of waiting
         // up to 15 min for the backstop.
         connectivitySyncTrigger = ConnectivitySyncTrigger(appContext).also { it.start() }
+
+        // Best-effort warm-up of the tariff-signing public key (see [tariffSigningKeyCache]) so
+        // a device that's online at first launch already has it cached before the first tariff
+        // [TariffCache.refresh] call needs it — that call also has its own on-demand fallback
+        // fetch (see TariffCache.verifySignatureOrThrow), so this is an optimization, not a
+        // correctness requirement; failures here are silently swallowed on purpose, same as
+        // every other best-effort call in this class.
+        startupScope.launch { runCatching { tariffSigningKeyCache.refresh() } }
     }
+
+    /** Fire-and-forget process-lifetime scope for one-shot startup tasks that must kick off
+     * unconditionally from [init] itself (not lazily on first property access, like every other
+     * `CoroutineScope` in this object) — currently just the tariff-signing-key warm-up above. */
+    private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()
@@ -157,9 +178,14 @@ object AppContainer {
     val shiftDao by lazy { database.shiftDao() }
     val tariffDao by lazy { database.tariffDao() }
     val syncOutboxDao by lazy { database.syncOutboxDao() }
+    val tariffSigningKeyDao by lazy { database.tariffSigningKeyDao() }
 
     val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService) }
-    val tariffCache by lazy { TariffCache(tariffDao, apiService) }
+
+    /** Local cache of the Ed25519 public key that verifies [tariffCache]'s signed tariffs — see
+     * that class's doc and `security/TariffSignatureVerifier.kt`'s `Ed25519TariffSignatureVerifier`. */
+    val tariffSigningKeyCache by lazy { TariffSigningKeyCache(tariffSigningKeyDao, apiService) }
+    val tariffCache by lazy { TariffCache(tariffDao, apiService, tariffSigningKeyCache) }
 
     // --- S4-S6 agent: fare-breakdown engine + hardware gateways ---
     //
@@ -196,15 +222,17 @@ object AppContainer {
     // suggest) specifically so it does not collide with that one.
     val pureFareEngine: PureFareEngine by lazy { PureFareEngine() }
 
-    // Hardware interfaces — see android/README.md "Real vs mocked". Only
-    // [tariffSignatureVerifier] is a real implementation; the rest are
-    // clearly-labeled mocks (no certified payment/printer/SMS/email hardware
-    // or backend endpoints exist to integrate against in this sandbox).
+    // Hardware interfaces — see android/README.md "Real vs mocked". The rest are clearly-labeled
+    // mocks (no certified payment/printer/SMS/email hardware exists to integrate against in this
+    // sandbox). Signature verification is real too, but isn't a singleton here the way these
+    // gateways are — [tariffCache] constructs an `Ed25519TariffSignatureVerifier` itself, scoped
+    // to whatever public key [tariffSigningKeyCache] hands it at verify time (the key is fetched/
+    // cached, not a compile-time constant, so there's no single verifier instance to hold onto
+    // for the process lifetime the way a gateway singleton implies) — see TariffCache.kt.
     val cardPaymentGateway: CardPaymentGateway by lazy { MockCardPaymentGateway() }
     val receiptPrinterGateway: ReceiptPrinterGateway by lazy { MockReceiptPrinterGateway() }
     val smsReceiptGateway: SmsReceiptGateway by lazy { MockSmsReceiptGateway() }
     val emailReceiptGateway: EmailReceiptGateway by lazy { MockEmailReceiptGateway() }
-    val tariffSignatureVerifier: TariffSignatureVerifier by lazy { RsaTariffSignatureVerifier() }
 
     // --- S1-S3 screen dependencies (integration pass) ---
     //
@@ -223,7 +251,20 @@ object AppContainer {
     val qrScanner: QrScanner by lazy { StubQrScanner() }
     val tripStatsRepository: TripStatsRepository by lazy { StubTripStatsRepository() }
     val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
-    val speedSource: SpeedSource by lazy { StubSpeedSource() }
+
+    /**
+     * Real fused-location GPS feed (see `domain/location/RealLocationProvider.kt`), replacing
+     * the former `StubSpeedSource()` default here — see HANDOFF.md's "GPS is stubbed" gap and
+     * that class's doc for the permission-poll loop that starts/stops it. Own process-lifetime
+     * `SupervisorJob` scope, same pattern as [duressController] below, so one location subscriber
+     * misbehaving (or the coroutine it's collecting on throwing) can't take down anything else
+     * sharing a scope. [StubSpeedSource][au.com.threesixty.cabdispatch.domain.StubSpeedSource]
+     * remains defined in `domain/FareEngine.kt`, kept (not deleted) as the explicit no-GPS
+     * fallback for tests/previews — this property just no longer constructs it by default.
+     */
+    val speedSource: SpeedSource by lazy {
+        RealLocationProvider(appContext, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+    }
 
     // --- Wheel redesign shared foundation (jobs/offers + messages, spec §9) ---
     //

@@ -12,13 +12,304 @@ meter app (Kotlin/Compose, offline-first). Full product spec: `../docs/TCT-METER
 behaviour). Repo: https://github.com/360-australiaa/cabdispatch
 
 **Honest current status:** every file in this module has been written and *read carefully* by a
-prior agent pass, including two reconciliation passes (2026-08-01's wheel-redesign pass — see
-below — and an earlier one that fixed S3 not persisting trip ticks to Room, see
-`ui/screens/hired/HiredViewModel.kt`'s doc comment if you want that history). But **it has never
-been compiled**. The environment that wrote it had no Android SDK. This machine (yours) is the
-first place this code will ever hit a real compiler. Expect and budget time for real compile
-errors — signature mismatches between sibling files that were written in parallel without ever
-type-checking against each other are the most likely failure mode, not conceptual bugs.
+prior agent pass, including three reconciliation passes (2026-08-03's GPS-core/4-sibling pass —
+see immediately below — 2026-08-01's wheel-redesign pass, and an earlier one that fixed S3 not
+persisting trip ticks to Room, see `ui/screens/hired/HiredViewModel.kt`'s doc comment if you want
+that history). But **it has never been compiled**. The environment that wrote it had no Android
+SDK. This machine (yours) is the first place this code will ever hit a real compiler (a real
+device build only just started elsewhere and has already found one real bug — a Mapbox `MapView`
+lifecycle issue, now fixed, see the 2026-08-02 "solid black map" entry below). Expect and budget
+time for real compile errors — signature mismatches between sibling files that were written in
+parallel without ever type-checking against each other are the most likely failure mode, not
+conceptual bugs.
+
+## 2026-08-03 (reconciliation pass) — GPS core + map/region + driver-PIN + admin-PIN/tariff-signing + MDM-locate cross-checked
+
+A core GPS-provider agent (`domain/location/RealLocationProvider.kt`, the `SpeedSource.locationFix`
+contract) and 4 sibling feature agents (map/region GPS wiring, driver-PIN login, admin-PIN +
+Ed25519 tariff-signature verification, MDM "locate") had all built against each other's contracts
+in sequence/parallel, per this file's own entries below, without ever compiling against each
+other. This pass's job was specifically to catch the naming/signature drift that produces — the
+"most likely failure mode" this file's intro paragraph warns about.
+
+**Unusual advantage this pass had that prior reconciliation passes didn't:** this checkout is a
+real git repository with the pre-existing code committed at HEAD, so instead of re-reading every
+file cold, every file this pass touched was diffed against HEAD directly (`git diff`) — a much
+more precise way to see exactly what each agent actually changed than re-deriving it by eye.
+
+**What was checked, and the result — no naming/signature mismatch was found anywhere:**
+
+- **`SpeedSource`/`LocationFix` contract** (`domain/FareEngine.kt`, defined by the core GPS pass)
+  vs. every consumer: `domain/location/RegionResolver.kt` (`resolve(fix: LocationFix?)` /
+  `resolve(lat: Double?, lng: Double?)` — both overloads used correctly, and
+  `WheelDashboardViewModel.kt` deliberately spells out the lambda rather than a method reference
+  specifically to avoid ambiguity between the two), `WheelDashboardScreen.kt`'s `MapBackground`/
+  `RealMapboxMapView` (`fix: LocationFix?` parameter threaded through consistently, including the
+  new `cameraFor(fix)` helper), `AvailableTripsWheelViewModel.kt` and
+  `AvailableTripOfferViewModel.kt` (both call `AppContainer.speedSource.locationFix.value` and
+  `RegionResolver.resolve(...)` identically), and `SettingsViewModel.kt`'s
+  `respondToLocateRequest()` (reads the same `.locationFix.value`, publishes `fix.lat`/`fix.lng`
+  against `PositionPublishRequestDto`'s matching `lat`/`lng` fields). Every call site agrees with
+  what `RealLocationProvider`/`domain/FareEngine.kt` actually built — no stale guess anywhere.
+- **`StubSpeedSource`** — confirmed still defined in `domain/FareEngine.kt`, NOT deleted.
+  `AppContainer.speedSource` no longer constructs it directly (now `RealLocationProvider`), but
+  it's kept exactly as every prior entry documents: the explicit fallback for tests/previews, and
+  `RealLocationProvider` itself reproduces the identical observable shape (`locationFix = null`,
+  `speedKmh = 0.0`) when ungranted/no-fix, so nothing that used to rely on the stub's shape
+  regresses.
+- **The golden-vector fare engine (`domain/fare/FareEngine.kt`) — confirmed byte-for-byte
+  untouched.** `git diff` against HEAD returns nothing for this file, its test
+  (`FareEngineTest.kt`), or anything downstream of it that turns a live trip into a charged amount
+  (`domain/fare/TripFareReconstruction.kt`, `domain/fare/TariffMapper.kt`,
+  `ui/screens/closepay/CloseAndPayViewModel.kt` — all zero-diff too). The GPS core pass's only
+  change to the *live* UI engine (`domain/FareEngine.kt`, the tick-by-tick display one — see this
+  file's Step 1 for why there are deliberately two) was additive: `SpeedSource` gained
+  `locationFix` alongside the pre-existing `speedKmh`, and `FareEngineImpl.tick()` still reads only
+  `speedSource.speedKmh.value` exactly as before. This is the one regression that would have
+  actually been dangerous (a miscalculated fare) — confirmed it did not happen.
+- **`ApiService.kt`'s DTOs, cross-checked against the actual backend** (not just the Android side
+  — `driver_code`/`pin` for driver-login, `configured`/`valid` for admin-PIN,
+  `public_key`/`algorithm` for the signing key, `PositionPublishRequestDto`'s `vehicle_id`/`lat`/
+  `lng`/`status`, and every URL path) against `backend/app/api/v1/{auth,fleet,tariffs,live_ops}.py`
+  and `backend/app/schemas/{auth,fleet,tariffs,live_ops}.py` — every field name, type, nullability,
+  and path matches exactly. `security/TariffCanonicalPayload.kt`'s field order/rate-quantization
+  also line up field-for-field with `backend/app/services/tariff_signing.py`'s
+  `canonical_tariff_payload`/`RATE_FIELDS`/`_fmt_rate` — the one residual risk already flagged by
+  that file's own doc (the `effective_from`/`effective_to` byte-format assumption) still stands,
+  since it genuinely can't be checked without a real signed payload from a real running backend.
+- **`AppContainer.kt`/`AppDatabase.kt` wiring** — `tariffSigningKeyDao`/`tariffSigningKeyCache`
+  registered once each, `AppDatabase` version 2→3 with `TariffSigningKeyEntity` in both the
+  `@Database(entities = [...])` list and its own `abstract fun`, no duplicate singletons, the
+  removed `tariffSignatureVerifier` singleton has zero remaining call sites (confirmed via
+  project-wide grep — `TariffCache` now constructs `Ed25519TariffSignatureVerifier` itself, per
+  that class's own doc explaining why it's no longer a singleton).
+- **No dangling references** to anything a sibling deleted: `ADMIN_PIN_PLACEHOLDER`,
+  `FARE_SCHEDULE_REGION`, and the hardcoded `DEFAULT_REGION` constant are all gone from every
+  *live* call site (grepped project-wide) — the only remaining `DEFAULT_REGION` is in the already-
+  dead, unreferenced `ui/screens/idle/IdleViewModel.kt` (superseded by `WheelDashboardViewModel`,
+  see the 2026-08-01 entry below), correctly left alone rather than edited for no reason.
+
+**Still not fully confident about — same standing caveat as every entry in this file:** none of
+this has ever been run through `kotlinc`. This pass is a careful `git diff` + cross-file textual
+trace, not a compiler-verified one, so a real type mismatch, missing import, or Compose API misuse
+this manual pass didn't spot by eye is still possible — `./gradlew assembleDebug` (Step 0) is still
+the first real test. The specific already-flagged risks below are unchanged by this pass (it
+didn't attempt to close any of them, only to confirm no *new* cross-agent drift was introduced):
+the tariff canonical-payload datetime-format assumption (`TariffCanonicalPayload.kt`'s own doc),
+the Mapbox Maps SDK v11 offline-region API surface (`MapboxOfflineRegion.kt`'s own doc, still the
+single highest-risk file in this module), and the MDM-locate/admin-PIN gaps each of those passes'
+own entries already documented (locate only answered when S6 happens to be opened; no periodic
+background heartbeat exists yet).
+
+**What's left, in priority order (unchanged by this reconciliation pass, restated here for a
+single up-to-date list):**
+
+- **Hardware-dependent, reasonable to leave stubbed until a physical pilot:**
+  `hardware/payments/CardPaymentGateway.kt` (Stripe Terminal Tap-to-Pay), `hardware/printing/
+  ReceiptPrinterGateway.kt` (BT thermal printer), `hardware/receipt/{Sms,Email}ReceiptGateway.kt`.
+  Real interfaces, mock/no-op implementations — don't fake these into "working" without real
+  hardware or a real Stripe key to test against.
+- **Offline-region-download risk flag:** `data/remote/MapboxOfflineRegion.kt` — written from a
+  general understanding of the Mapbox Maps SDK v11 `TileStore`/`OfflineManager` API shape, not
+  verified against a current release; the highest-risk unverified file in this module (see its own
+  doc and the 2026-08-02 "Real offline maps" entry below before debugging it).
+- **`reboot_requested`:** parsed (`DeviceDto.rebootRequested`) for parity/visibility only — nothing
+  acts on it. Actually rebooting the OS needs device-owner-level Android permissions this app
+  doesn't provision; stays a real, honest, backend-only command queue (see the backend's own
+  HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`).
+- Everything else this pass touched (GPS provider + fare-engine input, map centering, region
+  detection, driver-PIN login, admin-PIN factory reset, Ed25519 tariff-signature verification, MDM
+  "locate") is functionally addressed as of the dated entries below — genuinely open, narrower
+  follow-ups each of those entries already flags explicitly: the GPS status-strip dot and duress
+  GPS relay still reading a separate raw `LocationManager` fix instead of `AppContainer.speedSource`,
+  the driver-initiated-hire `TripContext.startLat`/`startLng` still hardcoded `0.0, 0.0`, no
+  periodic background heartbeat (so MDM "locate" only answers when S6 is opened), and
+  `LoginVehicleBindViewModel.kt`'s `DEMO_DRIVER_ID` quick-login constant no longer matching a real
+  seeded `driver_code`.
+
+## 2026-08-03 (even later) — Real admin-PIN verification + real Ed25519 tariff-signature verification
+
+Direct request, closing out both remaining "High priority (correctness)" gaps this file listed
+below: the hardcoded `ADMIN_PIN_PLACEHOLDER` factory-reset check and `TariffSignatureVerifier`'s
+placeholder public key. Backend counterparts (`POST /v1/fleet/devices/{id}/verify-admin-pin`,
+`GET /v1/tariffs/signing-public-key`, `GET /v1/tariffs/active`'s new `signature` field) already
+existed — see `shared/API_SUMMARY.md`'s "Admin PIN" / "Tariff signing" notes.
+
+- **Admin-PIN-gated factory reset (`ui/screens/settings/SettingsViewModel.kt`).**
+  `attemptFactoryReset` no longer compares the entered PIN to a hardcoded constant — it calls
+  `POST /v1/fleet/devices/{id}/verify-admin-pin` (new `ApiService.verifyAdminPin` +
+  `VerifyAdminPinRequestDto`/`VerifyAdminPinResponseDto`) using `SessionHolder.deviceId` (the same
+  device id `loadDeviceStatus`'s heartbeat call already used). Three distinct outcomes, all
+  surfaced via the existing `factoryResetError` UI state (no `SettingsScreen.kt` changes needed —
+  it already renders that string and disables the button on `factoryResetInProgress`):
+  no `deviceId` yet (device never paired) -> blocks with an explanatory error;
+  `configured=false` (tenant never set a PIN) -> blocks with an explanatory error, does NOT allow
+  the reset — this was the specific "don't silently allow it" case called out in the brief, since
+  a naive `if (!configured || valid)` would let anyone wipe an unconfigured tenant's device with
+  any PIN at all; `configured=true, valid=false` -> "Incorrect admin PIN"; `configured=true,
+  valid=true` -> proceeds with the existing DB-wipe/session-clear logic, unchanged. A network/
+  server failure fails closed (blocks the reset, shows an error) rather than allowing it.
+- **Real Ed25519 tariff-signature verification.** The backend signs `GET /v1/tariffs/active`
+  with Ed25519, not RSA (`backend/app/services/tariff_signing.py`) — `TariffSignatureVerifier.kt`'s
+  original `RsaTariffSignatureVerifier` can never verify these signatures no matter what key it's
+  given, so a new `Ed25519TariffSignatureVerifier` was added (BouncyCastle
+  `org.bouncycastle:bcprov-jdk18on`, since `java.security`'s own Ed25519 support needs API 33+ and
+  this project's minSdk is 29 — see that class's doc). `RsaTariffSignatureVerifier` is kept defined,
+  just no longer constructed by anything.
+  - New `security/TariffCanonicalPayload.kt#canonicalTariffPayload` — a byte-for-byte Kotlin port
+    of the backend's `canonical_tariff_payload` (fixed field order, rate fields quantized to 4dp
+    half-up via `BigDecimal`, compact JSON) — this is the exact byte string that gets
+    Ed25519-verified, not the raw wire JSON. **Flagged risk, not fully verified without a real
+    signed payload to test against:** `effective_from`/`effective_to` are passed through
+    verbatim on the assumption FastAPI/Pydantic v2's default datetime JSON serialization matches
+    Python's `datetime.isoformat()` byte-for-byte for the same underlying value — see that file's
+    doc for exactly what to check first if a real signature ever fails to verify.
+  - New `data/local/entity/TariffSigningKeyEntity.kt` + `dao/TariffSigningKeyDao.kt` +
+    `sync/TariffSigningKeyCache.kt` — a Room-backed cache for the signing public key, deliberately
+    mirroring `TariffCache`'s own pure-local-read-vs-network-refresh split 1:1 (per the brief).
+    `AppDatabase` bumped 2 -> 3 (no destructive-migration shortcut, same as the 1->2 bump — see
+    that class's doc). `AppContainer.init()` best-effort warms this cache on startup.
+  - `sync/TariffCache.kt#refresh` now verifies `TariffDto.signature` against the cached/fetched
+    public key BEFORE `tariffDao.upsert` — a tariff that fails verification throws the new
+    `TariffSignatureException` and is never cached, so the previously-cached (already-verified)
+    tariff simply stays in place. Offline behaviour matches the brief: the signing-key check
+    prefers the Room-cached key over a network fetch, so being offline *right now* never fails a
+    verification for a device that verified successfully at some point in the past — a network
+    fetch is only attempted as a fallback when nothing has ever been cached at all.
+  - `data/remote/ApiService.kt` gained `verifyAdminPin`/`tariffSigningPublicKey` +
+    `VerifyAdminPinRequestDto`/`VerifyAdminPinResponseDto`/`TariffSigningPublicKeyDto`;
+    `TariffDto` gained a nullable `signature` field (only ever populated by `activeTariff`'s
+    response, per the backend's `SignedTariffRead` vs. plain `TariffRead`).
+  - `app/build.gradle.kts` gained the BouncyCastle dependency (`org.bouncycastle:bcprov-jdk18on:1.78.1`).
+
+**Not done, flagged rather than silently left implicit:** neither change has ever been run
+through a real compiler (see this file's standing caveat) — the canonical-payload byte format in
+particular is the highest-risk part of this pass to get subtly wrong (a single stray field, wrong
+quantization, or datetime-format mismatch makes every real signature fail closed, which would be
+silently indistinguishable from "the anti-tamper check is working as intended" until someone
+actually looks at why tariffs never update on a real device). First real-device test should
+specifically watch for `TariffCache.refresh` throwing `TariffSignatureException` against a real
+signed payload from a real backend.
+
+## 2026-08-03 (latest) — Real GPS wired into map centering + region auto-detection
+
+Direct request, explicitly scoped as the sibling follow-up to the same day's location/fare-engine
+pass (`domain/location/RealLocationProvider.kt`, `SpeedSource.locationFix` — see that pass's own
+entry below): consume the real `LocationFix` feed it built for the two GPS-shaped gaps it
+deliberately left open for "a sibling map-centering/region-detection agent" — see its CONTRACT
+section below.
+
+**What changed:**
+- **New `domain/location/RegionResolver.kt` + `domain/location/GeoMath.kt`.** `RegionResolver.resolve()`
+  turns a `LocationFix?` (or bare `lat/lng`) into the real Fares Order tariff region (`"urban"` /
+  `"country"` — never `"exempt"`, which is a vehicle/tariff-type classification, not a
+  location-derived one) via a simple distance-from-Sydney-CBD circle (`URBAN_RADIUS_KM = 50.0`,
+  a placeholder tuned by eye, not a surveyed boundary). Falls back to `"urban"` when no fix is
+  available — the exact same fallback every hardcoded call site already produced, so "no fix yet"
+  never regresses behaviour. **Investigated and rejected both "call it server-side instead"
+  alternatives before writing this** (see `RegionResolver`'s own doc for the full writeup): neither
+  exists to call today. `backend/app/models/geofence.py`'s `kind="region"` geofence rows are
+  explicitly documented as "reserved for future use and not yet consumed by any service" — no
+  endpoint resolves a lat/lng to a region, and the geofence schema (`backend/app/schemas/geofence.py`)
+  has no field that would even tie a region-kind geofence to a tariff-region label if one existed.
+  `GeoMath.distanceKm()` is a plain-Kotlin haversine mirroring the backend's own formula/Earth-
+  radius constant byte-for-byte (`app/services/trips.py::haversine_km`), deliberately NOT
+  `android.location.Location.distanceBetween` (which `RealLocationProvider` uses internally) so
+  this money-adjacent (tariff-selecting) logic stays JVM-unit-testable without Robolectric, same
+  convention `domain/fare/FareEngine.kt`'s "line-for-line port" already established.
+- **Region wired at every hardcoded `DEFAULT_REGION = "urban"` call site found live in the nav
+  graph:** `ui/screens/dashboard/WheelDashboardViewModel.kt` (the real S2/Idle screen, registered
+  under `CabDispatchRoutes.IDLE` — see the 2026-08-01 reconciliation entry below for why
+  `ui/screens/idle/IdleViewModel.kt`/`IdleScreen.kt` are dead code, deliberately left untouched
+  here too), `ui/screens/settings/SettingsViewModel.kt` (S6's passenger-facing fare-schedule
+  display), `ui/wheel/content/AvailableTripsWheelViewModel.kt`, and
+  `ui/screens/availabletrips/AvailableTripOfferViewModel.kt` (both accept-a-job-offer hand-offs).
+  The dashboard's is the one made *reactive*: `WheelDashboardViewModel.region` is a
+  `distinctUntilChanged()` `StateFlow` off `AppContainer.speedSource.locationFix`, `flatMapLatest`'d
+  into `TariffCache.observeActiveTariff()` and re-`refresh()`'d on every genuine region change (not
+  just once at launch) — so a driver who actually crosses the urban/country boundary mid-shift gets
+  the newly-relevant region's tariff fetched too. The other three are one-shot snapshots
+  (`RegionResolver.resolve(AppContainer.speedSource.locationFix.value)`) taken at the moment each
+  already-existing one-shot tariff read happens — matches each call site's pre-existing shape,
+  no new reactive plumbing invented where none existed before.
+- **`ui/screens/dashboard/WheelDashboardScreen.kt`'s `MapBackground`/`RealMapboxMapView` now center
+  on the real fix** when one exists (both the interactive Mapbox `MapView` tier and the Static
+  Images API fallback tier), falling back to `SydneyCbdFallback` exactly as before whenever
+  `AppContainer.speedSource.locationFix` is `null` (first launch, permission denied, indoors) —
+  `SydneyCbdFallback` itself is unchanged/kept, per the brief's explicit instruction not to delete
+  it. **Deliberately NOT a continuous ~1Hz follow-me camera on the interactive `MapView` tier** —
+  see that function's own doc comment: this background map's pan/zoom is intentionally left enabled
+  ("let the driver glance around", per the 2026-08-02 Maps-SDK entry below) and a camera that
+  re-snaps to the driver on every single incoming GPS tick while the vehicle is moving would fight
+  that glance-around pan every second. Instead, `LaunchedEffect(fix != null)` recenters exactly
+  once per "no fix → fix" transition (covers the common "permission granted, first fix lands a few
+  seconds after this screen opens" case, and any later signal-loss/regain). A genuine follow-me
+  camera is a real, separate UX decision for whoever owns this screen next — flagged here rather
+  than accidentally half-built. The Static Images API tier has no live camera to re-point (it's a
+  fetched PNG — "a fresh image must be requested for a new center", per that file's own doc), so
+  its `remember` key includes the resolved center coordinates directly, re-fetching whenever they
+  change.
+- **The driver-position pin drawn over the map** now sits at dead-center when a real fix exists
+  (since the map itself is now centered on that fix) instead of the old fixed illustrative
+  `(-160.dp, -30.dp)` offset — that offset only made sense back when the map was unconditionally
+  centered on the fixed Sydney CBD point regardless of the driver's real location. Falls back to
+  the same illustrative offset whenever there's no fix yet, so the no-GPS case still visibly reads
+  as "approximate", not "definitely here".
+- **Known, explicitly out-of-scope gap NOT touched by this pass:** `TripContext.startLat`/`startLng`
+  at `WheelDashboardViewModel.startMeter()` (driver-initiated street-hail hire) is still a hardcoded
+  `0.0, 0.0` — a real fix is now trivially available there
+  (`AppContainer.speedSource.locationFix.value`) but this pass's brief was specifically "map
+  centering + region detection", and trip-start coordinates are a more sensitity, money/toll-
+  geofencing-adjacent piece of trip data than a background map's center or a tariff lookup — left
+  for a deliberate follow-up decision rather than folded in silently. (Job-offer-accepted hires
+  already use the job's own real pickup coordinates, not this stub — see
+  `AvailableTripsWheelViewModel.beginHiredHandoff()`'s doc, unaffected either way.)
+- **Also NOT touched, per the brief's own item 3:** `SettingsViewModel.kt#pollGps`'s GPS
+  diagnostics status dot still reads a separate raw `LocationManager` last-known-fix rather than
+  `AppContainer.speedSource.locationFix` — still a real, open consolidation candidate (as the
+  location/fare-engine pass's entry below already flagged), just not attempted here since the
+  brief called it explicitly non-priority ("leave that as-is unless it's trivial to also surface
+  the new accuracy/speed data more richly").
+
+## 2026-08-03 (later) — MDM "locate" command now wired end-to-end
+
+Direct request. Previously `locate_requested` was a real backend flag (`POST
+/v1/fleet/devices/{id}/locate` sets it, `Device.locateRequested`) that nothing on the device ever
+read — an admin could flip it from the dashboard and the device would just never respond. Fixed
+now that a real location provider exists (the 2026-08-03 location/fare-engine pass's
+`domain/location/RealLocationProvider.kt`, `AppContainer.speedSource.locationFix`).
+
+**What changed:**
+- `data/remote/ApiService.kt`'s `DeviceDto` gained `locateRequested`/`rebootRequested` fields — it
+  previously didn't even parse `locate_requested` back off the heartbeat response (harmless thanks
+  to `ignoreUnknownKeys=true`, but meant nothing could act on it either). Also added
+  `PositionPublishRequestDto`/`PositionPublishResponseDto` + `ApiService.publishPosition()`
+  (`POST /v1/fleet/positions`, the Live Ops domain's pub/sub endpoint — see `shared/API_SUMMARY.md`
+  "Live Ops"), previously not wired into this app's Retrofit contract at all.
+- `ui/screens/settings/SettingsViewModel.kt`'s `loadDeviceStatus()` (the existing heartbeat call)
+  now checks `device.locateRequested` on every heartbeat response; if set, `respondToLocateRequest()`
+  publishes the device's current real fix (`AppContainer.speedSource.locationFix.value`) against
+  its bound vehicle (`SessionHolder.session.value?.vehicleId`) via `publishPosition()` — so a
+  dispatcher watching the fleet dashboard's Live Map sees a fresh pin as evidence the request was
+  answered. New `LocateResponseState` UI state (`ui/screens/settings/SettingsScreen.kt`'s
+  DiagnosticsCard) surfaces the outcome (`Sent` / `NoFixYet` / `NoVehicleBound` / `Failed(...)`) —
+  silent (`Idle`) unless an admin has actually triggered a locate against this device.
+- **No acknowledge/clear step, by design, not an oversight:** the only endpoint that flips
+  `locate_requested` back off (`POST /v1/fleet/devices/{id}/locate`) is admin-only server-side —
+  a driver/staff-role device JWT can never call it. A fresh position publish is treated as
+  sufficient evidence per this pass's brief; the flag just stays set until an admin clears it,
+  which only means this device re-publishes on every subsequent heartbeat while it's still set.
+- **`reboot_requested` deliberately left alone**, exactly as this file already documents for other
+  hardware-needing gaps: actually rebooting the OS needs device-owner-level Android permissions
+  this app doesn't provision. `DeviceDto` now parses the field (for parity/visibility) but nothing
+  reads or acts on it — see the backend's own HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`
+  (`backend/app/api/v1/fleet.py`). Still a real, honest, backend-only command queue.
+- **Real, honest limitation this pass did NOT close:** `loadDeviceStatus()` only runs once, when
+  `SettingsViewModel` is created — i.e. whenever the driver happens to open S6/Settings. There is
+  no periodic/background heartbeat anywhere in this app yet, so a "Locate" request only gets
+  answered the next time S6 is opened, not the instant an admin sets the flag. Closing that would
+  need a periodic background heartbeat (WorkManager, mirroring `sync/SyncWorker.kt`'s pattern) —
+  a materially bigger change than "wire the existing flow", left open below.
 
 ## 2026-08-02 (even later) — Fixed: real map rendering solid black
 
@@ -235,24 +526,66 @@ brief asked for it alongside what shipped):
     repo credentials + the full SDK is a materially bigger change than this pass's brief), but a
     future pass wanting the interactive SDK may not need to go get a new secret token first — check
     whether that one is still valid before assuming it needs sourcing from scratch.
-  - Still a real, honest gap: the map is centered on a **fixed Sydney CBD coordinate**
-    (`SydneyCbdFallback` in `MapboxStaticImage.kt`), not the driver's actual position — the only
-    location-adjacent data source wired into this app (`AppContainer.speedSource`, a `SpeedSource`
-    exposing `speedKmh` only) has no lat/lng, and GPS is the pre-existing stubbed-GPS gap below.
-    Once a real position lands, swap the fallback center for it — `MapboxStaticImage.url()` already
-    takes an arbitrary center/zoom, no further change needed on that side. The position pin drawn
-    over the map is unchanged from before (still a static illustrative offset, same TODO as ever).
-  - Also still non-interactive by design (a fetched PNG, not a live map you can pan/zoom/rotate) —
-    that's the Static Images API's nature, not a shortcut taken this pass; see the constraint above
-    for why the interactive SDK isn't viable with only a `pk.*` token.
-- GPS is still stubbed project-wide (`StubSpeedSource`, GPS status-strip dot approximated from
-  permission+provider-enabled checks, not a live fix) — every "TODO(location sibling agent)" left
-  in the tree by prior passes is still open; this pass didn't touch location.
-- Driver login still maps Driver ID/PIN onto the staff email/password contract (`DriverAuthRepository`'s
-  known gap, unchanged) — a dedicated driver-PIN backend endpoint is still undecided-on, not built.
-- `TariffSignatureVerifier`'s public key is still a placeholder; `SettingsViewModel`'s admin
-  factory-reset PIN is still a hardcoded, explicitly-flagged-non-secure placeholder. Neither was
-  in scope for this pass.
+  - ~~Still a real, honest gap: the map is centered on a **fixed Sydney CBD coordinate**~~
+    **Addressed (2026-08-03, map-centering/region-detection pass — see that entry near the top of
+    this file for the full writeup):** `MapBackground`/`RealMapboxMapView` in
+    `WheelDashboardScreen.kt` now center on `AppContainer.speedSource.locationFix` when a real fix
+    exists, on both the interactive `MapView` tier and this Static Images fallback tier —
+    `SydneyCbdFallback` is kept as the real fallback center whenever there's no fix yet, not
+    deleted. The position pin drawn over the map now sits at dead-center when a real fix exists
+    (previously always the old static illustrative offset).
+  - Still non-interactive by design (a fetched PNG, not a live map you can pan/zoom/rotate) — that's
+    the Static Images API's nature, not a shortcut taken this pass; see the constraint above for
+    why the interactive SDK isn't viable with only a `pk.*` token.
+- ~~GPS is still stubbed project-wide~~ **Addressed for the provider + fare engine + map centering +
+  region detection (2026-08-03, two passes):** `domain/location/RealLocationProvider.kt` is a real
+  `FusedLocationProviderClient`-backed `SpeedSource`, wired as `AppContainer.speedSource` — the
+  fare engine (`domain/FareEngine.kt`'s `FareEngineImpl.tick`) now ticks against real device speed
+  instead of `StubSpeedSource`'s fixed 0.0. `SpeedSource` also gained
+  `locationFix: StateFlow<LocationFix?>` (lat/lng/speed/accuracy/timestamp) alongside the
+  pre-existing `speedKmh`; a same-day sibling pass (see this file's top entry) then consumed that
+  feed to close the two GPS-shaped gaps this note used to leave open — the dashboard's map
+  background now centers on it (`WheelDashboardScreen.kt`) and every hardcoded
+  `DEFAULT_REGION = "urban"` call site now resolves a real region from it
+  (`domain/location/RegionResolver.kt`). **Still genuinely open:** GPS status-strip dot
+  (`SettingsViewModel.kt#pollGps`) and duress GPS relay (`HiredViewModel.kt#lastKnownFix`) still
+  read a separate raw `LocationManager` last-known-fix rather than this feed — untouched by either
+  pass (explicitly out of scope for both), but now a real candidate to consolidate onto
+  `AppContainer.speedSource.locationFix` in a future pass. `WheelDashboardViewModel.startMeter()`'s
+  driver-initiated-hire `TripContext.startLat`/`startLng` is also still a hardcoded `0.0, 0.0` for
+  the same "explicitly out of scope for this pass's brief" reason — see the top entry's own
+  call-out. Runtime permission handling: `RealLocationProvider` only *checks*
+  `ACCESS_FINE_LOCATION` (poll-and-degrade, see its doc) — no screen anywhere in this module
+  actually *requests* it yet (grep for `ContextCompat.checkSelfPermission`, every existing hit only
+  checks); wiring a real `ActivityResultContracts.RequestPermission` prompt somewhere in the S1/S2
+  flow is still open and is a UI-consumer concern, not this file's.
+- ~~Driver login still maps Driver ID/PIN onto the staff email/password contract~~ **Fixed
+  (2026-08-03, driver-PIN login pass):** the backend shipped the dedicated `POST
+  /v1/auth/driver-login` endpoint (`driver_code` + `pin`) this gap asked for.
+  `domain/DriverAuthRepository.kt` now calls it directly instead of the staff `/v1/auth/login`
+  placeholder mapping; the offline-cached-hash fallback is unchanged. `data/remote/ApiService.kt`
+  gained `driverLogin()`/`DriverLoginRequestDto`/`DriverLoginResponseDto` and `mfaLogin()`/
+  `MfaLoginRequestDto` — the driver-login response is a union (`TokenResponse |
+  MfaRequiredResponse`, same two-step TOTP contract as staff login) since driver accounts with MFA
+  enabled are a real, documented path (shared/API_SUMMARY.md), not a hypothetical one; `login()`
+  now returns a 3-way `DriverLoginResult` (`Success`/`MfaRequired`/`Failure`) instead of a plain
+  `Result` so the MFA challenge isn't forced through the failure branch. `ui/screens/login/
+  LoginVehicleBindScreen.kt` gained an inline MFA-code sub-view on the same driver-login card (see
+  `MfaCodeStep`); `LoginVehicleBindViewModel.kt` gained `verifyMfaCode()`/`cancelMfaChallenge()`.
+  The "Driver ID" field's label/hint text already didn't imply email — no copy change was needed
+  there.
+  - **New follow-on gap this gap's fix introduced:** `LoginVehicleBindViewModel.kt`'s
+    `DEMO_DRIVER_ID` debug quick-login constant is the seeded demo driver's *email*
+    (`driver@lillycabs.test`), which no longer works as a `driver_code` now that quick-login goes
+    through the real endpoint — `backend/scripts/seed.py` mints a random `driver_code` per fresh
+    DB and only prints it to stdout, so there's no fixed value to hardcode. See that constant's
+    doc comment for the two ways to actually fix it (read the printed code manually, or have
+    seed.py write it somewhere this constant can read at debug-build time). The button still
+    renders and still fails safely (a normal 401 -> login error text), it just doesn't
+    one-tap-login anymore until someone picks this up.
+- ~~`TariffSignatureVerifier`'s public key is still a placeholder; `SettingsViewModel`'s admin
+  factory-reset PIN is still a hardcoded, explicitly-flagged-non-secure placeholder.~~ **Fixed
+  (2026-08-03, admin-PIN + tariff-signature pass — see that section above for the full writeup).**
 - Hardware gateways (`CardPaymentGateway`, `ReceiptPrinterGateway`, SMS/email receipt gateways)
   remain mock/no-op behind real interfaces, per the existing "leave stubbed until a physical pilot"
   guidance below — not touched.
@@ -305,13 +638,18 @@ list.
 
 ### High priority (correctness / would-block-shipping)
 
-- **`security/TariffSignatureVerifier.kt`** — has a `*** PLACEHOLDER KEY — REPLACE BEFORE
-  SHIPPING ***` comment. Real Ed25519/RSA verify logic is implemented, but the public key is a
-  placeholder constant. Needs a real keypair from whoever owns backend tariff-signing before this
-  can be trusted. Fine to leave as-is for dev/testing; flag loudly if asked to "ship" this.
-- **`ui/screens/settings/SettingsViewModel.kt`** — `ADMIN_PIN_PLACEHOLDER = "913572"` is a
-  hardcoded factory-reset PIN, explicitly marked `*** NOT A REAL SECURITY CONTROL ***`. Needs a
-  real backend-verified admin check before shipping.
+- ~~**`security/TariffSignatureVerifier.kt`** — has a `*** PLACEHOLDER KEY — REPLACE BEFORE
+  SHIPPING ***` comment.~~ **Fixed (2026-08-03, admin-PIN + tariff-signature pass):** now fetches
+  a real Ed25519 public key from `GET /v1/tariffs/signing-public-key` (Room-cached, see
+  `sync/TariffSigningKeyCache.kt`) and verifies every fetched tariff's signature via the new
+  `Ed25519TariffSignatureVerifier` before caching it — see that dated section above for the full
+  writeup, including the one real residual risk flagged there (the canonical-payload byte format
+  has never been checked against a real signed payload from a real compiler-built backend).
+- ~~**`ui/screens/settings/SettingsViewModel.kt`** — `ADMIN_PIN_PLACEHOLDER = "913572"` is a
+  hardcoded factory-reset PIN, explicitly marked `*** NOT A REAL SECURITY CONTROL ***`.~~ **Fixed
+  (2026-08-03, same pass):** `attemptFactoryReset` now calls `POST
+  /v1/fleet/devices/{id}/verify-admin-pin` and correctly distinguishes "no PIN configured for this
+  tenant yet" (blocks, doesn't silently allow) from "wrong PIN" — see that dated section above.
 - **`domain/DriverAuthRepository.kt`** — the meter's "Driver ID" field is currently mapped
   straight to the backend's `email`, and "PIN" to `password` — i.e. it's reusing the staff
   email/password login, not a real driver-PIN system. Decide: keep this as the permanent design,
@@ -323,17 +661,37 @@ list.
 
 ### Medium priority (real functionality gaps, no hardware needed)
 
-- **GPS is stubbed, not real.** Search `TODO(location` across the module — the fare engine
-  currently reads from a stub speed source, not `FusedLocationProviderClient`. This is required
-  for the app to be useful at all (S3's whole job is reacting to real speed/position). Implement
-  a real location provider, feed it into `domain/FareEngine.kt`'s tick loop.
-- **Region is hardcoded to `"urban"`** in `SettingsViewModel.kt` — no real region-polygon
-  detection yet (spec calls for geofenced urban/country/exempt regions, see spec B7).
+- ~~GPS is stubbed, not real.~~ **Fixed for the core provider + fare engine + map centering +
+  region detection (2026-08-03, two passes):** `domain/location/RealLocationProvider.kt` +
+  `AppContainer.speedSource`, then map-centering/region-detection consumed that feed the same day —
+  see the "still genuinely stubbed" section above for the full writeup and what's still open (GPS
+  status-strip, duress relay, driver-initiated-hire start coordinates — all separate call sites
+  neither pass touched).
+- ~~Region is hardcoded to `"urban"`~~ **Fixed (2026-08-03, map-centering/region-detection pass):**
+  every hardcoded `DEFAULT_REGION = "urban"` call site actually reachable from the nav graph
+  (`WheelDashboardViewModel.kt`, `SettingsViewModel.kt`, `AvailableTripsWheelViewModel.kt`,
+  `AvailableTripOfferViewModel.kt`) now resolves a real region via `domain/location/RegionResolver.kt`
+  — a distance-from-Sydney-CBD circle (`"urban"`/`"country"`), not the real polygon-based
+  geofencing spec B7 ultimately calls for (see that class's doc for why: neither a server-side nor
+  an on-device geofence-based resolver exists to call yet — `backend/app/models/geofence.py`'s
+  `kind="region"` rows are still explicitly "reserved for future use"). Never returns `"exempt"` —
+  that's a vehicle/tariff-type classification, not location-derived. The dead, unreferenced
+  `ui/screens/idle/IdleViewModel.kt`/`IdleScreen.kt` (superseded by `WheelDashboardViewModel`/
+  `WheelDashboardScreen`, see the 2026-08-01 reconciliation entry) still has its own hardcoded
+  `DEFAULT_REGION` — deliberately left alone, it's dead code with no route pointing at it.
 - **Toll preset amounts are illustrative placeholders** (`domain/TripModels.kt`) — replace with
   real fixed toll amounts (M5, Harbour southbound, airport) once you have them.
 - **Availability broadcast not wired** — `IdleViewModel.kt`'s "For Hire" toggle doesn't tell the
   backend anything yet. Backend already has `POST /v1/fleet/positions` for this (see
   `../shared/API_SUMMARY.md`).
+- ~~MDM "locate" command is backend-only, nothing on-device acts on it~~ **Fixed (2026-08-03,
+  see that dated section above):** `SettingsViewModel.kt`'s existing heartbeat now reads
+  `locate_requested` back and answers it via `POST /v1/fleet/positions`. Real open limitation left
+  behind: it only fires once, when S6/Settings happens to be opened — no periodic background
+  heartbeat exists in this app yet, so a locate request isn't answered until the driver next opens
+  that screen. `reboot_requested` remains intentionally backend-only (see the Low-priority
+  hardware note's spirit — this one's blocked by missing device-owner OS permissions, not missing
+  hardware).
 - ~~Duress gesture is a no-op~~ **Fixed (wheel-redesign Profile/overlays pass):** the hidden
   triple-tap gesture (S3/Hired and the wheel-dashboard shell) now calls the real backend duress
   endpoints via `domain/DuressController.kt` + `domain/DuressRepository.kt`, driving the

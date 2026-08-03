@@ -10,9 +10,9 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 
 | Part | Files | Real status |
 |---|---|---|
-| Backend (FastAPI) | 82 app + 23 tests | **Done and verified.** 300 tests passing (up from 232 — new `test_auth_mfa.py`, `test_geofences.py`, `test_reports.py`), incl. the golden fare-vector compliance suite, exercised live end-to-end over real HTTP — meter flow, dispatch flow, and (this pass) a two-step MFA login round-trip and a toll-zone geofence CRUD round-trip. |
-| Dashboard (React) | 95 | **Done and verified.** 13 ops modules now (see below for the 5 that shipped this pass). `npm run build` is clean (`tsc -b && vite build`, zero errors) and `npm run dev -- --port 5180` boots and serves 200 — checked directly, not assumed. |
-| Android driver app (Kotlin) | ~70 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Latest pass: fare-meter LED digits switched red → glowing white and enlarged for back-seat legibility, and the wheel got a lock-in pulse + gold glow on selection settle (previously just a size/color crossfade). **Still never compiled** — no Android SDK in the environment that built any of this — so none of the Android-side changes across any pass have been visually confirmed, only reasoned through against the existing code. |
+| Backend (FastAPI) | 82 app + 25 tests | **Done and verified.** 325 tests passing (up from 300 — new `test_driver_login.py`, `test_admin_pin.py`, plus tariff-signing coverage in `test_tariffs.py`), incl. the golden fare-vector compliance suite, exercised live end-to-end over real HTTP — driver-PIN login, admin-PIN device verification, and Ed25519 tariff-signature verification were each independently re-verified by hand this pass (not just "tests pass" — a real signed payload was fetched from the DB and tampered with to confirm the signature check actually detects it). |
+| Dashboard (React) | 95+ | **Done and verified.** 14 ops modules now (13 + new **Messages** — driver↔dispatch threads, `/messages`). `npm run build` is clean (`tsc -b && vite build`, zero errors) and a real message was sent through the live UI and confirmed persisted via a direct API call this pass. |
+| Android driver app (Kotlin) | ~75 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Latest pass: real GPS (`FusedLocationProviderClient`) now drives the fare engine, map centering, and region auto-detection — replacing the fixed `StubSpeedSource`/hardcoded `"urban"` region; driver login now hits a real `POST /v1/auth/driver-login` (driver-PIN, not email/password); admin-PIN factory-reset and tariff-signature verification are now real (Ed25519, server-verified), replacing hardcoded placeholders; MDM "locate" now answers with a real position. **Still never compiled** — no Android SDK in the environment that built any of this — so none of the Android-side changes across any pass have been visually confirmed, only reasoned through against the existing code and cross-checked file-by-file against `git diff` this pass (see `android/HANDOFF.md`'s top entry). |
 
 **2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
 
@@ -84,6 +84,29 @@ future work, not an oversight.
 (`thread_id == driver_id`), `sender_type` `dispatch`/`driver`, `WS /v1/messages/live?driver_id=`
 for real-time delivery. Simple by design — no multi-party threads, no attachments.
 
+**2026-08-03 addition — driver-PIN login, server-verified admin PIN, real Ed25519 tariff-signing —
+independently re-verified against the running DB/API, not just unit-tested:**
+
+- **Driver-PIN login (`app/api/v1/auth.py`, `app/services/user.py`).** New `User.driver_code`
+  (5-char, ambiguous-character-excluded alphabet — no 0/O/1/I — globally unique, not
+  tenant-scoped, since the login endpoint has no tenant context yet at that point) auto-generated
+  for `role="driver"` users created without one. `POST /v1/auth/driver-login` takes
+  `driver_code`+`pin`, reuses the exact same two-step MFA contract staff login already has. Live
+  re-verified this pass: reseeded, got a real `driver_code` (`HQMGA` for the demo driver),
+  confirmed the endpoint accepts the right PIN and 401s the wrong one.
+- **Server-verified admin PIN (`app/api/v1/tenants.py`, `app/services/tenant.py`).**
+  `Tenant.admin_pin_hash` (owner-settable via `POST /v1/tenants/{id}/admin-pin`), checked
+  device-side via `POST /v1/fleet/devices/{id}/verify-admin-pin` — replaces the Android app's old
+  hardcoded `ADMIN_PIN_PLACEHOLDER`. Live re-verified: created a device, set a real PIN, confirmed
+  `{"valid":true,...}` for the right PIN and `{"valid":false,...}` for the wrong one.
+- **Real Ed25519 tariff-signing (`app/services/tariff_signing.py`).** `GET
+  /v1/tariffs/active`'s `signature` field is a genuine Ed25519 signature over a canonical payload
+  (fixed field order, rate fields quantized to 4dp), verifiable via the unauthenticated `GET
+  /v1/tariffs/signing-public-key`. Went beyond "field is present" for this one: wrote an
+  independent script that fetched the real `Tariff` ORM row and called
+  `verify_tariff_signature()` directly — confirmed it returns `True` for the real signature and
+  `False` after hand-tampering `flag_fall`, i.e. real tamper-detection, not a decorative field.
+
 **2026-08-02 addition — MFA, geofences, reports (`app/api/v1/auth.py`, `geofences.py`,
 `reports.py`) — unit-tested, not yet browser-verified end-to-end from a real authenticator app:**
 
@@ -123,23 +146,34 @@ for real-time delivery. Simple by design — no multi-party threads, no attachme
   NOT fan out across multiple uvicorn workers/replicas. Fine for dev, needs Redis pub/sub wired
   in before running more than one backend process.
 - **MDM remote-device commands (kiosk-lock, force-update, locate, reboot — `app/models/fleet.py`
-  `Device.kiosk_locked`/`force_update_pending`/`locate_requested`/`reboot_requested`) are a
-  command *queue*, not a command *executor*.** The dashboard's new Devices panel can flip these
-  flags via `POST /v1/fleet/devices/{id}/{kiosk-lock,force-update,locate,reboot}` and they persist
-  and round-trip correctly — but nothing anywhere (backend or Android) actually acts on them yet.
-  Confirmed by reading the Android source: `MainActivity.kt` explicitly says kiosk/lock-task mode
-  is out of scope, and `reboot_requested` already carried an honesty note in the model (see
-  `app/models/fleet.py`) that a real reboot needs the on-device app enrolled as Android Device
-  Owner via zero-touch provisioning, which nothing here does. Treat every button in the Devices
-  panel as "queues a request the fleet can see," not "remotely controls the device."
+  `Device.kiosk_locked`/`force_update_pending`/`locate_requested`/`reboot_requested`) are mostly a
+  command *queue*, not a command *executor* — with one exception now.** `locate_requested` is
+  answered for real as of 2026-08-03: the Android app's existing heartbeat call
+  (`SettingsViewModel.kt#loadDeviceStatus`) checks the flag and, if set, publishes the device's
+  real GPS fix via `POST /v1/fleet/positions` — but only the next time the driver happens to open
+  S6/Settings (no periodic background heartbeat exists yet, so it's not instant). kiosk-lock and
+  force-update flags still persist and round-trip correctly but nothing on-device acts on them
+  (`MainActivity.kt` explicitly says kiosk/lock-task mode is out of scope). `reboot_requested`
+  remains intentionally backend-only — a real reboot needs the on-device app enrolled as Android
+  Device Owner via zero-touch provisioning, which nothing here does (see the honesty note in
+  `app/models/fleet.py`). Treat kiosk-lock/force-update/reboot buttons as "queues a request the
+  fleet can see," and locate as "answers eventually, not instantly."
 
 ## Dashboard — what's real, what's mocked
 
-13 modules now (Live Map, Dispatch, Duress Desk, Trips, Shifts & Reconciliation, Tariff Studio
-[now with a Toll Zones tab], PSL Centre, Fleet & Drivers [now with a Devices tab], Compliance
-Vault [now with a Reports tab], Billing, White-label Settings, **Security**) — all built against
-the real API, no mock data layer in the dashboard itself, `react-query` hooks call the live
-backend directly.
+14 modules now (Live Map, Dispatch, **Messages**, Duress Desk, Trips, Shifts & Reconciliation,
+Tariff Studio [now with a Toll Zones tab], PSL Centre, Fleet & Drivers [now with a Devices tab],
+Compliance Vault [now with a Reports tab], Billing, White-label Settings, Security) — all built
+against the real API, no mock data layer in the dashboard itself, `react-query` hooks call the
+live backend directly.
+
+**2026-08-03 addition — Messages (`src/pages/messages/`).** Closes the last piece of the
+driver↔dispatch loop: pick a driver from the sidebar (shows shift status), see/send messages in
+a thread panel with a live WS connection indicator (`useMessagesLive.ts`, mirroring
+`useDuressLiveGps.ts`'s token-in-query-param auth pattern). **Verified live, not just built:**
+logged in as the tenant owner, opened a real driver's thread, sent a message through the actual
+UI, and confirmed via a direct `GET /v1/messages?driver_id=...` call that it persisted
+server-side with the correct `sender_type`/`sender_user_id`/body.
 
 **2026-08-02 addition — 5 sibling agents' work reconciled in one pass (Reports/Compliance-export,
 MFA + two-step login, geofence zone manager, MDM remote-command buttons, and a real Mapbox GL JS
@@ -227,15 +261,23 @@ list here, update that file when gaps close):
   Messages, and restyled Trip/Earnings/Shift content panes. The meter and payment screens got a
   visual restyle (LED-style fare digits) and one real gap-fix (toll quick-add chips now actually
   add to the fare — the reference prototype itself never wired these, Android does).
-- Known real gaps, priority-ordered: hardcoded admin factory-reset PIN (`913572`, explicitly
-  flagged not-a-real-security-control), placeholder tariff-signature public key, the meter's
-  "Driver ID" field currently just being the backend `email` (not a real driver-PIN system),
-  stubbed GPS/region-detection/duress-gesture/QR-scanner (GPS being stubbed also means the wheel's
-  speed-lock, job-card distances, and the map background's live position are all approximated,
-  not real, until that's fixed), and hardware integrations (Stripe Terminal, BT printer) that are
-  real interfaces behind mock implementations — reasonable to leave stubbed until there's physical
-  hardware to test against. "Navigate" is a deliberate deep-link to the phone's maps app, not
-  custom turn-by-turn — that's a spec decision, not a shortcut.
+- **2026-08-03 — closed:** GPS is real now (`FusedLocationProviderClient`-backed
+  `RealLocationProvider`, driving the fare engine, map centering, and region auto-detection —
+  replacing the old hardcoded `"urban"`/`StubSpeedSource`); driver login hits the real
+  `POST /v1/auth/driver-login` (driver-PIN) instead of mapping onto staff email/password; admin
+  factory-reset PIN and the tariff-signature public key are both real/server-verified now (Ed25519),
+  not hardcoded placeholders; MDM "locate" is answered with a real position (next heartbeat, see
+  backend section above). None of this has been compiled/run on-device — see `android/HANDOFF.md`'s
+  top entry for the file-by-file cross-check done in place of a real compile.
+- Known real gaps still open, priority-ordered: duress-gesture GPS relay and the settings screen's
+  GPS status dot still read a separate raw `LocationManager` fix instead of the new real provider
+  (a real consolidation candidate, not a correctness bug); driver-initiated street-hail start
+  coordinates still hardcoded `0.0, 0.0`; QR vehicle-pairing scanner is still a stub
+  (manual-entry fallback works); no periodic background heartbeat (so MDM "locate" only answers
+  when Settings happens to be opened); and hardware integrations (Stripe Terminal, BT printer)
+  that are real interfaces behind mock implementations — reasonable to leave stubbed until there's
+  physical hardware to test against. "Navigate" is a deliberate deep-link to the phone's maps app,
+  not custom turn-by-turn — that's a spec decision, not a shortcut.
 
 ## Not done anywhere (flagged, not silently dropped)
 
@@ -245,9 +287,10 @@ S3 storage, ESP32 duress hardware + BLE pairing, physical field fare-accuracy te
 build/device verification, App Store/Play Store packaging, CI/CD, any kind of security/pen test
 pass, proximity/ETA-ranked job matching (v1 is broadcast-to-everyone, first-accept-wins), a true
 7-segment LED font for the meter digits, MFA verified against a real authenticator app in a real
-browser (only unit/integration-tested so far), and any device actually executing an MDM command
-(kiosk-lock/force-update/locate/reboot all queue server-side only — see the backend section
-above). This is a local-dev-verified MVP, not a production deployment.
+browser (only unit/integration-tested so far), and most MDM commands actually executing on-device
+(kiosk-lock/force-update/reboot still queue server-side only — `locate` is the one exception,
+answered for real as of 2026-08-03, see the backend section above). This is a local-dev-verified
+MVP, not a production deployment.
 
 **Map tiles are now real in exactly one place: the dashboard, and only with a Mapbox token
 configured.** `.env.example` ships the `VITE_MAPBOX_TOKEN` line blank, but this dev environment's

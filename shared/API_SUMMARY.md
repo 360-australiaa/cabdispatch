@@ -40,6 +40,22 @@ Response `200`:
 Other auth endpoints: `POST /v1/auth/refresh` (`{"refresh_token": "..."}` → new token pair),
 `GET /v1/auth/me` (current user), `POST /v1/auth/logout` (204, client should discard tokens).
 
+### `POST /v1/auth/driver-login`
+
+The real driver-facing counterpart to `POST /v1/auth/login` — Driver ID + PIN instead of
+email + password, for meter/kiosk devices. Replaces the placeholder driverId→email / pin→password
+mapping on the Android side.
+
+Request:
+```json
+{ "driver_code": "HQMGA", "pin": "ChangeMe123!" }
+```
+
+Response shape is identical to `POST /v1/auth/login` (`TokenResponse` or, if the driver has MFA
+enabled, `MfaRequiredResponse` — same two-step `POST /v1/auth/mfa/login` exchange). `driver_code` is
+globally unique (like `email`, not tenant-scoped) and only ever set on `role == "driver"` users —
+see `POST /v1/users` below.
+
 ### Admin MFA (TOTP)
 
 `POST /v1/auth/login` returns `TokenResponse` as before for users without MFA enabled. For a user
@@ -59,6 +75,7 @@ the real `TokenResponse`. Existing no-MFA logins are unaffected (still one call,
 |---|---|---|---|---|
 | `admin@cabdispatch.test` | `ChangeMe123!` | owner | TCT (platform, id `00000000-0000-0000-0000-000000000000`) | Cross-tenant: pass `?tenant_id=<id>` on any request to act as that tenant |
 | `owner@lillycabs.test` | `ChangeMe123!` | owner | Lilly Cabs (demo operator) | Locked to its own tenant |
+| `driver@lillycabs.test` | `ChangeMe123!` | driver | Lilly Cabs (demo operator) | Also logs in via `POST /v1/auth/driver-login` using its seeded `driver_code` (printed by `scripts/seed.py`'s final summary — value is random per fresh DB, not hardcoded here) |
 
 ## Roles
 
@@ -70,10 +87,12 @@ call them).
 
 | Prefix | Domain | Key endpoints |
 |---|---|---|
-| `/v1/auth` | Auth (foundation glue, not a domain slice) | `POST /login`, `POST /refresh`, `POST /logout`, `GET /me` |
-| `/v1/fleet` | Fleet | `GET,POST /vehicles`, `GET,PATCH,DELETE /vehicles/{id}`, `POST /vehicles/{id}/pairing-code`, `GET,POST /devices`, `POST /devices/register`, `POST /devices/{id}/heartbeat`, `POST /devices/{id}/kiosk-lock`, `POST /devices/{id}/force-update`, `POST /devices/{id}/locate`, `POST /devices/{id}/reboot` (MDM-lite) |
+| `/v1/auth` | Auth (foundation glue, not a domain slice) | `POST /login`, `POST /driver-login` (Driver ID + PIN, meter/kiosk-facing), `POST /refresh`, `POST /logout`, `GET /me` |
+| `/v1/users` | Users (staff + driver onboarding/CRUD) | `GET,POST /`, `GET,PATCH,DELETE /{id}` — `POST /` auto-generates a `driver_code` for `role="driver"` when none is supplied (see `app.services.user.generate_unique_driver_code`); `driver_code` is globally unique and required to use `POST /v1/auth/driver-login` |
+| `/v1/tenants` | Tenants (per-tenant admin PIN) | `POST /{id}/admin-pin` (owner-only; sets/overwrites the tenant's server-verified admin PIN gating destructive on-device actions, e.g. the Android app's factory-reset flow — hash never returned) |
+| `/v1/fleet` | Fleet | `GET,POST /vehicles`, `GET,PATCH,DELETE /vehicles/{id}`, `POST /vehicles/{id}/pairing-code`, `GET,POST /devices`, `POST /devices/register`, `POST /devices/{id}/heartbeat`, `POST /devices/{id}/kiosk-lock`, `POST /devices/{id}/force-update`, `POST /devices/{id}/locate`, `POST /devices/{id}/reboot` (MDM-lite), `POST /devices/{id}/verify-admin-pin` (device-facing check against the tenant's admin PIN from `/v1/tenants`; returns `{valid, configured}`, never the hash) |
 | `/v1/geofences` | Geofences (toll/region zones + auto-detection) | `GET,POST /`, `GET,PATCH,DELETE /{id}` — tenant zones plus platform-wide (tenant_id IS NULL) reference geofences seeded by `scripts/seed.py`; toll crossings are auto-detected from trip GPS ticks (see `app.services.geofence`, `PATCH /v1/trips/{id}/tick`) |
-| `/v1/tariffs` | Tariffs | `GET,POST /`, `GET /active?region=`, `GET,PATCH,DELETE /{id}`, `GET,POST /{id}/extras`, `GET /{id}/change-log` |
+| `/v1/tariffs` | Tariffs | `GET,POST /`, `GET /active?region=` (now includes an Ed25519 `signature` over the tariff's canonical rate payload — anti-tamper, blueprint B6), `GET /signing-public-key` (unauthenticated; the public key that verifies `/active`'s signature — see `app.services.tariff_signing`), `GET,PATCH,DELETE /{id}`, `GET,POST /{id}/extras`, `GET /{id}/change-log` |
 | `/v1/fares-order` | Tariffs (Fares Order reference) | `GET /current?region=urban\|country` — platform-wide (tenant_id IS NULL) regulated reference rates |
 | `/v1/trips` | Trips | `POST /`, `GET /`, `GET,PATCH,DELETE /{id}`, `PATCH /{id}/tick` (telemetry batch; also raises fatigue alerts and auto-detects geofence tolls as a side effect), `POST /{id}/close` (fare finalize), `POST /sync` (offline bulk replay, idempotent on `client_uuid`), `POST /{id}/receipt/email`, `POST /{id}/receipt/sms` (real PDF/email/SMS receipts) |
 | `/v1/shifts` | Shifts | `POST /start`, `POST /{id}/end`, `GET /{id}/report`, standard CRUD |
@@ -109,3 +128,13 @@ Full per-field request/response shapes: `shared/openapi.json`.
 - `PLATFORM_TENANT_ID` (`00000000-0000-0000-0000-000000000000`) is the only tenant_id whose
   `owner`-role token may cross-tenant via `?tenant_id=<id>` on any request; every other
   role/tenant is hard-locked server-side to its own token's tenant_id.
+- Tariff signing: `GET /v1/tariffs/active`'s `signature` field is Ed25519 over a fixed-order
+  canonical JSON payload (see `app.services.tariff_signing`'s module docstring for the exact wire
+  format — field order, decimal-string quantization, compact separators). One platform-wide keypair,
+  not per-tenant. The Android side's existing `TariffSignatureVerifier.kt` only implements RSA
+  today and needs a new Ed25519 verifier to consume this.
+- Admin PIN: per-tenant, not per-user. An owner sets/overwrites it via
+  `POST /v1/tenants/{id}/admin-pin`; the hash is never returned to any caller. A device checks a PIN
+  via `POST /v1/fleet/devices/{id}/verify-admin-pin`, which returns `{valid, configured}` — always
+  check `configured` explicitly (`configured=false` is "never set up", distinct from
+  `valid=false` = "set, but wrong").

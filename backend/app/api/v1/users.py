@@ -32,6 +32,10 @@ def _user_error_to_http(exc: user_service.UserError) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=f"email already in use: {exc}"
         )
+    if isinstance(exc, user_service.DuplicateDriverCodeError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"driver_code already in use: {exc}"
+        )
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
@@ -74,11 +78,24 @@ async def create_user(
 ):
     try:
         await user_service.assert_email_available(session, email=payload.email)
+        if payload.driver_code is not None:
+            await user_service.assert_driver_code_available(session, driver_code=payload.driver_code)
     except user_service.UserError as exc:
         raise _user_error_to_http(exc) from exc
 
-    data = payload.model_dump(exclude={"password"})
-    user = User(tenant_id=tenant_id, pin_hash=hash_password(payload.password), **data)
+    data = payload.model_dump(exclude={"password", "driver_code"})
+    driver_code = payload.driver_code
+    # Auto-generate a driver_code for role="driver" accounts that didn't supply
+    # one — only drivers get one (see app/models/user.py::User.driver_code).
+    if driver_code is None and payload.role == "driver":
+        driver_code = await user_service.generate_unique_driver_code(session)
+
+    user = User(
+        tenant_id=tenant_id,
+        pin_hash=hash_password(payload.password),
+        driver_code=driver_code,
+        **data,
+    )
     session.add(user)
     await session.commit()
     await session.refresh(user)

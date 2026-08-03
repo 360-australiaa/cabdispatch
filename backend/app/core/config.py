@@ -88,6 +88,37 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
 
+    # --- Tariff signing (Ed25519 anti-tamper signature over GET /v1/tariffs/active,
+    # blueprint B6) ---
+    # This is the backend counterpart to the Android app's
+    # `TariffSignatureVerifier` (android/.../security/TariffSignatureVerifier.kt) —
+    # closing the loop that file's own TODO flags ("reconcile with
+    # backend/tariff-signing agent"). NOTE: that Kotlin class currently only
+    # implements RSA (SHA256withRSA) verification, not Ed25519 — its own doc
+    # comment explains why (minSdk 29 lacks java.security Ed25519 support
+    # until API 33). The Android side needs a new Ed25519 verifier (e.g. via
+    # BouncyCastle, or java.security once minSdk rises) to consume what this
+    # backend now signs; see app/services/tariff_signing.py's module doc for
+    # the exact wire format it will need to match.
+    #
+    # PKCS8 DER, base64-encoded (`Ed25519PrivateKey.private_bytes` with
+    # `PrivateFormat.PKCS8` / `NoEncryption`).
+    #
+    # *** PLACEHOLDER KEY — generate a real one for production, do NOT use
+    # this default outside dev. *** Same convention as STRIPE_SECRET_KEY
+    # above. Generate a real keypair with:
+    #   uv run python -c "
+    #   import base64
+    #   from cryptography.hazmat.primitives.asymmetric import ed25519
+    #   from cryptography.hazmat.primitives import serialization
+    #   k = ed25519.Ed25519PrivateKey.generate()
+    #   print(base64.b64encode(k.private_bytes(
+    #       serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
+    #       serialization.NoEncryption())).decode())"
+    TARIFF_SIGNING_PRIVATE_KEY: str = (
+        "MC4CAQAwBQYDK2VwBCIEIFkwXAY2lpqyo1i90XuRlHd4cBPZBOZBe+m3wPrbdLLL"
+    )
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

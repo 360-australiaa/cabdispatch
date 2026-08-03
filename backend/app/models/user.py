@@ -38,6 +38,15 @@ class User(Base, TimestampMixin):
     wat_endorsed: Mapped[bool] = mapped_column(default=False, nullable=False)
     pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # Driver PIN-login identifier for POST /v1/auth/driver-login (see
+    # app/api/v1/auth.py). Short/memorable so it can be keyed in by hand on a
+    # meter/kiosk; only issued to role == "driver" (see
+    # app/services/user.py::generate_unique_driver_code). Globally unique —
+    # like User.email, not per-tenant — because driver-login has no tenant
+    # context to scope a lookup by (see
+    # app/services/user.py::assert_driver_code_available for the same
+    # reasoning already established for email by assert_email_available).
+    driver_code: Mapped[str | None] = mapped_column(String(6), nullable=True, unique=True, index=True)
     # MFA (blueprint 12.2): opt-in TOTP, not forced — mfa_enabled defaults to
     # False so every existing seeded/test account keeps logging in with just
     # email+password. mfa_secret is populated by POST /v1/auth/mfa/setup and

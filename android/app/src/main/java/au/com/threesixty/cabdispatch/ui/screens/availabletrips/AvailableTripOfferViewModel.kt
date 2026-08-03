@@ -7,6 +7,7 @@ import au.com.threesixty.cabdispatch.domain.JobOfferHandoff
 import au.com.threesixty.cabdispatch.domain.PendingJobOffer
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TripContext
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,7 +95,11 @@ class AvailableTripOfferViewModel : ViewModel() {
             return
         }
         viewModelScope.launch {
-            val tariff = AppContainer.tariffCache.getActiveTariff(DEFAULT_REGION)
+            // Real GPS-derived one-shot region snapshot (2026-08-03) — replaces the former
+            // hardcoded DEFAULT_REGION; see RegionResolver's doc for why a distance-from-Sydney-
+            // CBD circle, not a real polygon/geofence lookup (neither exists to call yet).
+            val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
+            val tariff = AppContainer.tariffCache.getActiveTariff(region)
             if (tariff == null) {
                 _uiState.update { it.copy(busy = false, error = "Accepted, but no cached tariff yet — open it from the dashboard.") }
                 return@launch
@@ -115,10 +120,4 @@ class AvailableTripOfferViewModel : ViewModel() {
         }
     }
 
-    companion object {
-        /** Default region until the geofencing sibling agent wires real GPS -> urban/country/
-         * exempt polygon detection (spec B7) — same stub convention as
-         * [au.com.threesixty.cabdispatch.ui.screens.idle.IdleViewModel]'s `DEFAULT_REGION`. */
-        private const val DEFAULT_REGION = "urban"
-    }
 }

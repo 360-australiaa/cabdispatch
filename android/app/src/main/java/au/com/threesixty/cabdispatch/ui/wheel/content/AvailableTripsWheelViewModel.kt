@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.remote.JobDto
 import au.com.threesixty.cabdispatch.data.remote.JobOfferDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TripContext
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -220,8 +221,12 @@ class AvailableTripsWheelViewModel : ViewModel() {
             return
         }
         viewModelScope.launch {
-            // Pure local Room read, never blocks on network — see TariffCache doc.
-            val tariff = AppContainer.tariffCache.getActiveTariff(DEFAULT_REGION)
+            // Pure local Room read, never blocks on network — see TariffCache doc. Region is a
+            // real GPS-derived one-shot snapshot as of 2026-08-03 (see RegionResolver's doc for
+            // why a distance-from-Sydney-CBD circle, not a real polygon/geofence lookup — neither
+            // exists to call yet), replacing the former hardcoded DEFAULT_REGION constant.
+            val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
+            val tariff = AppContainer.tariffCache.getActiveTariff(region)
             if (tariff == null) {
                 _uiState.update {
                     it.copy(actionError = "Trip accepted, but no cached tariff yet — open it from the dashboard.")
@@ -246,10 +251,5 @@ class AvailableTripsWheelViewModel : ViewModel() {
     companion object {
         private const val RECONNECT_DELAY_MS = 3000L
         private const val JOB_PAGE_LIMIT = 50
-
-        /** Default region until the geofencing sibling agent wires real GPS -> urban/country/
-         * exempt polygon detection (spec B7) — same stub convention as
-         * [au.com.threesixty.cabdispatch.ui.screens.idle.IdleViewModel]'s `DEFAULT_REGION`. */
-        private const val DEFAULT_REGION = "urban"
     }
 }

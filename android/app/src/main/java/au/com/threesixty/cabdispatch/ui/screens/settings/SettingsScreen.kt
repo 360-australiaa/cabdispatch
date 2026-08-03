@@ -255,6 +255,21 @@ private fun DiagnosticsCard(state: SettingsUiState) {
                 NetworkStatus.OFFLINE -> "Offline" to MaterialTheme.colorScheme.error
             }
             DiagnosticRow("Network", netLabel, netColor)
+
+            // Idle (no locate request seen this screen-visit) deliberately renders nothing — see
+            // LocateResponseState's doc: this row should only appear once an admin has actually
+            // used the dashboard's "Locate" command against this device.
+            val locateRow = when (state.locateResponse) {
+                LocateResponseState.Idle -> null
+                LocateResponseState.Sent -> "Position sent" to MaterialTheme.colorScheme.primary
+                LocateResponseState.NoFixYet -> "Waiting for GPS fix" to MaterialTheme.colorScheme.error
+                LocateResponseState.NoVehicleBound -> "No vehicle bound" to MaterialTheme.colorScheme.error
+                is LocateResponseState.Failed -> "Failed to send" to MaterialTheme.colorScheme.error
+            }
+            if (locateRow != null) {
+                val (locateLabel, locateColor) = locateRow
+                DiagnosticRow("Locate request", locateLabel, locateColor)
+            }
         }
     }
 }

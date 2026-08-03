@@ -173,3 +173,20 @@ class RebootRequest(BaseModel):
     reboot anything."""
 
     enabled: bool = True
+
+
+class VerifyAdminPinRequest(BaseModel):
+    """Body for `POST /v1/fleet/devices/{id}/verify-admin-pin` — same PIN
+    shape as `app.schemas.tenant.AdminPinSetRequest`."""
+
+    pin: str = Field(min_length=4, max_length=8, pattern=r"^\d{4,8}$")
+
+
+class VerifyAdminPinResponse(BaseModel):
+    """`configured=False` means the tenant has never set an admin PIN — kept
+    distinct from `valid=False` (a PIN is set but this one is wrong) so a
+    device can tell "nothing set up yet" from "wrong PIN" instead of treating
+    both the same way. See app.services.tenant.verify_admin_pin."""
+
+    valid: bool
+    configured: bool

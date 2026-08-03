@@ -18,6 +18,14 @@ deliberate exception is `fares_order_router`, which by definition reads the
 tenant_id IS NULL global row and only requires the caller to be authenticated
 (`get_current_user`) — there is no tenant to scope by for platform-wide
 reference data.
+
+Tariff signing (Ed25519, blueprint B6 anti-tamper): `GET /active` returns a
+`signature` field over the tariff's canonical rate payload, verifiable with
+the key from `GET /signing-public-key` — the second deliberate exception to
+the tenant-scoping note above, since a public key isn't tenant data and
+isn't secret; it has no auth dependency at all. See
+app.services.tariff_signing's module docstring for the full key-management
+story and wire format.
 """
 from __future__ import annotations
 
@@ -36,11 +44,14 @@ from app.schemas.tariffs import (
     ExtraRead,
     ExtraUpdate,
     Page,
+    SignedTariffRead,
     TariffChangeLogRead,
     TariffCreate,
     TariffRead,
+    TariffSigningPublicKeyRead,
     TariffUpdate,
 )
+from app.services import tariff_signing
 from app.services import tariffs as tariff_service
 
 router = APIRouter(prefix="/v1/tariffs", tags=["tariffs"])
@@ -101,7 +112,7 @@ async def list_tariffs(
     return Page(items=list(rows), total=total, skip=skip, limit=limit)
 
 
-@router.get("/active", response_model=TariffRead)
+@router.get("/active", response_model=SignedTariffRead)
 async def get_active_tariff(
     region: str = Query(...),
     at: datetime | None = Query(default=None, description="ISO8601 instant; defaults to now"),
@@ -110,7 +121,14 @@ async def get_active_tariff(
 ):
     """Resolves the tenant's currently-effective tariff for `region` at `at`
     (defaults to now). NOTE: registered before `/{tariff_id}` so "active"
-    is never captured as a path parameter."""
+    is never captured as a path parameter.
+
+    The response includes an Ed25519 `signature` over the tariff's canonical
+    rate payload (see app.services.tariff_signing) — this is the endpoint
+    devices poll to refresh their cached tariff, so it's the one response in
+    this domain that needs anti-tamper protection for the on-device
+    verifier. Pair with `GET /signing-public-key` to verify it.
+    """
     if region not in VALID_REGIONS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -125,7 +143,22 @@ async def get_active_tariff(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No effective '{region}' tariff for tenant at {resolved_at.isoformat()}",
         )
-    return row
+    signed_fields = TariffRead.model_validate(row).model_dump()
+    return SignedTariffRead(**signed_fields, signature=tariff_signing.sign_tariff(row))
+
+
+@router.get("/signing-public-key", response_model=TariffSigningPublicKeyRead)
+async def get_tariff_signing_public_key():
+    """The Ed25519 public key that verifies `GET /active`'s `signature`
+    field (X.509 SubjectPublicKeyInfo DER, base64-encoded — see
+    app.services.tariff_signing's module docstring for the full wire
+    format). Deliberately NO auth dependency: public keys aren't secret, and
+    devices need to be able to fetch this independent of (or before) being
+    otherwise authenticated. NOTE: registered before `/{tariff_id}` so
+    "signing-public-key" is never captured as a path parameter, same reason
+    as `/active` above.
+    """
+    return TariffSigningPublicKeyRead(public_key=tariff_signing.get_signing_public_key_b64())
 
 
 @router.post("", response_model=TariffRead, status_code=status.HTTP_201_CREATED)

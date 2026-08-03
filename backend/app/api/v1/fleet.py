@@ -29,8 +29,11 @@ from app.schemas.fleet import (
     VehicleCreate,
     VehicleRead,
     VehicleUpdate,
+    VerifyAdminPinRequest,
+    VerifyAdminPinResponse,
 )
 from app.services import fleet as fleet_service
+from app.services import tenant as tenant_service
 
 router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
 
@@ -416,3 +419,38 @@ async def set_device_reboot(
         raise _fleet_error_to_http(exc) from exc
 
     return await fleet_service.set_reboot_requested(session, device, enabled=payload.enabled)
+
+
+@router.post("/devices/{device_id}/verify-admin-pin", response_model=VerifyAdminPinResponse)
+async def verify_device_admin_pin(
+    device_id: str,
+    payload: VerifyAdminPinRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """What a device calls before doing something destructive locally (e.g.
+    the Android app's factory-reset flow — see
+    au...SettingsViewModel.attemptFactoryReset) to check a PIN against the
+    tenant's server-side admin_pin_hash, without the hash itself ever being
+    sent to the device. No admin-role gate: this is the device-facing check
+    endpoint, not the set endpoint (see POST /v1/tenants/{id}/admin-pin,
+    owner-only, in app/api/v1/tenants.py) — any authenticated user of this
+    tenant's device can attempt a PIN, same as anyone can attempt an admin
+    PIN on the physical device itself.
+
+    `configured=False` (tenant has never set an admin PIN) is always
+    accompanied by `valid=False`, but callers must check `configured`
+    explicitly rather than inferring "not configured" from `valid=False`
+    alone — that would be indistinguishable from "PIN set, but wrong"."""
+    try:
+        await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    try:
+        tenant = await tenant_service.check_admin_pin(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+    configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
+    return VerifyAdminPinResponse(valid=valid, configured=configured)

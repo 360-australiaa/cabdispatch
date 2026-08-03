@@ -35,6 +35,15 @@ in the existing `trips` router — see `app.services.fatigue` and
 `app/api/v1/trips.py`'s `tick_trip` docstring. That same pass also extended
 the `fleet` domain's `Device` model/router with `locate_requested` /
 `reboot_requested` MDM-lite command flags (no new router or path prefix).
+
+tenants (`/v1/tenants`) is new in this pass: owner-only
+`POST /v1/tenants/{id}/admin-pin` to set the tenant's server-verified admin
+PIN (see `app.models.tenant.Tenant.admin_pin_hash`, `app.services.tenant`),
+replacing the Android app's hardcoded ADMIN_PIN_PLACEHOLDER factory-reset
+check. This pass also extended the `fleet` domain's device router (no new
+router of its own) with `POST /v1/fleet/devices/{id}/verify-admin-pin` — the
+device-facing check endpoint a device calls to validate a PIN without ever
+seeing the hash.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +66,7 @@ from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
 from app.api.v1.tariffs import fares_order_router
 from app.api.v1.tariffs import router as tariffs_router
+from app.api.v1.tenants import router as tenants_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
 from app.core.config import settings
@@ -97,3 +107,4 @@ app.include_router(jobs_router)
 app.include_router(messages_router)
 app.include_router(reports_router)
 app.include_router(fatigue_alerts_router)
+app.include_router(tenants_router)

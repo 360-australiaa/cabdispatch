@@ -153,6 +153,15 @@ dependencies {
     // need small adjustments once someone can actually build against it. --
     implementation("com.mapbox.maps:android:11.8.1")
 
+    // -- BouncyCastle (pure-JVM crypto provider) — needed only for Ed25519 signature
+    // verification (security/TariffSignatureVerifier.kt's Ed25519TariffSignatureVerifier,
+    // verifying GET /v1/tariffs/active's signature). `java.security`'s own built-in Ed25519
+    // support (`NamedParameterSpec.ED25519`) only landed on API 33+, and this project's minSdk
+    // is 29 (see app/build.gradle.kts's own `minSdk` above) — bcprov gives KeyFactory/Signature
+    // "Ed25519" support on every API level this app targets instead of needing a minSdk bump.
+    // jdk18on (not the older jdk15on) is the currently-maintained artifact line. --
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
     testImplementation("junit:junit:4.13.2")
     // JVM unit tests for the offline sync engine (OutboxDrainerTest) — pure
     // Kotlin/coroutines, no Android framework classes, so these run without

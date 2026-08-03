@@ -84,6 +84,26 @@ class TariffRead(TariffBase):
     updated_at: datetime
 
 
+class SignedTariffRead(TariffRead):
+    """TariffRead + an Ed25519 signature over the tariff's canonical rate
+    payload (see app.services.tariff_signing). Used only by
+    `GET /v1/tariffs/active` — the endpoint devices poll to refresh their
+    cached tariff — so the on-device signature verifier can detect tampering
+    of a cached/relayed copy. See app.services.tariff_signing's module
+    docstring for the exact canonical-serialization format this signs."""
+
+    signature: str  # base64 Ed25519 signature, standard (non-URL-safe) alphabet
+
+
+class TariffSigningPublicKeyRead(BaseModel):
+    """Response for GET /v1/tariffs/signing-public-key. Public keys aren't
+    secret — this endpoint requires no auth so devices can fetch it before
+    (or independent of) being otherwise authenticated."""
+
+    public_key: str  # X.509 SubjectPublicKeyInfo DER, base64-encoded
+    algorithm: Literal["Ed25519"] = "Ed25519"
+
+
 # --- Extra ----------------------------------------------------------------------
 
 

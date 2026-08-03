@@ -41,6 +41,12 @@ class UserCreate(UserBase):
     # Plaintext in the request only — hashed into User.pin_hash before storage,
     # same column/verification path app/api/v1/auth.py already uses for login.
     password: str = Field(min_length=6, max_length=128)
+    # Optional: only meaningful for role="driver". If omitted, the create
+    # endpoint auto-generates one (see app/services/user.py::generate_unique_driver_code).
+    # Supplying it for a non-driver role is accepted but has no login effect —
+    # POST /v1/auth/driver-login is unreachable without role="driver" (see
+    # app/api/v1/auth.py).
+    driver_code: str | None = Field(default=None, min_length=4, max_length=6)
 
 
 class UserUpdate(BaseModel):
@@ -62,5 +68,8 @@ class UserRead(UserBase):
     tenant_id: str | None
     role: UserRole
     email: str
+    # Read-only after creation — see UserCreate.driver_code. None for every
+    # non-driver user (and for drivers created before this field existed).
+    driver_code: str | None = None
     created_at: datetime
     updated_at: datetime

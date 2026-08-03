@@ -70,6 +70,56 @@
         }
       }
     },
+    "/v1/auth/driver-login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Driver Login",
+        "description": "The real driver-facing counterpart to POST /login: Driver ID + PIN\ninstead of email + password. `driver_code` is globally unique (see\napp/services/user.py::assert_driver_code_available) so \u2014 same as\nemail \u2014 the lookup needs no tenant context.\n\nReplaces the placeholder driverId->email / pin->password mapping\ndocumented on the Android side in\ndomain/DriverAuthRepository.kt's NOTE(integration agent) comment.",
+        "operationId": "driver_login_v1_auth_driver_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriverLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MfaRequiredResponse"
+                    }
+                  ],
+                  "title": "Response Driver Login V1 Auth Driver Login Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/mfa/login": {
       "post": {
         "tags": [
@@ -1589,6 +1639,64 @@
         }
       }
     },
+    "/v1/fleet/devices/{device_id}/verify-admin-pin": {
+      "post": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "Verify Device Admin Pin",
+        "description": "What a device calls before doing something destructive locally (e.g.\nthe Android app's factory-reset flow \u2014 see\nau...SettingsViewModel.attemptFactoryReset) to check a PIN against the\ntenant's server-side admin_pin_hash, without the hash itself ever being\nsent to the device. No admin-role gate: this is the device-facing check\nendpoint, not the set endpoint (see POST /v1/tenants/{id}/admin-pin,\nowner-only, in app/api/v1/tenants.py) \u2014 any authenticated user of this\ntenant's device can attempt a PIN, same as anyone can attempt an admin\nPIN on the physical device itself.\n\n`configured=False` (tenant has never set an admin PIN) is always\naccompanied by `valid=False`, but callers must check `configured`\nexplicitly rather than inferring \"not configured\" from `valid=False`\nalone \u2014 that would be indistinguishable from \"PIN set, but wrong\".",
+        "operationId": "verify_device_admin_pin_v1_fleet_devices__device_id__verify_admin_pin_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyAdminPinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyAdminPinResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/geofences": {
       "get": {
         "tags": [
@@ -1993,7 +2101,7 @@
           "tariffs"
         ],
         "summary": "Get Active Tariff",
-        "description": "Resolves the tenant's currently-effective tariff for `region` at `at`\n(defaults to now). NOTE: registered before `/{tariff_id}` so \"active\"\nis never captured as a path parameter.",
+        "description": "Resolves the tenant's currently-effective tariff for `region` at `at`\n(defaults to now). NOTE: registered before `/{tariff_id}` so \"active\"\nis never captured as a path parameter.\n\nThe response includes an Ed25519 `signature` over the tariff's canonical\nrate payload (see app.services.tariff_signing) \u2014 this is the endpoint\ndevices poll to refresh their cached tariff, so it's the one response in\nthis domain that needs anti-tamper protection for the on-device\nverifier. Pair with `GET /signing-public-key` to verify it.",
         "operationId": "get_active_tariff_v1_tariffs_active_get",
         "security": [
           {
@@ -2036,7 +2144,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TariffRead"
+                  "$ref": "#/components/schemas/SignedTariffRead"
                 }
               }
             }
@@ -2047,6 +2155,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tariffs/signing-public-key": {
+      "get": {
+        "tags": [
+          "tariffs"
+        ],
+        "summary": "Get Tariff Signing Public Key",
+        "description": "The Ed25519 public key that verifies `GET /active`'s `signature`\nfield (X.509 SubjectPublicKeyInfo DER, base64-encoded \u2014 see\napp.services.tariff_signing's module docstring for the full wire\nformat). Deliberately NO auth dependency: public keys aren't secret, and\ndevices need to be able to fetch this independent of (or before) being\notherwise authenticated. NOTE: registered before `/{tariff_id}` so\n\"signing-public-key\" is never captured as a path parameter, same reason\nas `/active` above.",
+        "operationId": "get_tariff_signing_public_key_v1_tariffs_signing_public_key_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TariffSigningPublicKeyRead"
                 }
               }
             }
@@ -7863,10 +7993,102 @@
           }
         }
       }
+    },
+    "/v1/tenants/{tenant_id}/admin-pin": {
+      "post": {
+        "tags": [
+          "tenants"
+        ],
+        "summary": "Set Admin Pin",
+        "description": "Owner-only. Sets/updates the tenant's admin PIN, hashed with the same\nscheme as User.pin_hash (see app.core.security.hash_password). Setting it\nagain overwrites the previous PIN \u2014 there is no separate update route.",
+        "operationId": "set_admin_pin_v1_tenants__tenant_id__admin_pin_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPinSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPinSetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AdminPinSetRequest": {
+        "properties": {
+          "pin": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "pattern": "^\\d{4,8}$",
+            "title": "Pin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pin"
+        ],
+        "title": "AdminPinSetRequest"
+      },
+      "AdminPinSetResponse": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "admin_pin_configured": {
+            "type": "boolean",
+            "title": "Admin Pin Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "admin_pin_configured"
+        ],
+        "title": "AdminPinSetResponse"
+      },
       "AuditLogCreate": {
         "properties": {
           "action": {
@@ -8960,6 +9182,25 @@
         ],
         "title": "DriverLiveRead",
         "description": "One row of `GET /v1/drivers` \u2014 a driver (`User` with role=\"driver\",\nowned by the user domain) with on-shift status joined in from the shift\ndomain. Read-only, same rationale as `VehicleLiveRead`."
+      },
+      "DriverLoginRequest": {
+        "properties": {
+          "driver_code": {
+            "type": "string",
+            "title": "Driver Code"
+          },
+          "pin": {
+            "type": "string",
+            "title": "Pin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "driver_code",
+          "pin"
+        ],
+        "title": "DriverLoginRequest",
+        "description": "Body for POST /v1/auth/driver-login \u2014 the driver-facing counterpart to\nLoginRequest above. `pin` is verified against the same `User.pin_hash`\ncolumn `password` is (see app/api/v1/auth.py)."
       },
       "DuressCancelRequest": {
         "properties": {
@@ -12930,6 +13171,179 @@
         "title": "ShiftUpdate",
         "description": "Partial update \u2014 every field optional. Intended for admin corrections\n(e.g. fixing a mis-keyed inspection checklist or reconciliation figure)."
       },
+      "SignedTariffRead": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "region": {
+            "type": "string",
+            "enum": [
+              "urban",
+              "country",
+              "exempt"
+            ],
+            "title": "Region"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          },
+          "booked": {
+            "type": "boolean",
+            "title": "Booked",
+            "default": false
+          },
+          "flag_fall": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Flag Fall"
+          },
+          "peak_charge": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Peak Charge",
+            "default": "0"
+          },
+          "dist_rate_1": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Dist Rate 1"
+          },
+          "dist_rate_2": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Dist Rate 2"
+          },
+          "night_rate_1": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Night Rate 1"
+          },
+          "night_rate_2": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Night Rate 2"
+          },
+          "holiday_rate_1": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Holiday Rate 1",
+            "default": "0"
+          },
+          "holiday_rate_2": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Holiday Rate 2",
+            "default": "0"
+          },
+          "waiting_rate_per_min": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Waiting Rate Per Min"
+          },
+          "dist_km_threshold": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Dist Km Threshold",
+            "default": "12"
+          },
+          "speed_threshold_kmh": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Speed Threshold Kmh",
+            "default": "26"
+          },
+          "maxi_multiplier": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Maxi Multiplier",
+            "default": "1.5"
+          },
+          "multi_hire_pct": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Multi Hire Pct",
+            "default": "0.75"
+          },
+          "psl_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Psl Amount",
+            "default": "1.32"
+          },
+          "surcharge_pct_cap": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Surcharge Pct Cap",
+            "default": "5.0"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "signature": {
+            "type": "string",
+            "title": "Signature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "region",
+          "effective_from",
+          "flag_fall",
+          "dist_rate_1",
+          "dist_rate_2",
+          "night_rate_1",
+          "night_rate_2",
+          "waiting_rate_per_min",
+          "id",
+          "tenant_id",
+          "created_at",
+          "updated_at",
+          "signature"
+        ],
+        "title": "SignedTariffRead",
+        "description": "TariffRead + an Ed25519 signature over the tariff's canonical rate\npayload (see app.services.tariff_signing). Used only by\n`GET /v1/tariffs/active` \u2014 the endpoint devices poll to refresh their\ncached tariff \u2014 so the on-device signature verifier can detect tampering\nof a cached/relayed copy. See app.services.tariff_signing's module\ndocstring for the exact canonical-serialization format this signs."
+      },
       "StripeWebhookResponse": {
         "properties": {
           "received": {
@@ -13772,6 +14186,26 @@
           "updated_at"
         ],
         "title": "TariffRead"
+      },
+      "TariffSigningPublicKeyRead": {
+        "properties": {
+          "public_key": {
+            "type": "string",
+            "title": "Public Key"
+          },
+          "algorithm": {
+            "type": "string",
+            "const": "Ed25519",
+            "title": "Algorithm",
+            "default": "Ed25519"
+          }
+        },
+        "type": "object",
+        "required": [
+          "public_key"
+        ],
+        "title": "TariffSigningPublicKeyRead",
+        "description": "Response for GET /v1/tariffs/signing-public-key. Public keys aren't\nsecret \u2014 this endpoint requires no auth so devices can fetch it before\n(or independent of) being otherwise authenticated."
       },
       "TariffUpdate": {
         "properties": {
@@ -15152,6 +15586,19 @@
             "maxLength": 128,
             "minLength": 6,
             "title": "Password"
+          },
+          "driver_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 6,
+                "minLength": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Code"
           }
         },
         "type": "object",
@@ -15718,6 +16165,42 @@
         "title": "VehicleUpdate",
         "description": "Partial update \u2014 every field optional."
       },
+      "VerifyAdminPinRequest": {
+        "properties": {
+          "pin": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "pattern": "^\\d{4,8}$",
+            "title": "Pin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pin"
+        ],
+        "title": "VerifyAdminPinRequest",
+        "description": "Body for `POST /v1/fleet/devices/{id}/verify-admin-pin` \u2014 same PIN\nshape as `app.schemas.tenant.AdminPinSetRequest`."
+      },
+      "VerifyAdminPinResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid",
+          "configured"
+        ],
+        "title": "VerifyAdminPinResponse",
+        "description": "`configured=False` means the tenant has never set an admin PIN \u2014 kept\ndistinct from `valid=False` (a PIN is set but this one is wrong) so a\ndevice can tell \"nothing set up yet\" from \"wrong PIN\" instead of treating\nboth the same way. See app.services.tenant.verify_admin_pin."
+      },
       "app__schemas__auth__UserRead": {
         "properties": {
           "id": {
@@ -15754,6 +16237,17 @@
           "mfa_enabled": {
             "type": "boolean",
             "title": "Mfa Enabled"
+          },
+          "driver_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Code"
           }
         },
         "type": "object",
@@ -15843,6 +16337,17 @@
           "email": {
             "type": "string",
             "title": "Email"
+          },
+          "driver_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Code"
           },
           "created_at": {
             "type": "string",

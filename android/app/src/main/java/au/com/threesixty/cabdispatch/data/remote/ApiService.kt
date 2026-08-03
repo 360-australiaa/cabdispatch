@@ -40,6 +40,29 @@ interface ApiService {
     @POST("/v1/auth/login")
     suspend fun login(@Body body: LoginRequestDto): TokenResponseDto
 
+    /**
+     * Driver ID (`driver_code`) + PIN login for the meter — the real
+     * driver-facing counterpart to [login], see shared/API_SUMMARY.md
+     * "POST /v1/auth/driver-login". Return type is [DriverLoginResponseDto],
+     * not [TokenResponseDto], because the backend's `response_model` is a
+     * union (`TokenResponse | MfaRequiredResponse`) depending on whether the
+     * driver account has MFA enabled — see that DTO's doc for how callers
+     * disambiguate.
+     */
+    @POST("/v1/auth/driver-login")
+    suspend fun driverLogin(@Body body: DriverLoginRequestDto): DriverLoginResponseDto
+
+    /**
+     * Second step of the MFA two-step exchange, shared by staff [login] and
+     * [driverLogin] alike (`shared/API_SUMMARY.md` "Admin MFA (TOTP)") — a
+     * short-lived `mfa_token` (from a [DriverLoginResponseDto] with
+     * [DriverLoginResponseDto.mfaRequired] true) plus a 6-digit TOTP code for
+     * a real [TokenResponseDto]. Unlike [login]/[driverLogin] this endpoint
+     * has no MFA branch of its own — it always returns [TokenResponseDto].
+     */
+    @POST("/v1/auth/mfa/login")
+    suspend fun mfaLogin(@Body body: MfaLoginRequestDto): TokenResponseDto
+
     @POST("/v1/auth/refresh")
     suspend fun refresh(@Body body: RefreshRequestDto): TokenResponseDto
 
@@ -60,9 +83,37 @@ interface ApiService {
         @Body body: DeviceHeartbeatRequestDto,
     ): DeviceDto
 
+    /**
+     * Device-facing check against the tenant's server-side admin PIN (see
+     * `POST /v1/tenants/{id}/admin-pin`, owner-only, for the set/overwrite side — not called from
+     * this app). The hash is never sent to the device, only the boolean result. Backs
+     * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.attemptFactoryReset]'s
+     * server-verified factory-reset gate. `configured=false` (tenant has never set a PIN) is
+     * distinct from `valid=false` (PIN set, wrong value) — callers must check
+     * [VerifyAdminPinResponseDto.configured] explicitly, per shared/API_SUMMARY.md.
+     */
+    @POST("/v1/fleet/devices/{deviceId}/verify-admin-pin")
+    suspend fun verifyAdminPin(
+        @Path("deviceId") deviceId: String,
+        @Body body: VerifyAdminPinRequestDto,
+    ): VerifyAdminPinResponseDto
+
+    // ---- Live positions (MDM "locate" response — S6's heartbeat above reads
+    // DeviceDto.locateRequested back; when set, SettingsViewModel answers it by publishing the
+    // device's current real fix through this same endpoint, which is also what feeds the fleet
+    // dashboard's Live Map. Domain note: this endpoint's literal path (`/v1/fleet/positions`, not
+    // `/v1/fleet/devices/.../positions`) belongs to the separate Live Ops router, not the Devices
+    // one above — see shared/API_SUMMARY.md and backend/app/api/v1/live_ops.py. ----
+
+    @POST("/v1/fleet/positions")
+    suspend fun publishPosition(@Body body: PositionPublishRequestDto): PositionPublishResponseDto
+
     // ---- Tariffs (B6 fare engine reads these; server is the source of truth,
     // cached + signed on-device per B7 offline behaviour) ----
 
+    /** Response includes an Ed25519 `signature` field (see [TariffDto.signature]) — the one
+     * tariff response in this domain that's signed, since this is the endpoint devices poll to
+     * refresh their cached tariff (see [au.com.threesixty.cabdispatch.sync.TariffCache]). */
     @GET("/v1/tariffs/active")
     suspend fun activeTariff(
         @Query("region") region: String,
@@ -74,6 +125,13 @@ interface ApiService {
         @Query("region") region: String = "urban",
         @Query("at") at: String? = null,
     ): TariffDto
+
+    /** The Ed25519 public key that verifies [activeTariff]'s [TariffDto.signature] (X.509
+     * SubjectPublicKeyInfo DER, base64-encoded). Deliberately no auth requirement server-side —
+     * public keys aren't secret — so this is safe to call before/without a bearer token; see
+     * [au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache]. */
+    @GET("/v1/tariffs/signing-public-key")
+    suspend fun tariffSigningPublicKey(): TariffSigningPublicKeyDto
 
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
@@ -248,6 +306,46 @@ interface ApiService {
 @Serializable
 data class LoginRequestDto(val email: String, val password: String)
 
+/** Body for [ApiService.driverLogin]. `driverCode` is the meter's "Driver ID" field — globally
+ * unique, auto-generated per driver user, distinct from `email`/staff login. */
+@Serializable
+data class DriverLoginRequestDto(
+    @SerialName("driver_code") val driverCode: String,
+    val pin: String,
+)
+
+/**
+ * Mirrors the backend's `TokenResponse | MfaRequiredResponse` union response_model for
+ * `POST /v1/auth/driver-login` (shared/API_SUMMARY.md "POST /v1/auth/driver-login" +
+ * "Admin MFA (TOTP)"). kotlinx.serialization has no first-class support for an ad hoc union
+ * response like this, so both shapes' fields are folded into one DTO, all nullable —
+ * `ignoreUnknownKeys = true` (data/JsonConfig.kt) makes it safe for either shape's JSON to land
+ * here without the other shape's fields present.
+ *
+ * Callers MUST check [mfaRequired] first:
+ * - `true` -> only [mfaToken] is populated; exchange it (+ a 6-digit TOTP code) via
+ *   [ApiService.mfaLogin] for a real [TokenResponseDto]. [accessToken]/[user] are absent.
+ * - `null`/`false` -> a normal token response; [accessToken]/[refreshToken]/[user] are populated
+ *   exactly as [TokenResponseDto] would be.
+ */
+@Serializable
+data class DriverLoginResponseDto(
+    @SerialName("access_token") val accessToken: String? = null,
+    @SerialName("refresh_token") val refreshToken: String? = null,
+    @SerialName("token_type") val tokenType: String? = null,
+    val user: UserDto? = null,
+    @SerialName("mfa_required") val mfaRequired: Boolean? = null,
+    @SerialName("mfa_token") val mfaToken: String? = null,
+)
+
+/** Body for [ApiService.mfaLogin] — exchanges the short-lived `mfa_token` from a
+ * [DriverLoginResponseDto] (or the staff-login equivalent) plus a 6-digit TOTP `code`. */
+@Serializable
+data class MfaLoginRequestDto(
+    @SerialName("mfa_token") val mfaToken: String,
+    val code: String,
+)
+
 @Serializable
 data class RefreshRequestDto(@SerialName("refresh_token") val refreshToken: String)
 
@@ -284,6 +382,19 @@ data class DeviceHeartbeatRequestDto(
     @SerialName("app_version") val appVersion: String? = null,
 )
 
+/**
+ * [locateRequested]/[rebootRequested] mirror the backend's MDM-lite command flags (
+ * `backend/app/schemas/fleet.py::DeviceRead`, see `POST /v1/fleet/devices/{id}/locate`/`/reboot`)
+ * — an admin sets one via the dashboard, the device reads it back on its next [ApiService.deviceHeartbeat]
+ * call. [locateRequested] is the one this app actually acts on:
+ * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.loadDeviceStatus] answers a
+ * set flag by publishing a fresh position (see [PositionPublishRequestDto] /
+ * [ApiService.publishPosition]). [rebootRequested] is deliberately left unconsumed here — see the
+ * backend's own HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`: actually rebooting the OS
+ * needs device-owner-level Android permissions this app does not hold, so this stays a
+ * backend-only command queue an admin can see pending, not something this DTO's presence should
+ * be mistaken for "implemented" — see HANDOFF.md.
+ */
 @Serializable
 data class DeviceDto(
     val id: String,
@@ -294,6 +405,8 @@ data class DeviceDto(
     @SerialName("vehicle_id") val vehicleId: String?,
     @SerialName("kiosk_locked") val kioskLocked: Boolean,
     @SerialName("force_update_pending") val forceUpdatePending: Boolean,
+    @SerialName("locate_requested") val locateRequested: Boolean = false,
+    @SerialName("reboot_requested") val rebootRequested: Boolean = false,
     @SerialName("last_seen_at") val lastSeenAt: String?,
     val battery: Int?,
     val network: String?,
@@ -301,7 +414,50 @@ data class DeviceDto(
     @SerialName("updated_at") val updatedAt: String,
 )
 
-/** Mirrors `TariffRead` — money/rate fields are decimal-as-string, see file header. */
+/**
+ * Body for [ApiService.publishPosition] (`POST /v1/fleet/positions`, backend's
+ * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Two call
+ * sites, both best-effort/fire-and-forget: the MDM "locate" response
+ * ([SettingsViewModel.loadDeviceStatus][au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel])
+ * and (separately, still unwired — see HANDOFF.md "Availability broadcast not wired") the
+ * Idle screen's "For Hire" toggle. [status] has no server-side enum constraint (backend: a plain
+ * `str`, `min_length=1, max_length=20`), just documented examples ("available"/"on_trip"/
+ * "offline"/"break") — any short non-empty string round-trips fine.
+ */
+@Serializable
+data class PositionPublishRequestDto(
+    @SerialName("vehicle_id") val vehicleId: String,
+    val lat: Double,
+    val lng: Double,
+    val status: String,
+)
+
+/** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`
+ * (a `PositionRead` plus [subscriberCount]). Not currently read by either call site (both are
+ * fire-and-forget), kept typed rather than discarded so a future caller that wants to confirm the
+ * publish landed doesn't have to add it later. */
+@Serializable
+data class PositionPublishResponseDto(
+    @SerialName("vehicle_id") val vehicleId: String,
+    val lat: Double,
+    val lng: Double,
+    val status: String,
+    @SerialName("updated_at") val updatedAt: String,
+    @SerialName("subscriber_count") val subscriberCount: Int,
+)
+
+/**
+ * Mirrors `TariffRead` — money/rate fields are decimal-as-string, see file header.
+ *
+ * [signature] is only ever populated on [ApiService.activeTariff]'s response (backend's
+ * `SignedTariffRead`, `TariffRead` + a `signature` field) — every other endpoint that returns
+ * this shape (`currentFaresOrder`, plain tariff CRUD) serves the unsigned `TariffRead` and leaves
+ * it absent, which `ignoreUnknownKeys`/a nullable default (see data/JsonConfig.kt) makes safe to
+ * share one DTO for. See `au.com.threesixty.cabdispatch.security.canonicalTariffPayload` (the
+ * Kotlin port of `backend/app/services/tariff_signing.canonical_tariff_payload`, the exact
+ * byte-format this signs) and [au.com.threesixty.cabdispatch.sync.TariffCache.refresh] (where the
+ * signature is actually checked before this DTO is trusted/cached).
+ */
 @Serializable
 data class TariffDto(
     val id: String,
@@ -328,6 +484,30 @@ data class TariffDto(
     @SerialName("surcharge_pct_cap") val surchargePctCap: String = "5.0",
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    val signature: String? = null,
+)
+
+/** Body for [ApiService.verifyAdminPin] — same PIN shape as the backend's
+ * `VerifyAdminPinRequest`/`AdminPinSetRequest` (4-8 digits). */
+@Serializable
+data class VerifyAdminPinRequestDto(val pin: String)
+
+/** Response for [ApiService.verifyAdminPin]. [configured] `false` means the tenant has never set
+ * an admin PIN at all — kept distinct from [valid] `false` (a PIN is set but this one is wrong)
+ * so a caller can tell "nothing set up yet" from "wrong PIN" rather than treating both the same
+ * (i.e. rather than silently allowing a destructive action just because nothing's configured
+ * yet). Callers MUST check [configured] explicitly, per shared/API_SUMMARY.md's "Admin PIN" note. */
+@Serializable
+data class VerifyAdminPinResponseDto(val valid: Boolean, val configured: Boolean)
+
+/** Response for [ApiService.tariffSigningPublicKey] — the backend's `TariffSigningPublicKeyRead`.
+ * [publicKey] is X.509 SubjectPublicKeyInfo DER, base64-encoded, matching
+ * `au.com.threesixty.cabdispatch.security.RsaTariffSignatureVerifier`'s existing key-encoding
+ * convention (see that class's doc) even though the actual algorithm here is Ed25519. */
+@Serializable
+data class TariffSigningPublicKeyDto(
+    @SerialName("public_key") val publicKey: String,
+    val algorithm: String = "Ed25519",
 )
 
 @Serializable

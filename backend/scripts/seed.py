@@ -40,6 +40,7 @@ from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
 from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
 from app.services import fare_engine as fe
+from app.services.user import generate_unique_driver_code
 
 DEMO_PASSWORD = "ChangeMe123!"
 PLATFORM_TENANT_NAME = "TCT"
@@ -214,11 +215,26 @@ async def get_or_create_tenant_tariff(
 
 
 async def get_or_create_user(
-    session, *, email: str, tenant_id: str | None, role: str, name: str, password: str
+    session,
+    *,
+    email: str,
+    tenant_id: str | None,
+    role: str,
+    name: str,
+    password: str,
+    driver_code: str | None = None,
 ) -> User:
     result = await session.execute(select(User).where(User.email == email))
     existing = result.scalar_one_or_none()
     if existing is not None:
+        # Backfill driver_code onto a pre-existing seeded row from before
+        # this column existed (re-running seed.py after a fresh migration
+        # must not leave the demo driver without one — see
+        # app/models/user.py::User.driver_code).
+        if driver_code is not None and existing.driver_code is None:
+            existing.driver_code = driver_code
+            await session.commit()
+            await session.refresh(existing)
         return existing
 
     user = User(
@@ -228,6 +244,7 @@ async def get_or_create_user(
         email=email,
         pin_hash=hash_password(password),
         status="active",
+        driver_code=driver_code,
     )
     session.add(user)
     await session.commit()
@@ -276,13 +293,26 @@ async def seed() -> None:
             name="Lilly Cabs Owner",
             password=DEMO_PASSWORD,
         )
-        await get_or_create_user(
+        # Only mint a random driver_code (app.services.user.generate_unique_driver_code
+        # — same alphabet/length the real POST /v1/users auto-generation path
+        # uses) if the demo driver doesn't already have one from a prior run;
+        # get_or_create_user backfills it onto an existing pre-migration row too.
+        existing_driver = (
+            await session.execute(select(User).where(User.email == "driver@lillycabs.test"))
+        ).scalar_one_or_none()
+        demo_driver_code = (
+            await generate_unique_driver_code(session)
+            if existing_driver is None or existing_driver.driver_code is None
+            else None
+        )
+        demo_driver = await get_or_create_user(
             session,
             email="driver@lillycabs.test",
             tenant_id=demo_tenant.id,
             role=ROLE_DRIVER,
             name="Demo Driver",
             password=DEMO_PASSWORD,
+            driver_code=demo_driver_code,
         )
 
         print("\nSeed complete.")
@@ -292,6 +322,10 @@ async def seed() -> None:
         print("    admin@cabdispatch.test    (platform owner, cross-tenant)")
         print("    owner@lillycabs.test      (Lilly Cabs owner)")
         print("    driver@lillycabs.test     (Lilly Cabs driver — meter/app 'Driver ID' login)")
+        print(
+            f"  Demo driver_code: {demo_driver.driver_code}  "
+            "(POST /v1/auth/driver-login with pin 'ChangeMe123!')"
+        )
 
 
 if __name__ == "__main__":

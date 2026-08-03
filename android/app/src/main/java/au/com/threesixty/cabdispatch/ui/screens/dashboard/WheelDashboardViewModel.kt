@@ -17,23 +17,21 @@ import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.TripContext
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
-
-/** Default region until the geofencing sibling agent wires GPS -> urban/
- * country/exempt polygon detection (spec B5 S2) — same gap/constant as the
- * old [au.com.threesixty.cabdispatch.ui.screens.idle.IdleViewModel]. */
-private const val DEFAULT_REGION = "urban"
 
 private const val STATUS_POLL_INTERVAL_MS = 4000L
 
@@ -85,13 +83,34 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TodayStats())
 
+    /**
+     * Real GPS-derived tariff region (2026-08-03, location/region-detection pass) — replaces the
+     * former hardcoded `DEFAULT_REGION = "urban"` constant (same gap/constant the old
+     * [au.com.threesixty.cabdispatch.ui.screens.idle.IdleViewModel] and
+     * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel] used to hardcode too —
+     * see [RegionResolver]'s doc for why a simple distance-from-Sydney-CBD circle, not a real
+     * polygon/geofence lookup: neither exists server- or client-side yet to call instead).
+     * [distinctUntilChanged] so crossing the urban/country boundary re-subscribes
+     * [AppContainer.tariffCache]'s Room read below exactly once, not on every ~1Hz location tick.
+     */
+    private val region: StateFlow<String> = AppContainer.speedSource.locationFix
+        // Explicit lambda, not a `RegionResolver::resolve` method reference — [RegionResolver]
+        // has two overloads (`LocationFix?` and `lat: Double?, lng: Double?`); spelling the
+        // parameter out here removes any doubt about which one binds, in an environment where
+        // nothing has ever actually been run through kotlinc to confirm overload resolution.
+        .map { fix -> RegionResolver.resolve(fix) }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RegionResolver.REGION_URBAN)
+
     private val baseState: StateFlow<WheelDashboardUiState> = combine(
         SessionHolder.session,
         _isAvailable,
         _availabilityError,
         // Real, Room-backed, signed-payload tariff cache — see IdleViewModel's doc for the
-        // now-deleted in-memory stub this used to compete with.
-        AppContainer.tariffCache.observeActiveTariff(DEFAULT_REGION),
+        // now-deleted in-memory stub this used to compete with. flatMapLatest on [region] so a
+        // real region change (driver crosses the urban/country boundary) re-subscribes to the
+        // correct cached row instead of staying pinned to whichever region was active at launch.
+        region.flatMapLatest { r -> AppContainer.tariffCache.observeActiveTariff(r) },
         todayStats,
     ) { session, isAvailable, availabilityError, tariff, stats ->
         WheelDashboardUiState(
@@ -109,9 +128,13 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
 
     init {
         viewModelScope.launch {
-            // Best-effort: refresh() throws on failure — the dashboard already has a cached
-            // tariff to render from observeActiveTariff above in the common case.
-            runCatching { AppContainer.tariffCache.refresh(DEFAULT_REGION) }
+            // Best-effort, and re-run on every real region change (not just once at launch) — so
+            // if a driver genuinely crosses the urban/country boundary mid-shift, the newly
+            // relevant region's tariff gets fetched/cached too, not just whichever region was
+            // active when this ViewModel was created. refresh() throws on failure — the dashboard
+            // already has a cached tariff to render from observeActiveTariff above in the common
+            // case, so a failed refresh here just means "using whatever's already cached".
+            region.collect { r -> runCatching { AppContainer.tariffCache.refresh(r) } }
         }
         viewModelScope.launch {
             while (isActive) {

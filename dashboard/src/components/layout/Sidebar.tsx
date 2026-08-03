@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   Map,
   Send,
+  MessageSquare,
   ShieldAlert,
   Route,
   Clock,
@@ -23,10 +24,11 @@ interface NavItem {
   icon: typeof Map;
 }
 
-/** Route/label/icon list for the 10 fleet-ops modules. Keep in sync with router.tsx. */
+/** Route/label/icon list for the fleet-ops modules. Keep in sync with router.tsx. */
 const NAV_ITEMS: NavItem[] = [
   { to: "/live-map", label: "Live Map", icon: Map },
   { to: "/dispatch", label: "Dispatch", icon: Send },
+  { to: "/messages", label: "Messages", icon: MessageSquare },
   { to: "/duress", label: "Duress Desk", icon: ShieldAlert },
   { to: "/trips", label: "Trips", icon: Route },
   { to: "/shifts", label: "Shifts & Reconciliation", icon: Clock },

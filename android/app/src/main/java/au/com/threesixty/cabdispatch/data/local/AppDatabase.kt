@@ -5,10 +5,12 @@ import androidx.room.RoomDatabase
 import au.com.threesixty.cabdispatch.data.local.dao.ShiftDao
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
+import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
 /**
@@ -18,10 +20,12 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * Version bumped 1 -> 2 by the offline sync-engine agent, adding the trip
  * queue ([TripEntity]), shift record ([ShiftEntity]), tariff cache
  * ([TariffEntity]) and sync outbox ([SyncOutboxEntity]) — see each entity's
- * doc comment for its role. No Migration object is supplied because this
- * project has never shipped v1 (no installed base to migrate); the schema is
- * still pre-release. Once this ships, bumping `version` again MUST come with
- * a real `Migration(1, 2)` — do NOT reach for
+ * doc comment for its role. Version bumped 2 -> 3 (tariff-signature-verification pass) adding
+ * the local cache of the tariff-signing public key ([TariffSigningKeyEntity]) — see that
+ * entity's doc and [au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache]. No Migration
+ * object is supplied for either bump because this project has never shipped v1 (no installed
+ * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
+ * MUST come with a real `Migration` — do NOT reach for
  * `fallbackToDestructiveMigration()`, offline trip data is financial/
  * compliance evidence per B6 ("immutable trip log").
  *
@@ -39,8 +43,14 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  *   6. Register the DAO as a singleton in [au.com.threesixty.cabdispatch.data.AppContainer].
  */
 @Database(
-    entities = [TripEntity::class, ShiftEntity::class, TariffEntity::class, SyncOutboxEntity::class],
-    version = 2,
+    entities = [
+        TripEntity::class,
+        ShiftEntity::class,
+        TariffEntity::class,
+        SyncOutboxEntity::class,
+        TariffSigningKeyEntity::class,
+    ],
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -48,4 +58,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun shiftDao(): ShiftDao
     abstract fun tariffDao(): TariffDao
     abstract fun syncOutboxDao(): SyncOutboxDao
+    abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
 }

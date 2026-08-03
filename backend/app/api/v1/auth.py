@@ -37,6 +37,7 @@ from app.core.security import (
 )
 from app.models.user import User
 from app.schemas.auth import (
+    DriverLoginRequest,
     LoginRequest,
     MfaDisableRequest,
     MfaLoginRequest,
@@ -55,6 +56,9 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 _INVALID_CREDENTIALS = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
 )
+_INVALID_DRIVER_CREDENTIALS = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid driver code or PIN"
+)
 _INVALID_MFA_CODE = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code"
 )
@@ -68,6 +72,28 @@ def _issue_tokens(user: User) -> TokenResponse:
     )
 
 
+def _login_result(user: User) -> TokenResponse | MfaRequiredResponse:
+    """Shared second half of both POST /login and POST /driver-login, once
+    each has independently verified its own credentials against
+    `user.pin_hash`: active-status gate + MFA opt-in branch (blueprint 12.2).
+
+    Accounts that never enabled MFA get exactly the pre-existing behavior
+    below, unchanged — this branch only fires for mfa_enabled=True accounts,
+    and is the SAME two-step contract for both login paths (driver-login
+    doesn't fork it): POST /mfa/login is still the only way to exchange the
+    resulting mfa_token for real tokens, regardless of which endpoint issued
+    it.
+    """
+    if user.status != "active":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active")
+
+    if user.mfa_enabled:
+        mfa_token = create_mfa_pending_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role)
+        return MfaRequiredResponse(mfa_token=mfa_token)
+
+    return _issue_tokens(user)
+
+
 @router.post("/login", response_model=TokenResponse | MfaRequiredResponse)
 async def login(
     body: LoginRequest, session: AsyncSession = Depends(get_session)
@@ -77,17 +103,35 @@ async def login(
 
     if user is None or not user.pin_hash or not verify_password(body.password, user.pin_hash):
         raise _INVALID_CREDENTIALS
-    if user.status != "active":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is not active")
 
-    # MFA opt-in (blueprint 12.2): accounts that never enabled it get exactly
-    # the pre-existing behavior below, unchanged — this branch only fires for
-    # mfa_enabled=True accounts.
-    if user.mfa_enabled:
-        mfa_token = create_mfa_pending_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role)
-        return MfaRequiredResponse(mfa_token=mfa_token)
+    return _login_result(user)
 
-    return _issue_tokens(user)
+
+@router.post("/driver-login", response_model=TokenResponse | MfaRequiredResponse)
+async def driver_login(
+    body: DriverLoginRequest, session: AsyncSession = Depends(get_session)
+) -> TokenResponse | MfaRequiredResponse:
+    """The real driver-facing counterpart to POST /login: Driver ID + PIN
+    instead of email + password. `driver_code` is globally unique (see
+    app/services/user.py::assert_driver_code_available) so — same as
+    email — the lookup needs no tenant context.
+
+    Replaces the placeholder driverId->email / pin->password mapping
+    documented on the Android side in
+    domain/DriverAuthRepository.kt's NOTE(integration agent) comment.
+    """
+    result = await session.execute(select(User).where(User.driver_code == body.driver_code))
+    user = result.scalar_one_or_none()
+
+    if (
+        user is None
+        or user.role != "driver"
+        or not user.pin_hash
+        or not verify_password(body.pin, user.pin_hash)
+    ):
+        raise _INVALID_DRIVER_CREDENTIALS
+
+    return _login_result(user)
 
 
 @router.post("/mfa/login", response_model=TokenResponse)

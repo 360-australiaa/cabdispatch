@@ -16,23 +16,67 @@ import java.time.LocalTime
 import java.time.ZonedDateTime
 
 /**
+ * One fused-location fix, as emitted by [SpeedSource.locationFix].
+ *
+ * Deliberately holds more than the fare engine itself needs ([speedKmh] is the only field
+ * [FareEngineImpl.tick] reads) — [lat]/[lng] exist specifically so the *other* two GPS-shaped
+ * gaps named in HANDOFF.md (map centering, region auto-detection) have a real position to
+ * consume from the same feed, instead of each growing their own separate location plumbing. See
+ * `domain/location/RealLocationProvider.kt`'s doc for how this is populated/filtered.
+ *
+ * @property lat WGS84 latitude, degrees.
+ * @property lng WGS84 longitude, degrees.
+ * @property speedKmh Ground speed in km/h, never negative. Same value as [SpeedSource.speedKmh]
+ *   at the same instant — kept as a field here too so a [locationFix] consumer never needs to
+ *   also separately observe [SpeedSource.speedKmh] just to get the speed that came with this fix.
+ * @property accuracyM Estimated horizontal accuracy, metres (`Float.MAX_VALUE` if the platform
+ *   reported no accuracy for this fix — treat that as "unknown/poor", not "extremely precise").
+ * @property timestampMillis Fix time, `System.currentTimeMillis()`-epoch millis (from
+ *   `android.location.Location.getTime()`), used for jump/staleness filtering — not a monotonic
+ *   clock, don't use it for elapsed-time math against [System.currentTimeMillis] directly.
+ */
+data class LocationFix(
+    val lat: Double,
+    val lng: Double,
+    val speedKmh: Double,
+    val accuracyM: Float,
+    val timestampMillis: Long,
+)
+
+/**
  * Live GPS speed feed the fare engine ticks against — see spec B6 tick loop
  * ("speed = kalman(fused_location)").
+ *
+ * Real implementation: `domain/location/RealLocationProvider.kt`'s `RealLocationProvider`
+ * (FusedLocationProviderClient-backed, wired as `AppContainer.speedSource`). [StubSpeedSource]
+ * below remains the fixed-0.0/no-fix fallback for previews, unit tests, and (behaviourally,
+ * though not by literal instance-swap) whatever `RealLocationProvider` itself degrades to when
+ * ACCESS_FINE_LOCATION isn't granted.
  */
 interface SpeedSource {
     val speedKmh: StateFlow<Double>
+
+    /**
+     * Latest accepted fix, or `null` before the first fix arrives / whenever location is
+     * unavailable (no permission, provider disabled, no signal yet). Consumers that only care
+     * about speed (this file's own [FareEngineImpl], [au.com.threesixty.cabdispatch.ui.wheel.WheelGesture]'s
+     * speed-lock) can ignore this and keep reading [speedKmh] exactly as before — this property
+     * is additive, for consumers that need position (map centering, region auto-detection).
+     */
+    val locationFix: StateFlow<LocationFix?>
 }
 
 /**
- * TODO(location sibling agent): replace with a real Kalman-filtered fused
- * location provider (play-services-location is already a dependency — see
- * app/build.gradle.kts — but wiring FusedLocationProviderClient needs a real
- * device/emulator with location to verify, unavailable in this build
- * environment). Fixed at 0 km/h so the engine defaults to WAITING mode until
- * that lands.
+ * No-GPS fallback: fixed at 0 km/h / no fix, so the engine defaults to WAITING mode and any
+ * position-consuming UI sees "no fix" rather than a fabricated location. Real GPS is
+ * `domain/location/RealLocationProvider.kt`'s `RealLocationProvider` (wired as
+ * `AppContainer.speedSource`) — this class is kept, deliberately, as the explicit
+ * permission-denied/testing/preview fallback (see that class's and [SpeedSource]'s doc), not
+ * deleted now that real GPS exists.
  */
 class StubSpeedSource : SpeedSource {
     override val speedKmh: StateFlow<Double> = MutableStateFlow(0.0)
+    override val locationFix: StateFlow<LocationFix?> = MutableStateFlow(null)
 }
 
 /**

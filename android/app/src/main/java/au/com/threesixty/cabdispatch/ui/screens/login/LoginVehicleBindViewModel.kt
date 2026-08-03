@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.remote.UserDto
+import au.com.threesixty.cabdispatch.domain.DriverLoginResult
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository
@@ -15,9 +17,21 @@ import kotlinx.coroutines.launch
 
 enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
-/** Matches `backend/scripts/seed.py`'s seeded demo driver — debug-only quick-login, see
- * [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a secret (it's committed to the repo's
- * own seed script), but still gated to debug builds so it never renders in a release build. */
+/**
+ * Debug-only quick-login convenience, see [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a
+ * secret (the PIN is committed to the repo's own seed script), but still gated to debug builds so
+ * it never renders in a release build.
+ *
+ * **Known stale-until-fixed gap:** [DEMO_DRIVER_ID] is the seeded demo driver's *email*
+ * (`driver@lillycabs.test`), not its `driver_code` — now that [LoginVehicleBindViewModel.login]
+ * calls the real `POST /v1/auth/driver-login` (`driver_code` + `pin`, not email + password), this
+ * button will submit the email as a driver code and get a real 401 back. `backend/scripts/seed.py`
+ * mints a random `driver_code` per fresh DB and only prints it to stdout at seed time (see that
+ * script's final summary) — there is no fixed value to hardcode here. Whoever picks this up next:
+ * either read the printed code off your own `uv run python scripts/seed.py` output and paste it in
+ * for local testing, or extend seed.py to also write it to a well-known file/env var this constant
+ * can read at debug-build time.
+ */
 const val DEMO_DRIVER_ID = "driver@lillycabs.test"
 const val DEMO_DRIVER_PIN = "ChangeMe123!"
 
@@ -47,6 +61,13 @@ data class LoginVehicleBindUiState(
     val loginError: String? = null,
     val loggedInDriverName: String? = null,
     val loggedInDriverId: String? = null,
+    /** Non-null while awaiting the second MFA step ([LoginVehicleBindViewModel.verifyMfaCode]) —
+     * see [au.com.threesixty.cabdispatch.domain.DriverLoginResult.MfaRequired]. Driver accounts
+     * with MFA enabled are realistically possible (shared/API_SUMMARY.md documents the
+     * driver-login endpoint returning this exact challenge), so this is a real path, not
+     * speculative UI. */
+    val mfaToken: String? = null,
+    val mfaCodeInput: String = "",
     val vehicleIdInput: String = "",
     val boundVehicleId: String? = null,
     val qrScanAttempted: Boolean = false,
@@ -87,21 +108,63 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         }
         _uiState.update { it.copy(isLoggingIn = true, loginError = null) }
         viewModelScope.launch {
-            val result = driverAuthRepository.login(state.driverIdInput.trim(), state.pinInput)
-            result.onSuccess { user ->
-                _uiState.update {
+            when (val result = driverAuthRepository.login(state.driverIdInput.trim(), state.pinInput)) {
+                is DriverLoginResult.Success -> onLoggedIn(result.user)
+                is DriverLoginResult.MfaRequired -> _uiState.update {
+                    it.copy(isLoggingIn = false, mfaToken = result.mfaToken, mfaCodeInput = "")
+                }
+                is DriverLoginResult.Failure -> _uiState.update {
                     it.copy(
                         isLoggingIn = false,
-                        loggedInDriverName = user.name,
-                        loggedInDriverId = user.id,
-                        step = LoginStep.VEHICLE_BIND,
+                        loginError = result.error.message ?: "Login failed — check driver ID/PIN",
                     )
                 }
-            }.onFailure { error ->
+            }
+        }
+    }
+
+    /**
+     * Step two, only reachable once [login] has put [LoginVehicleBindUiState.mfaToken] into
+     * state — the driver account has MFA (TOTP) enabled, see that field's doc.
+     */
+    fun onMfaCodeChanged(value: String) = _uiState.update { it.copy(mfaCodeInput = value, loginError = null) }
+
+    /** Abandons the MFA challenge and returns to driver ID/PIN entry (e.g. wrong account). */
+    fun cancelMfaChallenge() = _uiState.update { it.copy(mfaToken = null, mfaCodeInput = "", loginError = null) }
+
+    fun verifyMfaCode() {
+        val state = _uiState.value
+        val mfaToken = state.mfaToken ?: return
+        if (state.mfaCodeInput.isBlank()) {
+            _uiState.update { it.copy(loginError = "Enter the 6-digit code") }
+            return
+        }
+        _uiState.update { it.copy(isLoggingIn = true, loginError = null) }
+        viewModelScope.launch {
+            val result = driverAuthRepository.completeMfaLogin(
+                driverId = state.driverIdInput.trim(),
+                pin = state.pinInput,
+                mfaToken = mfaToken,
+                code = state.mfaCodeInput.trim(),
+            )
+            result.onSuccess(::onLoggedIn).onFailure { error ->
                 _uiState.update {
-                    it.copy(isLoggingIn = false, loginError = error.message ?: "Login failed — check driver ID/PIN")
+                    it.copy(isLoggingIn = false, loginError = error.message ?: "Invalid or expired code")
                 }
             }
+        }
+    }
+
+    private fun onLoggedIn(user: UserDto) {
+        _uiState.update {
+            it.copy(
+                isLoggingIn = false,
+                loggedInDriverName = user.name,
+                loggedInDriverId = user.id,
+                mfaToken = null,
+                mfaCodeInput = "",
+                step = LoginStep.VEHICLE_BIND,
+            )
         }
     }
 

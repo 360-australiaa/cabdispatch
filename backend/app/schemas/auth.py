@@ -14,6 +14,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class DriverLoginRequest(BaseModel):
+    """Body for POST /v1/auth/driver-login — the driver-facing counterpart to
+    LoginRequest above. `pin` is verified against the same `User.pin_hash`
+    column `password` is (see app/api/v1/auth.py)."""
+
+    driver_code: str
+    pin: str
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -24,6 +33,7 @@ class UserRead(BaseModel):
     email: str
     status: str
     mfa_enabled: bool
+    driver_code: str | None = None
 
 
 class TokenResponse(BaseModel):

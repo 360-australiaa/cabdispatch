@@ -10,16 +10,24 @@ integration agent to run once routers are wired up.
 """
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app.core.database import AsyncSessionLocal
 from app.models.tariffs import Tariff
+from app.services.tariff_signing import RATE_FIELDS
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
+
+_RATE_QUANT = Decimal("0.0001")  # matches app.services.tariff_signing's quantization
 
 
 def _urban_payload(**overrides) -> dict:
@@ -349,3 +357,105 @@ async def test_extras_scoped_to_tariff_tenant(client, session):
 
     resp = await client.get(f"/v1/tariffs/{tariff_id}/extras", headers=headers_b)
     assert resp.status_code == 404  # tariff itself isn't visible to tenant B
+
+
+# --- Tariff signing (Ed25519) ------------------------------------------------------
+#
+# These tests round-trip through the wire contract only: fetch the public key
+# from the HTTP endpoint, fetch a signed tariff from the HTTP endpoint, and
+# verify using `cryptography`'s own Ed25519 verify (never re-deriving trust
+# from the private key / internal helpers) against a canonical payload
+# reconstructed independently here from the response JSON — proving the
+# documented format in app.services.tariff_signing is actually what's on the
+# wire, not just that the signing function agrees with itself. This cannot
+# exercise the Android Kotlin verifier directly; see that file's own
+# real-vs-mocked crypto note.
+
+
+def _reconstruct_canonical_payload(tariff_json: dict) -> bytes:
+    """Rebuilds the exact bytes app.services.tariff_signing.sign_tariff signs,
+    from a `SignedTariffRead` response body — independent re-implementation
+    of the documented wire format (not a call into the signing module), so
+    this genuinely checks the contract rather than the function's self-
+    consistency."""
+    fields: list[tuple[str, object]] = [
+        ("id", tariff_json["id"]),
+        ("tenant_id", tariff_json["tenant_id"]),
+        ("region", tariff_json["region"]),
+        ("effective_from", datetime.fromisoformat(tariff_json["effective_from"]).isoformat()),
+        (
+            "effective_to",
+            datetime.fromisoformat(tariff_json["effective_to"]).isoformat()
+            if tariff_json["effective_to"]
+            else None,
+        ),
+        ("booked", tariff_json["booked"]),
+    ]
+    fields.extend(
+        (name, str(Decimal(tariff_json[name]).quantize(_RATE_QUANT, rounding=ROUND_HALF_UP)))
+        for name in RATE_FIELDS
+    )
+    return json.dumps(dict(fields), separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+async def test_signing_public_key_endpoint_requires_no_auth(client, session):
+    resp = await client.get("/v1/tariffs/signing-public-key")  # no Authorization header at all
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["algorithm"] == "Ed25519"
+
+    der = base64.b64decode(body["public_key"])
+    public_key = serialization.load_der_public_key(der)
+    assert isinstance(public_key, ed25519.Ed25519PublicKey)
+
+
+async def test_active_tariff_signature_present_and_verifies_against_public_key(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+
+    key_resp = await client.get("/v1/tariffs/signing-public-key")
+    assert key_resp.status_code == 200
+    public_key = serialization.load_der_public_key(base64.b64decode(key_resp.json()["public_key"]))
+    assert isinstance(public_key, ed25519.Ed25519PublicKey)
+
+    active_resp = await client.get("/v1/tariffs/active?region=urban", headers=headers)
+    assert active_resp.status_code == 200
+    body = active_resp.json()
+    assert body.get("signature")
+
+    payload = _reconstruct_canonical_payload(body)
+    signature_bytes = base64.b64decode(body["signature"])
+
+    # Round-trip proof: signature really does validate against the payload
+    # under the fetched public key (raises InvalidSignature on failure).
+    public_key.verify(signature_bytes, payload)
+
+
+async def test_active_tariff_signature_rejects_tampered_payload(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+
+    key_resp = await client.get("/v1/tariffs/signing-public-key")
+    public_key = serialization.load_der_public_key(base64.b64decode(key_resp.json()["public_key"]))
+
+    active_resp = await client.get("/v1/tariffs/active?region=urban", headers=headers)
+    body = active_resp.json()
+
+    tampered = dict(body)
+    tampered["flag_fall"] = "999.9999"  # mutate a signed rate field
+    payload = _reconstruct_canonical_payload(tampered)
+    signature_bytes = base64.b64decode(body["signature"])
+
+    with pytest.raises(InvalidSignature):
+        public_key.verify(signature_bytes, payload)
+
+
+async def test_active_tariff_signature_differs_per_tariff(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    await client.post("/v1/tariffs", json=_urban_payload(booked=True, flag_fall="5.00"), headers=headers)
+    await client.post("/v1/tariffs", json=_country_payload(booked=True), headers=headers)
+
+    urban_resp = await client.get("/v1/tariffs/active?region=urban", headers=headers)
+    country_resp = await client.get("/v1/tariffs/active?region=country", headers=headers)
+
+    assert urban_resp.json()["signature"] != country_resp.json()["signature"]

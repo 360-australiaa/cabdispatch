@@ -77,6 +77,7 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
 import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.DuressUiState
+import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
 import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
@@ -130,6 +131,10 @@ fun WheelDashboardScreen(
     // ui/screens/hired/HiredViewModel.kt#duressState uses (a plain passthrough there since that
     // ViewModel already exists for other reasons; no ViewModel-layer indirection needed here).
     val duressState by AppContainer.duressController.state.collectAsState()
+    // Real GPS fix (2026-08-03, map-centering/region-detection pass) — see MapBackground's doc
+    // for how this replaces the fixed SydneyCbdFallback center it used to be pinned to
+    // unconditionally.
+    val locationFix by AppContainer.speedSource.locationFix.collectAsState()
     val wheelController = rememberWheelController(speedSource = AppContainer.speedSource)
     var displayedSlotIndex by remember { mutableStateOf(WheelSlot.OFF_DUTY_AVAILABLE.index) }
     val displayedSlot = remember(displayedSlotIndex) { WheelSlot.fromIndex(displayedSlotIndex) }
@@ -190,7 +195,7 @@ fun WheelDashboardScreen(
             .onGloballyPositioned { rootCoordinates = it },
     ) {
         Box(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = dashboardAlpha.value }) {
-            MapBackground(modifier = Modifier.fillMaxSize())
+            MapBackground(fix = locationFix, modifier = Modifier.fillMaxSize())
 
             Column(modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()) {
                 TopStatusStrip(status = uiState.status)
@@ -329,17 +334,20 @@ fun WheelDashboardScreen(
 // this same MapView serves it from the local tile cache automatically with zero network — no
 // separate offline-mode code path needed here.
 //
-// Centered on a fixed Sydney CBD coordinate ([SydneyCbdFallback]), not the driver's real
-// position: the only location-adjacent data source actually wired into this app
-// (`AppContainer.speedSource`, a `SpeedSource` exposing `speedKmh` only — see
-// `domain/FareEngine.kt`) has no lat/lng, and GPS is a documented still-open gap (HANDOFF.md,
-// "GPS is stubbed, not real"). Swap [SydneyCbdFallback] for a real fix once a location provider
-// lands, on both this MapView's camera AND the static-image fallback's URL center.
+// Centered on the driver's real GPS fix as of 2026-08-03 (location/map-centering pass) — was
+// unconditionally pinned to the fixed Sydney CBD coordinate ([SydneyCbdFallback]) before this,
+// since the only location-adjacent data source wired into this app
+// (`AppContainer.speedSource`) used to expose `speedKmh` only (see `domain/FareEngine.kt`'s
+// `LocationFix`/`SpeedSource.locationFix` doc for how that changed). [SydneyCbdFallback] is KEPT,
+// deliberately not deleted — it's still the real fallback center for first launch/permission-
+// denied/indoors, i.e. whenever [MapBackground]'s `fix` parameter is `null`.
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun MapBackground(modifier: Modifier = Modifier) {
+private fun MapBackground(fix: LocationFix?, modifier: Modifier = Modifier) {
     var sizePx by remember { mutableStateOf(IntSize.Zero) }
+    val centerLat = fix?.lat ?: SydneyCbdFallback.LAT
+    val centerLng = fix?.lng ?: SydneyCbdFallback.LNG
 
     Box(
         modifier = modifier
@@ -347,14 +355,18 @@ private fun MapBackground(modifier: Modifier = Modifier) {
             .onGloballyPositioned { sizePx = it.size },
     ) {
         if (BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank()) {
-            RealMapboxMapView(modifier = Modifier.fillMaxSize())
+            RealMapboxMapView(fix = fix, modifier = Modifier.fillMaxSize())
         } else if (sizePx.width > 0 && sizePx.height > 0) {
             // No token at all — Static Images API fallback (needs a real pixel size, hence the
             // sizePx gate; MapView above doesn't need this, it lays itself out normally).
-            val mapUrl = remember(sizePx) {
+            // `remember(sizePx, centerLat, centerLng)` (not just `sizePx`) so a real fix landing —
+            // or the driver moving meaningfully — requests a freshly-centered image; the Static
+            // Images API is a plain fetched PNG (per MapboxStaticImage's own doc, "a fresh image
+            // must be requested for a new center"), there's no live camera to just re-point.
+            val mapUrl = remember(sizePx, centerLat, centerLng) {
                 MapboxStaticImage.url(
-                    centerLat = SydneyCbdFallback.LAT,
-                    centerLng = SydneyCbdFallback.LNG,
+                    centerLat = centerLat,
+                    centerLng = centerLng,
                     zoom = SydneyCbdFallback.ZOOM,
                     widthPx = sizePx.width,
                     heightPx = sizePx.height,
@@ -378,20 +390,31 @@ private fun MapBackground(modifier: Modifier = Modifier) {
             IllustrativeGridFallback()
         }
 
-        // Driver position pin. TODO(location sibling agent): this is a fixed illustrative
-        // position, not a real fix — HANDOFF.md's "GPS is stubbed, not real" gap applies here
-        // too. Once a real FusedLocationProviderClient location lands, project it against the
-        // same center the map is centered on, rather than a static offset.
+        // Driver position pin. Once a real fix exists the map itself is centered on it (see
+        // above), so the driver's own marker belongs at dead-center, not the old fixed
+        // illustrative offset — that offset only made sense back when the map was always
+        // centered on the fixed Sydney CBD point regardless of the driver's actual location, i.e.
+        // "you're somewhere near this map, not literally at the crosshair". Falls back to that
+        // same illustrative offset whenever `fix` is null (no map-following center to be at the
+        // middle of yet) so the no-GPS case still reads as "approximate", not "definitely here".
         DriverPositionPin(
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = (-160).dp, y = (-30).dp),
+                .let { if (fix != null) it else it.offset(x = (-160).dp, y = (-30).dp) },
         )
     }
 }
 
+/** Shared by [RealMapboxMapView]'s create-time and recenter-time camera setup — real [fix] if
+ * present, [SydneyCbdFallback] otherwise. */
+private fun cameraFor(fix: LocationFix?): CameraOptions =
+    CameraOptions.Builder()
+        .center(Point.fromLngLat(fix?.lng ?: SydneyCbdFallback.LNG, fix?.lat ?: SydneyCbdFallback.LAT))
+        .zoom(SydneyCbdFallback.ZOOM)
+        .build()
+
 @Composable
-private fun RealMapboxMapView(modifier: Modifier = Modifier) {
+private fun RealMapboxMapView(fix: LocationFix?, modifier: Modifier = Modifier) {
     // Root-cause fix (2026-08-02, found via a real device/emulator report — "map area renders
     // solid black"): a View-based Mapbox `MapView` embedded via `AndroidView` does NOT get
     // Activity/Fragment lifecycle callbacks automatically the way it would if inflated via XML in
@@ -414,12 +437,7 @@ private fun RealMapboxMapView(modifier: Modifier = Modifier) {
             MapView(context).also { view ->
                 mapView.value = view
                 view.mapboxMap.loadStyle(Style.DARK)
-                view.mapboxMap.setCamera(
-                    CameraOptions.Builder()
-                        .center(Point.fromLngLat(SydneyCbdFallback.LNG, SydneyCbdFallback.LAT))
-                        .zoom(SydneyCbdFallback.ZOOM)
-                        .build(),
-                )
+                view.mapboxMap.setCamera(cameraFor(fix))
                 // Background map, not a navigation tool — the wheel/dashboard chrome sits on top
                 // of this, so gestures reaching the map underneath a control would be confusing.
                 // Leave pan/zoom enabled for the driver to glance around, per spec §5 ("live map
@@ -434,6 +452,20 @@ private fun RealMapboxMapView(modifier: Modifier = Modifier) {
             }
         },
     )
+
+    // 2026-08-03: recenters the live camera the FIRST time a real fix becomes available (most
+    // importantly a few seconds after this view is first created with the SydneyCbdFallback
+    // center — permission grant takes a moment, the first fix takes longer still) — and again on
+    // any later "no fix -> fix" transition (e.g. GPS regained after a signal loss). Keyed on
+    // `fix != null` rather than on `fix` itself, so this deliberately does NOT re-fire on every
+    // ~1Hz location tick while the vehicle is moving: the whole point of leaving pan/zoom enabled
+    // on this background map (see the factory block's comment above, "let the driver glance
+    // around") would be defeated if the camera snapped back to the driver every single second —
+    // a genuine continuous follow-me camera is a real, separate UX decision for whoever owns this
+    // screen next, not an accidental side effect of wiring GPS in.
+    LaunchedEffect(fix != null) {
+        if (fix != null) mapView.value?.mapboxMap?.setCamera(cameraFor(fix))
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
