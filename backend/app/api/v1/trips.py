@@ -1,10 +1,10 @@
 """Trips domain router — offline-sync-capable taxi-meter journey records.
 
-Full CRUD (list/get/create/update/delete) plus three domain-specific
-endpoints: PATCH .../tick (telemetry batch -> running totals), POST
-.../close (finalize via the fare engine), and POST /sync (bulk
-offline-replay upload with per-item idempotency + server-side fare
-verification).
+Full CRUD (list/get/create/update/delete) plus domain-specific endpoints:
+PATCH .../tick (telemetry batch -> running totals), POST .../close (finalize
+via the fare engine), POST /sync (bulk offline-replay upload with per-item
+idempotency + server-side fare verification), and PATCH .../flag (blueprint
+5.2.5 "Dispute" button — flag/clear a closed trip for operator review).
 
 EVERY query in this file filters by tenant_id via `get_current_tenant_id` —
 the sole multi-tenancy enforcement mechanism in this system.
@@ -12,6 +12,7 @@ the sole multi-tenancy enforcement mechanism in this system.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -19,8 +20,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id
+from app.core.security import get_current_tenant_id, get_current_user
+from app.models.fleet import Vehicle
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
+from app.models.user import User
 from app.schemas.trips import (
     ReceiptEmailRequest,
     ReceiptEmailResponse,
@@ -28,6 +31,7 @@ from app.schemas.trips import (
     ReceiptSmsResponse,
     TripCloseRequest,
     TripCreate,
+    TripFlagRequest,
     TripListResponse,
     TripRead,
     TripSyncItem,
@@ -36,18 +40,33 @@ from app.schemas.trips import (
     TripTickRequest,
     TripUpdate,
 )
+from app.services import compliance_expiry as compliance_expiry_service
 from app.services import fatigue as fatigue_service
 from app.services import receipts as receipts_service
+from app.services import payments as payments_service
+from app.services.fare_engine import round_half_up
+from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
 from app.services.trips import (
     CloseParams,
+    DisputeReasonRequiredError,
+    SplitPaymentMismatchError,
+    TripNotClosedError,
     UnknownTariffError,
     apply_tick,
     close_trip,
     compute_variance_pct,
+    flag_trip_for_review,
     recompute_from_trace,
 )
 
 router = APIRouter(prefix="/v1/trips", tags=["trips"])
+
+# Roles permitted to clear ANY trip's review flag and to flag a trip they
+# don't themselves drive, mirroring the _DISPATCH_ROLES convention used by
+# app.api.v1.duress / app.api.v1.fatigue_alerts / app.api.v1.jobs. A
+# `driver`-role caller may additionally flag (but not clear) a trip where
+# they are the trip's own driver — see flag_trip below.
+_DISPATCH_ROLES = ("owner", "admin", "dispatcher")
 
 
 async def _get_trip_or_404(trip_id: str, tenant_id: str, session: AsyncSession) -> Trip:
@@ -85,6 +104,8 @@ async def create_trip(
         start_lat=payload.start_lat,
         start_lng=payload.start_lng,
         payment_method=payload.payment_method,
+        voucher_code=payload.voucher_code,
+        account_reference=payload.account_reference,
         tolls=payload.tolls,
         extras=payload.extras,
         gps_trace_ref=payload.gps_trace_ref,
@@ -150,6 +171,35 @@ async def sync_trips(
 
         variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
 
+        # New payment methods (blueprint 5.2.5), same validate-before-persist contract as
+        # close_trip (app/services/trips.py) — voucher/account/split_fare are validated against
+        # the just-recomputed breakdown BEFORE any Trip row is constructed for this item, so a
+        # bad item raises before touching the session, same as UnknownTariffError above. This
+        # closes the real gap the sync-item schema had until now: voucher_code/account_reference/
+        # split_payments used to round-trip through TripSyncItemDto on the Android side but were
+        # silently dropped here since this schema didn't declare them.
+        split_payments_to_store: list[dict] | None = None
+        if item.payment_method == "voucher":
+            try:
+                payments_service.redeem_voucher(voucher_code=item.voucher_code or "")
+            except InvalidVoucherCodeError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        elif item.payment_method == "account":
+            try:
+                payments_service.validate_account_reference(account_reference=item.account_reference or "")
+            except InvalidAccountReferenceError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        elif item.payment_method == "split_fare":
+            subtotal = sum(
+                (Decimal(str(leg.amount)) for leg in (item.split_payments or [])), Decimal(0)
+            )
+            if round_half_up(subtotal) != round_half_up(breakdown.grand_total):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"split_payments sum to {subtotal} but trip total is {breakdown.grand_total}",
+                )
+            split_payments_to_store = [{"method": leg.method, "amount": str(leg.amount)} for leg in item.split_payments]
+
         trip = Trip(
             tenant_id=tenant_id,
             client_uuid=item.client_uuid,
@@ -183,6 +233,9 @@ async def sync_trips(
             total=breakdown.grand_total,
             gst_component=breakdown.gst_component,
             payment_method=item.payment_method,
+            voucher_code=item.voucher_code,
+            account_reference=item.account_reference,
+            split_payments=split_payments_to_store,
             gps_trace_ref=item.gps_trace_ref,
             max_fare_check_passed=variance_pct <= 1.0,
             variance_pct=variance_pct,
@@ -225,6 +278,9 @@ async def list_trips(
     type_filter: str | None = Query(None, alias="type"),
     vehicle_id: str | None = None,
     driver_id: str | None = None,
+    flagged_for_review: bool | None = Query(
+        None, description="Filter to trips flagged (or not) for operator review — blueprint 5.2.5 dashboard 'flagged' view"
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ) -> TripListResponse:
@@ -242,6 +298,8 @@ async def list_trips(
         filters.append(Trip.vehicle_id == vehicle_id)
     if driver_id is not None:
         filters.append(Trip.driver_id == driver_id)
+    if flagged_for_review is not None:
+        filters.append(Trip.flagged_for_review == flagged_for_review)
 
     total_result = await session.execute(select(func.count()).select_from(Trip).where(*filters))
     total = total_result.scalar_one()
@@ -279,6 +337,12 @@ async def update_trip(
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
 
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if field == "split_payments" and value is not None:
+            # JSON column — SQLAlchemy's JSON type serializes via json.dumps,
+            # which can't handle Decimal, so stringify amounts (same
+            # convention app.services.trips.close_trip uses when it stores
+            # this column).
+            value = [{"method": item["method"], "amount": str(item["amount"])} for item in value]
         setattr(trip, field, value)
 
     await session.commit()
@@ -321,7 +385,15 @@ async def tick_trip(
     to a shift) a shift_duration_exceeded check against that shift's elapsed
     open time. Both write FatigueAlert rows into the same transaction as the
     tick itself — see that module for thresholds/simplifications and
-    `app/api/v1/fatigue_alerts.py` for how they're surfaced/acknowledged."""
+    `app/api/v1/fatigue_alerts.py` for how they're surfaced/acknowledged.
+
+    Also runs driver-license/authority and vehicle-registration/insurance
+    compliance-expiry checks (blueprint 7.2.3/7.2.4/10.1) via
+    `app.services.compliance_expiry`, in the same transaction — this is the
+    "wherever fatigue checks are already triggered" call site for that pass.
+    Fails open (silently skips) if `trip.driver_id`/`trip.vehicle_id` don't
+    resolve to a real row, same reasoning as the shift lookup above (Trip's
+    cross-domain refs are unconstrained — see app.models.trips)."""
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
     if trip.status != TRIP_STATUS_OPEN:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is not open")
@@ -345,6 +417,20 @@ async def tick_trip(
         shift = await fatigue_service.get_shift_or_none(session, tenant_id=tenant_id, shift_id=trip.shift_id)
         if shift is not None:
             await fatigue_service.check_shift_duration(session, tenant_id=tenant_id, shift=shift)
+
+    driver_result = await session.execute(
+        select(User).where(User.id == trip.driver_id, User.tenant_id == tenant_id)
+    )
+    driver = driver_result.scalar_one_or_none()
+    if driver is not None:
+        await compliance_expiry_service.run_driver_compliance_checks(session, tenant_id=tenant_id, driver=driver)
+
+    vehicle_result = await session.execute(
+        select(Vehicle).where(Vehicle.id == trip.vehicle_id, Vehicle.tenant_id == tenant_id)
+    )
+    vehicle = vehicle_result.scalar_one_or_none()
+    if vehicle is not None:
+        await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
 
     await session.commit()
     await session.refresh(trip)
@@ -374,10 +460,67 @@ async def close_trip_endpoint(
         cleaning_fee=payload.cleaning_fee,
         include_psl=payload.include_psl,
         receipt_ref=payload.receipt_ref,
+        voucher_code=payload.voucher_code,
+        account_reference=payload.account_reference,
+        split_payments=(
+            [item.model_dump() for item in payload.split_payments] if payload.split_payments else None
+        ),
     )
     try:
         await close_trip(session, tenant_id=tenant_id, trip=trip, params=params)
     except UnknownTariffError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except SplitPaymentMismatchError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except InvalidVoucherCodeError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except InvalidAccountReferenceError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    await session.commit()
+    await session.refresh(trip)
+    return trip
+
+
+# --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------
+
+
+@router.patch("/{trip_id}/flag", response_model=TripRead)
+async def flag_trip(
+    trip_id: str,
+    payload: TripFlagRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Trip:
+    """Blueprint 5.2.5's "Dispute" button: the trip's own driver, or a staff
+    role (`_DISPATCH_ROLES`), may flag a *closed* trip for operator review
+    with a reason (`flagged=True`, the default — see `TripFlagRequest`). Only
+    a staff role may clear an existing flag (`flagged=False`) — a driver
+    cannot resolve their own dispute."""
+    trip = await _get_trip_or_404(trip_id, tenant_id, session)
+
+    is_staff = current_user.role in _DISPATCH_ROLES
+    is_own_trip = current_user.id == trip.driver_id
+
+    if payload.flagged:
+        if not (is_staff or is_own_trip):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the trip's own driver or a staff role may flag it for review",
+            )
+    else:
+        if not is_staff:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a staff role may clear a trip's review flag",
+            )
+
+    try:
+        flag_trip_for_review(trip=trip, flagged=payload.flagged, reason=payload.reason)
+    except TripNotClosedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DisputeReasonRequiredError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     await session.commit()

@@ -159,3 +159,97 @@ class Page[T](BaseModel):
     total: int
     skip: int
     limit: int
+
+
+# --- Named presets (see app.services.tariff_presets) ----------------------------
+
+PresetKey = Literal["airport_rank", "special_event", "shared_ride", "wheelchair_accessible"]
+
+
+class TariffPresetDefaults(BaseModel):
+    """The subset of TariffBase fields a preset provides defaults for.
+    `name`/`effective_from`/`effective_to` are always supplied by the caller
+    at creation time (see TariffFromPresetCreate below), never by the preset
+    itself."""
+
+    region: Region
+    booked: bool
+    flag_fall: Decimal
+    peak_charge: Decimal
+    dist_rate_1: Decimal
+    dist_rate_2: Decimal
+    night_rate_1: Decimal
+    night_rate_2: Decimal
+    holiday_rate_1: Decimal
+    holiday_rate_2: Decimal
+    waiting_rate_per_min: Decimal
+    dist_km_threshold: Decimal
+    speed_threshold_kmh: Decimal
+    maxi_multiplier: Decimal
+    multi_hire_pct: Decimal
+    psl_amount: Decimal
+    surcharge_pct_cap: Decimal
+
+
+class TariffPresetRead(BaseModel):
+    """Response item for GET /v1/tariffs/presets."""
+
+    key: PresetKey
+    label: str
+    description: str
+    defaults: TariffPresetDefaults
+
+
+class TariffPresetOverrides(BaseModel):
+    """Optional per-field overrides layered on top of a preset's defaults in
+    POST /v1/tariffs/from-preset — every field optional, same fields as
+    TariffPresetDefaults, unset fields left at the preset's own default
+    (exclude_unset semantics, same as TariffUpdate)."""
+
+    region: Region | None = None
+    booked: bool | None = None
+    flag_fall: Decimal | None = None
+    peak_charge: Decimal | None = None
+    dist_rate_1: Decimal | None = None
+    dist_rate_2: Decimal | None = None
+    night_rate_1: Decimal | None = None
+    night_rate_2: Decimal | None = None
+    holiday_rate_1: Decimal | None = None
+    holiday_rate_2: Decimal | None = None
+    waiting_rate_per_min: Decimal | None = None
+    dist_km_threshold: Decimal | None = None
+    speed_threshold_kmh: Decimal | None = None
+    maxi_multiplier: Decimal | None = None
+    multi_hire_pct: Decimal | None = None
+    psl_amount: Decimal | None = None
+    surcharge_pct_cap: Decimal | None = None
+
+
+class TariffFromPresetCreate(BaseModel):
+    """Request body for POST /v1/tariffs/from-preset: pick a preset, supply
+    the fields presets never default (name/effective window), and optionally
+    override any of the preset's defaulted fields."""
+
+    preset: PresetKey
+    name: str = Field(min_length=1, max_length=255)
+    effective_from: datetime
+    effective_to: datetime | None = None
+    overrides: TariffPresetOverrides | None = None
+
+    @model_validator(mode="after")
+    def _effective_to_after_from(self) -> TariffFromPresetCreate:
+        if self.effective_to is not None and self.effective_to <= self.effective_from:
+            raise ValueError("effective_to must be after effective_from")
+        return self
+
+
+# --- Auto-suggest (see app.services.tariffs.suggest_tariff) ---------------------
+
+
+class TariffSuggestionRead(BaseModel):
+    """Response for GET /v1/tariffs/suggest."""
+
+    tariff_id: str
+    tariff_name: str
+    time_class: Literal["day", "night"]
+    reason: str

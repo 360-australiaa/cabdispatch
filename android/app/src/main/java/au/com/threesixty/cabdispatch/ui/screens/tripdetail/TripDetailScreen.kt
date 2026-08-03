@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.ui.screens.tripdetail
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,9 +13,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -26,8 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
-import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.domain.format.asPaymentMethodLabel
@@ -83,14 +89,16 @@ fun TripDetailScreen(
                 CircularProgressIndicator()
             }
             is TripDetailUiState.Error -> Text(s.message, color = WheelColors.textSecondary, fontSize = 14.sp)
-            is TripDetailUiState.Loaded -> TripDetailBody(s.trip, s.breakdown)
+            is TripDetailUiState.Loaded -> TripDetailBody(s, viewModel)
         }
     }
 }
 
 @Composable
-private fun TripDetailBody(trip: TripEntity, b: FareBreakdown) {
-    Column {
+private fun TripDetailBody(state: TripDetailUiState.Loaded, vm: TripDetailViewModel) {
+    val trip = state.trip
+    val b = state.breakdown
+    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Text(trip.type.asTripTypeLabel(), color = WheelColors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         Text(
             "${trip.startAt.asLocalTime()} · Paid by ${trip.paymentMethod.asPaymentMethodLabel()}",
@@ -131,8 +139,104 @@ private fun TripDetailBody(trip: TripEntity, b: FareBreakdown) {
                 fontSize = 12.sp,
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+        DisputeSection(state, vm)
+        Spacer(Modifier.height(24.dp))
     }
 }
+
+/**
+ * Blueprint 5.2.5's "Dispute" button — reachable from a closed trip's detail screen (checked
+ * ui/screens/hired first per the brief: S3/HIRED never shows a *closed* trip, only the live
+ * in-progress one, so this screen — reached from the Trips wheel-slot content, see this file's own
+ * doc — is the real place for it). Wired to [TripDetailViewModel.submitDispute] ->
+ * `PATCH /v1/trips/{id}/flag`; see that function's own doc for the two client-side gates (non-blank
+ * reason, a real synced [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.serverId])
+ * before it calls the network at all.
+ */
+@Composable
+private fun DisputeSection(state: TripDetailUiState.Loaded, vm: TripDetailViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(WheelColors.surfaceRaised.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+            .border(1.dp, WheelColors.border, RoundedCornerShape(14.dp))
+            .padding(18.dp),
+    ) {
+        Text("DISPUTE THIS TRIP", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Spacer(Modifier.height(10.dp))
+
+        if (state.disputeState == DisputeSubmitState.SUBMITTED) {
+            Text(
+                "Dispute submitted — flagged for operator review.",
+                color = WheelColors.available,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        } else {
+            val notSynced = state.trip.serverId == null
+            val inProgress = state.disputeState == DisputeSubmitState.IN_PROGRESS
+
+            OutlinedTextField(
+                value = state.disputeReason,
+                onValueChange = vm::setDisputeReason,
+                placeholder = { Text("What went wrong with this trip?") },
+                minLines = 3,
+                enabled = !inProgress,
+                colors = disputeFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+
+            if (notSynced) {
+                Text(
+                    "This trip hasn't synced to the server yet — try again once it has.",
+                    color = WheelColors.textMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+            val error = state.disputeError
+            if (error != null) {
+                Text(error, color = WheelColors.duress, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = vm::submitDispute,
+                    enabled = !inProgress && !notSynced && state.disputeReason.isNotBlank(),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, WheelColors.duress),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = WheelColors.surface,
+                        contentColor = WheelColors.duress,
+                        disabledContentColor = WheelColors.textMuted,
+                    ),
+                ) { Text("SUBMIT DISPUTE", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+
+                if (inProgress) {
+                    CircularProgressIndicator(color = WheelColors.duress, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun disputeFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = WheelColors.textPrimary,
+    unfocusedTextColor = WheelColors.textPrimary,
+    focusedBorderColor = WheelColors.gold,
+    unfocusedBorderColor = WheelColors.borderStrong,
+    focusedContainerColor = WheelColors.surface,
+    unfocusedContainerColor = WheelColors.surface,
+    cursorColor = WheelColors.gold,
+    focusedLabelColor = WheelColors.gold,
+    unfocusedLabelColor = WheelColors.textSecondary,
+    focusedPlaceholderColor = WheelColors.textMuted,
+    unfocusedPlaceholderColor = WheelColors.textMuted,
+)
 
 @Composable
 private fun FareLineRow(label: String, amount: String, emphasize: Boolean = false) {

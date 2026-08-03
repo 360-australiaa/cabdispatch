@@ -72,13 +72,35 @@ data class TripEntity(
     val movingS: Int = 0,
     val waitingS: Int = 0,
 
-    val paymentMethod: String = "cash", // cash | card
+    val paymentMethod: String = "cash", // cash | card | voucher | account | split_fare
     val tolls: String = "0",
     val extras: String = "0",
     val cleaningFee: String = "0",
     val surchargePct: String? = null,
     val includePsl: Boolean = false,
     val receiptRef: String? = null,
+
+    /**
+     * Voucher code redeemed for this trip — only meaningful when [paymentMethod] == "voucher"
+     * (backend `TripCreate`/`TripCloseRequest.voucher_code`, `backend/app/schemas/trips.py`). Null
+     * for every other payment method.
+     */
+    val voucherCode: String? = null,
+
+    /**
+     * Corporate/linked account reference this trip was billed to — only meaningful when
+     * [paymentMethod] == "account" (backend `account_reference`). Null for every other payment method.
+     */
+    val accountReference: String? = null,
+
+    /**
+     * JSON-encoded `List<au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto>` — only
+     * meaningful when [paymentMethod] == "split_fare" (backend `split_payments: list[SplitPaymentItem]`).
+     * Same raw-JSON-blob convention [gpsTraceJson] already uses below for a small list that's only ever
+     * read/written wholesale (never queried per-element), not a child table. Null for every other
+     * payment method.
+     */
+    val splitPaymentsJson: String? = null,
 
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",

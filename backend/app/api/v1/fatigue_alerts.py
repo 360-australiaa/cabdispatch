@@ -46,6 +46,7 @@ async def list_fatigue_alerts(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     driver_id: str | None = Query(default=None),
+    vehicle_id: str | None = Query(default=None),
     shift_id: str | None = Query(default=None),
     kind: str | None = Query(default=None),
     acknowledged: bool | None = Query(default=None),
@@ -62,6 +63,9 @@ async def list_fatigue_alerts(
     if driver_id is not None:
         stmt = stmt.where(FatigueAlert.driver_id == driver_id)
         count_stmt = count_stmt.where(FatigueAlert.driver_id == driver_id)
+    if vehicle_id is not None:
+        stmt = stmt.where(FatigueAlert.vehicle_id == vehicle_id)
+        count_stmt = count_stmt.where(FatigueAlert.vehicle_id == vehicle_id)
     if shift_id is not None:
         stmt = stmt.where(FatigueAlert.shift_id == shift_id)
         count_stmt = count_stmt.where(FatigueAlert.shift_id == shift_id)

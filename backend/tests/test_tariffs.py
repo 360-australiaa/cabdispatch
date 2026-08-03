@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from app.core.database import AsyncSessionLocal
 from app.models.tariffs import Tariff
 from app.services.tariff_signing import RATE_FIELDS
+from app.services.tariffs import classify_time_of_day
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -459,3 +460,327 @@ async def test_active_tariff_signature_differs_per_tariff(client, session):
     country_resp = await client.get("/v1/tariffs/active?region=country", headers=headers)
 
     assert urban_resp.json()["signature"] != country_resp.json()["signature"]
+
+
+# --- Named presets: GET /presets, POST /from-preset -------------------------------
+
+
+async def test_list_tariff_presets_returns_all_four(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.get("/v1/tariffs/presets", headers=headers)
+    assert resp.status_code == 200, resp.text
+    presets = resp.json()
+    keys = {p["key"] for p in presets}
+    assert keys == {"airport_rank", "special_event", "shared_ride", "wheelchair_accessible"}
+    for preset in presets:
+        assert preset["label"]
+        assert preset["description"]
+        assert preset["defaults"]["region"] in ("urban", "country", "exempt")
+        assert Decimal(preset["defaults"]["flag_fall"]) >= 0
+
+
+async def test_list_tariff_presets_requires_auth(client, session):
+    resp = await client.get("/v1/tariffs/presets")  # no Authorization header at all
+    assert resp.status_code == 401
+
+
+async def test_create_tariff_from_airport_rank_preset(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "airport_rank",
+            "name": "Sydney Airport Rank",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "Sydney Airport Rank"
+    assert body["region"] == "urban"
+    assert body["booked"] is False
+    assert Decimal(body["flag_fall"]) == Decimal("5.00")  # unchanged Fares Order rate
+    assert body["tenant_id"] is not None
+
+    # preset creation writes exactly one change-log entry, same as a normal POST
+    log_resp = await client.get(f"/v1/tariffs/{body['id']}/change-log", headers=headers)
+    assert log_resp.json()["total"] == 1
+
+
+async def test_create_tariff_from_special_event_preset_is_unregulated(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "special_event",
+            "name": "NYE Fireworks 2026",
+            "effective_from": datetime(2025, 12, 31, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["booked"] is True
+    assert Decimal(body["flag_fall"]) == Decimal("8.00")
+    assert Decimal(body["maxi_multiplier"]) == Decimal("2.0")
+
+
+async def test_create_tariff_from_shared_ride_preset_reduces_multi_hire_pct(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "shared_ride",
+            "name": "Shared Ride",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert Decimal(resp.json()["multi_hire_pct"]) == Decimal("0.55")
+
+
+async def test_create_tariff_from_wheelchair_preset_has_no_maxi_surcharge(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "wheelchair_accessible",
+            "name": "Wheelchair Accessible (WAV)",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["booked"] is False
+    assert Decimal(body["maxi_multiplier"]) == Decimal("1.0")
+
+
+async def test_create_tariff_from_preset_with_overrides(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "shared_ride",
+            "name": "Shared Ride Custom",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+            "overrides": {"multi_hire_pct": "0.40"},
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert Decimal(resp.json()["multi_hire_pct"]) == Decimal("0.40")
+
+
+async def test_create_tariff_from_preset_still_validates_fares_order(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    # airport_rank is booked=False (rank/hail) — overriding flag_fall above
+    # the Fares Order cap must still 422, exactly like a hand-entered tariff.
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "airport_rank",
+            "name": "Bad Airport Rank",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+            "overrides": {"flag_fall": "999.00"},
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_tariff_from_unknown_preset_422s(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "not_a_real_preset",
+            "name": "x",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+# --- Auto-suggest: GET /suggest ----------------------------------------------------
+
+_SYDNEY_AIRPORT_LAT = -33.9399
+_SYDNEY_AIRPORT_LNG = 151.1753
+
+
+async def test_classify_time_of_day_boundaries():
+    assert classify_time_of_day(datetime(2026, 1, 1, 21, 59, tzinfo=UTC)) == "day"
+    assert classify_time_of_day(datetime(2026, 1, 1, 22, 0, tzinfo=UTC)) == "night"
+    assert classify_time_of_day(datetime(2026, 1, 1, 5, 59, tzinfo=UTC)) == "night"
+    assert classify_time_of_day(datetime(2026, 1, 1, 6, 0, tzinfo=UTC)) == "day"
+    assert classify_time_of_day(datetime(2026, 1, 1, 13, 0, tzinfo=UTC)) == "day"
+
+
+async def test_suggest_tariff_404_when_nothing_effective(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Suggest Empty")
+
+    resp = await client.get(
+        "/v1/tariffs/suggest", params={"lat": -33.86, "lng": 151.21}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_suggest_tariff_rejects_invalid_vehicle_class(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Suggest BadVC")
+
+    resp = await client.get(
+        "/v1/tariffs/suggest",
+        params={"lat": -33.86, "lng": 151.21, "vehicle_class": "not-a-class"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_suggest_tariff_falls_back_to_default_active_tariff(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Suggest Default")
+    create_resp = await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
+    )
+    tariff_id = create_resp.json()["id"]
+
+    resp = await client.get(
+        "/v1/tariffs/suggest",
+        params={"lat": -33.86, "lng": 151.21},  # nowhere near any geofence
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tariff_id"] == tariff_id
+    assert body["tariff_name"] == "Standard Urban"
+    assert "No vehicle- or location-specific" in body["reason"]
+
+
+async def test_suggest_tariff_matches_wheelchair_tariff_by_vehicle_class(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Suggest WAT")
+    await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
+    )
+    wav_resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "wheelchair_accessible",
+            "name": "Wheelchair Accessible (WAV)",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    wav_tariff_id = wav_resp.json()["id"]
+
+    resp = await client.get(
+        "/v1/tariffs/suggest",
+        params={"lat": -33.86, "lng": 151.21, "vehicle_class": "wat"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tariff_id"] == wav_tariff_id
+    assert "wheelchair" in body["reason"].lower()
+
+
+async def test_suggest_tariff_matches_airport_geofence_and_named_tariff(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Suggest Airport")
+    await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
+    )
+    geofence_resp = await client.post(
+        "/v1/geofences",
+        json={
+            "name": "Sydney Airport Precinct",
+            "kind": "region",
+            "center_lat": _SYDNEY_AIRPORT_LAT,
+            "center_lng": _SYDNEY_AIRPORT_LNG,
+            "radius_m": 2000,
+        },
+        headers=headers,
+    )
+    assert geofence_resp.status_code == 201, geofence_resp.text
+    airport_resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "airport_rank",
+            "name": "Airport Rank",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    airport_tariff_id = airport_resp.json()["id"]
+
+    resp = await client.get(
+        "/v1/tariffs/suggest",
+        params={"lat": _SYDNEY_AIRPORT_LAT, "lng": _SYDNEY_AIRPORT_LNG},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tariff_id"] == airport_tariff_id
+    assert "airport" in body["reason"].lower()
+
+
+async def test_suggest_tariff_degrades_gracefully_when_airport_geofence_but_no_named_tariff(
+    client, session
+):
+    headers = await auth_headers(
+        client, session, role="admin", tenant_name="Suggest Airport NoTariff"
+    )
+    default_resp = await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
+    )
+    default_tariff_id = default_resp.json()["id"]
+    await client.post(
+        "/v1/geofences",
+        json={
+            "name": "Sydney Airport Precinct",
+            "kind": "region",
+            "center_lat": _SYDNEY_AIRPORT_LAT,
+            "center_lng": _SYDNEY_AIRPORT_LNG,
+            "radius_m": 2000,
+        },
+        headers=headers,
+    )
+
+    resp = await client.get(
+        "/v1/tariffs/suggest",
+        params={"lat": _SYDNEY_AIRPORT_LAT, "lng": _SYDNEY_AIRPORT_LNG},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tariff_id"] == default_tariff_id
+    assert "airport geofence" in body["reason"].lower()
+
+
+async def test_suggest_tariff_scoped_to_tenant(client, session):
+    """A tenant's geofences/tariffs must never leak into another tenant's
+    suggestion, same tenant-isolation guarantee as every other endpoint."""
+    headers_a = await auth_headers(client, session, role="admin", tenant_name="Suggest Tenant A")
+    headers_b = await auth_headers(client, session, role="admin", tenant_name="Suggest Tenant B")
+
+    await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Tenant A Urban", booked=True), headers=headers_a
+    )
+    b_resp = await client.post(
+        "/v1/tariffs", json=_urban_payload(name="Tenant B Urban", booked=True), headers=headers_b
+    )
+    b_tariff_id = b_resp.json()["id"]
+
+    resp = await client.get(
+        "/v1/tariffs/suggest", params={"lat": -33.86, "lng": 151.21}, headers=headers_b
+    )
+    assert resp.status_code == 200
+    assert resp.json()["tariff_id"] == b_tariff_id

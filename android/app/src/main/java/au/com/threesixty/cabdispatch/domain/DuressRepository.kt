@@ -5,6 +5,10 @@ import au.com.threesixty.cabdispatch.data.remote.DuressCancelRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DuressEventDto
 import au.com.threesixty.cabdispatch.data.remote.DuressGpsPointDto
 import au.com.threesixty.cabdispatch.data.remote.DuressTriggerRequestDto
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.io.File
 
 /**
  * Thin `Result<T>`-returning network wrapper over the duress endpoints (spec §8 rows 28-30 —
@@ -20,6 +24,13 @@ interface DuressRepository {
     suspend fun cancel(eventId: String): Result<DuressEventDto>
     suspend fun getEvent(eventId: String): Result<DuressEventDto>
     suspend fun postGps(eventId: String, lat: Double, lng: Double, speedKmh: Double?, accuracyM: Double?): Result<Unit>
+
+    /** Uploads a captured duress audio recording (`POST /v1/duress/{eventId}/audio`, multipart
+     * `file` field — see `backend/app/api/v1/duress.py`). Driver-device-callable per that
+     * router's role policy, same as [trigger]/[cancel]/[postGps]. Called from
+     * [DuressController.stopAndUploadAudio] — best-effort, a failure here is swallowed by that
+     * caller exactly like every other call in this interface. */
+    suspend fun uploadAudio(eventId: String, file: File): Result<DuressEventDto>
 }
 
 class RemoteBackedDuressRepository(private val apiService: ApiService) : DuressRepository {
@@ -52,5 +63,17 @@ class RemoteBackedDuressRepository(private val apiService: ApiService) : DuressR
             eventId,
             DuressGpsPointDto(lat = lat, lng = lng, speedKmh = speedKmh, accuracyM = accuracyM),
         )
+    }
+
+    override suspend fun uploadAudio(eventId: String, file: File): Result<DuressEventDto> = runCatching {
+        // "audio/mp4" — a reasonable MIME for an MPEG-4-container/AAC (.m4a) file
+        // (au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder's actual output
+        // format), not verified against the backend rejecting/accepting anything specific here —
+        // `app/api/v1/duress.py#upload_audio` reads the multipart part generically
+        // (`UploadFile`) and never inspects `content_type`, so this is not load-bearing either
+        // way, just a best-effort correct label.
+        val body = file.asRequestBody("audio/mp4".toMediaType())
+        val part = MultipartBody.Part.createFormData("file", file.name, body)
+        apiService.uploadDuressAudio(eventId, part)
     }
 }

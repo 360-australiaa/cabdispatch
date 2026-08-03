@@ -50,6 +50,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserRead,
 )
+from app.services.compliance_expiry import is_expired
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -61,6 +62,10 @@ _INVALID_DRIVER_CREDENTIALS = HTTPException(
 )
 _INVALID_MFA_CODE = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code"
+)
+_LICENSE_EXPIRED = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Driver license has expired — contact your operator to renew before logging in",
 )
 
 
@@ -119,6 +124,20 @@ async def driver_login(
     Replaces the placeholder driverId->email / pin->password mapping
     documented on the Android side in
     domain/DriverAuthRepository.kt's NOTE(integration agent) comment.
+
+    Also enforces the blueprint's Driver Authentication screen spec (5.2.1):
+    a driver whose `driver_license_expiry` (app/models/user.py) is a real
+    date strictly in the past is blocked with 403, checked via
+    `app.services.compliance_expiry.is_expired` AFTER credentials verify (so
+    a wrong-PIN attempt still 401s rather than leaking expiry status) but
+    BEFORE MFA/token issuance. Fails OPEN on a null expiry (never set) or a
+    still-current one — only an actually-expired date blocks login, matching
+    this codebase's general fail-open-on-missing-compliance-data convention.
+    `driver_authority_expiry` deliberately does NOT block login here — the
+    blueprint reference for this login-block is license-specific; an expired
+    authority only ever raises a FatigueAlert (see
+    app.services.compliance_expiry.check_driver_authority_expiry, wired into
+    PATCH /v1/trips/{id}/tick), it doesn't stop the driver logging in.
     """
     result = await session.execute(select(User).where(User.driver_code == body.driver_code))
     user = result.scalar_one_or_none()
@@ -130,6 +149,9 @@ async def driver_login(
         or not verify_password(body.pin, user.pin_hash)
     ):
         raise _INVALID_DRIVER_CREDENTIALS
+
+    if is_expired(user.driver_license_expiry):
+        raise _LICENSE_EXPIRED
 
     return _login_result(user)
 

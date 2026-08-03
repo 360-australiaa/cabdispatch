@@ -127,9 +127,69 @@ export interface TariffChangeLogEntry {
   at: string;
 }
 
+/** `GET /v1/tariffs/presets` — static named-preset library (see
+ * `app/services/tariff_presets.py`). Every decimal default arrives as a
+ * string, matching the wire convention documented above; the field set is
+ * exactly `CappedRateField | UncappedRateField` plus `region`/`booked`, so a
+ * preset's defaults can be splatted straight into a `TariffFormModal`
+ * `FormState`. */
+export type PresetKey = "airport_rank" | "special_event" | "shared_ride" | "wheelchair_accessible";
+
+export type TariffPresetDefaults = {
+  region: Region;
+  booked: boolean;
+} & Record<CappedRateField | UncappedRateField, string>;
+
+export interface TariffPreset {
+  key: PresetKey;
+  label: string;
+  description: string;
+  defaults: TariffPresetDefaults;
+}
+
+/** Body shape for `POST /v1/tariffs/from-preset`. Not used by the Tariff
+ * Studio form flow today (the UI only reads `/presets` to prefill the
+ * regular create form so the operator keeps full edit + validation control),
+ * kept here so the type is available if a one-shot creation path is added
+ * later. */
+export interface TariffFromPresetInput {
+  preset: PresetKey;
+  name: string;
+  effective_from: string;
+  effective_to?: string | null;
+  overrides?: Partial<TariffPresetDefaults>;
+}
+
+/** `GET /v1/tariffs/suggest` result — see `app.services.tariffs.suggest_tariff`. */
+export interface TariffSuggestion {
+  tariff_id: string;
+  tariff_name: string;
+  time_class: "day" | "night";
+  reason: string;
+}
+
+export const VALID_VEHICLE_CLASSES = ["standard", "premium", "maxi", "wat"] as const;
+export type VehicleClass = (typeof VALID_VEHICLE_CLASSES)[number];
+
+export const VEHICLE_CLASS_LABELS: Record<VehicleClass, string> = {
+  standard: "Standard",
+  premium: "Premium",
+  maxi: "Maxi",
+  wat: "WAT (wheelchair accessible)",
+};
+
+export interface TariffSuggestParams {
+  lat: number;
+  lng: number;
+  vehicleClass?: VehicleClass | "";
+  at?: string | null;
+}
+
 const TARIFFS_KEY = "tariffs";
 const FARES_ORDER_KEY = "fares-order";
 const CHANGE_LOG_KEY = "tariff-change-log";
+const TARIFF_PRESETS_KEY = "tariff-presets";
+const TARIFF_SUGGEST_KEY = "tariff-suggest";
 
 export function useTariffsQuery(filters: TariffListFilters) {
   return useQuery({
@@ -186,6 +246,52 @@ export function useTariffChangeLogQuery(tariffId: string | null, opts?: { skip?:
       return res.data;
     },
     enabled: tariffId != null,
+  });
+}
+
+/** `GET /v1/tariffs/presets` — static data (no tenant scoping), so it's
+ * cheap to keep fresh for a long while. `enabled` lets callers only fire
+ * this when the create-tariff picker is actually in view. */
+export function useTariffPresetsQuery(enabled = true) {
+  return useQuery({
+    queryKey: [TARIFF_PRESETS_KEY],
+    queryFn: async () => {
+      const res = await apiClient.get<TariffPreset[]>("/v1/tariffs/presets");
+      return res.data;
+    },
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** `GET /v1/tariffs/suggest`. Pass `null` to leave the query idle (no
+ * lat/lng chosen yet). A 404 ("nothing resolves for this location/time" per
+ * the endpoint's contract) is treated as "no suggestion" rather than a query
+ * error, mirroring `useFaresOrderQuery`'s handling of its own 404 case. */
+export function useTariffSuggestQuery(params: TariffSuggestParams | null) {
+  return useQuery({
+    queryKey: [TARIFF_SUGGEST_KEY, params],
+    queryFn: async () => {
+      if (!params) return null;
+      try {
+        const res = await apiClient.get<TariffSuggestion>("/v1/tariffs/suggest", {
+          params: {
+            lat: params.lat,
+            lng: params.lng,
+            ...(params.vehicleClass ? { vehicle_class: params.vehicleClass } : {}),
+            ...(params.at ? { at: params.at } : {}),
+          },
+        });
+        return res.data;
+      } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    enabled: params != null,
+    retry: false,
   });
 }
 

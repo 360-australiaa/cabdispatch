@@ -39,6 +39,14 @@ instructions — everything else is exactly as specified):
    subsequent tick/close call.
 
 No column in the brief's list was renamed, dropped, or retyped.
+
+4. `flagged_for_review`, `review_notes`, `voucher_code`, `account_reference`,
+   `split_payments` are added by a later feature step on top of the domain
+   brief's original field list (blueprint 5.2.5's "Dispute" button / 6.1.3
+   schema, and the "Account"/"Voucher"/"Split Fare" payment methods). See
+   `app.services.trips.flag_trip_for_review` / `close_trip` and
+   `app.services.payments.redeem_voucher` / `validate_account_reference` for
+   the logic that populates/validates them.
 """
 from __future__ import annotations
 
@@ -143,3 +151,25 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # editing via TripUpdate — it's maintained exclusively by
     # app.services.trips.apply_tick.
     auto_tolls_applied: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
+
+    # --- dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema,
+    # module docstring deviation #4). Settable via PATCH /v1/trips/{id}/flag by
+    # the trip's own driver or a staff role (owner/admin/dispatcher) — see
+    # app.services.trips.flag_trip_for_review and app.api.v1.trips.flag_trip
+    # for the exact authorization rule. Indexed so the trip-listing endpoint's
+    # ?flagged_for_review= filter (dashboard "flagged" view) is cheap.
+    flagged_for_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- new payment methods (blueprint 5.2.5: Account / Voucher / Split Fare,
+    # module docstring deviation #4). voucher_code / account_reference are
+    # free-text, v1-scope fields — no real voucher/promo-code table or
+    # corporate-account table exists yet in this codebase; see
+    # app.services.payments.redeem_voucher / validate_account_reference for
+    # the stub validation this pass adds. split_payments is only populated
+    # (and validated to sum to `total`) when payment_method == "split_fare";
+    # see app.services.trips.close_trip / SplitPaymentMismatchError. Same
+    # plain-JSON column pattern as `auto_tolls_applied` above.
+    voucher_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    account_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    split_payments: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True, default=list)

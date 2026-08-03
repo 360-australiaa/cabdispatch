@@ -22,8 +22,11 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * ([TariffEntity]) and sync outbox ([SyncOutboxEntity]) — see each entity's
  * doc comment for its role. Version bumped 2 -> 3 (tariff-signature-verification pass) adding
  * the local cache of the tariff-signing public key ([TariffSigningKeyEntity]) — see that
- * entity's doc and [au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache]. No Migration
- * object is supplied for either bump because this project has never shipped v1 (no installed
+ * entity's doc and [au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache]. Version bumped
+ * 3 -> 4 (payment-methods/dispute pass) adding three new nullable [TripEntity] columns
+ * (`voucherCode`, `accountReference`, `splitPaymentsJson`) — no new entity, just new columns on an
+ * existing one, see that class's doc for each. No Migration
+ * object is supplied for any bump so far because this project has never shipped v1 (no installed
  * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
  * MUST come with a real `Migration` — do NOT reach for
  * `fallbackToDestructiveMigration()`, offline trip data is financial/
@@ -50,7 +53,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

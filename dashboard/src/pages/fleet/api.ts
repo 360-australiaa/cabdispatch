@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
 import type {
+  ComplianceExpiryItem,
   Device,
   DeviceFormValues,
   Driver,
@@ -309,5 +310,27 @@ export function useAcknowledgeFatigueAlert() {
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "fatigue-alerts"] }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Compliance expiry — READ-only rollup from /v1/fleet/compliance-expiry
+// (driver licence/authority + vehicle registration/insurance). No
+// acknowledge/dismiss endpoint exists for these; it's a point-in-time query.
+// ---------------------------------------------------------------------------
+
+/** Open (expiring-soon or already-expired) accreditation/registration items,
+ * used to surface a warning banner on the Fleet & Drivers page. */
+export function useComplianceExpiry(withinDays = 30) {
+  return useQuery({
+    queryKey: ["fleet", "compliance-expiry", withinDays],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<ComplianceExpiryItem>>(
+        "/v1/fleet/compliance-expiry",
+        { params: { skip: 0, limit: LOOKUP_LIMIT, within_days: withinDays } },
+      );
+      return data;
+    },
+    refetchInterval: 60_000,
   });
 }

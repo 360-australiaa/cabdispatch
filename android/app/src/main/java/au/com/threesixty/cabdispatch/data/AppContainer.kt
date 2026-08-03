@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
+import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
@@ -22,6 +23,7 @@ import au.com.threesixty.cabdispatch.domain.SpeedSource
 import au.com.threesixty.cabdispatch.domain.StubQrScanner
 import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
+import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
 import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
 import au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway
@@ -154,6 +156,13 @@ object AppContainer {
         // correctness requirement; failures here are silently swallowed on purpose, same as
         // every other best-effort call in this class.
         startupScope.launch { runCatching { tariffSigningKeyCache.refresh() } }
+
+        // Begins supervising session/shift state for the ambient position heartbeat (see
+        // [livePositionHeartbeat]'s own doc) — must be started unconditionally here, not left to
+        // whenever some screen happens to first read [livePositionHeartbeat], since (unlike every
+        // other `by lazy` singleton above) nothing else in this app ever needs to reference this
+        // property by name for it to do its job.
+        livePositionHeartbeat.start()
     }
 
     /** Fire-and-forget process-lifetime scope for one-shot startup tasks that must kick off
@@ -287,8 +296,31 @@ object AppContainer {
     // navigation (S3 -> S4 -> S2 etc.) — see [DuressController]'s doc for why it isn't just
     // another `by lazy` hung off HiredViewModel.
     val duressRepository: DuressRepository by lazy { RemoteBackedDuressRepository(apiService) }
+
+    /** Real `MediaRecorder`-backed duress audio capture (Blueprint §4.3/§8.3), only needs the
+     * process-lifetime application [appContext] — see that class's doc for the permission/
+     * simplification write-up. */
+    val duressAudioRecorder: DuressAudioRecorder by lazy { DuressAudioRecorder(appContext) }
     val duressController: DuressController by lazy {
-        DuressController(duressRepository, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        DuressController(
+            duressRepository,
+            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            duressAudioRecorder,
+        )
+    }
+
+    // --- Ambient live-position heartbeat (Taxi Meter SaaS Complete Blueprint §6.2.2:
+    // "vehicle.heartbeat -> Every 30 seconds: GPS, status, battery" while on shift) ---
+    //
+    // [livePositionHeartbeat] is a process-lifetime singleton, own `SupervisorJob`-backed
+    // `CoroutineScope` — same reasoning as [speedSource]/[duressController] above: it must keep
+    // publishing across screen navigation, not be tied to any one screen's ViewModel scope. Unlike
+    // [duressController] (externally trigger()/cancel()-driven), this one is self-supervising —
+    // see [LivePositionHeartbeat]'s own doc — so [start] only needs to be called once, right here,
+    // for it to react to [au.com.threesixty.cabdispatch.domain.SessionHolder.session] (shift
+    // open/closed) for the rest of the process lifetime with zero wiring in any screen/ViewModel.
+    val livePositionHeartbeat: LivePositionHeartbeat by lazy {
+        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default))
     }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:

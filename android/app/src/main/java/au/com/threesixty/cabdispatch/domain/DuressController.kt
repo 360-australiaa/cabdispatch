@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.domain
 
+import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -58,10 +59,25 @@ sealed interface DuressUiState {
  * per `backend/app/api/v1/duress.py`'s role policy; `escalate`/`close` are dispatcher-only and are
  * deliberately never called from this device — see [DuressRepository]/`ApiService`'s duress
  * endpoints for the exact split.
+ *
+ * ### Audio recording (Blueprint §4.3/§8.3, added alongside this doc's dated entry in
+ * `android/HANDOFF.md`)
+ * [audioRecorder] is optional (`null` in any test/preview construction that doesn't have a real
+ * `Context` to build one from — mirrors [locationProvider] being nullable for the same reason,
+ * except the recorder is a constructor dependency rather than a settable `var` since, unlike a
+ * per-screen `LocationManager` read, [DuressAudioRecorder] only ever needs the process-lifetime
+ * application `Context` [au.com.threesixty.cabdispatch.data.AppContainer] already holds — see
+ * that object's wiring). [runActivePhase] starts it once [DuressUiState.Active] is reached with a
+ * real event id and enforces [DuressAudioRecorder.MAX_RECORDING_DURATION_MS] itself (the recorder
+ * only knows how to start/stop a file, not the duress lifecycle around it — see that class's doc
+ * for the full "single capped file, not a true rolling buffer" write-up), uploading via
+ * [DuressRepository.uploadAudio] either once that cap elapses or the event reaches a terminal
+ * status, whichever comes first.
  */
 class DuressController(
     private val repository: DuressRepository,
     private val scope: CoroutineScope,
+    private val audioRecorder: DuressAudioRecorder? = null,
 ) {
     private val _state = MutableStateFlow<DuressUiState>(DuressUiState.Idle)
     val state: StateFlow<DuressUiState> = _state.asStateFlow()
@@ -150,7 +166,8 @@ class DuressController(
     /** [DuressUiState.Active]: keep trying to obtain an [DuressEventDto] id if the initial
      * trigger never landed, then relay best-effort GPS fixes + poll for dispatcher-side
      * resolution until the event reaches a terminal status, at which point this clears the
-     * banner back to [DuressUiState.Idle] on its own. */
+     * banner back to [DuressUiState.Idle] on its own. Also starts/caps/uploads the duress audio
+     * recording — see class doc's "Audio recording" section. */
     private suspend fun runActivePhase(vehicleId: String?, driverId: String?, initialEventId: String?) {
         var pendingEventId = initialEventId
         while (pendingEventId == null) {
@@ -163,17 +180,46 @@ class DuressController(
         // including inside the `let` lambda's inline-captured scope.
         val eventId: String = pendingEventId
 
+        // Audio recording starts here, i.e. the moment a real event id is known — in the
+        // overwhelmingly common case that coincides with reaching Active at all (the trigger
+        // call has 3 retries spread across the same 10s cancel-window countdown, see
+        // TRIGGER_MAX_ATTEMPTS/TRIGGER_RETRY_DELAY_MS above, so it has almost always already
+        // resolved by the time Active is reached). Documented, honest gap: if the device is
+        // still fully offline at this point, recording doesn't start until/unless the retry loop
+        // just above eventually gets an id — there is no event id to file a local-only recording
+        // under otherwise, and nothing to upload it against even if there were.
+        val recordingStartedAtMillis = System.currentTimeMillis()
+        var audioPending = audioRecorder?.start(eventId) == true
+
         while (true) {
             locationProvider?.invoke()?.let { (lat, lng, accuracyM) ->
                 repository.postGps(eventId, lat, lng, speedKmh = null, accuracyM = accuracyM?.toDouble())
             }
+
+            if (audioPending &&
+                System.currentTimeMillis() - recordingStartedAtMillis >= DuressAudioRecorder.MAX_RECORDING_DURATION_MS
+            ) {
+                stopAndUploadAudio(eventId)
+                audioPending = false
+            }
+
             val event = repository.getEvent(eventId).getOrNull()
             if (event != null && event.status in TERMINAL_STATUSES) {
+                if (audioPending) stopAndUploadAudio(eventId)
                 _state.value = DuressUiState.Idle
                 return
             }
             delay(ACTIVE_POLL_INTERVAL_MS)
         }
+    }
+
+    /** Stops whatever [audioRecorder] recording is in progress (a no-op, per that class's own
+     * doc, if none is) and uploads the resulting file via [DuressRepository.uploadAudio] —
+     * best-effort, same as [DuressController]'s every other network call in this phase: a
+     * failure here never blocks the GPS relay/resolution poll loop that called it. */
+    private suspend fun stopAndUploadAudio(eventId: String) {
+        val file = audioRecorder?.stop() ?: return
+        repository.uploadAudio(eventId, file)
     }
 
     companion object {

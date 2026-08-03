@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.domain.fare.Tariff
@@ -61,6 +62,40 @@ enum class PaymentMethodOption(val label: String, val persistedValue: String) {
     // needs to be reported distinctly (e.g. a CabCharge reconciliation
     // report).
     CABCHARGE("CabCharge / TTSS", "card"),
+
+    /** Promo-code / prepaid voucher redemption — backend `payment_method="voucher"`
+     * (`backend/app/schemas/trips.py` `PaymentMethod` Literal). Requires a non-empty
+     * [CloseAndPayUiState.ReadyToClose.voucherCode], mirroring the backend's
+     * `_validate_voucher_and_account` 422 rule (`VoucherEntryScreen` in CloseAndPayScreen.kt). */
+    VOUCHER("Voucher", "voucher"),
+
+    /** Pre-registered corporate/linked account, pay-later/invoiced — backend
+     * `payment_method="account"`. Requires a non-empty
+     * [CloseAndPayUiState.ReadyToClose.accountReference], same backend validation rule
+     * (`AccountEntryScreen` in CloseAndPayScreen.kt). */
+    ACCOUNT("Account", "account"),
+
+    /** Two sub-payments on one trip, summing exactly to [FareBreakdown.grandTotal] — backend
+     * `payment_method="split_fare"` + `split_payments: list[SplitPaymentItem]`. This screen
+     * deliberately supports exactly two legs (per the brief: "a basic split-fare flow... two
+     * methods and two amounts"), not the backend's unbounded list — see
+     * [CloseAndPayUiState.ReadyToClose.splitLegAMethod]/`.splitLegBMethod`
+     * (`SplitFareEntryScreen` in CloseAndPayScreen.kt). */
+    SPLIT_FARE("Split Fare", "split_fare"),
+}
+
+/**
+ * One leg of a split-fare payment (§ [PaymentMethodOption.SPLIT_FARE]) — deliberately narrower
+ * than [PaymentMethodOption]: no Tap-to-Pay/Payment-Link/CabCharge distinction and no
+ * split-fare-within-split-fare nesting, matching the backend's `SubPaymentMethod` Literal
+ * (`backend/app/schemas/trips.py`) 1:1. [persistedValue] is exactly the `method` string the
+ * backend's `SplitPaymentItem` expects (see [SplitPaymentEntryDto]).
+ */
+enum class SplitLegMethod(val label: String, val persistedValue: String) {
+    CASH("Cash", "cash"),
+    CARD("Card", "card"),
+    VOUCHER("Voucher", "voucher"),
+    ACCOUNT("Account", "account"),
 }
 
 enum class ActionState { IDLE, IN_PROGRESS, SUCCESS, FAILED }
@@ -83,6 +118,16 @@ sealed interface CloseAndPayUiState {
         // [docketNumber] (see the CABCHARGE enum entry's TODO — backend paymentMethod enum has
         // no CabCharge-specific fields yet), surfaced on the receipt via [buildReceipt].
         val docketNotes: String,
+        /** [PaymentMethodOption.VOUCHER]'s entry field — see that enum entry's doc. */
+        val voucherCode: String,
+        /** [PaymentMethodOption.ACCOUNT]'s entry field — see that enum entry's doc. */
+        val accountReference: String,
+        /** [PaymentMethodOption.SPLIT_FARE]'s first of exactly two legs. */
+        val splitLegAMethod: SplitLegMethod,
+        val splitLegAAmount: String,
+        /** [PaymentMethodOption.SPLIT_FARE]'s second of exactly two legs. */
+        val splitLegBMethod: SplitLegMethod,
+        val splitLegBAmount: String,
         val breakdown: FareBreakdown,
         val paymentInFlight: Boolean,
         val paymentError: String?,
@@ -95,12 +140,34 @@ sealed interface CloseAndPayUiState {
                 return if (change >= BigDecimal.ZERO) change else null
             }
 
+        /**
+         * `null` until both split-leg amounts parse as numbers; otherwise the amount still
+         * unallocated (zero once the two legs exactly sum to [FareBreakdown.grandTotal] — the
+         * reading [SplitFareEntryScreen][au.com.threesixty.cabdispatch.ui.screens.closepay] shows
+         * the driver, mirroring [changeDue]'s pattern for the Cash sub-screen). Can be negative
+         * (over-allocated).
+         */
+        val splitRemaining: BigDecimal?
+            get() {
+                val a = splitLegAAmount.toBigDecimalOrNull() ?: return null
+                val b = splitLegBAmount.toBigDecimalOrNull() ?: return null
+                return breakdown.grandTotal - a - b
+            }
+
         val canConfirm: Boolean
             get() = when (paymentMethod) {
                 PaymentMethodOption.CASH ->
                     (cashTendered.toBigDecimalOrNull() ?: BigDecimal.ZERO) >= breakdown.grandTotal
                 PaymentMethodOption.CABCHARGE -> docketNumber.isNotBlank()
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> true
+                PaymentMethodOption.VOUCHER -> voucherCode.isNotBlank()
+                PaymentMethodOption.ACCOUNT -> accountReference.isNotBlank()
+                PaymentMethodOption.SPLIT_FARE -> {
+                    val a = splitLegAAmount.toBigDecimalOrNull()
+                    val b = splitLegBAmount.toBigDecimalOrNull()
+                    a != null && b != null && a.signum() > 0 && b.signum() > 0 &&
+                        splitRemaining?.setScale(2, RoundingMode.HALF_UP)?.signum() == 0
+                }
             }
     }
 
@@ -188,6 +255,12 @@ class CloseAndPayViewModel : ViewModel() {
             cashTendered = "",
             docketNumber = "",
             docketNotes = "",
+            voucherCode = "",
+            accountReference = "",
+            splitLegAMethod = SplitLegMethod.CASH,
+            splitLegAAmount = "",
+            splitLegBMethod = SplitLegMethod.CARD,
+            splitLegBAmount = "",
             breakdown = breakdown,
             paymentInFlight = false,
             paymentError = null,
@@ -232,12 +305,23 @@ class CloseAndPayViewModel : ViewModel() {
         return state.copy(breakdown = breakdown)
     }
 
-    /** Live surcharge line — spec B5 S4 "surcharge line auto-computed <=5%". Card-family methods default to a 1.5% pass-through, clamped at the tariff's cap; cash is always 0. */
+    /** Live surcharge line — spec B5 S4 "surcharge line auto-computed <=5%". Card-family methods
+     * default to a 1.5% pass-through, clamped at the tariff's cap. Cash-like methods (cash, and the
+     * new voucher/account/split-fare methods — none of these are a merchant card swipe) are always
+     * 0; CabCharge/TTSS keeps its existing (pre-existing, unchanged by this pass) 1.5% default
+     * despite not being a card swipe either — see [PaymentMethodOption.CABCHARGE]'s own doc for why
+     * it's persisted as "card". */
     fun selectPaymentMethod(method: PaymentMethodOption) = updateReady { state ->
-        val surcharge = if (method == PaymentMethodOption.CASH) {
-            BigDecimal.ZERO
-        } else {
-            BigDecimal("1.5").min(state.tariff.surchargePctCap)
+        val surcharge = when (method) {
+            PaymentMethodOption.CASH,
+            PaymentMethodOption.VOUCHER,
+            PaymentMethodOption.ACCOUNT,
+            PaymentMethodOption.SPLIT_FARE,
+            -> BigDecimal.ZERO
+            PaymentMethodOption.TAP_TO_PAY,
+            PaymentMethodOption.PAYMENT_LINK,
+            PaymentMethodOption.CABCHARGE,
+            -> BigDecimal("1.5").min(state.tariff.surchargePctCap)
         }
         recomputed(
             state.copy(
@@ -264,13 +348,29 @@ class CloseAndPayViewModel : ViewModel() {
     fun setDocketNumber(value: String) = updateReady { it.copy(docketNumber = value) }
     fun setDocketNotes(value: String) = updateReady { it.copy(docketNotes = value) }
 
+    fun setVoucherCode(value: String) = updateReady { it.copy(voucherCode = value) }
+    fun setAccountReference(value: String) = updateReady { it.copy(accountReference = value) }
+
+    fun setSplitLegAMethod(method: SplitLegMethod) = updateReady { it.copy(splitLegAMethod = method) }
+    fun setSplitLegAAmount(value: String) = updateReady { it.copy(splitLegAAmount = value) }
+    fun setSplitLegBMethod(method: SplitLegMethod) = updateReady { it.copy(splitLegBMethod = method) }
+    fun setSplitLegBAmount(value: String) = updateReady { it.copy(splitLegBAmount = value) }
+
     fun confirmPayment() {
         val state = _uiState.value as? CloseAndPayUiState.ReadyToClose ?: return
         if (!state.canConfirm || state.paymentInFlight) return
         when (state.paymentMethod) {
             PaymentMethodOption.TAP_TO_PAY -> collectCardPayment(state)
             PaymentMethodOption.PAYMENT_LINK -> createLink(state)
-            PaymentMethodOption.CASH, PaymentMethodOption.CABCHARGE -> finalizeCloseWithProcessingDelay(state)
+            // None of these round-trip a real gateway (same reasoning as CABCHARGE's own doc) —
+            // voucher/account validation already happened client-side (canConfirm) and split-fare's
+            // legs are recorded, not charged through a card terminal.
+            PaymentMethodOption.CASH,
+            PaymentMethodOption.CABCHARGE,
+            PaymentMethodOption.VOUCHER,
+            PaymentMethodOption.ACCOUNT,
+            PaymentMethodOption.SPLIT_FARE,
+            -> finalizeCloseWithProcessingDelay(state)
         }
     }
 
@@ -358,6 +458,20 @@ class CloseAndPayViewModel : ViewModel() {
                 cleaningFee = state.cleaningFee.setScale(2, RoundingMode.HALF_UP).toPlainString(),
                 includePsl = state.includePsl,
                 receiptRef = receiptRef,
+                voucherCode = state.voucherCode.takeIf { state.paymentMethod == PaymentMethodOption.VOUCHER },
+                accountReference = state.accountReference.takeIf { state.paymentMethod == PaymentMethodOption.ACCOUNT },
+                splitPayments = if (state.paymentMethod == PaymentMethodOption.SPLIT_FARE) {
+                    val amountA = (state.splitLegAAmount.toBigDecimalOrNull() ?: BigDecimal.ZERO)
+                        .setScale(2, RoundingMode.HALF_UP)
+                    val amountB = (state.splitLegBAmount.toBigDecimalOrNull() ?: BigDecimal.ZERO)
+                        .setScale(2, RoundingMode.HALF_UP)
+                    listOf(
+                        SplitPaymentEntryDto(method = state.splitLegAMethod.persistedValue, amount = amountA.toPlainString()),
+                        SplitPaymentEntryDto(method = state.splitLegBMethod.persistedValue, amount = amountB.toPlainString()),
+                    )
+                } else {
+                    null
+                },
             )
             _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
         }
@@ -385,6 +499,12 @@ class CloseAndPayViewModel : ViewModel() {
                 PaymentMethodOption.CABCHARGE -> {
                     add(ReceiptLine("CabCharge / TTSS docket", state.docketNumber))
                     if (state.docketNotes.isNotBlank()) add(ReceiptLine("Notes", state.docketNotes))
+                }
+                PaymentMethodOption.VOUCHER -> add(ReceiptLine("Voucher code", state.voucherCode))
+                PaymentMethodOption.ACCOUNT -> add(ReceiptLine("Account reference", state.accountReference))
+                PaymentMethodOption.SPLIT_FARE -> {
+                    add(ReceiptLine(state.splitLegAMethod.label, (state.splitLegAAmount.toBigDecimalOrNull() ?: BigDecimal.ZERO).money()))
+                    add(ReceiptLine(state.splitLegBMethod.label, (state.splitLegBAmount.toBigDecimalOrNull() ?: BigDecimal.ZERO).money()))
                 }
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> Unit
             }

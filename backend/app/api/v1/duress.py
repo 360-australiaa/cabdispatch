@@ -9,12 +9,15 @@ foundation contract. This includes the websocket endpoint, which cannot use a
 applies the identical tenant-scoping rule by hand.
 
 Role policy:
-  - `trigger` / `cancel` / `gps`: any authenticated tenant user — these are the
-    actions a driver's own device takes (panic button, self-cancel, location
-    streaming while in duress).
+  - `trigger` / `cancel` / `gps` / `audio` (upload + playback): any
+    authenticated tenant user — these are the actions a driver's own device
+    takes (panic button, self-cancel, location streaming, and audio capture,
+    while in duress).
   - `escalate` / `close`: restricted to `owner`/`admin`/`dispatcher` — per the
     domain brief, escalation is "a background/dispatcher trigger", never the
-    driver's own device.
+    driver's own device. Reaching escalate's final stage also fires a real
+    Twilio Voice automated call to the tenant's emergency contact (blueprint
+    8.3) — see `app.services.duress.escalate_event`.
   - `WS /{id}/live`: restricted to `owner`/`admin`/`dispatcher` — this is the
     dispatch dashboard's live feed, not a driver-facing surface.
   - Generic `POST`/`PATCH`/`DELETE` (CRUD completeness/admin corrections):
@@ -30,12 +33,15 @@ from datetime import UTC, datetime
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     HTTPException,
     Query,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
+from fastapi.responses import FileResponse
 from jose import JWTError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,10 +67,13 @@ from app.schemas.duress import (
     DuressTriggerRequest,
 )
 from app.services.duress import (
+    DuressAudioError,
     cancel_event,
     close_event,
     escalate_event,
     gps_broadcaster,
+    resolve_absolute_path,
+    save_duress_audio,
     trigger_event,
 )
 
@@ -132,9 +141,13 @@ async def escalate(
     session: AsyncSession = Depends(get_session),
 ) -> DuressEvent:
     """Advances the escalation cascade by one stage (cancel_window_expired ->
-    notify_dispatch -> sms_emergency_contacts -> present_000_call_script)."""
+    notify_dispatch -> sms_emergency_contacts -> present_000_call_script).
+    Reaching the final stage also fires the real Twilio Voice automated
+    escalation call — see `app.services.duress.escalate_event`."""
     event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
-    return await escalate_event(session, event, note=body.note)
+    return await escalate_event(
+        session, event, note=body.note, emergency_contact_phone=body.emergency_contact_phone
+    )
 
 
 @router.post("/{event_id}/close", response_model=DuressEventRead)
@@ -172,6 +185,79 @@ async def post_gps(
 
     delivered = await gps_broadcaster.publish(event.id, payload)
     return {"delivered_to": delivered}
+
+
+# --- audio recording upload/playback -------------------------------------------
+
+
+@router.post("/{event_id}/audio", response_model=DuressEventRead)
+async def upload_audio(
+    event_id: str,
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DuressEvent:
+    """Multipart upload of a captured duress audio recording (e.g. an
+    Android `MediaRecorder` `.m4a`/`.3gp` file) — a driver-device action, same
+    role policy as `/trigger` / `/cancel` / `/gps`. Saves it to local disk
+    under `uploads/{tenant_id}/duress/{event_id}/` (created if missing),
+    following the EXACT same local-disk-upload convention as
+    `app.services.compliance` / `app.services.receipts`, and stores the
+    resulting *relative* path on `DuressEvent.audio_ref` — overwriting
+    whatever placeholder ref (if any) was supplied at trigger time, since
+    this is the real captured recording."""
+    event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+
+    content = await file.read()
+    try:
+        relative_path = await save_duress_audio(
+            tenant_id=tenant_id,
+            event_id=event.id,
+            original_filename=file.filename or "audio",
+            content=content,
+        )
+    except DuressAudioError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    event.audio_ref = relative_path
+    await session.commit()
+    await session.refresh(event)
+    return event
+
+
+@router.get("/{event_id}/audio")
+async def get_audio(
+    event_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Streams back the duress audio recording uploaded via
+    `POST /v1/duress/{event_id}/audio`, so e.g. the dashboard Safety/Duress
+    Desk can play it back. 404s if no recording is on file, or if
+    `audio_ref` points at a reference that was never actually uploaded here
+    (e.g. a device-supplied placeholder from `/trigger`) rather than a local
+    file."""
+    event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+    if not event.audio_ref:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No audio recording on file for this duress event",
+        )
+
+    try:
+        absolute_path = resolve_absolute_path(event.audio_ref)
+    except DuressAudioError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if not absolute_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Duress event has an audio_ref but its file is missing on disk",
+        )
+
+    return FileResponse(path=absolute_path, filename=absolute_path.name)
 
 
 async def _authenticate_websocket(websocket: WebSocket) -> dict | None:

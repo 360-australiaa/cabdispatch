@@ -2,11 +2,14 @@ package au.com.threesixty.cabdispatch.data.remote
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.MultipartBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -168,6 +171,17 @@ interface ApiService {
     @POST("/v1/trips/sync")
     suspend fun syncTrips(@Body body: List<TripSyncItemDto>): TripSyncResponseDto
 
+    /** Blueprint 5.2.5's "Dispute" button (Trip Detail screen, [au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailViewModel.submitDispute])
+     * — flags a *closed* trip for operator review with a driver-entered reason. Response is the full
+     * [TripDto] (backend's `TripRead`). A driver may flag (never clear) a trip where they are its own
+     * `driver_id` — see backend's `app/api/v1/trips.py::flag_trip` for the complete role rule: 403 for a
+     * non-owning, non-staff caller; 409 if the trip isn't closed yet; 422 without a non-empty `reason`. */
+    @PATCH("/v1/trips/{tripId}/flag")
+    suspend fun flagTrip(
+        @Path("tripId") tripId: String,
+        @Body body: TripFlagRequestDto,
+    ): TripDto
+
     // ---- Shifts (S1 open, S5 close/report) ----
 
     @POST("/v1/shifts/start")
@@ -284,6 +298,21 @@ interface ApiService {
         @Path("eventId") eventId: String,
         @Body body: DuressGpsPointDto,
     )
+
+    /** Uploads a captured duress audio recording (multipart, `file` field —
+     * `backend/app/api/v1/duress.py#upload_audio`). Driver-device-callable per that router's
+     * role policy, same as [triggerDuress]/[cancelDuress]/[postDuressGps]. See
+     * [au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder] for where the file comes
+     * from and [au.com.threesixty.cabdispatch.domain.DuressController.stopAndUploadAudio] for the
+     * only call site. Response is the updated [DuressEventDto] (`audio_ref` now set) — not
+     * currently read by anything on this device, the call is fire-and-forget from the caller's
+     * point of view. */
+    @Multipart
+    @POST("/v1/duress/{eventId}/audio")
+    suspend fun uploadDuressAudio(
+        @Path("eventId") eventId: String,
+        @Part file: MultipartBody.Part,
+    ): DuressEventDto
 
     // ---- Compliance Vault (read-only on-device — Profile > Compliance, spec §8 rows 20-21) ----
     //
@@ -416,13 +445,16 @@ data class DeviceDto(
 
 /**
  * Body for [ApiService.publishPosition] (`POST /v1/fleet/positions`, backend's
- * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Two call
- * sites, both best-effort/fire-and-forget: the MDM "locate" response
- * ([SettingsViewModel.loadDeviceStatus][au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel])
- * and (separately, still unwired — see HANDOFF.md "Availability broadcast not wired") the
- * Idle screen's "For Hire" toggle. [status] has no server-side enum constraint (backend: a plain
- * `str`, `min_length=1, max_length=20`), just documented examples ("available"/"on_trip"/
- * "offline"/"break") — any short non-empty string round-trips fine.
+ * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Three call
+ * sites, all best-effort/fire-and-forget: the MDM "locate" response
+ * ([SettingsViewModel.loadDeviceStatus][au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]),
+ * the ambient 30s while-on-shift heartbeat
+ * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat], Taxi Meter
+ * SaaS Complete Blueprint §6.2.2 "vehicle.heartbeat"), and (separately, still unwired — see
+ * HANDOFF.md "Availability broadcast not wired") the Idle screen's "For Hire" toggle. [status] has
+ * no server-side enum constraint (backend: a plain `str`, `min_length=1, max_length=20`), just
+ * documented examples ("available"/"on_trip"/"offline"/"break") — any short non-empty string
+ * round-trips fine.
  */
 @Serializable
 data class PositionPublishRequestDto(
@@ -521,7 +553,14 @@ data class TripCreateDto(
     @SerialName("start_at") val startAt: String? = null,
     @SerialName("start_lat") val startLat: Double,
     @SerialName("start_lng") val startLng: Double,
-    @SerialName("payment_method") val paymentMethod: String = "cash", // cash | card
+    @SerialName("payment_method") val paymentMethod: String = "cash", // cash | card | voucher | account | split_fare
+    /** Required (non-empty) when [paymentMethod] == "voucher" — backend 422s otherwise. */
+    @SerialName("voucher_code") val voucherCode: String? = null,
+    /** Required (non-empty) when [paymentMethod] == "account" — backend 422s otherwise. Note:
+     * `split_payments` deliberately has no field here — the backend's `TripCreate` schema doesn't
+     * accept it either (a trip's total isn't known until close; split-fare is a close-time-only
+     * payment method, see [TripCloseRequestDto.splitPayments]). */
+    @SerialName("account_reference") val accountReference: String? = null,
     @SerialName("time_class") val timeClass: String = "day", // day | night | holiday
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
@@ -569,6 +608,14 @@ data class TripDto(
     @SerialName("max_fare_check_passed") val maxFareCheckPassed: Boolean,
     @SerialName("variance_pct") val variancePct: String?,
     @SerialName("receipt_ref") val receiptRef: String?,
+    /** Blueprint 5.2.5 "Dispute" fields — mirrors backend `TripRead.flagged_for_review`/`review_notes`.
+     * Defaulted so this DTO still decodes fine against any older cached/mocked payload that predates
+     * them (`ignoreUnknownKeys`/nullable-default convention, see this file's header). */
+    @SerialName("flagged_for_review") val flaggedForReview: Boolean = false,
+    @SerialName("review_notes") val reviewNotes: String? = null,
+    @SerialName("voucher_code") val voucherCode: String? = null,
+    @SerialName("account_reference") val accountReference: String? = null,
+    @SerialName("split_payments") val splitPayments: List<SplitPaymentEntryDto>? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )
@@ -593,12 +640,30 @@ data class TelemetryPointDto(
 @Serializable
 data class TripTickRequestDto(val points: List<TelemetryPointDto>)
 
+/** One leg of a split-fare payment — mirrors the backend's `SplitPaymentItem`
+ * (`backend/app/schemas/trips.py`) exactly: [method] is one of `cash|card|voucher|account`
+ * (deliberately excludes `split_fare` itself — no nesting, matches the backend's `SubPaymentMethod`
+ * Literal), [amount] is decimal-as-string per this file's header rule. A trip's `split_payments`
+ * list must sum, to the cent, to its final total — enforced server-side at close time (backend's
+ * `SplitPaymentMismatchError` -> 422); this app additionally checks it client-side before enabling
+ * "Confirm & close trip" for Split Fare (see
+ * [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayUiState.ReadyToClose.canConfirm]) so
+ * a driver isn't sent to the server just to be told the split doesn't add up. */
+@Serializable
+data class SplitPaymentEntryDto(
+    val method: String,
+    val amount: String,
+)
+
 @Serializable
 data class TripCloseRequestDto(
     @SerialName("end_at") val endAt: String? = null,
     @SerialName("end_lat") val endLat: Double? = null,
     @SerialName("end_lng") val endLng: Double? = null,
-    @SerialName("payment_method") val paymentMethod: String? = null, // cash | card
+    @SerialName("payment_method") val paymentMethod: String? = null, // cash | card | voucher | account | split_fare
+    @SerialName("voucher_code") val voucherCode: String? = null,
+    @SerialName("account_reference") val accountReference: String? = null,
+    @SerialName("split_payments") val splitPayments: List<SplitPaymentEntryDto>? = null,
     @SerialName("surcharge_pct") val surchargePct: String? = null,
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
     @SerialName("include_psl") val includePsl: Boolean = false,
@@ -610,6 +675,17 @@ data class TripCloseRequestDto(
  * Carries its own `client_uuid` (idempotency key) and the raw `gps_trace`
  * recorded on-device so the server can independently recompute the fare and
  * check it against `device_total` (±1% variance tolerance, see spec B6).
+ *
+ * **Fixed (2026-08-03, reconciliation pass):** [voucherCode]/[accountReference]/[splitPayments]
+ * now round-trip all the way through — the backend's `TripSyncItem` Pydantic schema
+ * (`backend/app/schemas/trips.py`) was extended to declare these three fields and validate/persist
+ * them in `app.api.v1.trips.sync_trips` (same voucher-redemption / account-reference / split-sum
+ * checks `close_trip` already applied to the online close path), closing what had been a real gap
+ * where these fields were silently dropped on `POST /v1/trips/sync` — the ONLY network call this
+ * app's offline-first close flow actually makes (see
+ * [au.com.threesixty.cabdispatch.sync.SyncWorker]). Verified server-side via
+ * `backend/tests/test_trips.py::test_sync_voucher_payment_persists_voucher_code` and
+ * `::test_sync_split_fare_matching_sum_persists_split_payments`.
  */
 @Serializable
 data class TripSyncItemDto(
@@ -626,6 +702,9 @@ data class TripSyncItemDto(
     @SerialName("end_lat") val endLat: Double? = null,
     @SerialName("end_lng") val endLng: Double? = null,
     @SerialName("payment_method") val paymentMethod: String = "cash",
+    @SerialName("voucher_code") val voucherCode: String? = null,
+    @SerialName("account_reference") val accountReference: String? = null,
+    @SerialName("split_payments") val splitPayments: List<SplitPaymentEntryDto>? = null,
     @SerialName("time_class") val timeClass: String = "day",
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
@@ -639,6 +718,17 @@ data class TripSyncItemDto(
     @SerialName("receipt_ref") val receiptRef: String? = null,
     /** The total the offline device computed on-vehicle. */
     @SerialName("device_total") val deviceTotal: String,
+)
+
+/** Body for [ApiService.flagTrip] (`PATCH /v1/trips/{id}/flag`, backend's `TripFlagRequest`) — the
+ * "Dispute" button (Trip Detail screen). `flagged=true` (the default) requires a non-blank [reason]
+ * (backend 422s `DisputeReasonRequiredError` without one); this app never sends `flagged=false` —
+ * only a staff role may clear a flag server-side (`backend/app/api/v1/trips.py::flag_trip`), and
+ * this is a driver app. */
+@Serializable
+data class TripFlagRequestDto(
+    val flagged: Boolean = true,
+    val reason: String? = null,
 )
 
 @Serializable

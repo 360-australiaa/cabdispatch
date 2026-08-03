@@ -137,7 +137,7 @@ private fun CenteredMessage(text: String) {
 // Shared building blocks
 // ---------------------------------------------------------------------------
 
-private enum class PaymentSubScreen { METHOD_PICKER, CASH_CALCULATOR, CABCHARGE_ENTRY }
+private enum class PaymentSubScreen { METHOD_PICKER, CASH_CALCULATOR, CABCHARGE_ENTRY, VOUCHER_ENTRY, ACCOUNT_ENTRY, SPLIT_FARE_ENTRY }
 
 /** Always-visible fare summary — spec §7 step 1 "total fare + breakdown at top". */
 @Composable
@@ -275,6 +275,9 @@ private fun ReadyToCloseContent(state: CloseAndPayUiState.ReadyToClose, vm: Clos
                 vm = vm,
                 onSelectCash = { vm.selectPaymentMethod(PaymentMethodOption.CASH); subScreen = PaymentSubScreen.CASH_CALCULATOR },
                 onSelectCabCharge = { vm.selectPaymentMethod(PaymentMethodOption.CABCHARGE); subScreen = PaymentSubScreen.CABCHARGE_ENTRY },
+                onSelectVoucher = { vm.selectPaymentMethod(PaymentMethodOption.VOUCHER); subScreen = PaymentSubScreen.VOUCHER_ENTRY },
+                onSelectAccount = { vm.selectPaymentMethod(PaymentMethodOption.ACCOUNT); subScreen = PaymentSubScreen.ACCOUNT_ENTRY },
+                onSelectSplitFare = { vm.selectPaymentMethod(PaymentMethodOption.SPLIT_FARE); subScreen = PaymentSubScreen.SPLIT_FARE_ENTRY },
             )
             PaymentSubScreen.CASH_CALCULATOR -> CashCalculatorScreen(
                 state = state,
@@ -282,6 +285,21 @@ private fun ReadyToCloseContent(state: CloseAndPayUiState.ReadyToClose, vm: Clos
                 onBack = { subScreen = PaymentSubScreen.METHOD_PICKER },
             )
             PaymentSubScreen.CABCHARGE_ENTRY -> CabChargeEntryScreen(
+                state = state,
+                vm = vm,
+                onBack = { subScreen = PaymentSubScreen.METHOD_PICKER },
+            )
+            PaymentSubScreen.VOUCHER_ENTRY -> VoucherEntryScreen(
+                state = state,
+                vm = vm,
+                onBack = { subScreen = PaymentSubScreen.METHOD_PICKER },
+            )
+            PaymentSubScreen.ACCOUNT_ENTRY -> AccountEntryScreen(
+                state = state,
+                vm = vm,
+                onBack = { subScreen = PaymentSubScreen.METHOD_PICKER },
+            )
+            PaymentSubScreen.SPLIT_FARE_ENTRY -> SplitFareEntryScreen(
                 state = state,
                 vm = vm,
                 onBack = { subScreen = PaymentSubScreen.METHOD_PICKER },
@@ -301,6 +319,9 @@ private fun MethodPickerScreen(
     vm: CloseAndPayViewModel,
     onSelectCash: () -> Unit,
     onSelectCabCharge: () -> Unit,
+    onSelectVoucher: () -> Unit,
+    onSelectAccount: () -> Unit,
+    onSelectSplitFare: () -> Unit,
 ) {
     val b = state.breakdown
     LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
@@ -336,6 +357,9 @@ private fun MethodPickerScreen(
                 SecondaryPayButton("Cash", onClick = onSelectCash)
                 SecondaryPayButton("Payment Link", onClick = { vm.selectPaymentMethod(PaymentMethodOption.PAYMENT_LINK) })
                 SecondaryPayButton("CabCharge · TTSS", onClick = onSelectCabCharge)
+                SecondaryPayButton("Voucher", onClick = onSelectVoucher)
+                SecondaryPayButton("Account", onClick = onSelectAccount)
+                SecondaryPayButton("Split Fare", onClick = onSelectSplitFare)
             }
         }
 
@@ -559,6 +583,210 @@ private fun CabChargeEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+/** Voucher entry sub-screen (see [PaymentMethodOption.VOUCHER]'s doc). Feeds
+ * [CloseAndPayViewModel.setVoucherCode]; [CloseAndPayUiState.ReadyToClose.canConfirm] requires a
+ * non-blank code before "Confirm & close trip" enables, mirroring the backend's 422 rule. */
+@Composable
+private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+        item { BackHeader("Voucher payment", onBack) }
+        item { FareSummaryHeader(state.breakdown, compact = true) }
+
+        item {
+            WheelCard {
+                Text("VOUCHER CODE", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.voucherCode,
+                    onValueChange = vm::setVoucherCode,
+                    placeholder = { Text("e.g. WELCOME10") },
+                    singleLine = true,
+                    colors = wheelFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        val paymentError = state.paymentError
+        if (paymentError != null) {
+            item { Text(paymentError, color = WheelColors.duress, fontSize = 13.sp) }
+        }
+
+        item {
+            PrimaryPayButton(
+                "Confirm & close trip",
+                onClick = vm::confirmPayment,
+                enabled = state.canConfirm && !state.paymentInFlight,
+            )
+            if (!state.canConfirm) {
+                Text(
+                    "Enter a voucher code to continue",
+                    color = WheelColors.textMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+/** Corporate/linked account entry sub-screen (see [PaymentMethodOption.ACCOUNT]'s doc). Feeds
+ * [CloseAndPayViewModel.setAccountReference]; same non-blank-before-confirm rule as
+ * [VoucherEntryScreen]. */
+@Composable
+private fun AccountEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+        item { BackHeader("Account payment", onBack) }
+        item { FareSummaryHeader(state.breakdown, compact = true) }
+
+        item {
+            WheelCard {
+                Text("ACCOUNT REFERENCE", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.accountReference,
+                    onValueChange = vm::setAccountReference,
+                    placeholder = { Text("e.g. ACC-04821") },
+                    singleLine = true,
+                    colors = wheelFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        val paymentError = state.paymentError
+        if (paymentError != null) {
+            item { Text(paymentError, color = WheelColors.duress, fontSize = 13.sp) }
+        }
+
+        item {
+            PrimaryPayButton(
+                "Confirm & close trip",
+                onClick = vm::confirmPayment,
+                enabled = state.canConfirm && !state.paymentInFlight,
+            )
+            if (!state.canConfirm) {
+                Text(
+                    "Enter an account reference to continue",
+                    color = WheelColors.textMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+/** Small chip-row selector for one [SplitLegMethod] leg — deliberately not a full dropdown menu,
+ * only 4 options, matching this screen's existing quick-amount chip-row pattern
+ * ([CashCalculatorScreen]'s `quickAmounts` row). */
+@Composable
+private fun SplitLegMethodSelector(selected: SplitLegMethod, onSelect: (SplitLegMethod) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        SplitLegMethod.entries.forEach { option ->
+            val isSelected = option == selected
+            OutlinedButton(
+                onClick = { onSelect(option) },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, if (isSelected) WheelColors.gold else WheelColors.border),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = if (isSelected) WheelColors.gold.copy(alpha = 0.15f) else WheelColors.surface,
+                    contentColor = if (isSelected) WheelColors.gold else WheelColors.textSecondary,
+                ),
+            ) { Text(option.label, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+/**
+ * Split-fare sub-screen (see [PaymentMethodOption.SPLIT_FARE]'s doc) — exactly two legs, each a
+ * [SplitLegMethodSelector] + amount field. "Confirm & close trip" only enables once both amounts
+ * are positive numbers that sum, to the cent, to the total fare
+ * ([CloseAndPayUiState.ReadyToClose.canConfirm]) — the "remaining to allocate" card below gives the
+ * driver the same kind of live feedback [CashCalculatorScreen]'s "change due" card gives for Cash.
+ */
+@Composable
+private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
+    val total = state.breakdown.grandTotal
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+        item { BackHeader("Split fare payment", onBack) }
+        item { FareSummaryHeader(state.breakdown, compact = true) }
+
+        item {
+            WheelCard {
+                Text("PAYMENT 1", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(10.dp))
+                SplitLegMethodSelector(selected = state.splitLegAMethod, onSelect = vm::setSplitLegAMethod)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.splitLegAAmount,
+                    onValueChange = vm::setSplitLegAAmount,
+                    placeholder = { Text("0.00") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    colors = wheelFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        item {
+            WheelCard {
+                Text("PAYMENT 2", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(10.dp))
+                SplitLegMethodSelector(selected = state.splitLegBMethod, onSelect = vm::setSplitLegBMethod)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = state.splitLegBAmount,
+                    onValueChange = vm::setSplitLegBAmount,
+                    placeholder = { Text("0.00") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    colors = wheelFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
+        item {
+            val remaining = state.splitRemaining
+            WheelCard {
+                Text("REMAINING TO ALLOCATE", color = WheelColors.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    remaining?.money() ?: "—",
+                    color = if (remaining != null && remaining.signum() == 0) WheelColors.available else WheelColors.textMuted,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    "Total fare ${total.money()} must be split exactly across both payments",
+                    color = WheelColors.textMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+
+        val paymentError = state.paymentError
+        if (paymentError != null) {
+            item { Text(paymentError, color = WheelColors.duress, fontSize = 13.sp) }
+        }
+
+        item {
+            PrimaryPayButton(
+                "Confirm & close trip",
+                onClick = vm::confirmPayment,
+                enabled = state.canConfirm && !state.paymentInFlight,
+            )
         }
         item { Spacer(Modifier.height(8.dp)) }
     }

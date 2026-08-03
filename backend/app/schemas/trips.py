@@ -5,12 +5,52 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TripType = Literal["rank_hail", "booked", "airport_fixed", "multi_hire"]
 TripStatus = Literal["open", "closed"]
 TimeClass = Literal["day", "night", "holiday"]
-PaymentMethod = Literal["cash", "card"]
+# "voucher" (promo code/prepaid voucher redemption), "account" (pre-registered
+# linked corporate account, pay-later/invoiced) and "split_fare" (multiple
+# sub-payments on one trip) are added on top of the domain brief's original
+# cash/card pair — blueprint 5.2.5. See SplitPaymentItem /
+# _validate_voucher_and_account / _validate_split_payments_required below for
+# the cross-field requirements each new value carries, and
+# app.services.payments.redeem_voucher / validate_account_reference /
+# app.services.trips.SplitPaymentMismatchError for the server-side checks.
+PaymentMethod = Literal["cash", "card", "voucher", "account", "split_fare"]
+# Valid methods for one leg of a split-fare payment — deliberately excludes
+# "split_fare" itself (no nesting).
+SubPaymentMethod = Literal["cash", "card", "voucher", "account"]
+
+
+class SplitPaymentItem(BaseModel):
+    """One leg of a split-fare payment, e.g. {"method": "card", "amount":
+    "20.00"}. A trip's split_payments list must sum (to the cent) to its
+    total — enforced server-side at close time, since that's the only point
+    the trip's final total is known (see app.services.trips.close_trip)."""
+
+    method: SubPaymentMethod
+    amount: Decimal = Field(gt=0)
+
+
+def _validate_voucher_and_account(
+    payment_method: str, voucher_code: str | None, account_reference: str | None
+) -> None:
+    """Shared cross-field validation reused by TripCreate/TripUpdate/
+    TripCloseRequest's model_validator below — mirrors the model_validator
+    pattern already used by app.schemas.payments.CashPaymentRequest."""
+    if payment_method == "voucher" and not (voucher_code and voucher_code.strip()):
+        raise ValueError("voucher_code is required (and non-empty) when payment_method is 'voucher'")
+    if payment_method == "account" and not (account_reference and account_reference.strip()):
+        raise ValueError("account_reference is required (and non-empty) when payment_method is 'account'")
+
+
+def _validate_split_payments_required(
+    payment_method: str, split_payments: list[SplitPaymentItem] | None
+) -> None:
+    if payment_method == "split_fare" and not split_payments:
+        raise ValueError("split_payments is required (and non-empty) when payment_method is 'split_fare'")
 
 
 class TelemetryPoint(BaseModel):
@@ -36,12 +76,23 @@ class TripCreate(BaseModel):
     start_lat: float
     start_lng: float
     payment_method: PaymentMethod = "cash"
+    voucher_code: str | None = None
+    account_reference: str | None = None
     time_class: TimeClass = "day"
     is_peak: bool = False
     maxi: bool = False
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     gps_trace_ref: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_payment_fields(self) -> "TripCreate":
+        # split_payments isn't a TripCreate field — the trip's total isn't
+        # known until close, so split-fare requires closing with
+        # payment_method="split_fare" + split_payments rather than opening
+        # with it.
+        _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
+        return self
 
 
 # --- Update (partial; pre-close mutable fields only) ---------------------
@@ -53,12 +104,22 @@ class TripUpdate(BaseModel):
     shift_id: str | None = None
     tariff_id: str | None = None
     payment_method: PaymentMethod | None = None
+    voucher_code: str | None = None
+    account_reference: str | None = None
+    split_payments: list[SplitPaymentItem] | None = None
     tolls: Decimal | None = None
     extras: Decimal | None = None
     gps_trace_ref: str | None = None
     receipt_ref: str | None = None
     end_lat: float | None = None
     end_lng: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_payment_fields(self) -> "TripUpdate":
+        if self.payment_method is not None:
+            _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
+            _validate_split_payments_required(self.payment_method, self.split_payments)
+        return self
 
 
 # --- Tick -----------------------------------------------------------------
@@ -76,10 +137,27 @@ class TripCloseRequest(BaseModel):
     end_lat: float | None = None
     end_lng: float | None = None
     payment_method: PaymentMethod | None = None
+    voucher_code: str | None = None
+    account_reference: str | None = None
+    split_payments: list[SplitPaymentItem] | None = None
     surcharge_pct: Decimal | None = None
     cleaning_fee: Decimal = Decimal(0)
     include_psl: bool = False
     receipt_ref: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_payment_fields(self) -> "TripCloseRequest":
+        # payment_method=None here means "keep the trip's existing
+        # payment_method" (see app.api.v1.trips.close_trip_endpoint) — only
+        # cross-validate voucher_code/account_reference/split_payments against
+        # an *explicitly* requested payment_method; a trip already opened
+        # with payment_method="voucher" + voucher_code, then closed without
+        # re-specifying either, is valid (app.services.trips.close_trip reads
+        # the value already persisted on the trip row in that case).
+        if self.payment_method is not None:
+            _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
+            _validate_split_payments_required(self.payment_method, self.split_payments)
+        return self
 
 
 # --- Sync (offline bulk replay) ----------------------------------------------
@@ -106,6 +184,17 @@ class TripSyncItem(BaseModel):
     end_lat: float | None = None
     end_lng: float | None = None
     payment_method: PaymentMethod = "cash"
+    # Same three new-payment-method fields as TripCreate/TripCloseRequest (blueprint 5.2.5) —
+    # added so a trip closed offline with voucher/account/split_fare doesn't silently lose those
+    # details on the ONLY path this platform's driver app actually uses to persist a closed trip
+    # (POST /v1/trips/sync — direct TripCreate+TripCloseRequest calls exist in this API but have
+    # no real call site on-device, see the Android app's own ApiService.kt doc on TripSyncItemDto).
+    # split_payments' sum-vs-total check can't happen in this schema (device_total/the recomputed
+    # grand_total aren't known until the router calls recompute_from_trace) — see
+    # app.api.v1.trips.sync_trips for where that check actually runs, mirroring close_trip's.
+    voucher_code: str | None = None
+    account_reference: str | None = None
+    split_payments: list[SplitPaymentItem] | None = None
     time_class: TimeClass = "day"
     is_peak: bool = False
     maxi: bool = False
@@ -118,6 +207,12 @@ class TripSyncItem(BaseModel):
     gps_trace_ref: str | None = None
     receipt_ref: str | None = None
     device_total: Decimal = Field(..., description="The total the offline device computed on-vehicle")
+
+    @model_validator(mode="after")
+    def _validate_payment_fields(self) -> "TripSyncItem":
+        _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
+        _validate_split_payments_required(self.payment_method, self.split_payments)
+        return self
 
 
 # --- Read ---------------------------------------------------------------
@@ -164,6 +259,11 @@ class TripRead(BaseModel):
     variance_pct: Decimal | None
     receipt_ref: str | None
     auto_tolls_applied: list[str] | None = Field(default_factory=list)
+    flagged_for_review: bool
+    review_notes: str | None
+    voucher_code: str | None
+    account_reference: str | None
+    split_payments: list[dict] | None = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -183,6 +283,19 @@ class TripSyncResultItem(BaseModel):
 
 class TripSyncResponse(BaseModel):
     results: list[TripSyncResultItem]
+
+
+# --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------
+
+
+class TripFlagRequest(BaseModel):
+    """Body for PATCH /v1/trips/{id}/flag. `flagged=True` (the default) flags
+    a closed trip for operator review and requires a non-empty `reason`;
+    `flagged=False` clears an existing flag (staff-only — see
+    app.api.v1.trips.flag_trip) and ignores `reason`."""
+
+    flagged: bool = True
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 # --- Receipt delivery (blueprint 5.2.6/8.5) ----------------------------------

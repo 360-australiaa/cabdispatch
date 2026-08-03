@@ -119,6 +119,12 @@ class DuressEvent(Base, TenantScopedMixin, TimestampMixin):
     # captured for this event. Required — every duress event must be locatable.
     gps_stream_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     # Reference to a captured audio recording, if the device supports it.
+    # Either a device-supplied placeholder ref set at trigger time (e.g.
+    # `s3://...`, or the default from `DuressTriggerRequest.audio_ref`), or —
+    # once `POST /v1/duress/{id}/audio` has been called — the actual
+    # BACKEND_ROOT-relative on-disk path of the uploaded recording (see
+    # `app.services.duress.save_duress_audio`), which overwrites whichever
+    # placeholder was there before.
     audio_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Cancel-window bookkeeping + the full timestamped escalation timeline —

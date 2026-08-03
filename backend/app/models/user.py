@@ -9,8 +9,9 @@ this is enforced at the application layer, not the schema layer.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import Date, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -56,3 +57,18 @@ class User(Base, TimestampMixin):
     # call and never activates login until verified.
     mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mfa_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    # Driver compliance-expiry tracking (blueprint 7.2.3/10.1). Nullable, no
+    # server_default — every existing seeded/test user simply has neither set
+    # yet. Null means "unknown", NOT "expired": app.services.compliance_expiry
+    # and POST /v1/auth/driver-login both fail OPEN on a null value here,
+    # matching this codebase's existing treatment of nullable compliance-ish
+    # fields (e.g. driver_licence_no above is optional and never blocks
+    # anything). Only a real, in-the-past driver_license_expiry blocks
+    # driver-login (see app/api/v1/auth.py::driver_login); a real, in-the-past
+    # driver_authority_expiry does not block login in this pass — the task's
+    # blueprint reference (5.2.1) calls out license expiry specifically, not
+    # authority — it only ever raises a FatigueAlert (see
+    # app.services.compliance_expiry).
+    driver_license_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    driver_authority_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)

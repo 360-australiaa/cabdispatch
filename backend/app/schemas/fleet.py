@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for the fleet domain (vehicles + devices)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -34,6 +34,13 @@ class VehicleBase(BaseModel):
     tracking_device_id: str | None = Field(default=None, max_length=100)
     meter_device_id: str | None = Field(default=None, max_length=100)
     status: VehicleStatus = "active"
+    # Compliance-expiry tracking (blueprint 7.2.4/10.1). Null means "unknown,
+    # not expired" — see app.models.fleet.Vehicle's doc comment for the
+    # fail-open convention and app.services.compliance_expiry for the
+    # alerting logic and GET /v1/fleet/compliance-expiry for the dashboard
+    # listing.
+    registration_expiry: date | None = Field(default=None)
+    insurance_expiry: date | None = Field(default=None)
 
     @field_validator("rego")
     @classmethod
@@ -58,6 +65,8 @@ class VehicleUpdate(BaseModel):
     tracking_device_id: str | None = None
     meter_device_id: str | None = None
     status: VehicleStatus | None = None
+    registration_expiry: date | None = None
+    insurance_expiry: date | None = None
 
     @field_validator("rego")
     @classmethod
@@ -190,3 +199,31 @@ class VerifyAdminPinResponse(BaseModel):
 
     valid: bool
     configured: bool
+
+
+# --- Compliance expiry (blueprint 7.2.3/7.2.4/10.1) --------------------------
+# Response shape for `GET /v1/fleet/compliance-expiry` — see
+# app.services.compliance_expiry.list_compliance_expiry for how this is built.
+# Not a direct read of any one ORM row: each item represents ONE expiring/
+# expired field on either a driver (app.models.user.User) or a vehicle
+# (app.models.fleet.Vehicle), so a driver/vehicle with two lapsed fields (e.g.
+# both licence and authority) produces two separate items.
+
+ComplianceExpiryEntityType = Literal["driver", "vehicle"]
+ComplianceExpiryField = Literal[
+    "driver_license_expiry", "driver_authority_expiry", "registration_expiry", "insurance_expiry"
+]
+ComplianceExpiryStatus = Literal["expiring_soon", "expired"]
+
+
+class ComplianceExpiryItem(BaseModel):
+    entity_type: ComplianceExpiryEntityType
+    entity_id: str
+    # Driver name or vehicle rego — for the dashboard to render without a
+    # second lookup.
+    label: str
+    field: ComplianceExpiryField
+    expiry_date: date
+    status: ComplianceExpiryStatus
+    # Negative once past expiry_date (e.g. -5 means "expired 5 days ago").
+    days_remaining: int

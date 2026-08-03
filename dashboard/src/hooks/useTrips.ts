@@ -56,6 +56,8 @@ export interface Trip {
   max_fare_check_passed: boolean;
   variance_pct: string | null;
   receipt_ref: string | null;
+  flagged_for_review: boolean;
+  review_notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -72,6 +74,7 @@ export interface TripListFilters {
   type?: TripType;
   vehicle_id?: string;
   driver_id?: string;
+  flagged_for_review?: boolean;
   skip?: number;
   limit?: number;
 }
@@ -118,6 +121,15 @@ export interface TripCloseInput {
   cleaning_fee?: string | number;
   include_psl?: boolean;
   receipt_ref?: string | null;
+}
+
+/** Body for `PATCH /v1/trips/{id}/flag` — Blueprint 5.2.5's dispute-flag
+ * button. `flagged=true` (default) requires a non-empty `reason`; the trip
+ * must be closed (409 otherwise). Clearing a flag (`flagged=false`) is
+ * staff-only server-side and ignores `reason`. */
+export interface TripFlagInput {
+  flagged?: boolean;
+  reason?: string | null;
 }
 
 export interface VehicleLite {
@@ -238,6 +250,19 @@ export function useCloseTripMutation() {
   return useMutation({
     mutationFn: async ({ id, input }: { id: string; input: TripCloseInput }) => {
       const res = await apiClient.post<Trip>(`/v1/trips/${id}/close`, input);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [TRIPS_KEY] });
+    },
+  });
+}
+
+export function useFlagTripMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: TripFlagInput }) => {
+      const res = await apiClient.patch<Trip>(`/v1/trips/${id}/flag`, input);
       return res.data;
     },
     onSuccess: () => {

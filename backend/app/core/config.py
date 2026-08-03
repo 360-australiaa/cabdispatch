@@ -61,6 +61,19 @@ class Settings(BaseSettings):
     # deviation note and the seam left for a real per-tenant override later.
     FATIGUE_SHIFT_DURATION_LIMIT_HOURS: float = 12.0
 
+    # --- Compliance-expiry tracking (blueprint 7.2.3/7.2.4/10.1) ---
+    # Deployment-wide default/override for the "expiring soon" alert
+    # threshold, in days, used by app.services.compliance_expiry for driver
+    # license/authority and vehicle registration/insurance expiry checks.
+    # DEVIATION (flagged per task instructions): the blueprint calls for
+    # staged reminders at 30/60/90 days out — this pass raises a single
+    # expiring_soon alert kind at one threshold rather than three separate
+    # kinds (same single-threshold-simplification precedent as
+    # FATIGUE_SHIFT_DURATION_LIMIT_HOURS / app.services.fatigue's flat speed
+    # limit). See app.services.compliance_expiry's module docstring for the
+    # full deviation note.
+    COMPLIANCE_EXPIRY_WARNING_DAYS: int = 30
+
     # --- CabCharge ---
     # Authorization -> Docket creation -> Settlement batch (blueprint 5.2.5).
     CABCHARGE_API_KEY: str = "cabcharge_test_placeholder"
@@ -87,6 +100,23 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
+
+    # --- Duress escalation automated call (blueprint 8.3: "Automated phone
+    # call to primary contact (Twilio)") ---
+    # DEVIATION (same rationale as FATIGUE_SHIFT_DURATION_LIMIT_HOURS above):
+    # there is no persisted per-tenant "primary emergency contact" table in
+    # this codebase yet (Tenant only carries theme_json/plan/stripe_acct_id).
+    # This env-overridable, deployment-wide default phone number is dialed
+    # automatically when a duress event's escalation cascade reaches its
+    # final stage (`present_000_call_script` — see
+    # `app.services.duress.escalate_event`), UNLESS the caller supplies an
+    # explicit per-call override via `POST /v1/duress/{id}/escalate`'s
+    # `emergency_contact_phone` field. Empty (the default) means "no contact
+    # configured" — the automated call step is then skipped (recorded in
+    # `escalation_log_json` with `"skipped": true`) rather than dialing a
+    # bogus number. Reuses the same TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/
+    # TWILIO_FROM_NUMBER credentials as the receipt-SMS mock-fallback above.
+    DURESS_ESCALATION_CALL_PHONE: str = ""
 
     # --- Tariff signing (Ed25519 anti-tamper signature over GET /v1/tariffs/active,
     # blueprint B6) ---

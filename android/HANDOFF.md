@@ -23,6 +23,358 @@ time for real compile errors — signature mismatches between sibling files that
 parallel without ever type-checking against each other are the most likely failure mode, not
 conceptual bugs.
 
+## 2026-08-03 (newest, reconciliation + fixes) — Blueprint gap-closing pass verified; two real bugs found and fixed
+
+A 9-agent pass (4 backend, 2 dashboard, 3 Android) closed the remaining Taxi Meter SaaS Complete
+Blueprint gaps: duress Twilio Voice escalation + audio recording, trip dispute flagging + new
+payment methods (voucher/account/split-fare), tariff presets + auto-suggest, driver/vehicle
+accreditation-expiry tracking, and this ambient live-position heartbeat. Rather than trust each
+agent's self-report, this entry documents an independent verification pass done afterward — same
+standard as every prior pass in this project: real backend test run, real migration-apply against
+a scratch sqlite DB, live curl/browser exercise of the new endpoints and dashboard UI, and a
+manual cross-file reconciliation read of everything the 3 concurrent Android agents touched.
+
+**Backend — fully verified live, not just "tests pass":** 395/395 pytest (391 from the workflow's
+own agents + 4 new tests added below), all Alembic migrations (including the two new ones) apply
+cleanly to a fresh sqlite DB via `alembic upgrade head` (this matters — one agent had already
+caught and fixed a real `batch_alter_table` bug in its own migration; this confirms no similar bug
+slipped through), and every new endpoint exercised for real over HTTP: `GET /v1/tariffs/presets`,
+`GET /v1/tariffs/suggest` (correctly detected an airport geofence and honestly degraded since no
+airport-tariff exists yet), `GET /v1/fleet/compliance-expiry` + the driver-login 403 block (set a
+real expired license on the seeded demo driver, confirmed both), `PATCH /v1/trips/{id}/flag`
+(422 without a reason, 200 with one, correctly filterable), and split-fare close validation
+(422 on a mismatched sum). Dashboard: `npm run build` clean, then logged in as the tenant owner in
+a real browser and confirmed the "Review" trip filter, the flagged-trip dispute panel (showing the
+exact `review_notes` set via the API), the Fleet & Drivers compliance-expiry banner, and the
+Tariff Studio preset picker (clicking "Special Event" genuinely prefilled the form) all render and
+work against live data — not just that the code compiles.
+
+**Two real bugs found during this pass and fixed (not by the original agents):**
+1. **`TripSyncItem` schema gap (backend).** The dispute-payments agent had already honestly
+   flagged this in `ApiService.kt`'s own doc comment rather than silently leaving it: the backend's
+   `TripSyncItem` Pydantic schema (`backend/app/schemas/trips.py`) was never extended to accept
+   `voucher_code`/`account_reference`/`split_payments`, even though `TripCreate`/`TripCloseRequest`
+   were — and `POST /v1/trips/sync` is the ONLY network call this app's real offline-first close
+   flow ever makes (`closeTrip`/`createTrip` are live Retrofit surface with no actual call site on
+   this app). Result: a driver closing a trip with a voucher/account/split-fare payment would have
+   that detail captured correctly on-device (Room, receipt, Trip Detail) but silently dropped the
+   moment it synced — Pydantic's `extra="ignore"` neither errors nor persists unknown fields.
+   **Fixed:** `TripSyncItem` now declares all three fields with the same cross-field validation
+   `TripCreate`/`TripCloseRequest` already had, and `app.api.v1.trips.sync_trips` now runs the same
+   voucher-redemption/account-reference/split-sum checks `close_trip` already applied to the online
+   path, before persisting. New tests:
+   `test_sync_voucher_payment_persists_voucher_code`,
+   `test_sync_voucher_without_code_is_422`,
+   `test_sync_split_fare_matching_sum_persists_split_payments`,
+   `test_sync_split_fare_mismatched_sum_is_422` (all passing). The Android-side doc comment on
+   `TripSyncItemDto` (`data/remote/ApiService.kt`) is updated to reflect the fix.
+2. **`RealLocationProvider.kt`'s `supervisePermission()` — likely pre-existing compile error,
+   unrelated to this pass but caught while cross-checking the new heartbeat agent's own honest
+   flag.** The heartbeat agent (building `LivePositionHeartbeat.kt`) noticed that
+   `supervisePermission()` reads a bare `isActive`, but `kotlinx.coroutines.isActive` is an
+   extension property on `CoroutineScope` and this is a plain `private suspend fun` on a class that
+   does NOT implement `CoroutineScope` (`RealLocationProvider : SpeedSource`) — meaning `isActive`
+   there almost certainly has no implicit receiver to resolve against and would be an unresolved
+   reference at real compile time. The agent correctly avoided the same mistake in its own new code
+   (using `scope.isActive` throughout `LivePositionHeartbeat.kt`) but, appropriately, didn't touch
+   the pre-existing file since it was out of that task's scope. Confirmed the reasoning independently
+   and fixed it here: line changed to `scope.isActive` (the class already holds `scope` as a
+   constructor property). **First real compile-error candidate this module has had actually fixed
+   before ever reaching a compiler** — everything else in this file's history has been "reasoned
+   through," this one had a specific, checkable Kotlin-semantics argument behind it.
+
+**Android reconciliation (3 concurrent agents on overlapping files — `AppContainer.kt`,
+`ApiService.kt`, `DuressController.kt`):** read every diff by hand. `AppContainer.kt` cleanly
+carries both the new `livePositionHeartbeat` singleton and the new `duressAudioRecorder`-wired
+`duressController` construction — no duplicate singleton, no clobbered edit.  `ApiService.kt`
+cleanly carries the new `flagTrip`/`uploadDuressAudio` endpoints and the extended
+`TripCreateDto`/`TripCloseRequestDto`/`TripSyncItemDto`/`TripDto` fields plus the new
+`SplitPaymentEntryDto`/`TripFlagRequestDto` types — no name collisions. `LivePositionHeartbeat.kt`
+(new file) read in full: correct `SessionHolder.session`/`DriverSession.shiftId`/`vehicleId` field
+usage confirmed against `domain/Session.kt`'s real shape, correct `scope.isActive` usage (see bug
+#2 above). Still, as always: **none of this has been run through a real Kotlin compiler** — these
+two fixes are the ones a careful read could actually prove wrong; anything subtler (a genuine type
+mismatch this reasoning didn't catch) is still only found by `./gradlew assembleDebug`.
+
+## 2026-08-03 (newest) — Voucher/account/split-fare payment methods + "Dispute" button (Close & Pay / Trip Detail)
+
+Direct request, scoped to `ui/screens/closepay/` (extend the existing payment-method picker
+pattern, do not restructure the screen) plus a new "Dispute" action on Trip Detail. Backend
+counterpart already existed going into this pass (a sibling backend agent's own work this same
+session) — used its exact contract, not a guess: `POST /v1/trips`/`PATCH /v1/trips/{id}`/
+`POST /v1/trips/{id}/close` all gained optional `voucher_code`/`account_reference`/
+`split_payments` fields, `PaymentMethod` widened to `cash|card|voucher|account|split_fare`, and
+`PATCH /v1/trips/{id}/flag` (body `{flagged, reason}`) is the new "Dispute" endpoint —
+`backend/app/schemas/trips.py`, `backend/app/api/v1/trips.py`.
+
+**Did NOT touch `domain/fare/FareEngine.kt`** (the golden-vector-proven one, per the task's
+explicit instruction) — confirmed first, by reading it, that `close(paymentMethod: String, ...)`
+only ever branches on `paymentMethod == "card"` (for the non-cash surcharge); every other string,
+including the three new values, already takes the no-surcharge path with zero code changes. The
+charged total (`grandTotal`) is unaffected by any of this pass's work.
+
+**What changed:**
+- **`ui/screens/closepay/CloseAndPayViewModel.kt`** — `PaymentMethodOption` gained `VOUCHER`,
+  `ACCOUNT`, `SPLIT_FARE` (persisted values `"voucher"`/`"account"`/`"split_fare"`, matching the
+  backend's widened `PaymentMethod` Literal exactly); new `SplitLegMethod` enum
+  (`cash|card|voucher|account`, no `split_fare` — mirrors the backend's `SubPaymentMethod` Literal,
+  used only for a split-fare leg's own method). `ReadyToClose` gained `voucherCode`,
+  `accountReference`, `splitLegAMethod`/`splitLegAAmount`, `splitLegBMethod`/`splitLegBAmount`
+  (exactly two legs, per the brief — not the backend's unbounded list) + a `splitRemaining`
+  getter (mirrors `changeDue`'s pattern for Cash). `canConfirm` extended per-method (non-blank
+  code/reference; both split amounts positive and summing exactly to `grandTotal`).
+  `selectPaymentMethod`'s surcharge logic reclassified as a `when` over all 7 methods — voucher/
+  account/split-fare are cash-like (0% surcharge), matching neither being a card swipe.
+  **Caught and fixed a real bug while wiring this**: `confirmPayment()`'s dispatch `when` wasn't
+  exhaustive (a statement `when`, so the compiler wouldn't have caught it) — without adding
+  branches for the three new methods, tapping "Confirm & close trip" under Voucher/Account/
+  Split Fare would have silently done nothing. Fixed by routing all of CASH/CABCHARGE/VOUCHER/
+  ACCOUNT/SPLIT_FARE through the existing `finalizeCloseWithProcessingDelay` (none of them touch a
+  real payment gateway). `finalizeClose`/`buildReceipt` updated to pass/print the new fields.
+- **`ui/screens/closepay/CloseAndPayScreen.kt`** — three new sub-screens matching the existing
+  Cash/CabCharge sub-screen pattern exactly (`BackHeader` + `FareSummaryHeader(compact=true)` +
+  a `WheelCard` + `PrimaryPayButton`): `VoucherEntryScreen` (one text field), `AccountEntryScreen`
+  (one text field), `SplitFareEntryScreen` (two `SplitLegMethodSelector` chip-rows + amount fields
+  + a "remaining to allocate" card, same visual language as Cash's "change due" card).
+  `MethodPickerScreen` gained three more `SecondaryPayButton`s. No change to `ReadyToCloseContent`'s
+  overall shape — same `PaymentSubScreen` enum + `when`-dispatch pattern, three more cases.
+- **`data/local/entity/TripEntity.kt`** — three new nullable columns: `voucherCode`,
+  `accountReference`, `splitPaymentsJson` (JSON-encoded `List<SplitPaymentEntryDto>`, same
+  raw-blob convention `gpsTraceJson` already uses). `data/local/AppDatabase.kt` version bumped
+  3 -> 4 (no Migration, same "still pre-release, no installed base" reasoning already documented
+  there for the 1->2 and 2->3 bumps — do NOT copy that pattern once this ships for real).
+- **`data/repository/TripRepository.kt`** — `closeTrip()` gained `voucherCode`/`accountReference`/
+  `splitPayments` params (all optional, defaulted null — every existing call site, including the
+  JVM test in `OutboxDrainerTest.kt`, keeps compiling unchanged), persisted onto the new
+  `TripEntity` columns. `toSyncItemDto()` passes them through to the new `TripSyncItemDto` fields.
+- **`data/remote/ApiService.kt`** — new `SplitPaymentEntryDto`, `TripFlagRequestDto`; new
+  `flagTrip()` endpoint (`PATCH /v1/trips/{tripId}/flag`); `TripCreateDto`/`TripCloseRequestDto`/
+  `TripSyncItemDto`/`TripDto` all gained the matching fields, mirroring the backend's widened
+  schemas field-for-field (payment_method comments updated everywhere they appeared).
+- **`ui/screens/tripdetail/TripDetailViewModel.kt`/`TripDetailScreen.kt`** — the "Dispute" button.
+  Checked `ui/screens/hired/` first per the brief and confirmed it's the wrong place (S3/HIRED only
+  ever shows the live in-progress trip, never a closed one) — Trip Detail (reached from the Trips
+  wheel-slot content, already existed) is the real trip-history surface. New `DisputeSubmitState`
+  enum + `disputeReason`/`disputeState`/`disputeError` on `TripDetailUiState.Loaded`;
+  `submitDispute()` calls `ApiService.flagTrip` with two client-side gates before it ever touches
+  the network: a non-blank reason (mirrors the backend's 422) and a non-null
+  `TripEntity.serverId` (a trip shown here can be closed-but-not-yet-synced — see
+  `TripDao.observeRecentTrips`'s own doc — and there's no server-side trip id to flag until
+  `SyncWorker` confirms one; this screen surfaces that as an explicit "hasn't synced yet" message
+  rather than a confusing network error). `TripDetailScreen.kt` wrapped its body in
+  `verticalScroll` (wasn't scrollable before; the new Dispute card made that latent overflow risk
+  real) and added a `DisputeSection` composable matching the existing card visual language.
+  `domain/format/TripDisplayFormat.kt#asPaymentMethodLabel` extended for the three new values (used
+  by both Trip Detail and the Trips history rows).
+
+**Known gap, flagged loudly rather than silently assumed fixed — read this before debugging why a
+voucher code "disappeared":** this app's *actual* live network path for closing a trip is
+`POST /v1/trips/sync` (the offline outbox drain, `SyncWorker`/`TripRepository`'s own "never awaits
+a network call" rule) — `ApiService.createTrip`/`closeTrip` are live Retrofit contract surface that
+mirror the backend 1:1 but have **no call site** anywhere in this app, same as before this pass.
+The backend's `TripSyncItem` Pydantic schema (`backend/app/schemas/trips.py`) was **not** extended
+by the sibling backend pass to carry `voucher_code`/`account_reference`/`split_payments` — only
+`TripCreate`/`TripUpdate`/`TripCloseRequest` were. So: `voucherCode`/`accountReference`/
+`splitPayments` are captured correctly, persisted correctly to Room, and shown correctly on the
+in-app receipt and Trip Detail — but when the trip syncs to the server, Pydantic's default
+`extra="ignore"` behaviour silently drops those three fields (no error, no crash) while
+`payment_method` itself (e.g. `"voucher"`) still syncs and persists fine. `TripSyncItemDto` sends
+them anyway (harmless, forward-compatible) with a loud doc comment explaining exactly this, so a
+future backend pass that extends `TripSyncItem` needs zero Android-side change. This is the same
+class of gap `PaymentMethodOption.CABCHARGE`'s own pre-existing doc already flags for docket
+richness — not a new pattern, just a new instance of it.
+
+**Genuinely unverified, same standing caveat as every entry in this file:** none of this has ever
+been run through `kotlinc`. The riskiest single thing to check first on a real build: the
+`SplitLegMethod.entries` usage in `SplitLegMethodSelector` (Kotlin 1.9+ `entries` — already used
+elsewhere in this module, e.g. `WheelSlot.entries`/`ProfileTab.entries` in
+`WheelDashboardScreen.kt`/`ProfileScreen.kt`, so this should be safe, but it's the one new-to-this-
+pass stdlib API surface touched). Everything else in this pass is the same well-established
+Compose/Retrofit/Room/kotlinx.serialization surface every prior pass in this file has already used
+successfully.
+
+## 2026-08-03 (newest) — Duress audio recording, wired into the existing Active-phase state machine
+
+Direct request, closing the "optional audio recording" gap in Blueprint §4.3/§8.3. The backend
+counterpart already existed going into this pass (a sibling backend agent's own work this same
+day): `POST /v1/duress/{event_id}/audio` (multipart `file` field, returns `DuressEventRead`) and
+`GET /v1/duress/{event_id}/audio` (playback, not consumed by this device) —
+`backend/app/api/v1/duress.py`/`backend/app/services/duress.py`. Used that exact contract, not a
+guess.
+
+**What changed:**
+- **New `domain/duress/DuressAudioRecorder.kt`** — a real `android.media.MediaRecorder` wrapper,
+  MPEG-4 container + AAC encoder (`.m4a`, matching the backend's own doc-comment example path).
+  `start(eventId)`/`stop()` are both `suspend fun`s (`withContext(Dispatchers.IO)` internally,
+  since `MediaRecorder.prepare()`/`start()`/`stop()`/`release()` are blocking calls). Permission
+  handling mirrors `domain/location/RealLocationProvider.kt`'s exact graceful-degradation pattern
+  (read that file first if you haven't — this class's doc points at it explicitly): `start()`
+  checks `RECORD_AUDIO` via `ContextCompat.checkSelfPermission` and returns `false` (a silent
+  no-op) if ungranted, never throws, and never crashes the duress state machine either way. Unlike
+  `RealLocationProvider` this class does not itself poll for a later grant — see its doc for why
+  that's a deliberate difference, not an oversight (a duress Active phase is one bounded lifecycle,
+  not a process-lifetime subscription). `MediaRecorder(Context)` (API 31+) vs. the deprecated
+  no-arg constructor (this project's minSdk 29) is branched on `Build.VERSION.SDK_INT`, same
+  constraint `RealLocationProvider`'s doc already flags elsewhere in this module (the Ed25519/API
+  level note).
+- **Documented simplification, exactly as this task's brief pre-authorized:** Blueprint §4.3/§8.3
+  literally says "a 60-second circular buffer". This implementation is the simpler alternative the
+  brief explicitly sanctioned instead — record into a single file for up to
+  `DuressAudioRecorder.MAX_RECORDING_DURATION_MS` (60s) and then stop, not a true rolling buffer
+  that retains only the trailing 60 seconds of a longer recording. A real circular buffer needs
+  either chunked/stitched short-segment recording or a raw PCM ring buffer + manual encoder pass —
+  meaningfully more moving parts than a capped single `MediaRecorder` session, for code that has
+  never been run through a compiler let alone a device mic. If a genuine rolling buffer is wanted
+  later, `DuressAudioRecorder` is the one file to rework; nothing else needs to change (the
+  60s-cap enforcement lives in `DuressController.runActivePhase`, not in this class, precisely so
+  swapping the recording strategy doesn't touch the state machine — see below).
+- **`domain/DuressController.kt`** — new optional constructor param `audioRecorder:
+  DuressAudioRecorder? = null` (nullable/defaulted the same way `locationProvider` is nullable, for
+  the same "no real Context in a test/preview construction" reason — see that class's own doc,
+  now with a new "Audio recording" section). **Did not duplicate the state machine, per the task's
+  explicit instruction** — `runActivePhase` (the existing GPS-relay/dispatcher-resolution poll
+  loop) is the only place that calls into `DuressAudioRecorder`:
+  - Starts recording the moment a real event id is known inside that same function (which, per
+    the existing trigger-retry timing already documented on this class, is almost always the same
+    moment `Active` itself is reached — see the new doc comment for the one honest edge case where
+    it isn't: still fully offline at that point).
+  - Every poll iteration (already running every 5s via `ACTIVE_POLL_INTERVAL_MS`) checks elapsed
+    time against `MAX_RECORDING_DURATION_MS` and stops+uploads once it's past — no new timer/job,
+    reuses the loop that was already there.
+  - Also stops+uploads (if not already) the moment the loop sees the event reach a terminal
+    status — so a duress event resolved in under 60s still gets whatever was captured, not just
+    the full-60s-or-nothing case.
+  - New private `stopAndUploadAudio(eventId)` helper: `audioRecorder?.stop()` (a no-op/`null` if
+    nothing was recording — safe to call from both the cap-elapsed and terminal-status paths even
+    though at most one of them actually has anything to stop) then
+    `repository.uploadAudio(eventId, file)`, best-effort, same swallow-and-continue convention as
+    every other network call already in this function.
+- **`domain/DuressRepository.kt`** — new `uploadAudio(eventId, file): Result<DuressEventDto>` on
+  the interface + `RemoteBackedDuressRepository` impl (builds a `MultipartBody.Part` via OkHttp's
+  `File.asRequestBody(...)`, `"audio/mp4"` content-type — a reasonable label, not load-bearing,
+  since the backend reads the upload generically via FastAPI's `UploadFile` and never inspects
+  `content_type`, per that endpoint's own contract notes).
+- **`data/remote/ApiService.kt`** — new `@Multipart @POST("/v1/duress/{eventId}/audio")
+  uploadDuressAudio(eventId, file: MultipartBody.Part): DuressEventDto`. First `@Multipart`
+  endpoint in this file — every other upload-shaped concern in this app so far has been JSON
+  bodies only, so this is a genuinely new Retrofit annotation combination for this codebase (low
+  risk: it's standard, well-documented Retrofit surface, not a Mapbox-SDK-shaped "might not match
+  the real API" risk). `DuressEventDto` already had `audio_ref` from the original duress pass —
+  no DTO change needed there.
+- **`data/AppContainer.kt`** — new `duressAudioRecorder: DuressAudioRecorder by lazy {
+  DuressAudioRecorder(appContext) }`, threaded into the existing `duressController` construction.
+  No new `CoroutineScope` needed (unlike `speedSource`/`duressController` themselves) — the
+  recorder has no supervising loop of its own to run, it's driven entirely by
+  `DuressController.runActivePhase`'s existing scope/loop, per the "don't duplicate the state
+  machine" instruction.
+- **`AndroidManifest.xml`** — added `android.permission.RECORD_AUDIO` +
+  `<uses-feature android:name="android.hardware.microphone" android:required="false" />` (mirrors
+  the existing optional-camera-feature pattern just above it for QR pairing). No runtime-request
+  flow wired anywhere yet — same standing gap this file already documents for
+  `ACCESS_FINE_LOCATION`/`CAMERA` (grep for `ContextCompat.checkSelfPermission`, every hit today
+  only checks, never requests); ungranted `RECORD_AUDIO` degrades to "no audio captured, everything
+  else in the duress flow unaffected", never a crash, per the class's own doc.
+
+**Not done, flagged rather than silently left implicit (none of this has ever been run through a
+compiler — same standing caveat as every entry in this file):**
+- The circular-buffer simplification above.
+- The "still fully offline when Active is reached" audio-start gap above (rare in practice given
+  the existing trigger-retry timing, but real).
+- `MediaRecorder.stop()`'s well-known platform quirk (`RuntimeException` when stopped with no
+  valid data ever written, e.g. near-instant start/stop) is caught with `runCatching` and treated
+  as "nothing to upload" via the file-length check in `DuressAudioRecorder.stop()` — reasoned
+  through, not verified on a real device/emulator.
+- No UI surface for a driver to see "recording in progress" — the brief didn't ask for one, and
+  Blueprint §4.3/§8.3 doesn't call for on-screen recording-indicator UI either (arguably correct
+  for a safety feature that shouldn't visibly announce itself mid-duress); flagging in case that
+  reading is wrong.
+- Playback (`GET /v1/duress/{event_id}/audio`) is not called from this app — it's a
+  dispatcher/dashboard-side concern per the backend contract, out of scope for the driver device.
+
+## 2026-08-03 (same day as the duress-audio pass above) — Ambient live-position heartbeat while on shift (Blueprint §6.2.2)
+
+Direct request, closing a real gap this file has flagged in three separate places (the MDM
+"locate" entry below, its own "Medium priority" gap list entry, and the GPS-core reconciliation
+pass's own gap list): `POST /v1/fleet/positions` (`ApiService.publishPosition`) was only ever
+called *reactively*, in response to an admin's MDM "locate" request
+(`SettingsViewModel.respondToLocateRequest`, itself only checked once, whenever S6/Settings
+happens to be opened) — a dispatcher watching the fleet dashboard's Live Map saw no moving dot for
+a driver just driving around normally. The Taxi Meter SaaS Complete Blueprint's own WebSocket spec
+(§6.2.2) literally specifies `vehicle.heartbeat -> Every 30 seconds: GPS, status, battery` as an
+ambient event while a vehicle is on shift; nothing implemented that until now.
+
+**What changed:**
+
+- **New `domain/LivePositionHeartbeat.kt`.** Mirrors `domain/DuressController.kt`'s shape (a
+  process-lifetime `AppContainer` singleton, own `SupervisorJob`-backed `CoroutineScope`, not tied
+  to any screen's ViewModel scope) but is *self-supervising* rather than externally
+  trigger()/cancel()-driven: `start()` (called exactly once, from `AppContainer.init()`) launches a
+  coroutine that collects `SessionHolder.session` for the process lifetime and starts/stops its own
+  30s publish loop accordingly — the same self-supervising "poll/observe a condition, start/stop a
+  child job" shape `domain/location/RealLocationProvider.kt`'s `supervisePermission` already uses
+  for its own permission-gated start/stop (there: location permission; here: a shift being open).
+  This means **no screen or ViewModel needed any change** to make this work — `LoginVehicleBindViewModel.startShift`
+  (sets `SessionHolder.session` with a real `shiftId`) and `ShiftSubmittedScreen`'s DONE button
+  (`SessionHolder.clear()`) already existed and already are this class's only two triggers; it just
+  had nothing observing them for this purpose before.
+- **"On shift" signal:** `SessionHolder.session.value?.shiftId != null` — the same field
+  `ui/screens/shiftreport/ShiftReportViewModel.kt` already treats as "is there really an active
+  shift" (see that class's `init`). Deliberately gated on shift state, not on the separate,
+  still-unwired "For Hire"/availability toggle (see this file's "Availability broadcast not wired"
+  gap below) — the blueprint's own wording is "while a vehicle is on shift", an ambient presence
+  signal, not "while marked available for offers"; a driver on shift but on a break or mid-trip
+  should still show up somewhere on the Live Map, not vanish from it.
+- **Publishes `AppContainer.speedSource.locationFix`** (the real fused-GPS feed from the
+  2026-08-03 GPS-core pass, same feed `SettingsViewModel.respondToLocateRequest` already reads)
+  through the existing `ApiService.publishPosition` — no new backend endpoint, no new DTO. Skips
+  silently (not an error) whenever there is no fix yet, same reasoning as
+  `respondToLocateRequest`. `status` is published as a fixed `"unknown"` placeholder for the same
+  reason that method's own placeholder exists: this app has no other real-time
+  available/on-trip/break signal a process-lifetime singleton can read yet. Blueprint's line also
+  names "battery" alongside GPS/status — **not sent**, flagged rather than silently dropped:
+  `PositionPublishRequestDto` has no battery field at all (the backend's `PositionPublishRequest`
+  doesn't carry one), so this cannot honestly be added without a backend/DTO change first.
+- **`AppContainer.kt`** gained the `livePositionHeartbeat` singleton (constructed with `apiService`
+  + `speedSource`, own `CoroutineScope(SupervisorJob() + Dispatchers.Default)`, same pattern as
+  `duressController`/`speedSource` above it) and one new line in `init()`,
+  `livePositionHeartbeat.start()` — unlike every other `by lazy` singleton in that file, nothing
+  else in the app ever needs to reference this property by name for it to do its job, so it has to
+  be forced eagerly in `init()` rather than left to whenever some screen happens to first touch it
+  (the same reasoning `tariffSigningKeyCache`'s warm-up call already documents for itself).
+  `data/remote/ApiService.kt`'s `PositionPublishRequestDto` doc comment updated to name this as a
+  third call site (was "two call sites").
+- **Softens, but does not fully close, the MDM-locate gap documented below and in this file's
+  "Medium priority" list:** `respondToLocateRequest` itself is unchanged — `locate_requested` is
+  still only read/acted on once, whenever S6/Settings happens to be opened. What changes in
+  practice: any device that's on shift now publishes a fresh position every 30s regardless of
+  whether an admin ever asked, so a dispatcher watching Live Map sees a live-ish dot on its own
+  within half a minute of shift start, without needing a locate request to be answered at all. The
+  specific mechanic those other entries describe (the `locate_requested` flag itself only getting
+  acknowledged when S6 opens) is still real and still unchanged by this pass — left as-is rather
+  than silently implied fixed.
+
+**Genuinely unverified, flagged loudly (same standing caveat as every entry in this file — this
+machine has no Android SDK either):** never run through `kotlinc`. The riskiest single line, by
+eye, is `SessionHolder.session.collect { session -> ... }` inside `LivePositionHeartbeat.start()` —
+relies on the trailing-lambda-to-`FlowCollector` SAM conversion (`FlowCollector` is a `fun
+interface`) resolving against `Flow<T>`'s member `collect(FlowCollector<T>)` the same way
+`WheelDashboardViewModel.kt`'s existing `region.collect { r -> ... }` already does in this exact
+codebase — if that assumption is wrong for some reason this pass didn't anticipate, this is the
+first place to look. Everything else in the new file deliberately avoids the one other real risk
+this pass noticed while reading `RealLocationProvider.kt` for reference: that file's
+`supervisePermission()` is a plain `private suspend fun` (no `CoroutineScope` receiver) that reads
+a bare `isActive` — `kotlinx.coroutines.isActive` is declared as an extension property on
+`CoroutineScope`, and a plain suspend function with no such receiver in scope has no implicit
+receiver for it to resolve against, which reads like a real "unresolved reference: isActive" risk
+in that existing file. Not touched here (out of this pass's scope — the brief was the new
+heartbeat, not auditing/fixing `RealLocationProvider.kt`), but flagged here rather than silently
+copied: `LivePositionHeartbeat.kt`'s own `publishLoop`/`publishOnce` use `scope.isActive` with an
+explicit receiver everywhere instead, which resolves unambiguously regardless of implicit-receiver
+rules. Whoever hits real compile errors in `RealLocationProvider.kt`'s `supervisePermission` should
+look at this same fix (either give it a `CoroutineScope` receiver or use `scope.isActive`/`while
+(true)` with cancellation propagating through `delay()` instead, the way `DuressController`'s own
+poll loops already do).
+
 ## 2026-08-03 (newest) — Dashboard restructured into a permanent split panel: wheel fixed right, all content left
 
 Direct request, working from a Gemini-generated reference HTML (`Dispatch Tablet - Exact Metallic
@@ -173,8 +525,11 @@ single up-to-date list):**
   "locate") is functionally addressed as of the dated entries below — genuinely open, narrower
   follow-ups each of those entries already flags explicitly: the GPS status-strip dot and duress
   GPS relay still reading a separate raw `LocationManager` fix instead of `AppContainer.speedSource`,
-  the driver-initiated-hire `TripContext.startLat`/`startLng` still hardcoded `0.0, 0.0`, no
-  periodic background heartbeat (so MDM "locate" only answers when S6 is opened), and
+  the driver-initiated-hire `TripContext.startLat`/`startLng` still hardcoded `0.0, 0.0`, ~~no
+  periodic background heartbeat (so MDM "locate" only answers when S6 is opened)~~ **partially
+  addressed (2026-08-03, "Ambient live-position heartbeat" pass) — see that entry above:** a
+  process-wide 30s while-on-shift position heartbeat now exists, though it doesn't itself read or
+  acknowledge `locate_requested` (still only actioned when S6 is opened), and
   `LoginVehicleBindViewModel.kt`'s `DEMO_DRIVER_ID` quick-login constant no longer matching a real
   seeded `driver_code`.
 
@@ -360,7 +715,13 @@ now that a real location provider exists (the 2026-08-03 location/fare-engine pa
   no periodic/background heartbeat anywhere in this app yet, so a "Locate" request only gets
   answered the next time S6 is opened, not the instant an admin sets the flag. Closing that would
   need a periodic background heartbeat (WorkManager, mirroring `sync/SyncWorker.kt`'s pattern) —
-  a materially bigger change than "wire the existing flow", left open below.
+  a materially bigger change than "wire the existing flow", left open below. **Partially addressed
+  (see the same day's later "Ambient live-position heartbeat" entry above):** a separate 30s
+  while-on-shift heartbeat now exists (`domain/LivePositionHeartbeat.kt`), so in practice a
+  dispatcher sees a fresh position within ~30s of shift start regardless of whether a locate
+  request was ever sent — but that new heartbeat does not read or acknowledge `locate_requested`
+  itself; the specific mechanic described in this paragraph (the flag only getting acted on when
+  S6 opens) is still real, just less consequential now that positions publish ambiently anyway.
 
 ## 2026-08-02 (even later) — Fixed: real map rendering solid black
 
@@ -742,7 +1103,13 @@ list.
   heartbeat exists in this app yet, so a locate request isn't answered until the driver next opens
   that screen. `reboot_requested` remains intentionally backend-only (see the Low-priority
   hardware note's spirit — this one's blocked by missing device-owner OS permissions, not missing
-  hardware).
+  hardware). ~~No periodic background heartbeat exists in this app yet~~ **Partially addressed
+  (2026-08-03, "Ambient live-position heartbeat" pass, same day):** `domain/LivePositionHeartbeat.kt`
+  now publishes a position every 30s for the whole duration of an open shift, independent of
+  whether any locate request was ever sent — so in practice a dispatcher isn't waiting on a locate
+  response at all for a driver who's on shift. The `locate_requested` flag itself is still only
+  read/acted on when S6 happens to be opened, unchanged by that pass — see its own entry for the
+  exact scope of what it did and didn't close.
 - ~~Duress gesture is a no-op~~ **Fixed (wheel-redesign Profile/overlays pass):** the hidden
   triple-tap gesture (S3/Hired and the wheel-dashboard shell) now calls the real backend duress
   endpoints via `domain/DuressController.kt` + `domain/DuressRepository.kt`, driving the

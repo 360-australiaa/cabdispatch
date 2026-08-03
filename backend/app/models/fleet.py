@@ -10,9 +10,9 @@ here (unlike `app.models.tariffs`).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -55,6 +55,15 @@ class Vehicle(Base, TimestampMixin, TenantScopedMixin):
     tracking_device_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     meter_device_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=VEHICLE_STATUS_ACTIVE)
+
+    # Compliance-expiry tracking (blueprint 7.2.4/10.1) — same nullable,
+    # fail-open-on-missing-data convention as User.driver_license_expiry /
+    # User.driver_authority_expiry (see that model's doc comment): null means
+    # "unknown", not "expired", and never blocks anything on its own. See
+    # app.services.compliance_expiry for the expiring-soon/expired detection
+    # logic and GET /v1/fleet/compliance-expiry for the dashboard listing.
+    registration_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    insurance_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class Device(Base, TimestampMixin, TenantScopedMixin):

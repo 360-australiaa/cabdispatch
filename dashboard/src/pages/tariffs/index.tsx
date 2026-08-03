@@ -20,6 +20,7 @@ import {
 } from "@/hooks/useTariffStudio";
 import { ChangeLogModal } from "./ChangeLogModal";
 import { TariffFormModal } from "./TariffFormModal";
+import { TariffSuggestPanel } from "./TariffSuggestPanel";
 import { TollZonesPanel } from "./TollZonesPanel";
 import { extractErrorMessage, formatDateTime, formatMoney, REGION_OPTIONS, regionBadgeVariant } from "./format";
 
@@ -159,6 +160,8 @@ export default function TariffsPage() {
 
       {tab === "tariffs" && (
         <>
+      <TariffSuggestPanel />
+
       <Card className="mb-4">
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="flex flex-col gap-1.5">

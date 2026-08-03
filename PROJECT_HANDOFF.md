@@ -10,9 +10,9 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 
 | Part | Files | Real status |
 |---|---|---|
-| Backend (FastAPI) | 82 app + 25 tests | **Done and verified.** 325 tests passing (up from 300 — new `test_driver_login.py`, `test_admin_pin.py`, plus tariff-signing coverage in `test_tariffs.py`), incl. the golden fare-vector compliance suite, exercised live end-to-end over real HTTP — driver-PIN login, admin-PIN device verification, and Ed25519 tariff-signature verification were each independently re-verified by hand this pass (not just "tests pass" — a real signed payload was fetched from the DB and tampered with to confirm the signature check actually detects it). |
-| Dashboard (React) | 95+ | **Done and verified.** 14 ops modules now (13 + new **Messages** — driver↔dispatch threads, `/messages`). `npm run build` is clean (`tsc -b && vite build`, zero errors) and a real message was sent through the live UI and confirmed persisted via a direct API call this pass. |
-| Android driver app (Kotlin) | ~75 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens, including job offers, messaging, and a restyled meter/payment flow. Latest pass: real GPS (`FusedLocationProviderClient`) now drives the fare engine, map centering, and region auto-detection — replacing the fixed `StubSpeedSource`/hardcoded `"urban"` region; driver login now hits a real `POST /v1/auth/driver-login` (driver-PIN, not email/password); admin-PIN factory-reset and tariff-signature verification are now real (Ed25519, server-verified), replacing hardcoded placeholders; MDM "locate" now answers with a real position. **Still never compiled** — no Android SDK in the environment that built any of this — so none of the Android-side changes across any pass have been visually confirmed, only reasoned through against the existing code and cross-checked file-by-file against `git diff` this pass (see `android/HANDOFF.md`'s top entry). |
+| Backend (FastAPI) | 82 app + 27 tests | **Done and verified.** 395 tests passing (up from 325 — new `test_compliance_expiry.py`, plus dispute/payment/preset/duress coverage across `test_trips.py`/`test_tariffs.py`/`test_duress.py`), incl. the golden fare-vector compliance suite. Every Alembic migration (10 revisions) applies cleanly to a fresh sqlite DB. This pass's new endpoints were each independently re-exercised live over real HTTP, not just "tests pass": tariff presets/suggest, driver/vehicle compliance-expiry (including the real login-block on an actually-expired license), trip dispute flagging (422 without a reason, 200 with one), and split-fare close validation (422 on a mismatched sum). |
+| Dashboard (React) | 95+ | **Done and verified.** 14 ops modules, all built against the real API. `npm run build` is clean and this pass's new UI (Trips "Review" filter + dispute panel, Fleet compliance-expiry banner, Tariff Studio preset picker) was exercised live in a real browser against real data — not just compiled. |
+| Android driver app (Kotlin) | ~80 | **Source-complete, unverified.** Wheel-nav dashboard redesign (TCT-DRIVER-APP-01) on top of the original meter screens. This pass added: an ambient 30s live-position heartbeat while on shift (closing the "Live Map shows no moving dot" gap — blueprint §6.2.2's own literal spec), duress audio recording (60s, real if mic permission granted) with upload, and voucher/account/split-fare payment methods + a trip-dispute button on Close & Pay / Trip Detail. **Two real bugs were found and fixed during reconciliation, not left for a future compile** — see `android/HANDOFF.md`'s top entry: a backend schema gap that was silently dropping the new payment fields on the app's actual offline-sync path, and a likely pre-existing `isActive`-without-a-CoroutineScope-receiver compile error in `RealLocationProvider.kt`. **Still never compiled** — no Android SDK in this environment — so nothing here has been visually confirmed, only reasoned through and cross-checked file-by-file. |
 
 **2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
 
@@ -83,6 +83,44 @@ future work, not an oversight.
 **Messages (`app/api/v1/messages.py`) — also verified live:** one thread per driver
 (`thread_id == driver_id`), `sender_type` `dispatch`/`driver`, `WS /v1/messages/live?driver_id=`
 for real-time delivery. Simple by design — no multi-party threads, no attachments.
+
+**2026-08-03 addition (later) — duress voice/audio, trip dispute + new payment methods, tariff
+presets, driver/vehicle compliance-expiry — a 9-agent pass, independently re-verified live
+afterward (not just "tests pass"), with two real bugs found and fixed during that verification:**
+
+- **Duress escalation call + audio recording (`app/services/duress.py`, `app/api/v1/duress.py`).**
+  A real Twilio Voice call now fires automatically when the escalation cascade reaches its final
+  stage (mock-fallback if no `DURESS_ESCALATION_CALL_PHONE`/Twilio credentials configured, same
+  pattern as every other paid integration). New `POST`/`GET /v1/duress/{id}/audio` — upload and
+  play back a captured audio recording (local-disk storage, same convention as receipts/
+  compliance docs), reusing the existing `DuressEvent.audio_ref` column rather than a new one.
+- **Trip dispute flagging + voucher/account/split-fare payments (`app/models/trips.py`,
+  `app/services/trips.py`, `app/services/payments.py`).** New `PATCH /v1/trips/{id}/flag`
+  (422 without a non-empty reason, 409 on a still-open trip) and a `flagged_for_review` filter on
+  `GET /v1/trips`. `payment_method` now also accepts `voucher` (redemption stub), `account`
+  (corporate-account reference, stub), and `split_fare` (a list of sub-payments that must sum,
+  to the cent, to the trip's final total — 422 otherwise). Live re-verified: created and closed a
+  real trip, flagged it without a reason (422), flagged it with one (200), confirmed the filter
+  and the dashboard's dispute panel showed the exact reason text back.
+- **Tariff presets + auto-suggest (`app/services/tariff_presets.py`, `app/services/tariffs.py`).**
+  `GET /v1/tariffs/presets` (Airport Rank / Special Event / Shared Ride / Wheelchair Accessible —
+  prefills the existing accurate NSW Fares Order tariff model, doesn't replace it) and
+  `GET /v1/tariffs/suggest?lat=&lng=&vehicle_class=` (reuses the existing geofence/time-class
+  logic, degrades honestly to the current default tariff when nothing more specific matches — live
+  re-verified: correctly detected the seeded Sydney Airport geofence and said so in its `reason`
+  string, even though no airport-specific tariff exists yet to actually suggest).
+- **Driver/vehicle compliance-expiry tracking (`app/services/compliance_expiry.py`).** New
+  `driver_license_expiry`/`driver_authority_expiry` (User) and `registration_expiry`/
+  `insurance_expiry` (Vehicle) columns, a new `GET /v1/fleet/compliance-expiry` rollup, and a real
+  login block: `POST /v1/auth/driver-login` now 403s with an actually-expired license (never blocks
+  on a null/unset one). Live re-verified: set an expired license on the seeded demo driver,
+  confirmed both the compliance-expiry list and the login 403 fired correctly.
+- **Two real bugs caught and fixed during the post-pass verification, not left standing:** the new
+  `TripSyncItem` backend schema was missing the three new payment fields, meaning they'd have been
+  silently dropped on the app's actual offline-sync path (fixed, with 4 new tests); and a likely
+  pre-existing Kotlin compile error in `RealLocationProvider.kt` (`isActive` used without a
+  `CoroutineScope` receiver) was caught while cross-checking a sibling agent's own careful avoidance
+  of the same mistake, and fixed (see `android/HANDOFF.md`'s top entry for both).
 
 **2026-08-03 addition — driver-PIN login, server-verified admin PIN, real Ed25519 tariff-signing —
 independently re-verified against the running DB/API, not just unit-tested:**
@@ -281,9 +319,12 @@ list here, update that file when gaps close):
 
 ## Not done anywhere (flagged, not silently dropped)
 
-Real Stripe/Twilio keys, an actual Docker/Postgres/Redis run (compose file exists, untested),
-Redis-backed pub/sub for duress/live-position/jobs/messages at >1 backend process, PDF generation,
-S3 storage, ESP32 duress hardware + BLE pairing, physical field fare-accuracy testing, Android
+Real Stripe/Twilio/CabCharge/TTSS/SendGrid credentials (every one of these has a real mock-fallback
+call path in code — receipts, CabCharge/TTSS payment, duress voice escalation — but none has a live
+account configured in this dev environment), an actual Docker/Postgres/Redis run (compose file
+exists, untested), Redis-backed pub/sub for duress/live-position/jobs/messages at >1 backend
+process, S3 storage (receipts/compliance docs/duress audio all go to local disk), ESP32 duress
+hardware + BLE pairing, physical field fare-accuracy testing, Android
 build/device verification, App Store/Play Store packaging, CI/CD, any kind of security/pen test
 pass, proximity/ETA-ranked job matching (v1 is broadcast-to-everyone, first-accept-wins), a true
 7-segment LED font for the meter digits, MFA verified against a real authenticator app in a real

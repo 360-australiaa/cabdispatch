@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Sparkles } from "lucide-react";
 import { Badge, Button, Input, Modal, Select } from "@/components/ui";
 import {
   FARES_ORDER_CAPPED_FIELDS,
   UNCAPPED_RATE_FIELDS,
   useCreateTariffMutation,
   useFaresOrderQuery,
+  useTariffPresetsQuery,
   useUpdateTariffMutation,
   type CappedRateField,
   type Region,
   type Tariff,
   type TariffCreateInput,
+  type TariffPreset,
   type UncappedRateField,
 } from "@/hooks/useTariffStudio";
 import {
@@ -109,10 +111,14 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
   const [form, setForm] = useState<FormState>(tariff ? formFromTariff(tariff) : emptyForm());
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set());
+  const [selectedPreset, setSelectedPreset] = useState<string>("");
 
   const createMutation = useCreateTariffMutation();
   const updateMutation = useUpdateTariffMutation();
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  const isCreate = mode === "create";
+  const presetsQuery = useTariffPresetsQuery(open && isCreate);
 
   const regulated = form.region !== "exempt" && !form.booked;
   const faresOrderQuery = useFaresOrderQuery(regulated ? form.region : "");
@@ -123,12 +129,47 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
       setForm(tariff ? formFromTariff(tariff) : emptyForm());
       setError(null);
       setFieldErrors(new Set());
+      setSelectedPreset("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tariff?.id]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  /** Prefills region/booked + every rate field from a named preset's
+   * defaults. Name is only auto-filled while it's still blank or still
+   * matches a preset label the operator hasn't typed over — nothing here
+   * bypasses the normal create flow, the operator can edit any field
+   * (including re-picking a different preset) before hitting Save, which
+   * still runs through `useCreateTariffMutation` and full Fares Order
+   * validation as usual. */
+  function applyPreset(preset: TariffPreset) {
+    setSelectedPreset(preset.key);
+    setForm((f) => {
+      const nameIsAutoManaged = f.name.trim() === "" || presetsQuery.data?.some((p) => p.label === f.name);
+      return {
+        ...f,
+        name: nameIsAutoManaged ? preset.label : f.name,
+        region: preset.defaults.region,
+        booked: preset.defaults.booked,
+        ...Object.fromEntries(
+          [...FARES_ORDER_CAPPED_FIELDS, ...UNCAPPED_RATE_FIELDS].map((field) => [field, preset.defaults[field]]),
+        ),
+      };
+    });
+  }
+
+  /** "Blank tariff" — resets every rate field back to the empty-form
+   * defaults, keeping the name only if the operator typed something that
+   * isn't just a preset label left behind. */
+  function clearPreset() {
+    setSelectedPreset("");
+    setForm((f) => {
+      const keepName = f.name.trim() !== "" && !presetsQuery.data?.some((p) => p.label === f.name);
+      return { ...emptyForm(), name: keepName ? f.name : "" };
+    });
   }
 
   const capViolations = useMemo(() => {
@@ -261,6 +302,45 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
         onSubmit={handleSubmit}
         className="grid max-h-[65vh] grid-cols-1 gap-4 overflow-y-auto pr-1 sm:grid-cols-2"
       >
+        {isCreate && (
+          <div className="flex flex-col gap-2 rounded-md border border-dashed border-border bg-muted/40 p-3 sm:col-span-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Sparkles className="h-4 w-4 text-brand-primary" />
+              Start from a preset
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={selectedPreset === "" ? "primary" : "outline"}
+                onClick={clearPreset}
+              >
+                Blank tariff
+              </Button>
+              {presetsQuery.isLoading && (
+                <span className="self-center text-xs text-muted-foreground">Loading presets…</span>
+              )}
+              {presetsQuery.data?.map((preset) => (
+                <Button
+                  key={preset.key}
+                  type="button"
+                  size="sm"
+                  variant={selectedPreset === preset.key ? "primary" : "outline"}
+                  title={preset.description}
+                  onClick={() => applyPreset(preset)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {selectedPreset
+                ? `${presetsQuery.data?.find((p) => p.key === selectedPreset)?.description ?? ""} Every field below is prefilled from the preset — edit anything before saving.`
+                : "Prefills region, booked status, and every rate field below. You can still change any of them before saving, and the usual Fares Order validation still applies on save."}
+            </p>
+          </div>
+        )}
+
         <div className="flex flex-col gap-1 sm:col-span-2">
           <label className="text-xs font-medium text-muted-foreground">Name</label>
           <Input value={form.name} onChange={(e) => update("name", e.target.value)} required />

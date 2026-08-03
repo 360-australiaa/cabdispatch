@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import kotlinx.coroutines.flow.Flow
@@ -164,6 +165,14 @@ class TripRepository(
         cleaningFee: String = "0",
         includePsl: Boolean = false,
         receiptRef: String? = null,
+        /** Only meaningful when [paymentMethod] resolves to `"voucher"` — see [TripEntity.voucherCode]. */
+        voucherCode: String? = null,
+        /** Only meaningful when [paymentMethod] resolves to `"account"` — see [TripEntity.accountReference]. */
+        accountReference: String? = null,
+        /** Only meaningful when [paymentMethod] resolves to `"split_fare"` — see [TripEntity.splitPaymentsJson].
+         * JSON-encoded onto that column as-is; see [TripSyncItemDto]'s own doc for the known gap around this
+         * not yet reaching the server via [toSyncItemDto]/`POST /v1/trips/sync`. */
+        splitPayments: List<SplitPaymentEntryDto>? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("closeTrip() called for unknown trip clientUuid=$clientUuid")
@@ -183,6 +192,9 @@ class TripRepository(
             includePsl = includePsl,
             receiptRef = receiptRef,
             deviceTotal = deviceTotal,
+            voucherCode = voucherCode,
+            accountReference = accountReference,
+            splitPaymentsJson = splitPayments?.let { cabDispatchJson.encodeToString(it) },
             updatedAt = now,
         )
         tripDao.update(updated)
@@ -226,6 +238,13 @@ class TripRepository(
             endLat = trip.endLat,
             endLng = trip.endLng,
             paymentMethod = trip.paymentMethod,
+            // See TripSyncItemDto's own doc: the backend's TripSyncItem schema doesn't declare
+            // these three fields yet, so they round-trip in the outgoing JSON but are silently
+            // ignored server-side today. Sent anyway (forward-compatible, harmless) rather than
+            // omitted, so a future backend extension needs no Android-side change.
+            voucherCode = trip.voucherCode,
+            accountReference = trip.accountReference,
+            splitPayments = trip.splitPaymentsJson?.let { cabDispatchJson.decodeFromString<List<SplitPaymentEntryDto>>(it) },
             timeClass = trip.timeClass,
             isPeak = trip.isPeak,
             maxi = trip.maxi,

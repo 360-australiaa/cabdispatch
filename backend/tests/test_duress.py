@@ -12,6 +12,7 @@ import uuid
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.duress import place_escalation_call
 from tests.conftest import auth_headers
 
 
@@ -133,11 +134,100 @@ async def test_escalate_cascade_reaches_dispatched(client: AsyncClient, session:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == expected_status
-        assert body["escalation_log_json"]["entries"][-1]["stage"] == stage_name
+        last_entry = body["escalation_log_json"]["entries"][-1]
+        assert last_entry["stage"] == stage_name
+        if stage_name == "present_000_call_script":
+            # Only the final stage fires the automated Twilio Voice call —
+            # its outcome is folded into this same log entry, never an
+            # earlier one (checked below).
+            assert "call_result" in last_entry
+        else:
+            assert "call_result" not in last_entry
 
     # Fifth call: all stages exhausted.
     exhausted_resp = await client.post(f"/v1/duress/{event_id}/escalate", json={}, headers=headers)
     assert exhausted_resp.status_code == 409
+
+
+# --- automated Twilio Voice escalation call --------------------------------------
+
+
+def test_place_escalation_call_falls_back_to_mock_without_twilio_credentials():
+    """Unit test of app.services.duress.place_escalation_call directly — no
+    TWILIO_* credentials are configured in the test environment (see
+    tests/conftest.py), so every call must fall back to a clearly-flagged
+    mock response instead of attempting a real Twilio request."""
+    from app.models.duress import DuressEvent
+
+    event = DuressEvent(
+        id=str(uuid.uuid4()),
+        tenant_id=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        driver_id=str(uuid.uuid4()),
+        trigger="button",
+        status="dispatched",
+        opened_at=None,
+        gps_stream_ref="duress/test/gps",
+        escalation_log_json={},
+    )
+
+    result = place_escalation_call(event, "+61400000000")
+
+    assert result["mock"] is True
+    assert result["would_call"] == "+61400000000"
+    assert "twiml" in result
+    assert event.vehicle_id in result["twiml"]
+
+
+async def test_escalate_final_stage_skips_call_when_no_phone_configured(
+    client: AsyncClient, session: AsyncSession
+):
+    """No `DURESS_ESCALATION_CALL_PHONE` is configured in the test
+    environment and no `emergency_contact_phone` override is supplied, so the
+    final stage must record a clearly-flagged *skipped* result — never
+    silently pretend a call happened."""
+    headers = await auth_headers(client, session, role="dispatcher")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    for _ in range(3):
+        await client.post(f"/v1/duress/{event_id}/escalate", json={}, headers=headers)
+
+    final_resp = await client.post(f"/v1/duress/{event_id}/escalate", json={}, headers=headers)
+    assert final_resp.status_code == 200
+    body = final_resp.json()
+    assert body["status"] == "dispatched"
+    call_result = body["escalation_log_json"]["entries"][-1]["call_result"]
+    assert call_result["skipped"] is True
+    assert call_result["mock"] is True
+    # Mirrored at the top level too, per app.services.duress.escalate_event.
+    assert body["escalation_log_json"]["escalation_call_result"] == call_result
+
+
+async def test_escalate_final_stage_uses_explicit_phone_override(
+    client: AsyncClient, session: AsyncSession
+):
+    """An explicit `emergency_contact_phone` on the final `/escalate` call
+    takes priority over the (unset) deployment-wide default, and — since
+    Twilio isn't configured in the test env — falls back to a mock response
+    addressed to that overridden number."""
+    headers = await auth_headers(client, session, role="admin")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    for _ in range(3):
+        await client.post(f"/v1/duress/{event_id}/escalate", json={}, headers=headers)
+
+    final_resp = await client.post(
+        f"/v1/duress/{event_id}/escalate",
+        json={"emergency_contact_phone": "+61411222333"},
+        headers=headers,
+    )
+    assert final_resp.status_code == 200
+    call_result = final_resp.json()["escalation_log_json"]["entries"][-1]["call_result"]
+    assert call_result.get("skipped") is not True
+    assert call_result["mock"] is True
+    assert call_result["would_call"] == "+61411222333"
 
 
 async def test_escalate_requires_dispatch_role(client: AsyncClient, session: AsyncSession):
@@ -216,6 +306,85 @@ async def test_post_gps_unknown_event_404s(client: AsyncClient, session: AsyncSe
     headers = await auth_headers(client, session, role="driver")
     resp = await client.post(
         f"/v1/duress/{uuid.uuid4()}/gps", json={"lat": -33.87, "lng": 151.21}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+# --- audio recording upload/playback ---------------------------------------------
+
+
+async def test_upload_audio_stores_url_on_event_and_serves_it_back(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+    assert trigger_resp.json()["audio_ref"] is None
+
+    fake_audio_bytes = b"\x00\x00\x00\x18ftypM4A fake-audio-not-real-media-bytes"
+    upload_resp = await client.post(
+        f"/v1/duress/{event_id}/audio",
+        files={"file": ("panic_recording.m4a", fake_audio_bytes, "audio/m4a")},
+        headers=headers,
+    )
+    assert upload_resp.status_code == 200, upload_resp.text
+    body = upload_resp.json()
+    assert body["audio_ref"]
+    assert body["audio_ref"].endswith(".m4a")
+
+    # The DB row itself has the URL populated (not just the response body).
+    get_resp = await client.get(f"/v1/duress/{event_id}", headers=headers)
+    assert get_resp.json()["audio_ref"] == body["audio_ref"]
+
+    # And the dedicated playback endpoint actually serves the uploaded bytes.
+    playback_resp = await client.get(f"/v1/duress/{event_id}/audio", headers=headers)
+    assert playback_resp.status_code == 200
+    assert playback_resp.content == fake_audio_bytes
+
+
+async def test_upload_audio_rejects_empty_file(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/duress/{event_id}/audio",
+        files={"file": ("empty.m4a", b"", "audio/m4a")},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_upload_audio_unknown_event_404s(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    resp = await client.post(
+        f"/v1/duress/{uuid.uuid4()}/audio",
+        files={"file": ("recording.m4a", b"some-bytes", "audio/m4a")},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_get_audio_without_upload_404s(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="dispatcher")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.get(f"/v1/duress/{event_id}/audio", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_audio_upload_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    tenant_a_headers = await auth_headers(client, session, role="admin", tenant_name="Duress Audio Tenant A")
+    tenant_b_headers = await auth_headers(client, session, role="admin", tenant_name="Duress Audio Tenant B")
+
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=tenant_a_headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/duress/{event_id}/audio",
+        files={"file": ("recording.m4a", b"some-bytes", "audio/m4a")},
+        headers=tenant_b_headers,
     )
     assert resp.status_code == 404
 

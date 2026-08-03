@@ -7,7 +7,7 @@ Update-Read convention as every other domain (see app/schemas/fleet.py).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +31,13 @@ class UserBase(BaseModel):
     driver_licence_no: str | None = Field(default=None, max_length=50)
     wat_endorsed: bool = False
     status: UserStatus = "active"
+    # Compliance-expiry tracking (blueprint 7.2.3/10.1). Only meaningful for
+    # role="driver" accounts but, like driver_licence_no above, accepted (and
+    # a no-op) for any role. Null means "unknown, not expired" — see
+    # app.models.user.User's doc comment for the fail-open convention and
+    # app.services.compliance_expiry for the alerting/login-block logic.
+    driver_license_expiry: date | None = Field(default=None)
+    driver_authority_expiry: date | None = Field(default=None)
 
 
 class UserCreate(UserBase):
@@ -59,6 +66,8 @@ class UserUpdate(BaseModel):
     status: UserStatus | None = None
     role: UserRole | None = None
     password: str | None = Field(default=None, min_length=6, max_length=128)
+    driver_license_expiry: date | None = None
+    driver_authority_expiry: date | None = None
 
 
 class UserRead(UserBase):

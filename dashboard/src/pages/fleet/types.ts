@@ -150,3 +150,34 @@ export interface FatigueAlert {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * `ComplianceExpiryItem` — one row of `GET /v1/fleet/compliance-expiry`, a
+ * read-only rollup of driver-accreditation and vehicle-registration/insurance
+ * dates approaching or past expiry (see `app.services.compliance_expiry`).
+ * No acknowledge/dismiss endpoint exists for these — informational only.
+ */
+export type ComplianceEntityType = "driver" | "vehicle";
+export type ComplianceExpiryField =
+  | "driver_license_expiry"
+  | "driver_authority_expiry"
+  | "registration_expiry"
+  | "insurance_expiry";
+export type ComplianceExpiryStatus = "expiring_soon" | "expired";
+
+export const COMPLIANCE_EXPIRY_FIELD_LABELS: Record<ComplianceExpiryField, string> = {
+  driver_license_expiry: "Driver licence",
+  driver_authority_expiry: "Driver authority",
+  registration_expiry: "Vehicle registration",
+  insurance_expiry: "Vehicle insurance",
+};
+
+export interface ComplianceExpiryItem {
+  entity_type: ComplianceEntityType;
+  entity_id: string;
+  label: string;
+  field: ComplianceExpiryField;
+  expiry_date: string;
+  status: ComplianceExpiryStatus;
+  days_remaining: number;
+}

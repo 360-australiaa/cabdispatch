@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Plus, Search } from "lucide-react";
+import { AlertTriangle, Flag, Plus, Search } from "lucide-react";
 import {
   Badge,
   Button,
@@ -47,11 +47,18 @@ const STATUS_OPTIONS = [
 
 const TYPE_OPTIONS = [{ value: "", label: "All types" }, ...TRIP_TYPE_OPTIONS];
 
+const FLAGGED_OPTIONS = [
+  { value: "", label: "All trips" },
+  { value: "true", label: "Flagged for review" },
+  { value: "false", label: "Not flagged" },
+];
+
 export default function TripsPage() {
   const [statusFilter, setStatusFilter] = useState<TripStatus | "">("");
   const [typeFilter, setTypeFilter] = useState<TripType | "">("");
   const [vehicleFilter, setVehicleFilter] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
+  const [flaggedFilter, setFlaggedFilter] = useState<"" | "true" | "false">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
@@ -67,6 +74,7 @@ export default function TripsPage() {
     type: typeFilter || undefined,
     vehicle_id: vehicleFilter || undefined,
     driver_id: driverFilter || undefined,
+    flagged_for_review: flaggedFilter === "" ? undefined : flaggedFilter === "true",
     skip: 0,
     limit: FETCH_LIMIT,
   });
@@ -178,13 +186,34 @@ export default function TripsPage() {
           <span className="text-muted-foreground">—</span>
         ),
     },
+    {
+      key: "flagged_for_review",
+      header: "Review",
+      render: (row) =>
+        row.flagged_for_review ? (
+          <Badge variant="destructive" className="inline-flex items-center gap-1">
+            <Flag className="h-3 w-3" /> Flagged
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+      sortable: true,
+      sortAccessor: (row) => (row.flagged_for_review ? 1 : 0),
+    },
   ];
 
   // Forces <Table> to remount (resetting its internal page/sort state)
   // whenever a filter changes, so stale pagination can't hide matches.
-  const tableKey = [statusFilter, typeFilter, vehicleFilter, driverFilter, dateFrom, dateTo, search].join(
-    "|",
-  );
+  const tableKey = [
+    statusFilter,
+    typeFilter,
+    vehicleFilter,
+    driverFilter,
+    flaggedFilter,
+    dateFrom,
+    dateTo,
+    search,
+  ].join("|");
 
   return (
     <div>
@@ -249,6 +278,15 @@ export default function TripsPage() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Review</label>
+            <Select
+              className="w-44"
+              options={FLAGGED_OPTIONS}
+              value={flaggedFilter}
+              onChange={(e) => setFlaggedFilter(e.target.value as "" | "true" | "false")}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">From</label>
             <Input
               type="date"
@@ -266,7 +304,14 @@ export default function TripsPage() {
               onChange={(e) => setDateTo(e.target.value)}
             />
           </div>
-          {(statusFilter || typeFilter || vehicleFilter || driverFilter || dateFrom || dateTo || search) && (
+          {(statusFilter ||
+            typeFilter ||
+            vehicleFilter ||
+            driverFilter ||
+            flaggedFilter ||
+            dateFrom ||
+            dateTo ||
+            search) && (
             <Button
               variant="ghost"
               size="sm"
@@ -275,6 +320,7 @@ export default function TripsPage() {
                 setTypeFilter("");
                 setVehicleFilter("");
                 setDriverFilter("");
+                setFlaggedFilter("");
                 setDateFrom("");
                 setDateTo("");
                 setSearch("");

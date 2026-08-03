@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.duress import (
     CANCEL_WINDOW_SECONDS,
     DURESS_STATUS_CANCELLED,
@@ -26,6 +30,29 @@ from app.models.duress import (
 )
 
 logger = logging.getLogger("cab_dispatch.duress")
+
+# Backend root: app/services/duress.py -> parents[0]=services, [1]=app,
+# [2]=backend project root. Same BACKEND_ROOT/UPLOADS_ROOT local-disk-upload
+# convention as app.services.compliance / app.services.receipts — uploads
+# live at "<backend root>/uploads/...". No S3 in this environment.
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+UPLOADS_ROOT = BACKEND_ROOT / "uploads"
+
+
+class DuressAudioError(Exception):
+    """Raised on invalid duress audio uploads/lookups; the router translates
+    this to an HTTP 400."""
+
+
+def _safe_component(value: str, *, max_len: int = 80) -> str:
+    """Strips anything that could act as a path separator/traversal token —
+    identical helper to app.services.compliance._safe_component /
+    app.services.receipts._safe_component, duplicated here rather than
+    imported so this domain stays independently deployable (neither depends
+    on the other's internals — same rationale documented in those modules)."""
+    cleaned = "".join(c for c in value if c.isalnum() or c in "-_.")
+    cleaned = cleaned.strip(".") or "unknown"
+    return cleaned[:max_len]
 
 
 def _now_iso() -> str:
@@ -43,6 +70,131 @@ def _append_log_entry(event: DuressEvent, entry: dict, **bookkeeping_overrides) 
         **bookkeeping_overrides,
     }
     event.escalation_log_json = new_log
+
+
+# --- audio recording upload ----------------------------------------------------
+
+
+def duress_audio_dir(*, tenant_id: str, event_id: str) -> Path:
+    return UPLOADS_ROOT / _safe_component(tenant_id) / "duress" / _safe_component(event_id)
+
+
+def _audio_filename(event_id: str, *, original_filename: str) -> str:
+    """Deterministic filename per event id (`audio_{event_id}` plus the
+    original extension, if any) — same idempotent-on-re-upload spirit as
+    app.services.receipts._receipt_filename, so a second recording for the
+    same event overwrites the first rather than accumulating duplicates."""
+    suffix = Path(os.path.basename(original_filename or "")).suffix
+    safe_suffix = _safe_component(suffix, max_len=10) if suffix else ""
+    ext = f".{safe_suffix}" if safe_suffix else ""
+    return f"audio_{_safe_component(event_id)}{ext}"
+
+
+async def save_duress_audio(
+    *,
+    tenant_id: str,
+    event_id: str,
+    original_filename: str,
+    content: bytes,
+) -> str:
+    """Writes `content` under `uploads/{tenant_id}/duress/{event_id}/`
+    (created if missing), following the EXACT same local-disk-upload
+    convention as `app.services.compliance.save_upload` /
+    `app.services.receipts.ensure_receipt_pdf` (BACKEND_ROOT-relative paths,
+    the `_safe_component` path-traversal guard). Returns the *relative* (to
+    BACKEND_ROOT) path to persist on `DuressEvent.audio_ref` — never the
+    absolute path, so the recording stays portable across
+    machines/deployments."""
+    if not content:
+        raise DuressAudioError("Uploaded audio file is empty")
+
+    target_dir = duress_audio_dir(tenant_id=tenant_id, event_id=event_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    absolute_path = target_dir / _audio_filename(event_id, original_filename=original_filename)
+    absolute_path.write_bytes(content)
+
+    return absolute_path.relative_to(BACKEND_ROOT).as_posix()
+
+
+def resolve_absolute_path(relative_path: str) -> Path:
+    """Resolves a stored (relative-to-BACKEND_ROOT) `audio_ref` back to an
+    absolute path, rejecting anything that would escape BACKEND_ROOT. Same
+    contract as `app.services.compliance.resolve_absolute_path` /
+    `app.services.receipts.resolve_absolute_path`."""
+    absolute_path = (BACKEND_ROOT / relative_path).resolve()
+    if BACKEND_ROOT not in absolute_path.parents and absolute_path != BACKEND_ROOT:
+        raise DuressAudioError("Stored audio path resolves outside the uploads root")
+    return absolute_path
+
+
+# --- Twilio Voice automated escalation call (blueprint 8.3) --------------------
+
+
+def _twilio_voice_configured() -> bool:
+    """Identical three-credential check as
+    `app.services.receipts._twilio_configured`, duplicated here per that
+    module's own documented duplication rationale so the two domains stay
+    independently deployable."""
+    return bool(settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_FROM_NUMBER)
+
+
+def _escalation_call_twiml(event: DuressEvent) -> str:
+    """TwiML announced (via Twilio's text-to-speech voice) when the call
+    connects, passed inline as the `Twiml=` form field on the Calls.json
+    request — there is no publicly hosted TwiML URL in this dev environment,
+    so (same reasoning as `app.services.receipts._receipt_sms_body`'s
+    omitted link) the vehicle/driver ids stand in for a fully resolved
+    street address."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response><Say voice=\"alice\">"
+        f"Emergency alert. A duress signal has been raised for vehicle {event.vehicle_id}, "
+        f"driver {event.driver_id}. Trigger type: {event.trigger}. "
+        "This is an automated call from Cab Dispatch. Please respond immediately."
+        "</Say></Response>"
+    )
+
+
+def place_escalation_call(event: DuressEvent, phone_number: str) -> dict:
+    """Places a real (or mocked) Twilio Voice call to `phone_number`
+    announcing the emergency at the vehicle's location, via a `POST` to
+    Twilio's `Calls.json` REST endpoint. Same mock-fallback pattern as
+    `app.services.receipts.send_receipt_sms`: requires all three of
+    TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER to be configured;
+    any missing falls back to a clearly-flagged `{"mock": True, ...}`
+    response, so this is testable without live Twilio credentials."""
+    twiml = _escalation_call_twiml(event)
+
+    if _twilio_voice_configured():
+        try:
+            with httpx.Client(timeout=10.0) as http_client:
+                resp = http_client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls.json",
+                    auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
+                    data={"From": settings.TWILIO_FROM_NUMBER, "To": phone_number, "Twiml": twiml},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return {"mock": False, "to_phone": phone_number, "twilio_call_sid": data.get("sid")}
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Twilio Voice call failed (%s) — returning mock call response.", exc)
+
+    logger.info("Mock emergency call to %s for duress event %s", phone_number, event.id)
+    return {"mock": True, "would_call": phone_number, "twiml": twiml}
+
+
+def _fire_escalation_call(event: DuressEvent, emergency_contact_phone: str | None) -> dict:
+    """Resolves the phone number to dial (explicit per-call override, else
+    the deployment-wide `settings.DURESS_ESCALATION_CALL_PHONE` default) and
+    fires `place_escalation_call` — or, if no phone number is configured
+    either way, returns a clearly-flagged skipped result instead of dialing a
+    bogus number. Called exactly once, only from `escalate_event`, only when
+    the cascade reaches its final stage."""
+    phone = emergency_contact_phone or settings.DURESS_ESCALATION_CALL_PHONE or None
+    if not phone:
+        return {"mock": True, "skipped": True, "reason": "no emergency contact phone configured"}
+    return place_escalation_call(event, phone)
 
 
 # --- trigger / open -----------------------------------------------------------
@@ -127,7 +279,13 @@ async def cancel_event(session: AsyncSession, event: DuressEvent, *, note: str |
 # --- escalate --------------------------------------------------------------------
 
 
-async def escalate_event(session: AsyncSession, event: DuressEvent, *, note: str | None) -> DuressEvent:
+async def escalate_event(
+    session: AsyncSession,
+    event: DuressEvent,
+    *,
+    note: str | None,
+    emergency_contact_phone: str | None = None,
+) -> DuressEvent:
     """Advances the escalation cascade by exactly one stage.
 
     Cascade (see app.models.duress.ESCALATION_STAGES):
@@ -138,6 +296,17 @@ async def escalate_event(session: AsyncSession, event: DuressEvent, *, note: str
     escalating -> dispatched. Each call is a discrete, manually-triggered step
     (from a background job or a dispatcher action) — there is no server-side
     timer in this pass.
+
+    Reaching the final stage (`present_000_call_script`) ALSO fires the real
+    Twilio Voice automated escalation call (blueprint 8.3) via
+    `_fire_escalation_call` / `place_escalation_call` — and only that stage;
+    every earlier stage advances the cascade without dialing anything.
+    `emergency_contact_phone`, if given, overrides the deployment-wide
+    `settings.DURESS_ESCALATION_CALL_PHONE` default for that one call. The
+    call's outcome (`{"mock": ...}` dict) is folded into the same
+    `present_000_call_script` log entry under `call_result`, and mirrored at
+    the top level of `escalation_log_json` as `escalation_call_result` — no
+    new column needed.
     """
     if event.status in DURESS_TERMINAL_STATUSES:
         raise HTTPException(
@@ -161,16 +330,19 @@ async def escalate_event(session: AsyncSession, event: DuressEvent, *, note: str
     stage = ESCALATION_STAGES[next_stage_index]
     now = datetime.now(UTC)
 
-    _append_log_entry(
-        event,
-        {"stage": stage, "at": now.isoformat(), "note": note},
-        next_stage_index=next_stage_index + 1,
-    )
+    entry: dict = {"stage": stage, "at": now.isoformat(), "note": note}
+    bookkeeping: dict = {"next_stage_index": next_stage_index + 1}
 
     if stage == ESCALATION_STAGE_CANCEL_WINDOW_EXPIRED:
         event.status = DURESS_STATUS_ESCALATING
     elif stage == ESCALATION_STAGE_PRESENT_000_CALL_SCRIPT:
         event.status = DURESS_STATUS_DISPATCHED
+        # Fires on this final stage ONLY — never on the earlier three.
+        call_result = _fire_escalation_call(event, emergency_contact_phone)
+        entry["call_result"] = call_result
+        bookkeeping["escalation_call_result"] = call_result
+
+    _append_log_entry(event, entry, **bookkeeping)
 
     await session.commit()
     await session.refresh(event)

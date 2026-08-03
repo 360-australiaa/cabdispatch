@@ -47,10 +47,13 @@ fun String.asTripTypeLabel(): String = when (this) {
     else -> this.replaceFirstChar { it.uppercase() }
 }
 
-/** "cash" | "card" persisted value -> display label. */
+/** "cash" | "card" | "voucher" | "account" | "split_fare" persisted value -> display label. */
 fun String.asPaymentMethodLabel(): String = when (this) {
     "cash" -> "Cash"
     "card" -> "Card"
+    "voucher" -> "Voucher"
+    "account" -> "Account"
+    "split_fare" -> "Split Fare"
     else -> this.replaceFirstChar { it.uppercase() }
 }
 

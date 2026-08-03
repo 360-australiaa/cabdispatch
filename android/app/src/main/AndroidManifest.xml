@@ -17,6 +17,13 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
+    <!-- Duress audio recording (Blueprint §4.3/§8.3) — best-effort: RECORD_AUDIO ungranted is a
+         graceful no-op (domain/duress/DuressAudioRecorder.kt), never a crash. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
     <!-- Sync/duress/shift-report notifications (Android 13+ runtime permission) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

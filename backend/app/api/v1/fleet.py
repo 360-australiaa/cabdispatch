@@ -15,6 +15,7 @@ from app.core.database import get_session
 from app.core.security import get_current_tenant_id, require_role
 from app.models.fleet import Device, Vehicle
 from app.schemas.fleet import (
+    ComplianceExpiryItem,
     DeviceCreate,
     DeviceHeartbeatRequest,
     DeviceRead,
@@ -32,6 +33,7 @@ from app.schemas.fleet import (
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
 )
+from app.services import compliance_expiry as compliance_expiry_service
 from app.services import fleet as fleet_service
 from app.services import tenant as tenant_service
 
@@ -180,6 +182,56 @@ async def create_pairing_code(
         return await fleet_service.generate_pairing_code(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
+
+
+# ==================================================================================
+# Compliance expiry (blueprint 7.2.3/7.2.4/10.1)
+# ==================================================================================
+
+
+@router.get("/compliance-expiry", response_model=Page[ComplianceExpiryItem])
+async def list_compliance_expiry(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    within_days: int = Query(
+        30, ge=1, le=365, description="Include items expiring within this many days (or already expired)"
+    ),
+    entity_type: str | None = Query(default=None, description="Filter to 'driver' or 'vehicle'"),
+    status_filter: str | None = Query(
+        default=None, alias="status", description="Filter to 'expiring_soon' or 'expired'"
+    ),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Dashboard-facing list of every driver license/authority and vehicle
+    registration/insurance field that is either already expired or expiring
+    within `within_days`. Not paginated at the DB level (the underlying query
+    is a full tenant-scoped scan of Users + Vehicles, same cost as any of
+    this domain's `Page[T]`-returning list endpoints on a tenant's realistic
+    fleet/driver-roster size) — `skip`/`limit` slice the already-computed,
+    already-sorted (soonest-expiring first) in-memory list, same Page[T]
+    contract as every other list endpoint in this file.
+
+    No extra role restriction beyond authentication + tenant scope — same
+    convention already used by `GET /vehicles` and `GET /devices` above."""
+    if entity_type is not None and entity_type not in ("driver", "vehicle"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid entity_type filter")
+    if status_filter is not None and status_filter not in ("expiring_soon", "expired"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+
+    items = await compliance_expiry_service.list_compliance_expiry(
+        session, tenant_id=tenant_id, within_days=within_days
+    )
+    if entity_type is not None:
+        items = [i for i in items if i["entity_type"] == entity_type]
+    if status_filter is not None:
+        items = [i for i in items if i["status"] == status_filter]
+
+    total = len(items)
+    page_items = items[skip : skip + limit]
+    return Page[ComplianceExpiryItem](
+        items=[ComplianceExpiryItem(**i) for i in page_items], total=total, skip=skip, limit=limit
+    )
 
 
 # ==================================================================================

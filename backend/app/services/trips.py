@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.geofence import GEOFENCE_KIND_TOLL
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import TRIP_TYPE_AIRPORT_FIXED, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip
 from app.schemas.trips import TelemetryPoint
+from app.services import payments as payments_service
 from app.services.fare_engine import (
     FareBreakdown,
     FareEngine,
@@ -40,6 +41,21 @@ _EARTH_RADIUS_KM = Decimal("6371.0088")
 class UnknownTariffError(ValueError):
     """Raised when tariff_id does not resolve to a fare-engine-usable Tariff
     row owned by the requesting tenant."""
+
+
+class SplitPaymentMismatchError(ValueError):
+    """Raised when a split_fare trip's sub-payments (blueprint 5.2.5) don't
+    sum, to the cent, to the trip's total."""
+
+
+class TripNotClosedError(Exception):
+    """Raised when flagging a trip for review (blueprint 5.2.5's "Dispute"
+    button) that hasn't been closed yet."""
+
+
+class DisputeReasonRequiredError(Exception):
+    """Raised when flagging a trip for review without supplying a non-empty
+    reason."""
 
 
 async def resolve_tariff(session: AsyncSession, *, tenant_id: str, tariff_id: str) -> Tariff:
@@ -168,6 +184,14 @@ class CloseParams:
     cleaning_fee: Decimal
     include_psl: bool
     receipt_ref: str | None
+    # --- new payment methods (blueprint 5.2.5) — all optional, only acted on
+    # when `payment_method` resolves to "voucher" / "account" / "split_fare"
+    # respectively; see close_trip below. voucher_code/account_reference
+    # default to None meaning "keep whatever's already on the trip row" (they
+    # may have been set at create/update time instead of re-supplied here).
+    voucher_code: str | None = None
+    account_reference: str | None = None
+    split_payments: list[dict] | None = None
 
 
 async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, params: CloseParams) -> FareBreakdown:
@@ -189,6 +213,35 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
         include_psl=params.include_psl,
     )
 
+    # --- new payment methods (blueprint 5.2.5): voucher / account / split_fare.
+    # Validated BEFORE any trip.* field is mutated below, using breakdown.
+    # grand_total directly (trip.total isn't assigned yet) — so a validation
+    # failure here (e.g. a split_payments mismatch) leaves `trip` completely
+    # untouched rather than half-mutated, matching UnknownTariffError's
+    # already-established "raise before mutating anything" contract in this
+    # function's callers (they never commit on an exception, but not
+    # mutating `trip` in the first place is still the safer invariant to hold).
+    resolved_voucher_code = params.voucher_code if params.voucher_code is not None else trip.voucher_code
+    resolved_account_reference = (
+        params.account_reference if params.account_reference is not None else trip.account_reference
+    )
+    split_payments_to_store: list[dict] | None = None
+    if params.payment_method == "voucher":
+        payments_service.redeem_voucher(voucher_code=resolved_voucher_code or "")
+    elif params.payment_method == "account":
+        payments_service.validate_account_reference(account_reference=resolved_account_reference or "")
+    elif params.payment_method == "split_fare":
+        if not params.split_payments:
+            raise SplitPaymentMismatchError("split_fare requires at least one sub-payment in split_payments")
+        subtotal = sum((Decimal(str(item["amount"])) for item in params.split_payments), Decimal(0))
+        if round_half_up(subtotal) != round_half_up(breakdown.grand_total):
+            raise SplitPaymentMismatchError(
+                f"split_payments sum to {subtotal} but trip total is {breakdown.grand_total}"
+            )
+        split_payments_to_store = [
+            {"method": item["method"], "amount": str(item["amount"])} for item in params.split_payments
+        ]
+
     trip.flag_fall = breakdown.flag_fall
     trip.peak_amount = breakdown.peak_charge
     trip.dist_amount = breakdown.distance_charge
@@ -201,6 +254,9 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     trip.total = breakdown.grand_total
     trip.gst_component = breakdown.gst_component
     trip.payment_method = params.payment_method
+    trip.voucher_code = resolved_voucher_code
+    trip.account_reference = resolved_account_reference
+    trip.split_payments = split_payments_to_store
     trip.status = "closed"
     trip.end_at = params.end_at
     trip.end_lat = params.end_lat
@@ -290,3 +346,28 @@ def compute_variance_pct(recomputed_total: Decimal, device_total: Decimal) -> De
         return Decimal("100.00") if device_total != 0 else Decimal("0.00")
     variance = abs(recomputed_total - device_total) / recomputed_total * Decimal(100)
     return round_half_up(variance)
+
+
+# --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------
+
+
+def flag_trip_for_review(*, trip: Trip, flagged: bool, reason: str | None) -> Trip:
+    """Flags (or clears the flag on) a trip for operator review.
+
+    Caller-identity authorization — the trip's own driver or a staff role may
+    set flagged=True; only a staff role may clear it with flagged=False — is
+    the router's job (see `app.api.v1.trips.flag_trip`'s docstring for the
+    exact rule); this function only enforces the domain rules that don't
+    depend on who's calling: only a *closed* trip can be flagged, and a
+    non-empty reason is required to flag one. Does NOT commit — caller owns
+    the session/transaction."""
+    if flagged:
+        if trip.status != TRIP_STATUS_CLOSED:
+            raise TripNotClosedError("Only a closed trip can be flagged for review")
+        if not reason or not reason.strip():
+            raise DisputeReasonRequiredError("A non-empty reason is required to flag a trip for review")
+        trip.flagged_for_review = True
+        trip.review_notes = reason.strip()
+    else:
+        trip.flagged_for_review = False
+    return trip

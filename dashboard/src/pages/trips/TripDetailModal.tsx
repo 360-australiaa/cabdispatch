@@ -1,8 +1,8 @@
 import { useState } from "react";
 import axios from "axios";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Flag } from "lucide-react";
 import { Badge, Button, Input, Modal, Select } from "@/components/ui";
-import { useCloseTripMutation, type Trip } from "@/hooks/useTrips";
+import { useCloseTripMutation, useFlagTripMutation, type Trip } from "@/hooks/useTrips";
 import {
   formatDateTime,
   formatDistance,
@@ -62,7 +62,12 @@ export function TripDetailModal({
   const [includePsl, setIncludePsl] = useState(false);
   const [closePaymentMethod, setClosePaymentMethod] = useState<string>("");
 
+  const [flagging, setFlagging] = useState(false);
+  const [flagReason, setFlagReason] = useState("");
+  const [flagError, setFlagError] = useState<string | null>(null);
+
   const closeMutation = useCloseTripMutation();
+  const flagMutation = useFlagTripMutation();
 
   if (!trip) return null;
 
@@ -87,6 +92,32 @@ export function TripDetailModal({
     }
   }
 
+  async function handleFlag() {
+    setFlagError(null);
+    try {
+      await flagMutation.mutateAsync({
+        id: trip!.id,
+        input: { flagged: true, reason: flagReason.trim() },
+      });
+      setFlagging(false);
+      setFlagReason("");
+    } catch (err) {
+      setFlagError(extractErrorMessage(err));
+    }
+  }
+
+  async function handleUnflag() {
+    setFlagError(null);
+    try {
+      await flagMutation.mutateAsync({
+        id: trip!.id,
+        input: { flagged: false },
+      });
+    } catch (err) {
+      setFlagError(extractErrorMessage(err));
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -95,6 +126,11 @@ export function TripDetailModal({
         <span className="flex items-center gap-2">
           Trip {trip.id.slice(0, 8)}
           <Badge variant={statusBadgeVariant(trip.status)}>{trip.status}</Badge>
+          {trip.flagged_for_review && (
+            <Badge variant="destructive" className="inline-flex items-center gap-1">
+              <Flag className="h-3 w-3" /> Flagged for review
+            </Badge>
+          )}
         </span>
       }
       description={formatDateTime(trip.start_at)}
@@ -134,6 +170,16 @@ export function TripDetailModal({
           <div className="flex items-center gap-2 rounded-md border border-success bg-success/10 px-3 py-2 text-sm text-success">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>Max fare check passed — variance {formatPercent(trip.variance_pct)}.</span>
+          </div>
+        )}
+
+        {trip.flagged_for_review && (
+          <div className="flex items-start gap-2 rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <Flag className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">Flagged for dispute review</p>
+              <p>{trip.review_notes || "No reason was recorded."}</p>
+            </div>
           </div>
         )}
 
@@ -258,6 +304,72 @@ export function TripDetailModal({
             )}
           </div>
         )}
+
+        <div className="rounded-lg border border-dashed border-border p-3">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Dispute / review flag
+          </p>
+          {trip.flagged_for_review ? (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                {trip.review_notes || "No reason was recorded."}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleUnflag}
+                disabled={flagMutation.isPending}
+              >
+                {flagMutation.isPending ? "Clearing…" : "Clear flag"}
+              </Button>
+            </div>
+          ) : !flagging ? (
+            <div className="space-y-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setFlagging(true)}
+                disabled={trip.status !== "closed"}
+              >
+                <Flag className="h-3.5 w-3.5" /> Flag for review…
+              </Button>
+              {trip.status !== "closed" && (
+                <p className="text-xs text-muted-foreground">
+                  Only closed trips can be flagged for dispute review.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Input
+                placeholder="Reason for dispute (required)"
+                value={flagReason}
+                onChange={(e) => setFlagReason(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleFlag}
+                  disabled={flagMutation.isPending || flagReason.trim().length === 0}
+                >
+                  {flagMutation.isPending ? "Flagging…" : "Confirm flag"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setFlagging(false);
+                    setFlagReason("");
+                    setFlagError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+          {flagError && <p className="mt-2 text-sm text-destructive">{flagError}</p>}
+        </div>
       </div>
     </Modal>
   );

@@ -134,6 +134,17 @@ async def _tenant_of(client: AsyncClient, headers: dict) -> str:
     return security.decode_token(token)["tenant_id"]
 
 
+def _user_id_of(headers: dict) -> str:
+    """Small helper: decode the user id (`sub`) straight out of the bearer
+    token so dispute-flagging tests can set a trip's driver_id to the exact
+    authenticated user's id (needed for the "own driver" authorization
+    check — see app.api.v1.trips.flag_trip)."""
+    from app.core import security
+
+    token = headers["Authorization"].split(" ", 1)[1]
+    return security.decode_token(token)["sub"]
+
+
 async def test_create_trip_duplicate_client_uuid_is_409(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
@@ -626,3 +637,430 @@ async def test_sync_batch_handles_mixed_new_and_duplicate(client: AsyncClient, s
     assert results[0]["duplicate"] is True
     assert results[1]["duplicate"] is False
     assert results[0]["trip"]["id"] != results[1]["trip"]["id"]
+
+
+# --- sync + new payment methods (voucher/account/split_fare must not be dropped on the offline
+# sync path — this used to be a real gap: TripSyncItem didn't declare these fields at all, so a
+# trip closed with e.g. payment_method="voucher" on-device synced fine but silently lost its
+# voucher_code, since Pydantic's default extra="ignore" behaviour drops unknown fields rather
+# than erroring) -----------------------------------------------------------------------------
+
+
+async def test_sync_voucher_payment_persists_voucher_code(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="10.00",
+        payment_method="voucher",
+        voucher_code="SAVE10",
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["payment_method"] == "voucher"
+    assert trip["voucher_code"] == "SAVE10"
+
+
+async def test_sync_voucher_without_code_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="10.00", payment_method="voucher"
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_sync_split_fare_matching_sum_persists_split_payments(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    now = datetime.now(UTC)
+    trace = [{"lat": start_lat, "lng": start_lng, "speed_kmh": 0, "ts": now.isoformat()}]
+    # No distance travelled -> total is just flag_fall ($5.00) for this tariff, matching
+    # test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no surcharge" note.
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="5.00",
+        start_lat=start_lat,
+        start_lng=start_lng,
+        payment_method="split_fare",
+        split_payments=[{"method": "cash", "amount": "2.00"}, {"method": "card", "amount": "3.00"}],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["payment_method"] == "split_fare"
+    assert trip["split_payments"] == [
+        {"method": "cash", "amount": "2.00"},
+        {"method": "card", "amount": "3.00"},
+    ]
+
+
+async def test_sync_split_fare_mismatched_sum_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    now = datetime.now(UTC)
+    trace = [{"lat": start_lat, "lng": start_lng, "speed_kmh": 0, "ts": now.isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="5.00",
+        start_lat=start_lat,
+        start_lng=start_lng,
+        payment_method="split_fare",
+        split_payments=[{"method": "cash", "amount": "1.00"}, {"method": "card", "amount": "1.00"}],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 422
+
+
+# --- dispute flagging (blueprint 5.2.5 "Dispute" button) --------------------
+
+
+async def test_flag_open_trip_is_409(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(headers)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=driver_id)
+
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/flag", json={"reason": "meter looked wrong"}, headers=headers
+    )
+    assert resp.status_code == 409
+
+
+async def test_flag_closed_trip_by_own_driver_succeeds(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(headers)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=driver_id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/flag", json={"reason": "passenger disputes the fare"}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["flagged_for_review"] is True
+    assert body["review_notes"] == "passenger disputes the fare"
+
+
+async def test_flag_without_reason_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(headers)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=driver_id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+
+    resp = await client.patch(f"/v1/trips/{trip['id']}/flag", json={}, headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_flag_by_unrelated_driver_is_403(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # trip's driver_id is a random uuid, NOT this authenticated driver's own id
+    trip = await _create_trip(client, headers, tariff.id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/flag", json={"reason": "not my trip"}, headers=headers
+    )
+    assert resp.status_code == 403
+
+
+async def test_flag_by_staff_role_succeeds_for_any_trip(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, driver_headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, driver_headers, tariff.id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=driver_headers)
+
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/flag", json={"reason": "flagged by dispatch"}, headers=admin_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["flagged_for_review"] is True
+
+
+async def test_unflag_by_driver_is_403(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(headers)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=driver_id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    await client.patch(f"/v1/trips/{trip['id']}/flag", json={"reason": "dispute"}, headers=headers)
+
+    resp = await client.patch(f"/v1/trips/{trip['id']}/flag", json={"flagged": False}, headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_unflag_by_staff_clears_flag(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, driver_headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(driver_headers)
+    trip = await _create_trip(client, driver_headers, tariff.id, driver_id=driver_id)
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=driver_headers)
+    await client.patch(
+        f"/v1/trips/{trip['id']}/flag", json={"reason": "dispute"}, headers=driver_headers
+    )
+
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    resp = await client.patch(f"/v1/trips/{trip['id']}/flag", json={"flagged": False}, headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.json()["flagged_for_review"] is False
+
+
+async def test_flag_404_when_trip_missing(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.patch(
+        f"/v1/trips/{uuid.uuid4()}/flag", json={"reason": "x"}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_list_trips_filters_by_flagged_for_review(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    flagged_trip = await _create_trip(client, headers, tariff.id)
+    await client.post(f"/v1/trips/{flagged_trip['id']}/close", json={}, headers=headers)
+    await client.patch(
+        f"/v1/trips/{flagged_trip['id']}/flag", json={"reason": "dispute"}, headers=headers
+    )
+
+    not_flagged_trip = await _create_trip(client, headers, tariff.id)
+    await client.post(f"/v1/trips/{not_flagged_trip['id']}/close", json={}, headers=headers)
+
+    resp = await client.get("/v1/trips?flagged_for_review=true", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = {item["id"] for item in body["items"]}
+    assert flagged_trip["id"] in ids
+    assert not_flagged_trip["id"] not in ids
+
+
+# --- new payment methods (blueprint 5.2.5: Account / Voucher / Split Fare) ---
+
+
+async def test_create_trip_voucher_without_code_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, payment_method="voucher"),
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_trip_account_without_reference_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, payment_method="account"),
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_close_trip_with_voucher_payment_method_redeems_and_stores_code(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    trip = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        type="airport_fixed",
+        payment_method="voucher",
+        voucher_code="PROMO-2026-XYZ",
+    )
+    assert trip["voucher_code"] == "PROMO-2026-XYZ"
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["payment_method"] == "voucher"
+    assert body["voucher_code"] == "PROMO-2026-XYZ"
+    assert body["total"] == "60.00"
+
+
+async def test_close_trip_voucher_payment_method_without_any_code_is_422(
+    client: AsyncClient, session: AsyncSession
+):
+    """Trip opened as cash, then closed with payment_method="voucher" but no
+    voucher_code anywhere (never set at creation, not supplied at close)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, type="airport_fixed")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "voucher", "voucher_code": ""},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_close_trip_with_account_payment_method_stores_reference(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    trip = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        type="airport_fixed",
+        payment_method="account",
+        account_reference="ACME-CORP-0042",
+    )
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["payment_method"] == "account"
+    assert body["account_reference"] == "ACME-CORP-0042"
+    assert body["total"] == "60.00"
+
+
+async def test_close_trip_split_fare_sums_to_total(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, type="airport_fixed")  # fixed $60.00 total
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={
+            "payment_method": "split_fare",
+            "split_payments": [
+                {"method": "card", "amount": "40.00"},
+                {"method": "cash", "amount": "20.00"},
+            ],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["payment_method"] == "split_fare"
+    assert body["total"] == "60.00"
+    assert body["split_payments"] == [
+        {"method": "card", "amount": "40.00"},
+        {"method": "cash", "amount": "20.00"},
+    ]
+
+
+async def test_close_trip_split_fare_mismatched_sum_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, type="airport_fixed")  # fixed $60.00 total
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={
+            "payment_method": "split_fare",
+            "split_payments": [
+                {"method": "card", "amount": "10.00"},
+                {"method": "cash", "amount": "20.00"},
+            ],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_trip_with_split_fare_payment_method_is_allowed_without_split_payments(
+    client: AsyncClient, session: AsyncSession
+):
+    """`split_payments` isn't a TripCreate field (the trip's total isn't known
+    until close) — opening with payment_method="split_fare" is allowed; it's
+    POST .../close that requires split_payments and enforces the sum-to-total
+    check (see the next test)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, payment_method="split_fare"),
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+
+async def test_close_trip_split_fare_without_split_payments_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(
+        client, headers, tariff.id, type="airport_fixed", payment_method="split_fare"
+    )
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_update_trip_stores_split_payments_as_stringified_amounts(
+    client: AsyncClient, session: AsyncSession
+):
+    """TripUpdate stores split_payments directly (no sum-vs-total check — that
+    only happens at close, per app.services.trips.close_trip) but must still
+    stringify Decimal amounts before hitting the JSON column (see
+    app.api.v1.trips.update_trip)."""
+    headers = await auth_headers(client, session, role="dispatcher")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}",
+        json={
+            "payment_method": "split_fare",
+            "split_payments": [{"method": "cash", "amount": "3.50"}],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["split_payments"] == [{"method": "cash", "amount": "3.50"}]

@@ -120,7 +120,13 @@ class RealLocationProvider(
      * long enough not to matter as busy-work in the meantime.
      */
     private suspend fun supervisePermission() {
-        while (isActive) {
+        // scope.isActive, not a bare isActive — kotlinx.coroutines.isActive is an extension
+        // property on CoroutineScope, and this plain suspend member function has no implicit
+        // CoroutineScope receiver of its own (this class implements SpeedSource, not
+        // CoroutineScope) — a bare `isActive` here would be an unresolved reference. Caught during
+        // a 2026-08-03 reconciliation pass (see android/HANDOFF.md) while verifying a sibling
+        // file's (LivePositionHeartbeat.kt) deliberate avoidance of this exact pitfall.
+        while (scope.isActive) {
             if (hasPermission()) {
                 if (updatesJob?.isActive != true) {
                     updatesJob = scope.launch { rawLocationUpdates().collect(::onNewFix) }

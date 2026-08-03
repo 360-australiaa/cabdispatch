@@ -36,6 +36,14 @@ class DuressEscalateRequest(BaseModel):
     stage of the fixed cascade (see `app.models.duress.ESCALATION_STAGES`)."""
 
     note: str | None = Field(default=None, max_length=500)
+    emergency_contact_phone: str | None = Field(
+        default=None,
+        max_length=32,
+        description="Overrides the deployment-wide `DURESS_ESCALATION_CALL_PHONE` "
+        "default for the automated Twilio Voice call fired when this call advances "
+        "the cascade to its final stage (present_000_call_script). Ignored on "
+        "earlier stages.",
+    )
 
 
 class DuressCloseRequest(BaseModel):

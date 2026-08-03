@@ -6,6 +6,7 @@ import { VehiclesPanel } from "./VehiclesPanel";
 import { DriversPanel } from "./DriversPanel";
 import { DevicesPanel } from "./DevicesPanel";
 import { FatigueAlertsBanner } from "./FatigueAlertsBanner";
+import { ComplianceExpiryBanner } from "./ComplianceExpiryBanner";
 
 type FleetTab = "vehicles" | "drivers" | "devices";
 
@@ -28,6 +29,7 @@ export default function FleetPage() {
       />
 
       <FatigueAlertsBanner />
+      <ComplianceExpiryBanner />
 
       <div className="mb-6 flex gap-1 border-b border-border">
         {TABS.map(({ key, label, icon: Icon }) => (

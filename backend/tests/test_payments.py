@@ -461,3 +461,45 @@ async def test_stripe_webhook_ignores_unmapped_event_types(client, session):
     )
     assert resp.status_code == 200
     assert resp.json()["payment_id"] is None
+
+
+# --- voucher / account stub validation (blueprint 5.2.5, used by the trips ------
+# domain's new "voucher"/"account" Trip.payment_method values — see
+# app.services.trips.close_trip / tests/test_trips.py for the endpoint-level
+# coverage of those; these are direct unit tests of the stub functions
+# themselves)
+
+
+def test_redeem_voucher_accepts_a_non_empty_code():
+    from app.services.payments import redeem_voucher
+
+    result = redeem_voucher(voucher_code="PROMO-2026-XYZ")
+    assert result == {"voucher_code": "PROMO-2026-XYZ", "redeemed": True}
+
+
+def test_redeem_voucher_rejects_empty_code():
+    from app.services.payments import InvalidVoucherCodeError, redeem_voucher
+
+    for bad_code in ("", "   "):
+        try:
+            redeem_voucher(voucher_code=bad_code)
+            assert False, "expected InvalidVoucherCodeError"
+        except InvalidVoucherCodeError:
+            pass
+
+
+def test_validate_account_reference_accepts_a_non_empty_reference():
+    from app.services.payments import validate_account_reference
+
+    validate_account_reference(account_reference="ACME-CORP-0042")  # must not raise
+
+
+def test_validate_account_reference_rejects_empty_reference():
+    from app.services.payments import InvalidAccountReferenceError, validate_account_reference
+
+    for bad_ref in ("", "   "):
+        try:
+            validate_account_reference(account_reference=bad_ref)
+            assert False, "expected InvalidAccountReferenceError"
+        except InvalidAccountReferenceError:
+            pass

@@ -283,3 +283,47 @@ def verify_and_parse_webhook(*, payload: bytes, sig_header: str | None) -> dict:
 
 def status_for_event(event_type: str) -> str | None:
     return _EVENT_STATUS_MAP.get(event_type)
+
+
+# --- Voucher / linked corporate ("Account") payment methods (blueprint 5.2.5) -
+# Two new Trip.payment_method values (see app.models.trips / app.schemas.trips):
+# "voucher" (promo code/prepaid voucher redemption) and "account" (pre-registered
+# linked corporate account, pay-later/invoiced). Neither has a real backing
+# table in this codebase yet (v1 scope, per the task brief) — both are stub
+# validation-only checks, deliberately NOT the real-or-mock external-API
+# pattern above: there is no external voucher/corporate-account API being
+# called here at all, so there is nothing to mock a fallback for.
+
+
+class InvalidVoucherCodeError(ValueError):
+    """Raised when a voucher_code is missing/whitespace-only."""
+
+
+class InvalidAccountReferenceError(ValueError):
+    """Raised when an account_reference is missing/whitespace-only."""
+
+
+def redeem_voucher(*, voucher_code: str) -> dict:
+    """Stub voucher/promo-code redemption. Validates `voucher_code` is a
+    non-empty string and logs the redemption attempt; does NOT check the code
+    against any real voucher/promo-code table (none exists yet in this
+    codebase — a later pass can wire this to one without changing this
+    function's contract)."""
+    if not voucher_code or not voucher_code.strip():
+        raise InvalidVoucherCodeError("voucher_code must be a non-empty string")
+    logger.info("Voucher redeemed (stub, no real voucher ledger yet): code=%s", voucher_code)
+    return {"voucher_code": voucher_code, "redeemed": True}
+
+
+def validate_account_reference(*, account_reference: str) -> None:
+    """Stub validation for the 'account' payment method (pre-registered linked
+    corporate account, pay-later/invoiced). Validates `account_reference` is a
+    non-empty string and logs the attempt; does NOT check it against any real
+    corporate-account table (none exists yet in this codebase — v1 scope, per
+    the task brief)."""
+    if not account_reference or not account_reference.strip():
+        raise InvalidAccountReferenceError("account_reference must be a non-empty string")
+    logger.info(
+        "Account-reference payment recorded (stub, no real corporate-account ledger yet): ref=%s",
+        account_reference,
+    )

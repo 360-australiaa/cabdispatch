@@ -26,10 +26,20 @@ the tenant-scoping note above, since a public key isn't tenant data and
 isn't secret; it has no auth dependency at all. See
 app.services.tariff_signing's module docstring for the full key-management
 story and wire format.
+
+Named presets + auto-suggest (blueprint 5.2.3/9.1, new for this pass):
+`GET /presets` lists the small preset library (see
+app.services.tariff_presets), `POST /from-preset` creates a new Tariff
+pre-filled from one, and `GET /suggest` auto-recommends the best-matching
+currently-effective tariff for a (lat, lng, vehicle_class) — see
+app.services.tariffs.suggest_tariff's docstring for the algorithm. All three
+are registered before `/{tariff_id}` for the same path-shadowing reason as
+`/active` and `/signing-public-key` above.
 """
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -37,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user
+from app.models.fleet import VALID_VEHICLE_CLASSES
 from app.models.tariffs import VALID_REGIONS, Extra, Tariff, TariffChangeLog
 from app.models.user import User
 from app.schemas.tariffs import (
@@ -47,10 +58,14 @@ from app.schemas.tariffs import (
     SignedTariffRead,
     TariffChangeLogRead,
     TariffCreate,
+    TariffFromPresetCreate,
+    TariffPresetRead,
     TariffRead,
     TariffSigningPublicKeyRead,
+    TariffSuggestionRead,
     TariffUpdate,
 )
+from app.services import tariff_presets
 from app.services import tariff_signing
 from app.services import tariffs as tariff_service
 
@@ -161,6 +176,65 @@ async def get_tariff_signing_public_key():
     return TariffSigningPublicKeyRead(public_key=tariff_signing.get_signing_public_key_b64())
 
 
+@router.get("/presets", response_model=list[TariffPresetRead])
+async def list_tariff_presets(
+    _user: User = Depends(get_current_user),
+):
+    """Named preset library (blueprint 5.2.3/9.1: Airport Rank, Special
+    Event, Shared Ride, Wheelchair Accessible) an operator can create a new
+    Tariff from via `POST /v1/tariffs/from-preset` instead of filling in
+    every rate field from scratch. Not tenant-specific data, so this only
+    requires an authenticated caller (same as `GET /fares-order/current`)
+    rather than `get_current_tenant_id`. NOTE: registered before
+    `/{tariff_id}` so "presets" is never captured as a path parameter, same
+    reason as `/active` and `/signing-public-key` above.
+    """
+    return tariff_presets.list_presets()
+
+
+@router.get("/suggest", response_model=TariffSuggestionRead)
+async def suggest_tariff(
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+    vehicle_class: str | None = Query(default=None),
+    at: datetime | None = Query(default=None, description="ISO8601 instant; defaults to now"),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Auto-suggests the best-matching currently-effective Tariff for a new
+    job at (lat, lng) — see `app.services.tariffs.suggest_tariff`'s
+    docstring for the exact algorithm (vehicle_class="wat" match >
+    airport-geofence match > default region fallback). NOTE: registered
+    before `/{tariff_id}` for the same reason as `/active` and
+    `/signing-public-key` above.
+    """
+    if vehicle_class is not None and vehicle_class not in VALID_VEHICLE_CLASSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"vehicle_class must be one of {VALID_VEHICLE_CLASSES}",
+        )
+
+    resolved_at = at or datetime.now(UTC)
+    try:
+        suggestion = await tariff_service.suggest_tariff(
+            session,
+            tenant_id=tenant_id,
+            lat=lat,
+            lng=lng,
+            vehicle_class=vehicle_class,
+            at=resolved_at,
+        )
+    except tariff_service.NoEffectiveTariffError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return TariffSuggestionRead(
+        tariff_id=suggestion.tariff_id,
+        tariff_name=suggestion.tariff_name,
+        time_class=suggestion.time_class,
+        reason=suggestion.reason,
+    )
+
+
 @router.post("", response_model=TariffRead, status_code=status.HTTP_201_CREATED)
 async def create_tariff(
     payload: TariffCreate,
@@ -171,6 +245,44 @@ async def create_tariff(
     await tariff_service.validate_tariff_or_422(session, payload)
 
     row = Tariff(tenant_id=tenant_id, **payload.model_dump())
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+
+    await tariff_service.write_change_log(session, tariff=row, actor_user_id=user.id, before=None)
+    return row
+
+
+@router.post("/from-preset", response_model=TariffRead, status_code=status.HTTP_201_CREATED)
+async def create_tariff_from_preset(
+    payload: TariffFromPresetCreate,
+    tenant_id: str = Depends(get_current_tenant_id),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Creates a new Tariff pre-filled from a named preset (see
+    `GET /v1/tariffs/presets`), with any `overrides` layered on top, then
+    runs the exact same Fares Order validation + change-log write
+    `POST /v1/tariffs` does — the preset only saves re-typing defaults, it
+    never skips validation.
+    """
+    preset = tariff_presets.get_preset(payload.preset)
+    if preset is None:  # unreachable given TariffFromPresetCreate.preset's Literal type; defensive only
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown preset '{payload.preset}'"
+        )
+
+    data: dict[str, Any] = dict(preset["defaults"])
+    data["name"] = payload.name
+    data["effective_from"] = payload.effective_from
+    data["effective_to"] = payload.effective_to
+    if payload.overrides is not None:
+        data.update(payload.overrides.model_dump(exclude_unset=True))
+
+    tariff_data = TariffCreate(**data)
+    await tariff_service.validate_tariff_or_422(session, tariff_data)
+
+    row = Tariff(tenant_id=tenant_id, **tariff_data.model_dump())
     session.add(row)
     await session.commit()
     await session.refresh(row)
