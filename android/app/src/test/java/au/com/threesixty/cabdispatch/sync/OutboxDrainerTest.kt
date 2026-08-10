@@ -29,6 +29,8 @@ import au.com.threesixty.cabdispatch.data.remote.TripSyncResponseDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResultItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripTickRequestDto
 import au.com.threesixty.cabdispatch.data.remote.UserDto
+import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -365,6 +367,15 @@ private class FakeApiService : ApiService {
     override suspend fun startShift(body: ShiftStartDto): ShiftDto = notUsed()
     override suspend fun endShift(shiftId: String, body: ShiftEndDto): ShiftDto = notUsed()
     override suspend fun shiftReport(shiftId: String): ShiftReportDto = notUsed()
+    // Added 2026-08-10 (driver-photo pass) alongside the two new ApiService methods below --
+    // this FakeApiService already did not override every ApiService member (driverLogin,
+    // mfaLogin, verifyAdminPin, the duress endpoints, getComplianceDossier, zones, etc. are all
+    // missing too, none of it added by this pass) -- see HANDOFF.md's 2026-08-10 entry for the
+    // honest flag that this file was very likely already failing to compile against the real
+    // interface before this pass touched it, for reasons unrelated to this change. Only these two
+    // are added here, to at least not add to that pre-existing list with brand new gaps.
+    override suspend fun uploadUserPhoto(userId: String, file: MultipartBody.Part): UserDto = notUsed()
+    override suspend fun getUserPhoto(userId: String): ResponseBody = notUsed()
 
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }

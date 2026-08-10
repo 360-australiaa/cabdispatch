@@ -7,13 +7,16 @@ this system (see app.core.security / app.core.database docstrings).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, require_role
+from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.fleet import Device, Vehicle
+from app.models.user import User
 from app.schemas.fleet import (
     ComplianceExpiryItem,
     DeviceCreate,
@@ -28,14 +31,19 @@ from app.schemas.fleet import (
     PairingCodeRead,
     RebootRequest,
     VehicleCreate,
+    VehicleLifetimeTotals,
+    VehiclePilotReport,
     VehicleRead,
     VehicleUpdate,
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
 )
 from app.services import compliance_expiry as compliance_expiry_service
+from app.services import evidence_pack as evidence_pack_service
 from app.services import fleet as fleet_service
+from app.services import fleet_reports as fleet_reports_service
 from app.services import tenant as tenant_service
+from app.services.reports import InvalidDateRangeError
 
 router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
 
@@ -184,6 +192,93 @@ async def create_pairing_code(
         raise _fleet_error_to_http(exc) from exc
 
 
+@router.get("/vehicles/{vehicle_id}/evidence-pack")
+async def get_vehicle_evidence_pack(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One-click per-vehicle compliance evidence pack: a single ZIP bundling
+    the vehicle's compliance-vault documents, its tenant's tariff version
+    history, its paired device(s) firmware/app-version history, a
+    tamper/event-log (audit-log) extract for the vehicle, and an
+    installation-record placeholder. See app.services.evidence_pack module
+    docstring for exactly what each category contains and how an empty
+    category is represented (never silently omitted).
+
+    Any authenticated tenant user may fetch this -- same "any authenticated
+    tenant user may read" convention as GET /v1/compliance/vehicles/{id}/dossier.
+    """
+    try:
+        vehicle = await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    zip_bytes = await evidence_pack_service.build_evidence_pack(session, tenant_id=tenant_id, vehicle=vehicle)
+    filename = evidence_pack_service.evidence_pack_filename(vehicle)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/vehicles/{vehicle_id}/lifetime-totals", response_model=VehicleLifetimeTotals)
+async def get_vehicle_lifetime_totals(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Per-vehicle lifetime cumulative-totals register (operations-cycle
+    tracking pass): a read-only SUM aggregation across every CLOSED Trip ever
+    recorded for this vehicle. Mirrors the classic statutory cumulative-
+    totals register a physical taxi meter keeps -- exactly the evidence a
+    cl 14 compliance pack wants. Not paginated, no filters -- a single
+    lifetime snapshot, computed fresh on every request from the `trips`
+    table (no new storage). See app.services.fleet_reports for the exact
+    aggregation and the documented gap on `total_tips` (no such field exists
+    on Trip in this codebase).
+
+    Any authenticated tenant user may fetch this -- same convention as
+    GET /vehicles/{vehicle_id}/evidence-pack above."""
+    try:
+        return await fleet_reports_service.vehicle_lifetime_totals(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id
+        )
+    except fleet_reports_service.VehicleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found") from exc
+
+
+@router.get("/vehicles/{vehicle_id}/pilot-report", response_model=VehiclePilotReport)
+async def get_vehicle_pilot_report(
+    vehicle_id: str,
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """60-day-pilot-report evidence pack for a single vehicle over
+    [from_date, to_date] (inclusive calendar days, same convention as
+    GET /v1/reports/revenue): average fare-accuracy variance_pct, a coarse
+    device-uptime estimate, duress-event counts, and flagged-for-review trip
+    counts. See app.services.fleet_reports.vehicle_pilot_report for the
+    documented simplifications (device uptime) and gaps
+    (duress_test_activation_count -- no such field exists on DuressEvent in
+    this codebase as of this pass).
+
+    Any authenticated tenant user may fetch this -- same convention as
+    GET /vehicles/{vehicle_id}/evidence-pack above."""
+    try:
+        return await fleet_reports_service.vehicle_pilot_report(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, from_date=from_date, to_date=to_date
+        )
+    except fleet_reports_service.VehicleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found") from exc
+    except InvalidDateRangeError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
 # ==================================================================================
 # Compliance expiry (blueprint 7.2.3/7.2.4/10.1)
 # ==================================================================================
@@ -196,25 +291,26 @@ async def list_compliance_expiry(
     within_days: int = Query(
         30, ge=1, le=365, description="Include items expiring within this many days (or already expired)"
     ),
-    entity_type: str | None = Query(default=None, description="Filter to 'driver' or 'vehicle'"),
+    entity_type: str | None = Query(default=None, description="Filter to 'driver', 'vehicle', or 'device'"),
     status_filter: str | None = Query(
         default=None, alias="status", description="Filter to 'expiring_soon' or 'expired'"
     ),
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    """Dashboard-facing list of every driver license/authority and vehicle
-    registration/insurance field that is either already expired or expiring
-    within `within_days`. Not paginated at the DB level (the underlying query
-    is a full tenant-scoped scan of Users + Vehicles, same cost as any of
-    this domain's `Page[T]`-returning list endpoints on a tenant's realistic
+    """Dashboard-facing list of every driver license/authority, vehicle
+    registration/insurance, and device meter-calibration-due field that is
+    either already expired or expiring within `within_days`. Not paginated at
+    the DB level (the underlying query is a full tenant-scoped scan of
+    Users + Vehicles + Devices, same cost as any of this domain's
+    `Page[T]`-returning list endpoints on a tenant's realistic
     fleet/driver-roster size) — `skip`/`limit` slice the already-computed,
     already-sorted (soonest-expiring first) in-memory list, same Page[T]
     contract as every other list endpoint in this file.
 
     No extra role restriction beyond authentication + tenant scope — same
     convention already used by `GET /vehicles` and `GET /devices` above."""
-    if entity_type is not None and entity_type not in ("driver", "vehicle"):
+    if entity_type is not None and entity_type not in ("driver", "vehicle", "device"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid entity_type filter")
     if status_filter is not None and status_filter not in ("expiring_soon", "expired"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")

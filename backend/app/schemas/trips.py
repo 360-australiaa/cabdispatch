@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.fare_engine import NEGOTIATED_TOTAL_MAX, NEGOTIATED_TOTAL_MIN
+
 TripType = Literal["rank_hail", "booked", "airport_fixed", "multi_hire"]
 TripStatus = Literal["open", "closed"]
 TimeClass = Literal["day", "night", "holiday"]
@@ -53,6 +55,20 @@ def _validate_split_payments_required(
         raise ValueError("split_payments is required (and non-empty) when payment_method is 'split_fare'")
 
 
+def _validate_negotiated_total(negotiated_total: Decimal | None) -> None:
+    """Shared sanity-cap check for the negotiated/"Set Price" fixed fare
+    (competitor "Set Price" feature; NSW allows pre-arranged/negotiated
+    fares) — reuses app.services.fare_engine's NEGOTIATED_TOTAL_MIN/MAX band,
+    the same "reasonable cap" spirit as this codebase's other money sanity
+    checks (see e.g. app.services.fare_engine.Tariff.surcharge_pct_cap)."""
+    if negotiated_total is None:
+        return
+    if not (NEGOTIATED_TOTAL_MIN <= negotiated_total <= NEGOTIATED_TOTAL_MAX):
+        raise ValueError(
+            f"negotiated_total must be between {NEGOTIATED_TOTAL_MIN} and {NEGOTIATED_TOTAL_MAX}"
+        )
+
+
 class TelemetryPoint(BaseModel):
     """A single raw GPS/speed fix, as recorded by the in-vehicle meter."""
 
@@ -84,6 +100,16 @@ class TripCreate(BaseModel):
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     gps_trace_ref: str | None = None
+    negotiated_total: Decimal | None = Field(
+        default=None,
+        description=(
+            "Negotiated/set-price fixed fare (competitor 'Set Price' feature): "
+            "the driver enters this before starting the meter (NSW allows this "
+            "for pre-arranged/negotiated fares). Settable only at trip creation "
+            "— not mid-trip. Replaces the metered flag/distance/time components "
+            "at close; PSL and tolls still accrue and add on top of it."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripCreate":
@@ -92,6 +118,7 @@ class TripCreate(BaseModel):
         # payment_method="split_fare" + split_payments rather than opening
         # with it.
         _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
+        _validate_negotiated_total(self.negotiated_total)
         return self
 
 
@@ -206,12 +233,21 @@ class TripSyncItem(BaseModel):
     gps_trace: list[TelemetryPoint] = Field(default_factory=list)
     gps_trace_ref: str | None = None
     receipt_ref: str | None = None
+    negotiated_total: Decimal | None = Field(
+        default=None,
+        description=(
+            "Same negotiated/set-price fixed fare as TripCreate.negotiated_total "
+            "— carried through offline sync so a trip opened+closed on-device "
+            "with a driver-entered set price doesn't lose it on replay."
+        ),
+    )
     device_total: Decimal = Field(..., description="The total the offline device computed on-vehicle")
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripSyncItem":
         _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
         _validate_split_payments_required(self.payment_method, self.split_payments)
+        _validate_negotiated_total(self.negotiated_total)
         return self
 
 
@@ -264,6 +300,7 @@ class TripRead(BaseModel):
     voucher_code: str | None
     account_reference: str | None
     split_payments: list[dict] | None = Field(default_factory=list)
+    negotiated_total: Decimal | None
     created_at: datetime
     updated_at: datetime
 

@@ -10,6 +10,12 @@ import java.util.UUID
  * in a call to open a shift"). */
 interface ShiftRepository {
     suspend fun startShift(driverId: String, vehicleId: String, inspection: Map<String, String>): Result<ShiftDto>
+
+    /** Plain re-read of one shift by id — added for the Plot Zone screen's "currently plotted
+     * in" indicator ([au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneViewModel]), which
+     * needs [ShiftDto.plottedZoneId] for the driver's own current shift
+     * ([au.com.threesixty.cabdispatch.domain.SessionHolder.session]'s `shiftId`) on screen load. */
+    suspend fun getShift(shiftId: String): Result<ShiftDto>
 }
 
 /**
@@ -23,6 +29,9 @@ interface ShiftRepository {
  * connectivity returns.
  */
 class RemoteBackedShiftRepository(private val apiService: ApiService) : ShiftRepository {
+    override suspend fun getShift(shiftId: String): Result<ShiftDto> =
+        runCatching { apiService.getShift(shiftId) }
+
     override suspend fun startShift(
         driverId: String,
         vehicleId: String,

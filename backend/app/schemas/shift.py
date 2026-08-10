@@ -85,6 +85,12 @@ class ShiftRead(BaseModel):
     card_total: Decimal
     psl_owed: Decimal
     reconciled: bool
+    # Zone-plotting fields (see app.models.shift.Shift's DEVIATION note) --
+    # managed exclusively via POST /v1/zones/{id}/plot and
+    # POST /v1/zones/unplot (app.services.zones), not settable via
+    # ShiftCreate/ShiftUpdate above.
+    plotted_zone_id: str | None = None
+    plotted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

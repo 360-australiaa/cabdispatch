@@ -23,6 +23,8 @@ import au.com.threesixty.cabdispatch.domain.SpeedSource
 import au.com.threesixty.cabdispatch.domain.StubQrScanner
 import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
+import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
+import au.com.threesixty.cabdispatch.domain.ZonesRepository
 import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
 import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
@@ -322,6 +324,14 @@ object AppContainer {
     val livePositionHeartbeat: LivePositionHeartbeat by lazy {
         LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default))
     }
+
+    // --- Zones (Plot / Statistics screens — named dispatch zones, "plot into a zone", live
+    // per-zone demand stats, matching a real competitor taxi meter's zone screens, per
+    // backend/app/api/v1/zones.py) ---
+    //
+    // Thin network-only, same reasoning as [jobsRepository] above (see [ZonesRepository]'s own
+    // doc) — no Room/offline-queue story needed, just [apiService].
+    val zonesRepository: ZonesRepository by lazy { RemoteBackedZonesRepository(apiService) }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:
     // val fooDao: FooDao by lazy { database.fooDao() }

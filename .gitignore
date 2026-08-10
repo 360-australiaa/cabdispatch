@@ -37,3 +37,7 @@ android/.cxx/
 Thumbs.db
 .vscode/
 *.log
+
+# Competitor reference screenshots (research only, not project deliverables — do not commit
+# a competitor's proprietary product UI into this repo's history)
+meter screens/

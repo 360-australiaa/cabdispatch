@@ -68,6 +68,10 @@ class TripRepository(
         timeClass: String = "day",
         isPeak: Boolean = false,
         maxi: Boolean = false,
+        /** See [TripEntity.negotiatedTotal]'s doc — "Set Price" entry point (2026-08-10
+         * meter-polish pass). Defaulted null so every existing call site (a normal metered Start
+         * Meter tap) keeps compiling/behaving unchanged. */
+        negotiatedTotal: String? = null,
     ): TripEntity {
         val now = System.currentTimeMillis()
         val trip = TripEntity(
@@ -85,6 +89,7 @@ class TripRepository(
             startLat = startLat,
             startLng = startLng,
             paymentMethod = paymentMethod,
+            negotiatedTotal = negotiatedTotal,
             createdAt = now,
             updatedAt = now,
         )
@@ -245,6 +250,7 @@ class TripRepository(
             voucherCode = trip.voucherCode,
             accountReference = trip.accountReference,
             splitPayments = trip.splitPaymentsJson?.let { cabDispatchJson.decodeFromString<List<SplitPaymentEntryDto>>(it) },
+            negotiatedTotal = trip.negotiatedTotal,
             timeClass = trip.timeClass,
             isPeak = trip.isPeak,
             maxi = trip.maxi,

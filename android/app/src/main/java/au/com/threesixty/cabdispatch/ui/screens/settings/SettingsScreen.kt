@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
+import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 
 private enum class SettingsSubScreen { MAIN, PRINTER_PAIRING, FARE_SCHEDULE }
 
@@ -72,6 +73,12 @@ fun SettingsScreen(
             onOpenFareSchedule = { subScreen = SettingsSubScreen.FARE_SCHEDULE },
             onFactoryResetClick = { showResetDialog = true },
             onDownloadOfflineMaps = viewModel::downloadOfflineMaps,
+            // Permissions checklist (2026-08-10 meter-polish pass) -- a real nav route
+            // (au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen),
+            // not a SettingsSubScreen case, since it needs no SettingsViewModel state at all --
+            // matches this file's own precedent of using navController directly for a
+            // destination outside this screen's own sub-screen enum (see onBack above).
+            onOpenPermissions = { navController.navigate(CabDispatchRoutes.PERMISSIONS_CHECKLIST) },
         )
         SettingsSubScreen.PRINTER_PAIRING -> PrinterPairingContent(
             state = state,
@@ -136,6 +143,7 @@ private fun MainSettingsContent(
     onOpenFareSchedule: () -> Unit,
     onFactoryResetClick: () -> Unit,
     onDownloadOfflineMaps: () -> Unit,
+    onOpenPermissions: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -183,6 +191,14 @@ private fun MainSettingsContent(
         item {
             OutlinedButton(onClick = onOpenFareSchedule, modifier = Modifier.fillMaxWidth()) {
                 Text("Fare schedule (passenger display)")
+            }
+        }
+
+        item {
+            // 2026-08-10 meter-polish pass -- see PermissionsChecklistScreen's own doc for why
+            // this is read-only status, not a request flow.
+            OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.fillMaxWidth()) {
+                Text("App permissions")
             }
         }
 

@@ -4,7 +4,9 @@ import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MessageCreateDto
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
 import au.com.threesixty.cabdispatch.data.remote.MessageListResponseDto
+import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
+import au.com.threesixty.cabdispatch.data.remote.TemplateMessageCreateDto
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -23,6 +25,17 @@ interface MessagesRepository {
      * for why this is untyped `String`. A `driver`-role caller may only subscribe to their own
      * thread server-side. */
     fun observeLive(driverId: String, accessToken: String): Flow<String>
+
+    /** Canned quick-tap template menu — see [ApiService.listMessageTemplates]'s doc. Callers
+     * should fetch once and cache (e.g. in a ViewModel's [kotlinx.coroutines.flow.StateFlow]),
+     * not refetch per composition — the menu is not tenant/driver-specific and effectively
+     * static for the lifetime of the app process. */
+    suspend fun listTemplates(): Result<List<MessageTemplateDto>>
+
+    /** Quick-tap send — see [ApiService.sendTemplateMessage]'s doc. Same [driverId] rule as
+     * [sendMessage]. [note] is the optional free-text suffix (primarily for the "other"
+     * template). */
+    suspend fun sendTemplateMessage(driverId: String?, code: String, note: String? = null): Result<MessageDto>
 }
 
 class RemoteBackedMessagesRepository(
@@ -42,4 +55,12 @@ class RemoteBackedMessagesRepository(
 
     override fun observeLive(driverId: String, accessToken: String): Flow<String> =
         realtimeSocket.connect(RealtimeSocket.messagesLiveUrl(baseHttpUrl, driverId, accessToken))
+
+    override suspend fun listTemplates(): Result<List<MessageTemplateDto>> =
+        runCatching { apiService.listMessageTemplates() }
+
+    override suspend fun sendTemplateMessage(driverId: String?, code: String, note: String?): Result<MessageDto> =
+        runCatching {
+            apiService.sendTemplateMessage(code, TemplateMessageCreateDto(driverId = driverId, note = note))
+        }
 }

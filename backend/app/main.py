@@ -44,6 +44,26 @@ check. This pass also extended the `fleet` domain's device router (no new
 router of its own) with `POST /v1/fleet/devices/{id}/verify-admin-pin` — the
 device-facing check endpoint a device calls to validate a PIN without ever
 seeing the hash.
+
+zones (`/v1/zones`) is new in this pass: named dispatch zones with a
+driver-facing short code (e.g. "17"), "plot into a zone" (stored as
+plotted_zone_id/plotted_at on the existing `shifts` table -- see
+app.models.shift.Shift's DEVIATION note), and GET /v1/zones/stats -- a live
+per-zone demand snapshot matching a screen on a real competitor taxi meter
+(MTI). Owns one new table (`zones`); reads shifts/live_ops/jobs/trips
+read-only for the stats aggregation (see app.services.zones).
+
+platform (/v1/platform) is new in this pass: a platform-owner-only admin
+console - GET/POST /v1/platform/tenants (list every tenant / onboard a
+new one), GET /v1/platform/tenants/{id}/summary (per-tenant health
+rollup), GET /v1/platform/health (platform-wide aggregate). Gated to
+role == "owner" AND tenant_id == PLATFORM_TENANT_ID specifically (see
+app.api.v1.platform.require_platform_owner) - stricter than the plain
+owner-role gate every other domain router uses. Closes the gap where the
+platform tenant could already act cross-tenant via get_current_tenant_id
+tenant_id override (see app.core.security) but had no dedicated
+management surface. Path prefix platform does not collide with any
+existing domain routes.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,6 +81,7 @@ from app.api.v1.live_ops import router as live_ops_router
 from app.api.v1.messages import router as messages_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.payments import webhook_router as payments_webhook_router
+from app.api.v1.platform import router as platform_router
 from app.api.v1.psl_ledger import router as psl_ledger_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
@@ -69,6 +90,7 @@ from app.api.v1.tariffs import router as tariffs_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
+from app.api.v1.zones import router as zones_router
 from app.core.config import settings
 
 app = FastAPI(title="Cab Dispatch API", version="0.1.0")
@@ -108,3 +130,5 @@ app.include_router(messages_router)
 app.include_router(reports_router)
 app.include_router(fatigue_alerts_router)
 app.include_router(tenants_router)
+app.include_router(zones_router)
+app.include_router(platform_router)

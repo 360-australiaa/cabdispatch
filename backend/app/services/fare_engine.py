@@ -141,6 +141,36 @@ def airport_fixed_fare(maxi: bool) -> Decimal:
     return AIRPORT_FIXED_FARE_MAXI if maxi else AIRPORT_FIXED_FARE_STANDARD
 
 
+# Negotiated / "Set Price" fixed fare - matches a real competitor taxi-meter
+# feature: the driver enters a fixed price before starting the meter. NSW law
+# permits this for pre-arranged/negotiated fares (unlike rank/hail tariffs,
+# which are Fares Order-capped - see validate_against_fares_order - negotiated
+# fares are not rate-capped at all, since the passenger agrees to the exact
+# number up front). The competitor's own on-screen disclaimer reads "this
+# price doesn't include levies and/or tolls" - i.e. PSL and tolls still accrue
+# and add ON TOP of the negotiated amount, unlike AIRPORT_FIXED_FARE_* above
+# which excludes them entirely. See FareEngine.close's `negotiated_total`
+# branch.
+#
+# NEGOTIATED_TOTAL_MIN/MAX are a sanity cap only - guarding against an
+# obvious data-entry error (a stray zero, a decimal-point slip), not a
+# regulatory rate cap (negotiated fares aren't Fares Order-regulated in the
+# first place, per the NSW rule above).
+NEGOTIATED_TOTAL_MIN = Decimal("1.00")
+NEGOTIATED_TOTAL_MAX = Decimal("500.00")
+
+
+def validate_negotiated_total(amount: Decimal) -> None:
+    """Sanity-checks a driver-entered negotiated/set-price amount. Raises
+    ValueError (mirrors FaresOrderViolation's ValueError-subclass convention
+    above) if `amount` falls outside the sane [MIN, MAX] band."""
+    if not (NEGOTIATED_TOTAL_MIN <= amount <= NEGOTIATED_TOTAL_MAX):
+        raise ValueError(
+            f"negotiated_total {amount} is outside the sane range "
+            f"{NEGOTIATED_TOTAL_MIN}-{NEGOTIATED_TOTAL_MAX}"
+        )
+
+
 def validate_against_fares_order(
     tariff: Tariff, fares_order_reference: Tariff, *, booked: bool = False
 ) -> None:
@@ -180,6 +210,14 @@ class FareState:
     # Sydney Airport Fixed Fare Trial: when set, close() returns exactly this
     # amount (60/80) plus ONLY surcharge/cleaning fee — no PSL, tolls, or peak.
     fixed_fare: Decimal | None = None
+
+    # Negotiated / "Set Price" fixed fare (see validate_negotiated_total /
+    # NEGOTIATED_TOTAL_MIN/MAX above): when set, close() charges exactly this
+    # amount for the base/flag/distance/time components combined, but — unlike
+    # fixed_fare above — PSL and tolls still accrue and add ON TOP, exactly as
+    # they do for a normal metered trip (per the competitor's own "doesn't
+    # include levies and/or tolls" on-screen disclaimer this mirrors).
+    negotiated_total: Decimal | None = None
 
 
 @dataclass
@@ -301,6 +339,58 @@ class FareEngine:
                 cleaning_fee=cleaning_fee,
                 extras=Decimal(0),
                 maxi_applied=state.maxi,
+                fare_total=fare_total,
+                surcharge=surcharge,
+                grand_total=grand_total,
+                gst_component=gst_component,
+            )
+
+        if state.negotiated_total is not None:
+            # Negotiated / "Set Price" fixed fare: negotiated_total REPLACES
+            # the flag/peak/distance/waiting components combined — reported
+            # as 0 individually below, same convention fixed_fare uses — but
+            # PSL and tolls still accrue and add on top, exactly as they do
+            # for a normal metered trip (see FareState.negotiated_total's
+            # docstring). Not run through the maxi multiplier: the negotiated
+            # number is the number the driver and passenger already agreed to.
+            flag_fall = Decimal(0)
+            peak_charge = Decimal(0)
+            distance_charge_amount = Decimal(0)
+            waiting_charge_amount = Decimal(0)
+            psl = state.tariff.psl_amount if include_psl else Decimal(0)
+
+            subtotal = (
+                state.negotiated_total
+                + state.tolls
+                + psl
+                + state.extras
+                + cleaning_fee
+            )
+
+            maxi_applied = state.maxi
+            fare_total = round_half_up(subtotal)
+
+            surcharge = Decimal(0)
+            if payment_method == "card":
+                pct = min(
+                    surcharge_pct if surcharge_pct is not None else state.tariff.surcharge_pct_cap,
+                    state.tariff.surcharge_pct_cap,
+                )
+                surcharge = round_half_up(fare_total * pct / Decimal(100))
+
+            grand_total = fare_total + surcharge
+            gst_component = round_half_up(grand_total / Decimal(11))
+
+            return FareBreakdown(
+                flag_fall=flag_fall,
+                peak_charge=peak_charge,
+                distance_charge=distance_charge_amount,
+                waiting_charge=waiting_charge_amount,
+                tolls=state.tolls,
+                psl=psl,
+                cleaning_fee=cleaning_fee,
+                extras=state.extras,
+                maxi_applied=maxi_applied,
                 fare_total=fare_total,
                 surcharge=surcharge,
                 grand_total=grand_total,

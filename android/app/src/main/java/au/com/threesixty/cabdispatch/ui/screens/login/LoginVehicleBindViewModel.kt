@@ -209,6 +209,9 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                         driverName = state.loggedInDriverName ?: driverId,
                         vehicleId = vehicleId,
                         shiftId = shift.id,
+                        // Feeds the dashboard's shift-duration countdown (2026-08-10 meter-polish
+                        // pass) — see DriverSession.shiftStartAt's own doc.
+                        shiftStartAt = shift.startAt,
                     ),
                 )
                 _uiState.update { it.copy(isStartingShift = false) }

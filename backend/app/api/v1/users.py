@@ -10,12 +10,13 @@ domain router — see app/core/security.py.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, hash_password, require_role
+from app.core.security import get_current_tenant_id, get_current_user, hash_password, require_role
 from app.models.user import User
 from app.schemas.user import Page, UserCreate, UserRead, UserUpdate
 from app.services import user as user_service
@@ -23,6 +24,7 @@ from app.services import user as user_service
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
 _require_admin = require_role("owner", "admin")
+_require_staff = require_role("owner", "admin", "dispatcher")
 
 
 def _user_error_to_http(exc: user_service.UserError) -> HTTPException:
@@ -36,6 +38,8 @@ def _user_error_to_http(exc: user_service.UserError) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=f"driver_code already in use: {exc}"
         )
+    if isinstance(exc, user_service.InvalidPhotoUploadError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
@@ -152,6 +156,101 @@ async def delete_user(
 
     await session.delete(user)
     await session.commit()
+
+
+# ==================================================================================
+# Photo (closes a real gap: a monitoring partner receiving a duress alarm
+# needs to see the driver photo to verify identity -- today there was
+# nowhere for one to even be stored). Mirrors the compliance vault's
+# local-disk-upload convention exactly -- see app.services.user's photo
+# storage helpers.
+# ==================================================================================
+
+
+@router.post("/{user_id}/photo", response_model=UserRead)
+async def upload_user_photo(
+    user_id: str,
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(get_current_tenant_id),
+    caller: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Multipart upload: saves the file under
+    uploads/{tenant_id}/users/{user_id}/ (created if missing) on local disk
+    and stores the relative path on User.photo_url.
+
+    Self-or-staff gated: any authenticated user may upload their OWN photo
+    (caller.id == user_id -- the common self-service profile-picture case,
+    and what the Android app's Profile screen actually does), and staff
+    (owner/admin/dispatcher) may additionally upload on behalf of ANY user in
+    their tenant (the admin-managed-onboarding case). Fixed from an earlier,
+    stricter staff-only gate that blocked a driver from uploading their own
+    photo entirely -- a real cross-agent contract mismatch caught during
+    integration: the Android client was built to let a driver capture/upload
+    their own photo from their own Profile screen, which would have 403'd
+    against the original gate on every real device. Re-verifying a
+    duress-identity photo's authenticity, if ever needed, is a staff/ops
+    process concern, not something enforced by this upload gate."""
+    is_self = caller.id == user_id
+    is_staff = caller.role in ("owner", "admin", "dispatcher")
+    if not (is_self or is_staff):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Can only upload your own photo unless you are staff (owner/admin/dispatcher)",
+        )
+
+    try:
+        user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
+    except user_service.UserError as exc:
+        raise _user_error_to_http(exc) from exc
+
+    content = await file.read()
+    try:
+        relative_path = await user_service.save_user_photo(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            original_filename=file.filename or "photo",
+            content=content,
+        )
+    except user_service.UserError as exc:
+        raise _user_error_to_http(exc) from exc
+
+    user.photo_url = relative_path
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+@router.get("/{user_id}/photo")
+async def get_user_photo(
+    user_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Any authenticated tenant user may fetch a photo (e.g. a monitoring
+    partner / dispatcher confirming a driver identity during a duress
+    alert) -- same read convention as GET /v1/compliance/documents/{id}/download."""
+    try:
+        user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
+    except user_service.UserError as exc:
+        raise _user_error_to_http(exc) from exc
+
+    if user.photo_url is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No photo on file for this user")
+
+    try:
+        absolute_path = user_service.resolve_photo_path(user.photo_url)
+    except user_service.UserError as exc:
+        raise _user_error_to_http(exc) from exc
+
+    if not absolute_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Photo row exists but its file is missing on disk",
+        )
+
+    return FileResponse(path=absolute_path)
 
 
 __all__ = ["router"]

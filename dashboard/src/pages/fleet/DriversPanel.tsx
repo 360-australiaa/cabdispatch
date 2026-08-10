@@ -1,10 +1,14 @@
-import { useMemo, useState } from "react";
-import { Info } from "lucide-react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Camera, Info } from "lucide-react";
 import { Badge, Button, Card, CardContent, Input, Modal, Select, Table, type TableColumn } from "@/components/ui";
-import { useDrivers, useVehicleOptions, type DriverFilters, PAGE_LIMIT } from "./api";
+import { useAuth } from "@/lib/auth";
+import { useDrivers, useUploadDriverPhoto, useVehicleOptions, type DriverFilters, PAGE_LIMIT } from "./api";
+import { DriverAvatar } from "./DriverAvatar";
 import { PaginationBar } from "./PaginationBar";
 import { errorMessage, formatDateTime, truncateId } from "./format";
 import type { Driver } from "./types";
+
+const PHOTO_UPLOAD_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 const ON_SHIFT_OPTIONS = [
   { value: "true", label: "On shift" },
@@ -12,10 +16,15 @@ const ON_SHIFT_OPTIONS = [
 ];
 
 export function DriversPanel() {
+  const { user } = useAuth();
+  const canUploadPhoto = Boolean(user && PHOTO_UPLOAD_ROLES.has(user.role));
   const [skip, setSkip] = useState(0);
   const [statusSearch, setStatusSearch] = useState("");
   const [onShiftFilter, setOnShiftFilter] = useState("");
   const [selected, setSelected] = useState<Driver | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadPhoto = useUploadDriverPhoto();
 
   const filters: DriverFilters = useMemo(
     () => ({
@@ -28,6 +37,18 @@ export function DriversPanel() {
   const driversQuery = useDrivers(skip, filters);
   const vehicleOptionsQuery = useVehicleOptions();
 
+  async function handlePhotoSelected(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !selected) return;
+    setPhotoError(null);
+    try {
+      await uploadPhoto.mutateAsync({ userId: selected.id, file });
+    } catch (err) {
+      setPhotoError(errorMessage(err));
+    }
+  }
+
   const vehicleRegoById = useMemo(() => {
     const map = new Map<string, string>();
     for (const v of vehicleOptionsQuery.data ?? []) map.set(v.id, v.rego);
@@ -35,6 +56,12 @@ export function DriversPanel() {
   }, [vehicleOptionsQuery.data]);
 
   const columns: TableColumn<Driver>[] = [
+    {
+      key: "photo",
+      header: "",
+      className: "w-12",
+      render: (d) => <DriverAvatar userId={d.id} name={d.name} size="h-8 w-8" />,
+    },
     { key: "name", header: "Name", sortable: true, render: (d) => <span className="font-medium">{d.name}</span> },
     { key: "phone", header: "Phone", render: (d) => d.phone || "—" },
     { key: "user_status", header: "Status", render: (d) => <Badge variant="outline">{d.user_status}</Badge> },
@@ -123,17 +150,52 @@ export function DriversPanel() {
 
       <Modal
         open={selected !== null}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          setSelected(null);
+          setPhotoError(null);
+        }}
         title={selected?.name}
         description="Read-only driver detail"
         footer={
-          <Button variant="outline" onClick={() => setSelected(null)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSelected(null);
+              setPhotoError(null);
+            }}
+          >
             Close
           </Button>
         }
       >
         {selected && (
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          <>
+            <div className="mb-4 flex items-center gap-4">
+              <DriverAvatar userId={selected.id} name={selected.name} size="h-16 w-16" />
+              {canUploadPhoto && (
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoSelected}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploadPhoto.isPending}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Camera className="h-3.5 w-3.5" />
+                    {uploadPhoto.isPending ? "Uploading..." : "Upload photo"}
+                  </Button>
+                  {photoError && <p className="mt-1 text-xs text-destructive">{photoError}</p>}
+                </div>
+              )}
+            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <div>
               <dt className="text-xs text-muted-foreground">Phone</dt>
               <dd>{selected.phone || "—"}</dd>
@@ -158,7 +220,8 @@ export function DriversPanel() {
               <dt className="text-xs text-muted-foreground">Current trip</dt>
               <dd>{truncateId(selected.current_trip_id, 12)}</dd>
             </div>
-          </dl>
+            </dl>
+          </>
         )}
       </Modal>
     </div>

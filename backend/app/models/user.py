@@ -72,3 +72,14 @@ class User(Base, TimestampMixin):
     # app.services.compliance_expiry).
     driver_license_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
     driver_authority_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Driver/staff photo. Nullable -- most existing seeded/test users have
+    # none. Stores a relative (to BACKEND_ROOT) on-disk path, same local-disk-
+    # upload convention as app.models.compliance.ComplianceDocument.file_path
+    # -- see app.services.user's photo-storage helpers, which mirror
+    # app.services.compliance's exactly. Populated by
+    # POST /v1/users/{id}/photo, served by GET /v1/users/{id}/photo (see
+    # app/api/v1/users.py) -- closes a real gap: a monitoring partner
+    # receiving a duress alarm needs to see the driver's photo to verify
+    # identity.
+    photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

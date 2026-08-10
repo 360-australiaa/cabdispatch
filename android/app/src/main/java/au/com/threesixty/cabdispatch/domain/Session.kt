@@ -20,6 +20,18 @@ data class DriverSession(
     val driverName: String,
     val vehicleId: String,
     val shiftId: String?,
+    /**
+     * ISO-8601 shift-start timestamp (`ShiftDto.startAt`, backend-assigned at
+     * `POST /v1/shifts` time), set alongside [shiftId] by
+     * [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.startShift].
+     * Added for the dashboard's shift-duration countdown (2026-08-10 meter-polish pass) — see
+     * [au.com.threesixty.cabdispatch.domain.ShiftDurationLimit]. Nullable rather than
+     * non-null-with-a-sentinel for the same reason [shiftId] already is: a session can exist with
+     * no real shift bound to it in this app's pre-persisted-session model (see this class's own
+     * TODO above), and the countdown must degrade to "not shown" rather than a wrong number when
+     * that's the case.
+     */
+    val shiftStartAt: String? = null,
 )
 
 /**
@@ -37,6 +49,21 @@ data class TripContext(
     val driverId: String,
     val vehicleId: String,
     val shiftId: String?,
+    /**
+     * Negotiated/fixed fare amount (decimal-as-string, per this project's money-field convention
+     * — see `ApiService.kt`'s header note), set only when the driver used the dashboard's "Set
+     * Price" entry point instead of a normal metered Start Meter tap (2026-08-10 meter-polish
+     * pass). `null` for every ordinary metered trip — the existing/default case, unchanged.
+     * Threaded through to [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]
+     * -> [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.negotiatedTotal] ->
+     * `TripSyncItemDto.negotiatedTotal` (`negotiated_total` on the wire), matching the backend's
+     * `TripCreate.negotiated_total` / `TripSyncItem.negotiated_total` contract field-for-field.
+     * Does NOT change how the live on-screen meter ([au.com.threesixty.cabdispatch.domain.FareEngineImpl])
+     * or the on-device reconstruction (`domain/fare/TripFareReconstruction.kt`) compute anything —
+     * see `HANDOFF.md`'s 2026-08-10 entry for why that's a real, honestly-flagged gap and not
+     * silently assumed handled.
+     */
+    val negotiatedTotal: String? = null,
 )
 
 /**

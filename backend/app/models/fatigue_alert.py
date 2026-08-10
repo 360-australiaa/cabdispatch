@@ -66,6 +66,16 @@ FATIGUE_ALERT_REGISTRATION_EXPIRED = "registration_expired"
 FATIGUE_ALERT_INSURANCE_EXPIRING_SOON = "insurance_expiring_soon"
 FATIGUE_ALERT_INSURANCE_EXPIRED = "insurance_expired"
 
+# Meter re-verification / calibration due-date kinds (operations-cycle
+# tracking pass, on top of the compliance-expiry pass above), raised by
+# app.services.compliance_expiry against the VEHICLE the calibration-due
+# Device is currently paired to (a Device has no driver, and FatigueAlert has
+# no device_id column — see app.models.fleet.Device.calibration_due's doc
+# comment for why calibration lives on Device, not Vehicle). Same naming
+# pattern as the registration/insurance kinds above.
+FATIGUE_ALERT_CALIBRATION_EXPIRING_SOON = "calibration_expiring_soon"
+FATIGUE_ALERT_CALIBRATION_EXPIRED = "calibration_expired"
+
 FATIGUE_ALERT_KINDS = {
     FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
     FATIGUE_ALERT_NO_BREAK_TAKEN,
@@ -78,6 +88,8 @@ FATIGUE_ALERT_KINDS = {
     FATIGUE_ALERT_REGISTRATION_EXPIRED,
     FATIGUE_ALERT_INSURANCE_EXPIRING_SOON,
     FATIGUE_ALERT_INSURANCE_EXPIRED,
+    FATIGUE_ALERT_CALIBRATION_EXPIRING_SOON,
+    FATIGUE_ALERT_CALIBRATION_EXPIRED,
 }
 
 # Kinds raised against a vehicle (no driver_id) rather than a driver.
@@ -86,6 +98,8 @@ FATIGUE_ALERT_VEHICLE_KINDS = {
     FATIGUE_ALERT_REGISTRATION_EXPIRED,
     FATIGUE_ALERT_INSURANCE_EXPIRING_SOON,
     FATIGUE_ALERT_INSURANCE_EXPIRED,
+    FATIGUE_ALERT_CALIBRATION_EXPIRING_SOON,
+    FATIGUE_ALERT_CALIBRATION_EXPIRED,
 }
 
 

@@ -157,12 +157,13 @@ export interface FatigueAlert {
  * dates approaching or past expiry (see `app.services.compliance_expiry`).
  * No acknowledge/dismiss endpoint exists for these — informational only.
  */
-export type ComplianceEntityType = "driver" | "vehicle";
+export type ComplianceEntityType = "driver" | "vehicle" | "device";
 export type ComplianceExpiryField =
   | "driver_license_expiry"
   | "driver_authority_expiry"
   | "registration_expiry"
-  | "insurance_expiry";
+  | "insurance_expiry"
+  | "calibration_due";
 export type ComplianceExpiryStatus = "expiring_soon" | "expired";
 
 export const COMPLIANCE_EXPIRY_FIELD_LABELS: Record<ComplianceExpiryField, string> = {
@@ -170,6 +171,7 @@ export const COMPLIANCE_EXPIRY_FIELD_LABELS: Record<ComplianceExpiryField, strin
   driver_authority_expiry: "Driver authority",
   registration_expiry: "Vehicle registration",
   insurance_expiry: "Vehicle insurance",
+  calibration_due: "Meter calibration",
 };
 
 export interface ComplianceExpiryItem {
@@ -180,4 +182,43 @@ export interface ComplianceExpiryItem {
   expiry_date: string;
   status: ComplianceExpiryStatus;
   days_remaining: number;
+}
+
+/**
+ * `VehicleLifetimeTotals` — `GET /v1/fleet/vehicles/{id}/lifetime-totals`, a
+ * read-only SUM aggregation across every CLOSED trip ever recorded for a
+ * vehicle (see `app.services.fleet_reports.vehicle_lifetime_totals`).
+ * `total_tips` is always null — no tips field exists on Trip in this
+ * codebase; it is a documented gap, not a fabricated zero.
+ */
+export interface VehicleLifetimeTotals {
+  vehicle_id: string;
+  trip_count: number;
+  total_fares: string;
+  total_psl: string;
+  total_tolls: string;
+  total_tips: string | null;
+  total_km: string;
+  generated_at: string;
+}
+
+/**
+ * `VehiclePilotReport` — `GET /v1/fleet/vehicles/{id}/pilot-report?from=&to=`,
+ * a date-range evidence pack of fare-accuracy variance, a coarse device-
+ * uptime estimate, duress-event counts, and flagged-trip counts (see
+ * `app.services.fleet_reports.vehicle_pilot_report`). `device_uptime_estimate_pct`
+ * is a coarse recency proxy, not a true uptime percentage; `duress_test_activation_count`
+ * is always null — no test-activation field exists on DuressEvent in this codebase.
+ */
+export interface VehiclePilotReport {
+  vehicle_id: string;
+  from_date: string;
+  to_date: string;
+  trip_count: number;
+  avg_fare_accuracy_variance_pct: string | null;
+  device_uptime_estimate_pct: string | null;
+  duress_test_activation_count: number | null;
+  duress_event_count_total: number;
+  flagged_for_review_count: number;
+  generated_at: string;
 }

@@ -47,3 +47,13 @@ export function truncateId(id: string | null | undefined, len = 8): string {
   if (!id) return "—";
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
+
+/** Two-letter avatar initials from a driver's full name (e.g. "Jane Doe" -> "JD").
+ * Mirrors src/pages/messages/format.ts's initials helper. */
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+  return (first + last).toUpperCase() || "?";
+}

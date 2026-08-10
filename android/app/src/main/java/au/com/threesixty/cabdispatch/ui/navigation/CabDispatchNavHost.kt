@@ -11,13 +11,17 @@ import au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen
 import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
 import au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessageThreadScreen
+import au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen
 import au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen
 import au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftReportScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftstart.ShiftStartScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftsubmitted.ShiftSubmittedScreen
 import au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen
+import au.com.threesixty.cabdispatch.ui.screens.terms.TermsDisclaimerScreen
 import au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailScreen
+import au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneScreen
+import au.com.threesixty.cabdispatch.ui.screens.zones.ZoneStatisticsScreen
 
 /**
  * Route name constants for the six meter screens (spec B5, S1–S6). Screens
@@ -76,6 +80,31 @@ object CabDispatchRoutes {
      * surfaces the Compliance Vault dossier. See
      * [au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen]. */
     const val PROFILE = "profile"
+
+    /** Plot / Statistics — zone-based demand screens (matches a real competitor taxi meter's
+     * screens, backend/app/api/v1/zones.py). All 6 wheel slots are already spoken for
+     * ([au.com.threesixty.cabdispatch.ui.wheel.WheelState.SLOT_COUNT] is a fixed 6, with the
+     * angle/geometry math in [au.com.threesixty.cabdispatch.ui.wheel.WheelGeometry] hardcoded
+     * against that count) so these are separate destinations, not a 7th/8th wheel slot — reached
+     * from a small "Zones" entry point on the dashboard's [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
+     * top status strip, same "demoted off the wheel" precedent [PROFILE] above already
+     * documents for a low-frequency screen. [PLOT_ZONE] is the entry point (zone list + current
+     * plot state); [ZONE_STATISTICS] is reached from a button on that screen and pops back to it. */
+    const val PLOT_ZONE = "plot_zone"
+    const val ZONE_STATISTICS = "zone_statistics"
+
+    /** Boot-time Terms and Conditions / Privacy Policy disclaimer (2026-08-10 meter-polish
+     * pass), registered ahead of S1 -- see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]
+     * for the gate deciding whether this is ever actually shown (once per app-version, per
+     * [au.com.threesixty.cabdispatch.domain.TermsAcceptance]'s own doc), and
+     * [au.com.threesixty.cabdispatch.ui.screens.terms.TermsDisclaimerScreen] for the screen
+     * itself. */
+    const val TERMS_DISCLAIMER = "terms_disclaimer"
+
+    /** Permissions checklist (2026-08-10 meter-polish pass) -- reachable from Settings (S6), a
+     * read-only status display of every runtime permission this app uses. See
+     * [au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen]. */
+    const val PERMISSIONS_CHECKLIST = "permissions_checklist"
 }
 
 @Composable
@@ -157,5 +186,38 @@ fun CabDispatchNavHost(
                 },
             )
         }
+        composable(CabDispatchRoutes.PLOT_ZONE) {
+            PlotZoneScreen(navController = navController)
+        }
+        composable(CabDispatchRoutes.ZONE_STATISTICS) {
+            ZoneStatisticsScreen(navController = navController)
+        }
+        composable(CabDispatchRoutes.TERMS_DISCLAIMER) {
+            TermsDisclaimerScreen(
+                onAccept = {
+                    navController.navigate(postAuthDestination()) {
+                        popUpTo(CabDispatchRoutes.TERMS_DISCLAIMER) { inclusive = true }
+                    }
+                },
+            )
+        }
+        composable(CabDispatchRoutes.PERMISSIONS_CHECKLIST) {
+            PermissionsChecklistScreen(navController = navController)
+        }
     }
 }
+
+/**
+ * Shared branch decision between [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]
+ * (the normal path) and [CabDispatchRoutes.TERMS_DISCLAIMER]'s onAccept above (the boot-time
+ * disclaimer path, 2026-08-10 meter-polish pass, only reached the first time a given app version
+ * is ever opened) -- both need to answer the exact same question, "is there already a session, or
+ * does this driver need to sign in", so this is factored out once here rather than duplicated in
+ * both screens (which would risk them silently drifting apart over time).
+ */
+fun postAuthDestination(): String =
+    if (au.com.threesixty.cabdispatch.domain.SessionHolder.session.value != null) {
+        CabDispatchRoutes.IDLE
+    } else {
+        CabDispatchRoutes.LOGIN_VEHICLE_BIND
+    }

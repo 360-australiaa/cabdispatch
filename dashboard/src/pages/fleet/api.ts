@@ -10,6 +10,8 @@ import type {
   PairingCode,
   Vehicle,
   VehicleFormValues,
+  VehicleLifetimeTotals,
+  VehiclePilotReport,
 } from "./types";
 
 export const PAGE_LIMIT = 10;
@@ -333,4 +335,114 @@ export function useComplianceExpiry(withinDays = 30) {
     },
     refetchInterval: 60_000,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle operations-cycle reports — lifetime cumulative-totals register and
+// date-range pilot-report, both READ-only against /v1/fleet/vehicles/{id}/...
+// ---------------------------------------------------------------------------
+
+/** Per-vehicle lifetime cumulative-totals register — a single all-time
+ * snapshot computed fresh on every request, no pagination/filters. */
+export function useVehicleLifetimeTotals(vehicleId: string | null) {
+  return useQuery({
+    queryKey: ["fleet", "vehicles", vehicleId, "lifetime-totals"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<VehicleLifetimeTotals>(
+        `/v1/fleet/vehicles/${vehicleId}/lifetime-totals`,
+      );
+      return data;
+    },
+    enabled: Boolean(vehicleId),
+  });
+}
+
+/** Per-vehicle date-range pilot report (fare-accuracy variance, device-uptime
+ * estimate, duress counts, flagged-trip count) over [from, to] inclusive. */
+export function useVehiclePilotReport(
+  vehicleId: string | null,
+  range: { from: string; to: string },
+) {
+  return useQuery({
+    queryKey: ["fleet", "vehicles", vehicleId, "pilot-report", range],
+    queryFn: async () => {
+      const { data } = await apiClient.get<VehiclePilotReport>(
+        `/v1/fleet/vehicles/${vehicleId}/pilot-report`,
+        { params: { from: range.from, to: range.to } },
+      );
+      return data;
+    },
+    enabled: Boolean(vehicleId && range.from && range.to),
+    placeholderData: (prev) => prev,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Driver photo -- GET/POST /v1/users/{user_id}/photo. `GET /v1/drivers` (the
+// list this page renders) does not itself return `photo_url`, so rather than
+// guess at a second field on `Driver`, each avatar independently asks for its
+// own photo and falls back to initials on 404 (no photo set) -- see
+// `DriverAvatar.tsx`.
+// ---------------------------------------------------------------------------
+
+/** Fetches a driver's photo as a blob and exposes it as an object URL for
+ * `<img src>`. 404 (no photo uploaded) surfaces as a normal query error --
+ * callers should fall back to initials rather than showing an error state. */
+export function useDriverPhoto(userId: string) {
+  return useQuery({
+    queryKey: ["fleet", "drivers", userId, "photo"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Blob>(`/v1/users/${userId}/photo`, {
+        responseType: "blob",
+      });
+      return URL.createObjectURL(data);
+    },
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** `POST /v1/users/{user_id}/photo` -- multipart upload, staff-role-gated
+ * (owner/admin/dispatcher) server-side. Invalidates the driver's own photo
+ * query so the new image is refetched. */
+export function useUploadDriverPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ userId, file }: { userId: string; file: File }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await apiClient.post<{ id: string; photo_url: string | null }>(
+        `/v1/users/${userId}/photo`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
+      return data;
+    },
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["fleet", "drivers", variables.userId, "photo"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "drivers"] });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle evidence pack -- GET /v1/fleet/vehicles/{vehicle_id}/evidence-pack.
+// Streams a zip via the authenticated apiClient (no public download URL) and
+// triggers a browser save via a throwaway object URL + anchor click -- same
+// pattern as `downloadNswPtpExport` (src/hooks/useReports.ts).
+// ---------------------------------------------------------------------------
+
+export async function downloadVehicleEvidencePack(vehicle: Pick<Vehicle, "id" | "rego">): Promise<void> {
+  const res = await apiClient.get(`/v1/fleet/vehicles/${vehicle.id}/evidence-pack`, {
+    responseType: "blob",
+  });
+  const blob = new Blob([res.data], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `evidence-pack_${vehicle.rego}_${vehicle.id}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

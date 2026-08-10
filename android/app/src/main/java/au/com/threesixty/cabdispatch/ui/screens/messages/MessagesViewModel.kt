@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
+import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
 
 /**
@@ -37,8 +40,44 @@ data class MessagesUiState(
     val composerText: String = "",
     val sending: Boolean = false,
     val sendError: String? = null,
+    /** Driver-side quick-tap canned templates ("No Job"/"Recall"/"Job Query"/"Other" — a real
+     * competitor taxi-meter's quick-request menu, see `GET /v1/messages/templates`). Fetched once
+     * per process via [MessageTemplatesCache], not per-ViewModel-instance — see that object's doc.
+     * Already filtered to `sender_type == "driver"`; this app never sends a dispatch-side code. */
+    val templates: List<MessageTemplateDto> = emptyList(),
+    val templatesError: String? = null,
+    /** Non-null while a quick-tap template send is in flight, holding that template's
+     * [MessageTemplateDto.code] so only the tapped button shows a busy state — a driver mashing a
+     * different button while one send is still in flight is otherwise a plausible slip at the
+     * wheel. */
+    val sendingTemplateCode: String? = null,
+    val templateSendError: String? = null,
+    /** Optional free-text suffix, entered only for the "other" template's small inline field — see
+     * [MessageThreadScreen]'s `TemplateQuickTapRow`. */
+    val otherNoteText: String = "",
 ) {
     val unreadCount: Int get() = messages.count { it.senderType == "dispatch" && it.readAt == null }
+}
+
+/**
+ * Process-lifetime, in-memory cache for the canned-template menu — deliberately not Room-backed
+ * like [au.com.threesixty.cabdispatch.sync.TariffCache]: this is a small, near-static, non-tenant-
+ * specific list (see `app.api.v1.messages.list_templates`'s doc), so a per-process singleton is
+ * plenty; no offline/persistence need the way tariffs have. [MessagesViewModel] instances are
+ * per-nav-destination (see this file's top doc), so without this object each screen visit would
+ * refetch — this is what actually makes "fetch once" true across the wheel-slot and thread screens.
+ */
+private object MessageTemplatesCache {
+    private val mutex = Mutex()
+    private var cached: List<MessageTemplateDto>? = null
+
+    suspend fun getOrFetch(fetch: suspend () -> Result<List<MessageTemplateDto>>): Result<List<MessageTemplateDto>> {
+        cached?.let { return Result.success(it) }
+        return mutex.withLock {
+            cached?.let { return@withLock Result.success(it) }
+            fetch().onSuccess { cached = it }
+        }
+    }
 }
 
 class MessagesViewModel : ViewModel() {
@@ -57,6 +96,24 @@ class MessagesViewModel : ViewModel() {
         } else {
             loadThread()
             observeLive(driverId)
+            loadTemplates()
+        }
+    }
+
+    /** Fetches the canned-template menu (cached across instances, see [MessageTemplatesCache]) and
+     * keeps only `sender_type == "driver"` entries — this is a driver-facing app, it should never
+     * offer a dispatch-side quick-status code as a quick-tap button. */
+    private fun loadTemplates() {
+        viewModelScope.launch {
+            MessageTemplatesCache.getOrFetch { messagesRepository.listTemplates() }
+                .onSuccess { templates ->
+                    _uiState.update {
+                        it.copy(templates = templates.filter { t -> t.senderType == "driver" }, templatesError = null)
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(templatesError = e.message ?: "Could not load quick messages") }
+                }
         }
     }
 
@@ -143,6 +200,42 @@ class MessagesViewModel : ViewModel() {
         }
     }
 
+    fun updateOtherNoteText(text: String) {
+        _uiState.update { it.copy(otherNoteText = text) }
+    }
+
+    /** Quick-tap send — resolves [code] to a canned template server-side (see
+     * [au.com.threesixty.cabdispatch.domain.MessagesRepository.sendTemplateMessage]'s doc) instead
+     * of composing free text. [driverId] is intentionally not sent, same rationale as [sendReply].
+     * Only the "other" template's optional [MessagesUiState.otherNoteText] is forwarded as [note] —
+     * every other template ignores whatever's currently typed there. */
+    fun sendTemplate(code: String) {
+        if (_uiState.value.sendingTemplateCode != null) return
+        val note = if (code == OTHER_TEMPLATE_CODE) {
+            _uiState.value.otherNoteText.trim().ifBlank { null }
+        } else {
+            null
+        }
+        _uiState.update { it.copy(sendingTemplateCode = code, templateSendError = null) }
+        viewModelScope.launch {
+            messagesRepository.sendTemplateMessage(driverId = null, code = code, note = note)
+                .onSuccess { message ->
+                    _uiState.update {
+                        it.copy(
+                            sendingTemplateCode = null,
+                            otherNoteText = if (code == OTHER_TEMPLATE_CODE) "" else it.otherNoteText,
+                            messages = mergeMessage(it.messages, message),
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(sendingTemplateCode = null, templateSendError = e.message ?: "Could not send")
+                    }
+                }
+        }
+    }
+
     /** Marks every unread dispatch->driver message read — called when the detail screen opens. */
     fun markUnreadAsRead() {
         val unread = _uiState.value.messages.filter { it.senderType == "dispatch" && it.readAt == null }
@@ -161,5 +254,9 @@ class MessagesViewModel : ViewModel() {
 
     companion object {
         private const val RECONNECT_DELAY_MS = 3000L
+
+        /** Matches the backend's `app.services.messages.MESSAGE_TEMPLATES` "other" code exactly —
+         * the sole template code this screen treats specially (shows the inline note field). */
+        private const val OTHER_TEMPLATE_CODE = "other"
     }
 }

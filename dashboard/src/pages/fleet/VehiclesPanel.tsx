@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, BarChart3, Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -12,6 +12,7 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import {
+  downloadVehicleEvidencePack,
   useCreateVehicle,
   useDeleteVehicle,
   useDeviceOptions,
@@ -22,6 +23,7 @@ import {
   PAGE_LIMIT,
 } from "./api";
 import { PaginationBar } from "./PaginationBar";
+import { VehicleReportsModal } from "./VehicleReportsModal";
 import { errorMessage, formatDateTime } from "./format";
 import {
   EMPTY_VEHICLE_FORM,
@@ -78,11 +80,27 @@ export function VehiclesPanel() {
 
   const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
   const [pairingTarget, setPairingTarget] = useState<Vehicle | null>(null);
+  const [reportsTarget, setReportsTarget] = useState<Vehicle | null>(null);
 
   const createVehicle = useCreateVehicle();
   const updateVehicle = useUpdateVehicle();
   const deleteVehicle = useDeleteVehicle();
   const generatePairingCode = useGeneratePairingCode();
+
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function handleExportEvidencePack(v: Vehicle) {
+    setExportError(null);
+    setExportingId(v.id);
+    try {
+      await downloadVehicleEvidencePack(v);
+    } catch (err) {
+      setExportError(errorMessage(err));
+    } finally {
+      setExportingId(null);
+    }
+  }
 
   function openCreate() {
     setEditing(null);
@@ -177,6 +195,30 @@ export function VehiclesPanel() {
           <Button
             variant="ghost"
             size="icon"
+            aria-label={`Operations reports for ${v.rego}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setReportsTarget(v);
+            }}
+          >
+            <BarChart3 className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Export evidence pack for ${v.rego}`}
+            title="Export evidence pack"
+            disabled={exportingId === v.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleExportEvidencePack(v);
+            }}
+          >
+            <Archive className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label={`Edit ${v.rego}`}
             onClick={(e) => {
               e.stopPropagation();
@@ -246,6 +288,14 @@ export function VehiclesPanel() {
           <Plus className="h-4 w-4" /> Add vehicle
         </Button>
       </div>
+
+      {exportError && (
+        <Card className="mb-4 border-destructive/40">
+          <CardContent className="pt-4 text-sm text-destructive">
+            Failed to export evidence pack: {exportError}
+          </CardContent>
+        </Card>
+      )}
 
       {vehiclesQuery.isError ? (
         <Card>
@@ -425,6 +475,7 @@ export function VehiclesPanel() {
           </p>
         )}
       </Modal>
+      <VehicleReportsModal vehicle={reportsTarget} onClose={() => setReportsTarget(null)} />
     </div>
   );
 }

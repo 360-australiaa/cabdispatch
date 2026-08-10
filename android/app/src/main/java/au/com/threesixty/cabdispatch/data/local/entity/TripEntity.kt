@@ -102,6 +102,17 @@ data class TripEntity(
      */
     val splitPaymentsJson: String? = null,
 
+    /**
+     * Negotiated/fixed-fare total set at [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]
+     * time (2026-08-10 meter-polish pass, "Set Price" entry point) — mirrors the backend's
+     * `Trip.negotiated_total`. Decimal-as-string, same convention as every other money field on
+     * this entity. `null` for every normal metered trip (the default, unchanged). Set once at
+     * open, never mutated at [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]/
+     * [au.com.threesixty.cabdispatch.data.repository.TripRepository.closeTrip] time — matches the
+     * backend's own "settable only at trip creation" contract.
+     */
+    val negotiatedTotal: String? = null,
+
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",
 

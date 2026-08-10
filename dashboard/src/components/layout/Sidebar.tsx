@@ -14,9 +14,12 @@ import {
   Palette,
   ShieldCheck,
   LogOut,
+  Building2,
+  MapPinned,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 
 interface NavItem {
@@ -34,6 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/trips", label: "Trips", icon: Route },
   { to: "/shifts", label: "Shifts & Reconciliation", icon: Clock },
   { to: "/tariffs", label: "Tariff Studio", icon: Receipt },
+  { to: "/zones", label: "Zones & Demand", icon: MapPinned },
   { to: "/psl", label: "PSL Centre", icon: Wallet },
   { to: "/fleet", label: "Fleet & Drivers", icon: Car },
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
@@ -41,6 +45,10 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/white-label", label: "White-label", icon: Palette },
   { to: "/settings/security", label: "Security", icon: ShieldCheck },
 ];
+
+/** Platform-owner-only nav item — see src/lib/platformAdmin.ts and
+ * src/components/PlatformOwnerRoute.tsx for the matching route guard. */
+const PLATFORM_NAV_ITEM: NavItem = { to: "/platform", label: "Platform Admin", icon: Building2 };
 
 export function Sidebar() {
   const { user, logout } = useAuth();
@@ -52,6 +60,8 @@ export function Sidebar() {
   // "no customization -> platform default" convention as the theme colors themselves.
   const { data: tenant } = useTenantQuery();
   const logoUrl = tenant?.theme_json?.logo_url;
+
+  const navItems = isPlatformOwner(user) ? [...NAV_ITEMS, PLATFORM_NAV_ITEM] : NAV_ITEMS;
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col bg-brand-primary text-brand-primary-foreground">
@@ -76,7 +86,7 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         <ul className="flex flex-col gap-1">
-          {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+          {navItems.map(({ to, label, icon: Icon }) => (
             <li key={to}>
               <NavLink
                 to={to}

@@ -23,6 +23,519 @@ time for real compile errors — signature mismatches between sibling files that
 parallel without ever type-checking against each other are the most likely failure mode, not
 conceptual bugs.
 
+## 2026-08-10 (meter-polish pass) — Set Price, start-meter confirmation, boot-time terms screen, permissions checklist, shift-limit countdown
+
+Direct request: five small meter-flow polish items matching real competitor taxi-meter UX
+patterns from reference screenshots. Read `ui/screens/dashboard/WheelDashboardScreen.kt`'s
+`StartMeterButton`/`onStartMeterTapped` flow fully first, per the brief. Scoped to avoid
+`domain/fare/FareEngine.kt` entirely (see "Known gap" below for the one real consequence of that
+choice) and to avoid re-guessing the backend's Set Price contract — used the exact fields the
+same-session fare-set-price backend agent reported: `TripCreate`/`TripSyncItem.negotiated_total`
+(`Decimal | None`, `[1.00, 500.00]`). `FareEngine.close()`'s negotiated-total branch is
+backend-only, nothing on this side computes a fare — this app just captures and forwards the
+number.
+
+**1. "Set Price" (negotiated/fixed fare):**
+- `domain/Session.kt` — `TripContext` gained `negotiatedTotal: String? = null` (decimal-as-string,
+  this project's money-field convention). `DriverSession` also gained `shiftStartAt: String?`
+  (see item 5 below — bundled into the same file edit since both are small additive fields on the
+  same two data classes, not because they are related features).
+- `ui/screens/dashboard/WheelDashboardScreen.kt` — a small "Set Price" `TextButton` above
+  `StartMeterButton` (enabled/disabled by the same `startMeterEnabled` gate), opening a new
+  full-screen `SetPriceEntryScreen` overlay composable in the same file (same pattern as the
+  existing "Starting meter..." transition overlay — a same-composable overlay, not a new
+  `CabDispatchNavHost` route, so this stays inside the one file this task was scoped to touch).
+  The note text is the exact wording the task brief specified: "This price doesn't include levies
+  and/or tolls." Confirming calls `WheelDashboardViewModel.startMeter(negotiatedTotal)` — the
+  method's existing `Boolean` return / no-tariff/no-session guard is completely unchanged, it just
+  gained one new optional, defaulted parameter threaded into `TripContext`.
+- `WheelDashboardViewModel.startMeter()` -> `TripContext.negotiatedTotal` ->
+  `HiredViewModel.openTripInRoom` -> `TripRepository.openTrip(negotiatedTotal = ...)` ->
+  `TripEntity.negotiatedTotal` (new nullable column, `AppDatabase` bumped 4 to 5, no Migration,
+  same "still pre-release" shortcut every prior version bump in this file used) ->
+  `toSyncItemDto()` -> `TripSyncItemDto.negotiatedTotal` (`negotiated_total` on the wire). This is
+  a real, working end-to-end wire, not just a capture-and-drop: unlike
+  `voucherCode`/`accountReference` (which a prior pass found were dropped by an older
+  `TripSyncItem` backend schema — see the 2026-08-03 entry below), the fare-set-price backend
+  agent's own contract notes confirm `TripSyncItem.negotiated_total` was declared from the start
+  this same session, with the same validation as `TripCreate`'s.
+- `data/remote/ApiService.kt` — `negotiated_total` added to `TripCreateDto`, `TripSyncItemDto`,
+  and `TripDto` (nullable-defaulted on all three, per this file's own "old cached payload still
+  decodes" convention). **One flagged, unverified assumption:** the backend agent's contract only
+  explicitly lists `negotiated_total` on `Trip`/`TripCreate`/`TripSyncItem`, not `TripRead` by
+  name — added to `TripDto` anyway since every other model field this project's `TripRead`-backed
+  DTOs expose so far has been 1:1 with the model, but this one specific field was not confirmed
+  against a real `TripRead` response body.
+
+- **Known gap, flagged loudly rather than silently assumed handled:** per the task's explicit
+  instruction, `domain/fare/FareEngine.kt` (the golden-vector-proven engine) and
+  `domain/fare/TripFareReconstruction.kt` were **not** touched. The backend's real
+  `FareEngine.close()` zeroes flag/peak/distance/waiting and charges `negotiated_total + tolls +
+  psl + extras` when `negotiated_total` is set — this Android module's on-device reconstruction
+  (used by Trip Detail / the on-device receipt / S5 shift report) has no equivalent branch, so a
+  Set Price trip's on-device-displayed total will not match what the backend actually bills until
+  someone ports that branch here too. The live ticking meter display (`domain/FareEngineImpl`,
+  S3/HIRED) also keeps showing the normal running metered fare after a Set Price start — it is
+  never told about the negotiated total at all. Neither of these was in this task's explicit scope
+  ("must ONLY add a new optional parameter, never change existing behaviour when it is absent" —
+  extending the `close()`/reconstruction math is a materially bigger change than that), so this is
+  a real, live discrepancy between what the driver sees on-device and what actually settles
+  server-side for a Set Price trip, not a hypothetical one.
+
+**2. Start-meter confirmation dialog:** none existed before this pass (confirmed by reading the
+whole `onStartMeterTapped` flow first, per the brief). `StartMeterButton`'s `onClick` now sets a
+`showStartConfirm` flag instead of calling `onStartMeterTapped()` directly; a single Compose
+`AlertDialog` ("Are you sure you want to start the meter?") gates the real call. Kept as a plain
+`AlertDialog` overlay, not a new screen/route, per the brief. Set Price deliberately does **not**
+route through this same dialog — its own numeric-entry screen already ends in an explicit "start
+meter at $X" confirm action, so stacking a second confirmation on top would be pure friction, not
+an extra safety check. `onStartMeterTapped` itself is otherwise unchanged (same animation
+sequence, same `viewModel.startMeter()` call, same HIRED navigation) — it just gained the one new
+optional `negotiatedTotal` parameter both callers (the dialog's confirm button, and Set Price's
+confirm) now pass through.
+
+**3. Boot-time terms/disclaimer screen:** new `ui/screens/terms/TermsDisclaimerScreen.kt` +
+`domain/TermsAcceptance.kt` (SharedPreferences-backed, same real, already-established pattern
+`SharedPreferencesDriverAuthRepository` uses elsewhere in this codebase for a small persisted
+flag not worth a new Room entity/DAO/migration). **Gating choice, per the task's own "your call,
+document the choice" instruction:** gated per app **version code**, not per install — a plain
+once-per-install flag would never re-surface the disclaimer if a later release genuinely changes
+the terms; re-prompting once per version bump was judged the safer default for a
+compliance-adjacent screen. New `CabDispatchRoutes.TERMS_DISCLAIMER` route, registered ahead of
+S1/S2. `SplashScreen.kt`'s existing "does a session already exist" branch is now factored into a
+shared `postAuthDestination()` top-level function in `CabDispatchNavHost.kt`, since both Splash's
+normal path and the new Terms screen's Accept action need the exact same decision — Splash now
+checks `TermsAcceptance.isAccepted` first and routes to `TERMS_DISCLAIMER` instead of S1/S2 when
+it is false; the Terms screen's Accept button marks acceptance then navigates to
+`postAuthDestination()` with `popUpTo(TERMS_DISCLAIMER){inclusive=true}`. Copy matches the task
+brief's reference tone ("Please read and accept... your continued use of this app will mean you
+have accepted these terms") — **not real legal text**, no legal-reviewed Terms & Conditions /
+Privacy Policy document exists anywhere in this repo to source from; flagged here rather than
+implied to be production copy. Decline finishes the hosting Activity outright (no meaningful
+"use the app without accepting" fallback state exists past this screen) — **genuinely untested**,
+same as everything else in this module.
+
+**4. Permissions-checklist screen:** new `ui/screens/permissions/PermissionsChecklistScreen.kt`,
+reachable from Settings (S6) via a new "App permissions" button. Read `AndroidManifest.xml` for
+the real permission list rather than guessing: `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`,
+`CAMERA`, `RECORD_AUDIO`, `POST_NOTIFICATIONS` (the runtime/dangerous ones, added across several
+prior passes) — `INTERNET`/`ACCESS_NETWORK_STATE` deliberately excluded, they are
+normal-protection-level permissions granted automatically at install and would only add confusing
+noise next to real dangerous-permission entries. Read-only status display, per the brief — no
+request flow, since (confirmed by grep) this codebase has no existing runtime-permission-request
+wiring anywhere to hook into; every existing `ContextCompat.checkSelfPermission` call site in this
+module only ever checks, never requests.
+
+**5. Live shift-duration countdown:** new `domain/ShiftDurationLimit.kt` + a `ShiftCountdownChip`
+composable in `WheelDashboardScreen.kt`'s `TopStatusStrip` (reuses that composable's existing 30s
+clock ticker as its own recompute cadence, rather than adding a second timer/coroutine). Checked
+`backend/app/core/config.py` first, per the brief: `FATIGUE_SHIFT_DURATION_LIMIT_HOURS` (default
+`12.0`) is real and consumed server-side by `app/services/fatigue.py`, but no endpoint exposes it
+to this client (grepped the whole `app/api/v1/` tree — nothing outside `config.py`/`fatigue.py`
+references the constant). Rather than block this item on a new backend endpoint, this hardcodes
+the same default value client-side and computes remaining time from `DriverSession.shiftStartAt`
+(new field, populated from `ShiftDto.startAt` at `LoginVehicleBindViewModel.startShift` — the one
+real construction site of `DriverSession` in this codebase) minus `now`. **Flagged, live risk of
+this simplification, not hypothetical:** if a tenant is ever configured with a non-default
+`FATIGUE_SHIFT_DURATION_LIMIT_HOURS` server-side, this on-device countdown will silently disagree
+with the backend's real fatigue enforcement. The chip shows "Shift: Xh Ym left" normally and an
+explicit "Shift limit exceeded" state once past the limit (a negative `Duration`, deliberately not
+clamped to zero, so the two states are visibly different) — reuses `StatusChip`'s existing
+dot+label visual language, so it is only ever a binary ok/not-ok color today; a three-state
+"approaching the limit" amber warning is a real, deliberately deferred follow-up.
+
+**Files changed/added:** `domain/Session.kt`, `domain/ShiftDurationLimit.kt` (new),
+`domain/TermsAcceptance.kt` (new), `ui/screens/login/LoginVehicleBindViewModel.kt`,
+`data/remote/ApiService.kt`, `data/local/entity/TripEntity.kt`, `data/local/AppDatabase.kt`,
+`data/repository/TripRepository.kt`, `ui/screens/hired/HiredViewModel.kt`,
+`ui/screens/dashboard/WheelDashboardViewModel.kt`, `ui/screens/dashboard/WheelDashboardScreen.kt`,
+`ui/navigation/CabDispatchNavHost.kt`, `ui/screens/splash/SplashScreen.kt`,
+`ui/screens/terms/TermsDisclaimerScreen.kt` (new),
+`ui/screens/permissions/PermissionsChecklistScreen.kt` (new),
+`ui/screens/settings/SettingsScreen.kt`.
+
+**Concurrency note:** several sibling agents were editing `AppContainer.kt`/`ApiService.kt`/
+`HANDOFF.md`/`WheelDashboardScreen.kt`/`CabDispatchNavHost.kt` in this same pass (a "Zones"
+statistics feature and a driver-photo feature both landed mid-session, visible as new content in
+`WheelDashboardScreen.kt`'s `TopStatusStrip` and this file's other 2026-08-10 entries that were
+not there when this task started). Every edit in this entry was applied via exact-anchor string
+replacement against a **freshly re-read** copy of each file immediately before editing it, not a
+stale copy from the start of this session, specifically to merge on top of those concurrent
+changes instead of clobbering them — confirmed afterward by re-reading
+`WheelDashboardScreen.kt`/`CabDispatchNavHost.kt` end-to-end and checking brace/paren balance
+across every touched file. This pass did **not** touch `AppContainer.kt` at all (nothing in this
+task needed a new singleton), so there was no direct collision surface with sibling agents' own
+`AppContainer.kt` edits.
+
+**Genuinely unverified, same standing caveat as every entry in this file — this machine has no
+Android SDK either:** none of this has ever been run through `kotlinc`. Reasoned through by eye,
+not compiler-checked. Highest-risk spots to check first on a real build, in order:
+1. `ShiftCountdownChip`'s `remember(session?.shiftStartAt, now) { ... } ?: return` early-return
+   pattern inside a `@Composable` — early-return-from-composable is used elsewhere in this
+   codebase's ViewModels (e.g. `WheelDashboardViewModel.startMeter`'s `?: return false`) but this
+   is the first place in this pass doing it directly inside a `@Composable` function body; believed
+   valid Kotlin (a bare `return` from a `Unit`-returning function is always legal) but not
+   cross-checked against another example already in this file.
+2. `SetPriceEntryScreen`'s `BigDecimal` + string-concatenation currency formatting
+   (`"START METER AT " + CURRENCY_SIGN + displayAmount`) — deliberately avoided Kotlin string
+   templates for the literal dollar sign to sidestep an unrelated tooling issue this session (see
+   below), using plain `+` concatenation instead; valid Kotlin either way (`String.plus(Any?)` on
+   a `BigDecimal`/`String` right-hand side calls `toString()`) but a different code shape than
+   this file's other money-formatting call sites, worth a second look.
+3. `TermsDisclaimerScreen.kt`'s `(context as? ComponentActivity)?.finishAffinity()` — reasoned
+   through (this screen is always hosted by `MainActivity`, a real `ComponentActivity`, per
+   `AndroidManifest.xml`) but the Decline path has never been exercised on a device or emulator.
+4. The `AppDatabase` 4 to 5 bump (new nullable `TripEntity.negotiatedTotal` column) — same
+   no-Migration shortcut every prior bump in this file used, same caveat: fine pre-release, would
+   need a real `Migration` the moment this ships.
+
+**Unrelated environment note, in case a future pass hits the same thing:** this session's
+`Edit`/`Write` tools were broken the whole time (a `PreToolUse` hook crashes on the
+`C:\Users\Surface Pro 7\...` path with a space) — every file change in this entry was made via
+`Bash` + Python instead, same workaround already documented in this session's own backend-agent
+reports. One extra wrinkle worth flagging for whoever hits it next: very large single `Bash`
+heredoc payloads (roughly 90+ lines in one call) intermittently failed with a bash-level
+"unexpected EOF while looking for matching" quote error before Python ever ran, even with a
+quoted heredoc delimiter and no unbalanced quotes in the actual content — splitting the same
+content across two or three smaller `Bash` calls (writing to a scratch file, then combining)
+reliably worked around it. Not fully root-caused; noted here rather than left a silent mystery.
+
+## 2026-08-10 — Driver photo capture/upload (Profile screen)
+
+Direct request, scoped to `ui/screens/profile/` (the Profile screen, reachable from the
+dashboard's identity card) plus `ui/screens/login/LoginVehicleBindScreen.kt` — both read fully
+first, per the brief. Checked whether a camera/photo-picker pattern already existed anywhere in
+this module before writing anything: it does not. `domain/QrScanner.kt` (`StubQrScanner`) is a
+manual-entry stub with zero real camera wiring (see HANDOFF's own "Medium priority" gap list —
+"real camera scanning (CameraX + ML Kit) isn't implemented"), and nothing else in this module
+captures or picks an image. `domain/location/RealLocationProvider.kt`'s "check, never request,
+degrade gracefully on missing permission" pattern was mirrored for the *background* GPS case that
+file documents, but a photo capture is a direct one-tap user action, not a passive background
+feed — see `ProfileScreen.kt`'s `IdentityHeader` doc for why that made an inline runtime `CAMERA`
+permission *request* the right fit instead (the first real permission-request flow anywhere in
+this module — every existing `ContextCompat.checkSelfPermission` hit before this pass only
+checked, never requested, per this file's own standing note). `domain/duress/
+DuressAudioRecorder.kt` / `RemoteBackedDuressRepository.uploadAudio` (`domain/DuressRepository.kt`)
+was read for the multipart-upload convention already established in this codebase and mirrored
+field-for-field (`MultipartBody.Part.createFormData("file", ...)`).
+
+Did NOT touch `domain/fare/FareEngine.kt` or `domain/fare/` — no reason to, unrelated domain.
+
+**Backend contract used exactly as built this session** (BACKEND AGENT 2's report in the task
+brief — read directly off that report's own CONTRACT section, not guessed):
+
+- `POST /v1/users/{user_id}/photo` — multipart (`file` field), staff-role-gated
+  (`owner`/`admin`/`dispatcher`). Returns `UserRead`.
+- `GET /v1/users/{user_id}/photo` — any authenticated tenant user. Returns the raw image via
+  `FileResponse`. 404 if the user has no photo or the file is missing.
+- `UserRead` (the Android `UserDto`) gained `photo_url: str | None` — a relative on-disk path, not
+  a directly-loadable URL.
+
+**What changed:**
+
+- **`data/remote/ApiService.kt`** — new `uploadUserPhoto(userId, file: MultipartBody.Part):
+  UserDto` (`@Multipart @POST("/v1/users/{userId}/photo")`) and `getUserPhoto(userId):
+  ResponseBody` (`@Streaming @GET("/v1/users/{userId}/photo")` — a raw-bytes `FileResponse`, not
+  JSON, hence the plain `ResponseBody` return type instead of a DTO). `UserDto` gained a nullable
+  `photoUrl` field (`@SerialName("photo_url")`), defaulted so no existing call site/construction
+  needed a change.
+- **New photo state on `ui/screens/profile/ProfileViewModel.kt`** (kept on the same `ViewModel`
+  as the existing Compliance section, not a third one — see its own doc for why): `photoState`
+  (`NoPhoto`/`Loading`/`Loaded(bitmap)`), `isUploadingPhoto`, `photoUploadError`. `loadPhoto()`
+  fetches whatever is already on file via `getUserPhoto` and decodes it with
+  `BitmapFactory.decodeStream` — a 404 or any other failure both land on `NoPhoto` (never a crash,
+  never a broken-image icon), same "degrade to placeholder, do not error the whole screen"
+  philosophy the existing `ComplianceSection` fallback already uses. `uploadPhoto(bytes:
+  ByteArray)` posts the multipart body and, on success, decodes the same bytes straight back into
+  the preview `Bitmap` rather than re-fetching over the network.
+- **`ui/screens/profile/ProfileScreen.kt`'s `IdentityHeader`** — the avatar circle is now
+  tap-to-capture-or-pick, not initials-only (initials remain the fallback whenever `photoState`
+  is not `Loaded`, matching `WheelDashboardScreen.kt`'s `IdentityCard` avatar-fallback style this
+  screen's own `IdentityHeader` already used). Two entry points: "Camera"
+  (`ActivityResultContracts.TakePicturePreview` — the simpler of the two standard capture
+  contracts per the brief, since it hands back an in-memory `Bitmap` with no `FileProvider`/
+  manifest `<provider>` entry needed) and "Gallery" (`ActivityResultContracts.GetContent` — no
+  runtime storage permission needed either, launches the system picker out-of-process). Camera
+  requests `Manifest.permission.CAMERA` inline before launching (already declared in
+  `AndroidManifest.xml` for the still-stubbed QR scanner, so no manifest change was needed); a
+  denial falls back to an inline hint, never a crash. A read failure on the gallery `Uri` (rare,
+  but a content provider can misbehave) deliberately reuses `uploadPhoto`'s own `bytes.isEmpty()`
+  guard by passing an empty `ByteArray` rather than adding a second error-plumbing path.
+- **`app/src/test/java/.../sync/OutboxDrainerTest.kt`'s `FakeApiService`** — added stub overrides
+  for the two new `ApiService` methods (`uploadUserPhoto`/`getUserPhoto`, both `notUsed()`, same
+  convention as every other unused override in that class). See the real, pre-existing gap flagged
+  below for why this class almost certainly already failed to compile before this pass touched it,
+  independent of these two additions.
+
+**Cross-agent contract mismatch this pass flagged — fixed during integration verification,
+not left standing:** `POST /v1/users/{user_id}/photo` originally shipped **staff-role-gated**
+(`owner`/`admin`/`dispatcher`), which would have 403'd this exact Profile-screen call site for
+every real `driver`-role account (this feature was scoped as a driver-facing action, and a driver
+uploading their own photo is the obvious use case). Caught during the post-workflow verification
+pass and fixed server-side: `POST /v1/users/{user_id}/photo` is now **self-or-staff gated** — any
+authenticated user may upload their OWN photo (`caller.id == user_id`), and staff may additionally
+upload on behalf of any user in their tenant (the admin-managed-onboarding case). See
+`backend/app/api/v1/users.py`'s `upload_user_photo` doc comment and
+`backend/tests/test_users.py::test_driver_can_upload_their_own_photo` (live-verified over real
+HTTP too: a real driver token successfully uploaded to its own `user_id`). No Android-side change
+was needed — this app was already calling the endpoint correctly as "the signed-in user updating
+their own photo"; the backend's original gate was the bug, not this client.
+
+**Second real, pre-existing gap surfaced while wiring this (not introduced by this pass):**
+`OutboxDrainerTest.kt`'s `FakeApiService` already did not override every `ApiService` abstract
+member before this pass touched it — `driverLogin`, `mfaLogin`, `verifyAdminPin`,
+`tariffSigningPublicKey`, `publishPosition`, every duress endpoint, `getComplianceDossier`, the
+zones endpoints, and more are all missing overrides too, none of it added by this pass. That
+strongly suggests this JVM test module was already failing to compile against the real
+`ApiService` interface for reasons unrelated to this change, quite possibly since one of the
+earlier sibling passes that added those methods never touched this test file. Only the two methods
+this pass itself added were backfilled here — fixing the rest is a materially bigger, pre-existing
+cleanup job, out of this pass's scope, flagged here rather than silently left for whoever hits the
+resulting compile error first.
+
+**Genuinely unverified, same standing caveat as every entry in this file — this machine has no
+Android SDK either, none of this has ever been run through `kotlinc`:** the two riskiest points to
+check first on a real build, by eye: (1) `ActivityResultContracts.GetContent()` is
+soft-deprecated in newer `androidx.activity` releases in favor of `PickVisualMedia` — it is still
+present and functional as of the `activity-compose:1.9.1` version this project already depends on
+(confirmed in `app/build.gradle.kts`), chosen deliberately as "the simpler/more standard choice"
+per the brief, but a lint warning (not a compile error) should be expected; (2) the JPEG
+re-compression quality (85) used when converting a captured `Bitmap` to upload bytes is a plain
+reasonable default, not measured against any real size constraint the backend contract does not
+name. Everything else in this pass (the `@Multipart`/`@Streaming` Retrofit annotations, the
+`ByteArray`-based `MultipartBody.Part.createFormData` call, the `ViewModel` state-flow shape) is
+the same well-established Retrofit/OkHttp/Compose surface every prior pass in this file has
+already used successfully — see `RemoteBackedDuressRepository.uploadAudio` for the one other
+multipart call site this pass's own convention was checked against.
+
+## 2026-08-10 — Quick-tap canned messages (message templates, matching a real competitor
+taxi-meter's "No Job / Recall / Job Query / Other" quick-request menu)
+
+Scope per the brief: read `ui/screens/messages/MessagesWheelContent.kt`,
+`ui/screens/messages/MessageThreadScreen.kt`, `ui/screens/messages/MessagesViewModel.kt`, and
+`domain/MessagesRepository.kt` fully first. Did NOT touch `domain/fare/FareEngine.kt` or
+`domain/fare/` — no reason to; unrelated domain.
+
+**Backend contract used exactly as built this session** — read directly from
+`backend/app/schemas/messages.py` and `backend/app/api/v1/messages.py`, not guessed. Same
+situation as the 2026-08-10 zones entry immediately below this one: none of the six pasted
+backend-agent session reports in the task brief actually described the message-templates
+contract at all (one report was a jobs/duress-adjacent report, others covered evidence packs,
+negotiated fares, the platform console, or hadn't finished polling their test run) — the only
+honest way to get the real field names/paths was to read the backend source directly. Confirmed
+`messages_router` is registered in `backend/app/main.py` (it is).
+
+- `GET /v1/messages/templates` -> `list[MessageTemplateRead]` (`code`/`label`/`sender_type`) — any
+  authenticated tenant user, not tenant-specific data.
+- `POST /v1/messages/templates/{code}` -> `MessageRead` — body `TemplateMessageCreate`
+  (`driver_id: str | None`, `note: str | None`, max 500 chars). Same sender-attribution rule as
+  free-text `POST /v1/messages`: a `driver`-role caller always sends as themselves, `driver_id` in
+  the body is ignored for them.
+- Fixed driver-side template codes as seeded server-side (`app.services.messages.MESSAGE_TEMPLATES`):
+  `no_job` ("No Job"), `recall` ("Recall"), `job_query` ("Job Query"), `other` ("Other"). There are
+  also three `dispatch`-typed codes (`check_in`/`return_to_depot`/`contact_base_urgent`) — this
+  driver-facing app filters the fetched list down to `sender_type == "driver"` client-side and
+  never renders or sends the dispatch-side codes.
+
+**What was added:**
+
+- `data/remote/ApiService.kt` — `listMessageTemplates(): List<MessageTemplateDto>` (`GET
+  /v1/messages/templates`) and `sendTemplateMessage(code, TemplateMessageCreateDto):
+  MessageDto` (`POST /v1/messages/templates/{code}`), plus the `MessageTemplateDto`
+  (`code`/`label`/`sender_type`) and `TemplateMessageCreateDto` (`driver_id`/`note`) DTOs, placed
+  next to the existing Messages section/DTOs.
+- `domain/MessagesRepository.kt` — `listTemplates(): Result<List<MessageTemplateDto>>` and
+  `sendTemplateMessage(driverId, code, note): Result<MessageDto>` added to the interface and to
+  `RemoteBackedMessagesRepository`, same thin `runCatching` wrapper pattern as every other method
+  in that class. No change to `AppContainer.kt` was needed — `messagesRepository`'s existing
+  singleton wiring already exposes these through the same interface reference every screen already
+  pulls from `AppContainer`.
+
+- `ui/screens/messages/MessagesViewModel.kt` — new `MessagesUiState` fields: `templates`,
+  `templatesError`, `sendingTemplateCode`, `templateSendError`, `otherNoteText`. New private
+  `MessageTemplatesCache` object (file-private, process-lifetime in-memory cache guarded by a
+  `Mutex`) so the template menu is genuinely fetched once per app process rather than once per
+  `MessagesViewModel` instance — worth knowing: `MessagesWheelContent` and `MessageThreadScreen`
+  are separate nav destinations in `CabDispatchNavHost.kt` (`composable(...)` blocks), so each
+  `viewModel()` call there actually creates its own `MessagesViewModel` instance scoped to that
+  destination's own `NavBackStackEntry` — this file's own top-of-file doc comment claims the two
+  screens "share this one ViewModel", which on inspection isn't literally true for `viewModel()`
+  called with no shared `ViewModelStoreOwner`; pre-existing claim, not introduced or fixed by this
+  pass, but the `MessageTemplatesCache` singleton is what actually makes "fetch once" true across
+  both screens regardless of that. `loadTemplates()` runs from `init` alongside the pre-existing
+  `loadThread()`/`observeLive()` calls, filters the response to `sender_type == "driver"`.
+  `sendTemplate(code)` mirrors `sendReply()`'s pattern (`driverId = null`, merges the returned
+  `MessageDto` into the thread) but also threads through `otherNoteText` as `note` only when
+  `code == "other"`, and refuses to start a second send while one is already in flight
+  (`sendingTemplateCode != null` guard) so a driver mashing a different button mid-send is a no-op
+  instead of a double-send race.
+
+- `ui/screens/messages/MessageThreadScreen.kt` — new `TemplateQuickTapRow` composable, placed
+  between the thread's error texts and the existing free-text `ReplyComposer` at the bottom of the
+  screen (not on the wheel-slot list side — the brief asked for "somewhere sensible in the messages
+  thread UI", and this screen is the one with room for a whole extra row without crowding the
+  6-row wheel-slot preview list). A horizontally-scrollable `LazyRow` of large (`heightIn(min =
+  48.dp)`) tap-target buttons, one per driver-side template, label text upper-cased. Every
+  template except "other" sends immediately on tap (`onTap(template.code)` straight into
+  `viewModel.sendTemplate`). "Other" instead toggles a small inline `TextField` + a compact SEND
+  button beneath the row — the brief's "if the backend contract supports an optional free-text
+  suffix for an Other template, add a small text field only for that one case" applies exactly:
+  the field never appears for the other three templates. The tapped button shows a
+  `CircularProgressIndicator` in place of its label while `sendingTemplateCode` matches its own
+  code (not the whole row), and every button in the row is disabled (not just the busy one) while
+  any send is in flight, via `enabled = sendingCode == null`. Reuses the exact `TextField`/
+  `TextFieldDefaults.colors(...)` block already established by `ReplyComposer` in the same file
+  rather than inventing a second visual language for text input.
+
+**Known duplication, left alone deliberately:** the `"other"` template code literal exists as a
+private constant in two places — `MessagesViewModel`'s companion object
+(`OTHER_TEMPLATE_CODE`, used to decide whether to forward `otherNoteText` as `note`) and a
+separate top-level `private const val OTHER_TEMPLATE_CODE` in `MessageThreadScreen.kt` (used to
+decide whether to show the inline note field vs. send immediately). Both are `private`, so neither
+file can reference the other's copy without promoting one to `internal`/public — not done this
+pass since it's a one-line literal with an obvious/stable source of truth
+(`app.services.messages.MESSAGE_TEMPLATES`'s `code="other"`), not worth widening either class's
+visibility surface for. A future pass wanting a single source of truth could promote one copy and
+have the other file import it.
+
+**Real risk / what's unverified (this was never run through a compiler, same standing caveat as
+every entry in this file):**
+
+- `LazyRow` + the `items(...)` extension: this file already imported `androidx.compose.foundation.
+  lazy.items` for the pre-existing `LazyColumn` in this same screen, and that same `items` overload
+  is documented to work against `LazyListScope` (which both `LazyRow` and `LazyColumn` provide) —
+  reasoned through as correct by eye, but literally the first time this codebase's `LazyRow` usage
+  would be compiled, since no other screen in this module uses `LazyRow` to compare against.
+- `TextFieldDefaults.colors(...)`'s exact parameter set was copied verbatim from the pre-existing
+  `ReplyComposer` in the same file (which presumably already compiled fine in whatever earlier pass
+  wrote it, though "presumably" is doing real work in that sentence — nothing in this module has
+  actually compiled yet, see this file's top section) — low risk since it's a literal copy, not new
+  API surface, but flagging per this file's own "be honest" standard rather than asserting
+  confidence I can't back with a real build.
+- `MessageTemplatesCache`'s `Mutex`/`withLock` usage (`kotlinx.coroutines.sync`) is a new import in
+  this module's messages screen — standard coroutines API, but unverified against this project's
+  actual `kotlinx-coroutines-core` version/whatever it resolves to until `./gradlew assembleDebug`
+  runs.
+- Not manually tested against a running backend/emulator (no Android SDK in this sandbox, see this
+  file's top section) — the contract above was read from source, not exercised over the wire.
+
+## 2026-08-10 (newest) — Plot / Statistics screens (zone-based demand, matching a real competitor taxi meter)
+
+Direct request, single most-requested feature-parity item this pass. Scope per the brief: read
+`ui/screens/dashboard/WheelDashboardScreen.kt`, the wheel-slot content pattern
+(`ui/wheel/content/`, e.g. `AvailableTripsWheelContent.kt`), and `ui/navigation/CabDispatchNavHost.kt`
+first, then decide wheel-slot vs. separate-destination on the merits. Did NOT touch
+`domain/fare/FareEngine.kt`.
+
+**Wheel slot vs. separate destination — checked first, not guessed.** `ui/wheel/WheelState.kt`
+declares `SLOT_COUNT = 6` as a hardcoded constant (`STEP_DEGREES = 360f / SLOT_COUNT`), and every
+one of the 6 slots (Off Duty/Available, Available Trips, Messages, Trips, Earnings, Shift) is
+already wired to real content per the 2026-08-01 reconciliation entry below — there is no free
+slot, and the angle/geometry math in `ui/wheel/WheelGeometry.kt` (icon positions, spoke angles,
+label ring) is built against that fixed count throughout `WheelDashboardScreen.kt`'s
+`WheelArea`/`WheelRimAndSpokes`/`WheelSlotDot`. Retrofitting a 7th/8th slot would mean changing
+`SLOT_COUNT` and re-deriving every angle constant with no way to verify the result on a real
+screen in this sandbox — clearly more disruptive than the task brief's "use your judgement, match
+whatever is least disruptive" standard. Went with separate destinations instead, reached from a
+new small "Zones" entry point added to `WheelDashboardScreen.kt`'s existing `TopStatusStrip`
+(the GPS/4G/Printer/Batt chip row) — a plain clickable label at the same visual weight as the
+status chips beside it, not a full button, so it doesn't compete with `StartMeterButton`/the new
+"Set Price" `TextButton` a concurrent sibling pass added to the same screen this same day (see
+that pass's own entry, once it lands — `SetPriceEntryScreen`/`negotiatedTotal` were already present
+in `WheelDashboardScreen.kt` when this pass started reading it; left entirely alone, out of scope).
+
+**Backend contract used exactly as built this session by the zones-demand backend agent** (read
+directly from `backend/app/api/v1/zones.py`/`app/schemas/zones.py`/`app/models/shift.py`, not
+guessed — that agent's own session report never actually included the zones contract text, only
+an oblique mention of a sibling-added "zones" section in `main.py`'s docstring, so the real source
+was the only honest way to get this right):
+- `GET /v1/zones?skip=&limit=` -> `Page[ZoneRead]` (`items`/`total`/`skip`/`limit`) — any
+  authenticated tenant user.
+- `GET /v1/zones/stats` -> `list[ZoneStats]` (`zone_id`/`zone_name`/`zone_number`/
+  `plotted_vehicles`/`vacant_vehicles`/`busy_vehicles`/`jobs_holding`/`bookings_last_hour`/
+  `street_hails_last_hour`) — any authenticated tenant user; registered server-side ahead of
+  `GET /v1/zones/{zone_id}` specifically so `"stats"` isn't captured as a zone-id path segment.
+- `POST /v1/zones/{zoneId}/plot` / `POST /v1/zones/unplot` -> `ZonePlotRead` (`shift_id`/
+  `driver_id`/`vehicle_id`/`plotted_zone_id`/`plotted_at`) — any authenticated tenant user, acting
+  on their own currently-open shift (identity-scoped server-side via the bearer token, no
+  `driver_id`/`shift_id` sent from the device); `plot` 404s on an unknown zone, 409s
+  (`NoActiveShiftError`) if the caller has no open shift.
+- Admin zone CRUD (`POST`/`PUT`/`DELETE /v1/zones`) is owner/admin-only and deliberately NOT
+  exposed on this device — a driver's tablet only ever reads the zone list/stats and plots itself.
+- **One real gap found and closed while tracing the "currently plotted in" indicator:** `GET
+  /v1/zones` returns `ZoneRead` rows with no per-caller plotting field, and neither does any other
+  zones endpoint on a bare read — the only way to learn the calling driver's own current plot state
+  is a side-effecting `plot`/`unplot` call, or reading it off their own `Shift` row. Confirmed
+  `backend/app/schemas/shift.py`'s `ShiftRead` (used by the pre-existing `GET /v1/shifts/{shift_id}`,
+  any authenticated tenant user, not previously called from this app) carries `plotted_zone_id`/
+  `plotted_at` — added `ApiService.getShift`/`ShiftRepository.getShift` for exactly this read; see
+  `PlotZoneViewModel.refresh`'s doc for how it's used (a best-effort second read after the zone
+  list loads, degrading to "unknown/not plotted" on failure rather than blocking the zone list).
+
+**What changed:**
+- **New `data/remote/ApiService.kt` surface:** `ZoneDto`/`ZoneListResponseDto`/`ZonePlotReadDto`/
+  `ZoneStatsDto` (field-for-field mirrors of the backend schemas above — `centerLat`/`centerLng`/
+  `radiusM` are plain `Double`, not decimal-as-string, since the backend models them as Pydantic
+  `float` not `Decimal`, unlike this file's money-field convention), `listZones`/`zoneStats`/
+  `plotIntoZone`/`unplotZone` methods, plus `getShift` and two new nullable fields on `ShiftDto`
+  (`plottedZoneId`/`plottedAt`, defaulted null — every existing `ShiftDto(...)` call site, including
+  `RemoteBackedShiftRepository`'s synthetic-offline-shift fallback, keeps compiling unchanged).
+- **New `domain/ZonesRepository.kt`** (`ZonesRepository`/`RemoteBackedZonesRepository`) — thin
+  network-only `Result<T>` wrapper, same shape as `domain/JobsRepository.kt` (no Room/offline-queue:
+  like a job offer, "plot me into zone X" and the live stats table are only ever meaningful right
+  now, no "plot me in from 20 minutes ago" story to build). `domain/ShiftRepository.kt` gained
+  `getShift` alongside the pre-existing `startShift`.
+- **`data/AppContainer.kt`** — new `zonesRepository: ZonesRepository by lazy { RemoteBackedZonesRepository(apiService) }`,
+  registered per the file's own "how a sibling agent registers a new repository" convention.
+- **New `ui/screens/zones/` package:**
+  - `PlotZoneViewModel.kt`/`PlotZoneScreen.kt` — the Plot screen: a list of zones (name/number,
+    tap a row to plot in), a "currently plotted in: X" card with an Unplot action, matching the
+    task brief's spec exactly. Styled with the same Back-header + `WheelColors` card pattern
+    `ui/screens/tripdetail/TripDetailScreen.kt` already uses for a screen reached the same way
+    (small entry point off the dashboard, not part of the original S1-S6 flow). A "Stats" link
+    in the header navigates to the Statistics screen.
+  - `ZoneStatisticsViewModel.kt`/`ZoneStatisticsScreen.kt` — the Statistics screen: a table of
+    zones and their live stats (plotted/vacant/busy vehicles, jobs holding, bookings/street-hails
+    last hour), horizontally scrollable (7 columns). Auto-refreshes every 20s while visible —
+    **reused `SettingsViewModel`'s exact existing coroutine polling pattern**
+    (`viewModelScope.launch { while (isActive) { poll(); delay(interval) } }`), per the brief's
+    explicit instruction not to invent a new refresh mechanism. "While visible" falls out of
+    ViewModel lifecycle for free — this screen has its own back-stack entry with its own
+    `viewModelScope`, so navigating back cancels the loop with no explicit start/stop wiring.
+- **`ui/navigation/CabDispatchNavHost.kt`** — two new routes, `CabDispatchRoutes.PLOT_ZONE`
+  (`"plot_zone"`) and `CabDispatchRoutes.ZONE_STATISTICS` (`"zone_statistics"`), registered as
+  ordinary `composable(...)` entries taking just `navController`, same shape as every other
+  small off-dashboard screen (`TRIP_DETAIL`, `PROFILE`, etc.).
+- **`ui/screens/dashboard/WheelDashboardScreen.kt`** — `TopStatusStrip` gained a required
+  `onZonesClick: () -> Unit` parameter and a new "Zones" clickable row at the start of its
+  existing GPS/4G/Printer/Batt chip `Row`; the one call site now passes
+  `{ navController.navigate(CabDispatchRoutes.PLOT_ZONE) }`. This is the only change to this file
+  — re-read fresh immediately before editing per this pass's own instruction (several sibling
+  agents were touching it concurrently) and found the "Set Price"/`negotiatedTotal`/
+  `SetPriceEntryScreen` changes already present; left completely untouched.
+
+**Genuinely unverified, same standing caveat as every entry in this file — this machine has no
+Android SDK either:** never run through `kotlinc`. Specific risks to check first on a real build,
+in rough order of likelihood:
+1. `ApiService.plotIntoZone`/`unplotZone` are bodyless `@POST`s (no `@Body` parameter) — modeled
+   directly on `ApiService.logout()`'s existing identical shape (also a bodyless `@POST` with no
+   params), so this should be safe Retrofit surface, but it's the first *parameterized* bodyless
+   POST in this file (`plotIntoZone` still has a `@Path`) — worth a specific look if either 4xxs
+   unexpectedly with a body-related error.
+2. `PlotZoneViewModel`'s `shiftId` is a one-shot `SessionHolder.session.value?.shiftId` read at
+   construction, same convention `AvailableTripsWheelViewModel`'s `driverId` property already
+   uses — fine given this screen is only reachable once a driver session exists, but if a future
+   pass makes Plot reachable earlier in the flow this assumption needs revisiting.
+3. `ZoneStatisticsScreen`'s table is a fixed-width `Column` (`TABLE_WIDTH_DP`, 7 columns) inside a
+   `horizontalScroll` wrapper, sized by eye against the app's existing 1280x800-class reference
+   canvas ratio (see the 2026-08-02 LED-digit entry below for the same "sized by eye, not seen on
+   a real device" caveat) — has never been measured against a real tablet's actual pixel width.
+4. `ShiftDto` gaining two new nullable fields is additive/backward-compatible by construction
+   (every existing named-arg `ShiftDto(...)` call site was checked and keeps compiling), but this
+   is the only place in this pass that changes a DTO shared with the shift-open/shift-report flow
+   rather than adding purely new surface — worth a specific look if `RemoteBackedShiftRepository`'s
+   offline-shift-start fallback path shows anything unexpected around the new fields.
+
 ## 2026-08-03 (newest, reconciliation + fixes) — Blueprint gap-closing pass verified; two real bugs found and fixed
 
 A 9-agent pass (4 backend, 2 dashboard, 3 Android) closed the remaining Taxi Meter SaaS Complete

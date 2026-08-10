@@ -316,3 +316,169 @@ def test_websocket_rejects_driver_subscribing_to_another_drivers_thread(app):
         except FastAPIWebSocketDisconnect:
             raised = True
         assert raised
+
+
+# --- canned templates --------------------------------------------------------
+
+
+async def test_list_templates_includes_driver_and_dispatch_codes(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.get("/v1/messages/templates", headers=driver_headers)
+
+    assert resp.status_code == 200
+    templates = resp.json()
+    codes = {t["code"] for t in templates}
+    assert {"no_job", "recall", "job_query", "other"} <= codes
+    assert {"check_in", "return_to_depot", "contact_base_urgent"} <= codes
+    driver_codes = {t["code"] for t in templates if t["sender_type"] == "driver"}
+    dispatch_codes = {t["code"] for t in templates if t["sender_type"] == "dispatch"}
+    assert "no_job" in driver_codes
+    assert "check_in" in dispatch_codes
+
+
+async def test_driver_sends_no_job_template(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+    driver_id = _user_id_from_headers(driver_headers)
+
+    resp = await client.post("/v1/messages/templates/no_job", json={}, headers=driver_headers)
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["thread_id"] == driver_id
+    assert body["sender_type"] == "driver"
+    assert body["body"] == "No job."
+
+    list_resp = await client.get("/v1/messages", params={"driver_id": driver_id}, headers=driver_headers)
+    assert list_resp.json()["items"][0]["id"] == body["id"]
+
+
+async def test_driver_sends_other_template_with_note_appended(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post(
+        "/v1/messages/templates/other",
+        json={"note": "need change for a fifty dollar note"},
+        headers=driver_headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["body"] == "Other. need change for a fifty dollar note"
+
+
+async def test_driver_cannot_send_dispatch_only_template(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post("/v1/messages/templates/check_in", json={}, headers=driver_headers)
+
+    assert resp.status_code == 400
+
+
+async def test_dispatch_sends_check_in_template_into_named_driver_thread(
+    client: AsyncClient, session: AsyncSession
+):
+    driver_headers = await auth_headers(client, session, role="driver")
+    driver_id = _user_id_from_headers(driver_headers)
+    dispatcher_headers = await auth_headers(client, session, role="dispatcher")
+
+    resp = await client.post(
+        "/v1/messages/templates/check_in", json={"driver_id": driver_id}, headers=dispatcher_headers
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["sender_type"] == "dispatch"
+    assert body["body"] == "Please check in."
+
+
+async def test_dispatch_cannot_send_driver_only_template(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+    driver_id = _user_id_from_headers(driver_headers)
+    dispatcher_headers = await auth_headers(client, session, role="dispatcher")
+
+    resp = await client.post(
+        "/v1/messages/templates/recall", json={"driver_id": driver_id}, headers=dispatcher_headers
+    )
+
+    assert resp.status_code == 400
+
+
+async def test_dispatch_template_requires_driver_id(client: AsyncClient, session: AsyncSession):
+    dispatcher_headers = await auth_headers(client, session, role="dispatcher")
+
+    resp = await client.post("/v1/messages/templates/check_in", json={}, headers=dispatcher_headers)
+
+    assert resp.status_code == 400
+
+
+async def test_unknown_template_code_404s(client: AsyncClient, session: AsyncSession):
+    driver_headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.post("/v1/messages/templates/does_not_exist", json={}, headers=driver_headers)
+
+    assert resp.status_code == 404
+
+
+def test_template_message_broadcasts_to_live_websocket_listeners(app):
+    """Same rationale as test_messages_broadcast_to_live_websocket_listeners
+    above for using the synchronous TestClient -- httpx's ASGITransport does
+    not support websocket upgrade."""
+    import asyncio
+    import uuid
+
+    from fastapi.testclient import TestClient
+
+    from app.core.database import AsyncSessionLocal
+    from app.models import Tenant, User
+
+    async def _setup():
+        async with AsyncSessionLocal() as db:
+            tenant = Tenant(name=f"WS Messages Template Tenant {uuid.uuid4()}", plan="standard")
+            db.add(tenant)
+            await db.commit()
+            await db.refresh(tenant)
+
+            driver = User(
+                tenant_id=tenant.id,
+                role="driver",
+                name="Test Driver",
+                email=f"{uuid.uuid4()}@example.com",
+                pin_hash=security.hash_password("Test-Passw0rd!"),
+                status="active",
+            )
+            dispatcher = User(
+                tenant_id=tenant.id,
+                role="dispatcher",
+                name="Test Dispatcher",
+                email=f"{uuid.uuid4()}@example.com",
+                pin_hash=security.hash_password("Test-Passw0rd!"),
+                status="active",
+            )
+            db.add_all([driver, dispatcher])
+            await db.commit()
+            await db.refresh(driver)
+            await db.refresh(dispatcher)
+
+            driver_token = security.create_access_token(user_id=driver.id, tenant_id=tenant.id, role=driver.role)
+            dispatcher_token = security.create_access_token(
+                user_id=dispatcher.id, tenant_id=tenant.id, role=dispatcher.role
+            )
+        return driver.id, driver_token, dispatcher_token
+
+    driver_id, driver_token, dispatcher_token = asyncio.run(_setup())
+
+    with TestClient(app) as test_client:
+        with test_client.websocket_connect(f"/v1/messages/live?driver_id={driver_id}&token={driver_token}") as ws:
+            send_resp = test_client.post(
+                "/v1/messages/templates/return_to_depot",
+                json={"driver_id": driver_id},
+                headers={"Authorization": f"Bearer {dispatcher_token}"},
+            )
+            assert send_resp.status_code == 201, send_resp.text
+
+            received = ws.receive_json()
+            assert received["body"] == "Return to depot."
+            assert received["driver_id"] == driver_id
+            assert received["sender_type"] == "dispatch"

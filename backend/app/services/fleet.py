@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.fleet import Device, DevicePairingCode, Vehicle
+from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
 
 # Codes exclude visually-ambiguous characters (0/O, 1/I) since a driver may need
 # to key one in by hand if the QR scan fails.
@@ -189,12 +189,31 @@ async def record_heartbeat(
     network: str | None,
     app_version: str | None,
 ) -> Device:
+    """Updates last_seen_at/battery/network/app_version.
+
+    Also appends a `DeviceVersionHistory` row whenever the incoming
+    `app_version` differs from what is currently stored on `device.app_version`
+    (including the very first time a version is ever recorded, i.e. going
+    from None to a real value) -- this is the sole write path onto that
+    table, feeding the per-vehicle evidence pack
+    (app.services.evidence_pack) with a real firmware/app-version timeline
+    instead of just a current snapshot. Does NOT duplicate the heartbeat
+    endpoint -- this extends the existing one, per the evidence-pack task
+    brief."""
     device.last_seen_at = datetime.now(UTC)
     if battery is not None:
         device.battery = battery
     if network is not None:
         device.network = network
-    if app_version is not None:
+    if app_version is not None and app_version != device.app_version:
+        session.add(
+            DeviceVersionHistory(
+                tenant_id=device.tenant_id,
+                device_id=device.id,
+                app_version=app_version,
+                recorded_at=datetime.now(UTC),
+            )
+        )
         device.app_version = app_version
     await session.commit()
     await session.refresh(device)

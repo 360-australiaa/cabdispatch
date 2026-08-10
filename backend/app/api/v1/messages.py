@@ -8,6 +8,13 @@ Reuses the exact in-process pub/sub pattern from `app.api.v1.duress` /
 `app.services.duress.GPSBroadcaster` — no Redis, see
 `app.services.messages.MessageBroadcaster`.
 
+Also: `GET /templates` lists the fixed canned-template menu (driver-side
+quick-request codes like "no_job"/"recall"/"job_query"/"other", and
+dispatch-side quick-status codes like "check_in"/"return_to_depot"), and
+`POST /templates/{code}` sends one — it's a thin body-composition step in
+front of the exact same `send_message` service path `POST /` uses, not a
+parallel message-creation path. See `app.services.messages.MESSAGE_TEMPLATES`.
+
 Threading model: a "thread" is just every `Message` sharing a `thread_id` for
 one driver's ongoing conversation with dispatch. Per the domain brief this is
 intentionally NOT a generic multi-thread system — `thread_id` always equals
@@ -63,7 +70,13 @@ from app.core.security import (
     get_current_tenant_id,
     get_current_user,
 )
-from app.schemas.messages import MessageCreate, MessageRead, Page
+from app.schemas.messages import (
+    MessageCreate,
+    MessageRead,
+    MessageTemplateRead,
+    Page,
+    TemplateMessageCreate,
+)
 from app.services import messages as messages_service
 
 router = APIRouter(prefix="/v1/messages", tags=["messages"])
@@ -78,6 +91,13 @@ def _messages_error_to_http(exc: messages_service.MessagesError) -> HTTPExceptio
         return HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="driver_id is required when sending as dispatch",
+        )
+    if isinstance(exc, messages_service.TemplateNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+    if isinstance(exc, messages_service.TemplateNotAllowedForSenderError):
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This template is not available to your role",
         )
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -143,6 +163,60 @@ async def mark_read(
         raise _messages_error_to_http(exc) from exc
 
     return await messages_service.mark_read(session, message)
+
+
+# --- canned templates --------------------------------------------------------
+
+
+@router.get("/templates", response_model=list[MessageTemplateRead])
+async def list_templates(
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+):
+    """Lists every available canned template (both driver-side quick-request
+    codes and dispatch-side quick-status codes) so the client doesn't need to
+    hardcode the menu. `tenant_id`/`_user` are required only to enforce this
+    is an authenticated tenant call, same as every other endpoint in this
+    router -- the template list itself is not tenant-specific."""
+    return messages_service.list_templates()
+
+
+@router.post("/templates/{code}", response_model=MessageRead, status_code=status.HTTP_201_CREATED)
+async def send_template_message(
+    code: str,
+    payload: TemplateMessageCreate,
+    tenant_id: str = Depends(get_current_tenant_id),
+    current_user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Quick-tap equivalent of `POST /v1/messages`: resolves `code` to a
+    canned template and creates a real `Message` row through the exact same
+    `app.services.messages.send_message` path (via `send_template_message`),
+    so it shows up in the thread and over the live websocket identically to
+    a free-text send. Sender attribution follows the same rule as the
+    free-text endpoint above -- a `driver`-role caller always sends as
+    themselves; anyone else must supply `driver_id` and can only use
+    dispatch-side template codes."""
+    sender_type = "driver" if current_user.role == _DRIVER_ROLE else "dispatch"
+    driver_id = current_user.id if sender_type == "driver" else payload.driver_id
+
+    try:
+        message = await messages_service.send_template_message(
+            session,
+            tenant_id=tenant_id,
+            driver_id=driver_id,
+            sender_type=sender_type,
+            sender_user_id=current_user.id,
+            code=code,
+            note=payload.note,
+        )
+    except messages_service.MessagesError as exc:
+        raise _messages_error_to_http(exc) from exc
+
+    ws_payload = MessageRead.model_validate(message).model_dump(mode="json")
+    await messages_service.message_broadcaster.publish(tenant_id, driver_id, ws_payload)
+
+    return message
 
 
 # --- live websocket relay ------------------------------------------------------

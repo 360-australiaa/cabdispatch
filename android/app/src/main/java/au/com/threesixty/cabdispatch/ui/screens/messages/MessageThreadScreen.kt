@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +31,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -38,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
+import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.WheelColors
 
@@ -106,6 +112,22 @@ fun MessageThreadScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
+        if (state.templateSendError != null) {
+            Text(
+                state.templateSendError,
+                color = WheelColors.duress,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+
+        TemplateQuickTapRow(
+            templates = state.templates,
+            sendingCode = state.sendingTemplateCode,
+            otherNoteText = state.otherNoteText,
+            onOtherNoteChange = viewModel::updateOtherNoteText,
+            onTap = viewModel::sendTemplate,
+        )
 
         ReplyComposer(
             text = state.composerText,
@@ -217,6 +239,130 @@ private fun MessageBubble(message: MessageDto) {
  * since the coincidence (same hex) is about the prototype's specific gold-button text color choice,
  * not a semantic link to the "raised surface" token. */
 private val CabDispatchIndigoText = Color(0xFF2A1C58)
+
+/**
+ * Quick-tap canned-message menu, spec brief "matching a real competitor taxi meter's 'No Job /
+ * Recall / Job Query / Other' quick-request menu" — large tap targets, no multi-step flow,
+ * so a driver can fire one off without taking real attention off the road. Every driver-side
+ * template except "other" sends immediately on tap; "other" expands a small optional note field
+ * instead of sending straight away (see `TemplateMessageCreate.note` on the backend — it's
+ * accepted on any code but only meaningful for this one, per
+ * `app.schemas.messages.TemplateMessageCreate`'s doc).
+ */
+@Composable
+private fun TemplateQuickTapRow(
+    templates: List<MessageTemplateDto>,
+    sendingCode: String?,
+    otherNoteText: String,
+    onOtherNoteChange: (String) -> Unit,
+    onTap: (String) -> Unit,
+) {
+    if (templates.isEmpty()) return
+    var otherExpanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(WheelColors.surface)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(
+            "QUICK MESSAGE",
+            color = WheelColors.textMuted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 6.dp, start = 2.dp),
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(templates, key = { it.code }) { template ->
+                val isOther = template.code == OTHER_TEMPLATE_CODE
+                val busy = sendingCode == template.code
+                val highlighted = isOther && otherExpanded
+                Button(
+                    onClick = {
+                        if (isOther) {
+                            otherExpanded = !otherExpanded
+                        } else {
+                            onTap(template.code)
+                        }
+                    },
+                    enabled = sendingCode == null,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (highlighted) WheelColors.gold else WheelColors.surfaceRaised,
+                        contentColor = if (highlighted) CabDispatchIndigoText else WheelColors.textPrimary,
+                        disabledContainerColor = WheelColors.surfaceRaised,
+                        disabledContentColor = WheelColors.textMuted,
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(16.dp).width(16.dp),
+                            color = WheelColors.textPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(template.label.uppercase(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        if (otherExpanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextField(
+                    value = otherNoteText,
+                    onValueChange = onOtherNoteChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Optional note…", color = WheelColors.textMuted) },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = WheelColors.surfaceRaised,
+                        unfocusedContainerColor = WheelColors.surfaceRaised,
+                        disabledContainerColor = WheelColors.surfaceRaised,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        focusedTextColor = WheelColors.textPrimary,
+                        unfocusedTextColor = WheelColors.textPrimary,
+                        cursorColor = WheelColors.gold,
+                    ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        onTap(OTHER_TEMPLATE_CODE)
+                        otherExpanded = false
+                    },
+                    enabled = sendingCode == null,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = WheelColors.gold,
+                        contentColor = CabDispatchIndigoText,
+                        disabledContainerColor = WheelColors.surfaceRaised,
+                        disabledContentColor = WheelColors.textMuted,
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("SEND", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/** Matches the backend's `app.services.messages.MESSAGE_TEMPLATES` "other" code exactly —
+ * see [MessagesViewModel]'s own private copy of this same constant; kept separate rather than
+ * shared since one is a UI-layer literal and the other is the ViewModel's request-composition
+ * literal, and neither module exposes the other's private constant. */
+private const val OTHER_TEMPLATE_CODE = "other"
+
 
 @Composable
 private fun ReplyComposer(

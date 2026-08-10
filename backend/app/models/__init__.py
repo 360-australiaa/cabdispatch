@@ -16,7 +16,7 @@ from app.models.billing import Subscription
 from app.models.compliance import ComplianceDocument
 from app.models.duress import DuressEvent
 from app.models.fatigue_alert import FatigueAlert
-from app.models.fleet import Device, DevicePairingCode, Vehicle
+from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
 from app.models.geofence import Geofence
 from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
@@ -27,6 +27,7 @@ from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
 from app.models.trips import Trip
 from app.models.user import User
+from app.models.zones import Zone
 
 # live_ops owns no table of its own (see app/services/live_ops.py) — nothing
 # to import here for that domain.
@@ -37,6 +38,7 @@ __all__ = [
     "ComplianceDocument",
     "Device",
     "DevicePairingCode",
+    "DeviceVersionHistory",
     "DriverAvailability",
     "DuressEvent",
     "Extra",
@@ -56,4 +58,5 @@ __all__ = [
     "Trip",
     "User",
     "Vehicle",
+    "Zone",
 ]

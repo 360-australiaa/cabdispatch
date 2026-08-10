@@ -1064,3 +1064,130 @@ async def test_update_trip_stores_split_payments_as_stringified_amounts(
     assert resp.status_code == 200
     body = resp.json()
     assert body["split_payments"] == [{"method": "cash", "amount": "3.50"}]
+
+
+
+# --- negotiated / "Set Price" fixed fare ------------------------------------
+
+
+async def test_create_trip_with_negotiated_total_over_cap_is_422(client: AsyncClient, session: AsyncSession):
+    """Sanity cap: app.services.fare_engine.NEGOTIATED_TOTAL_MAX is $500.00."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, negotiated_total="99999.00"),
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_trip_with_negotiated_total_zero_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, negotiated_total="0.00"),
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_trip_with_negotiated_total_persists_it(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="45.00")
+    assert Decimal(trip["negotiated_total"]) == Decimal("45.00")
+    # Not charged onto `total` until close() runs.
+    assert trip["total"] == "0.00"
+
+
+async def test_close_negotiated_total_trip_charges_negotiated_plus_tolls_and_psl(
+    client: AsyncClient, session: AsyncSession
+):
+    """The important nuance from the competitor's own on-screen disclaimer
+    ("this price doesn't include levies and/or tolls"): PSL and tolls still
+    accrue and add ON TOP of negotiated_total — unlike the pre-existing
+    airport_fixed trip type, which excludes them entirely."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # Tenant-scoped (not tenant_id=None) and at a location no other test in
+    # this module uses, so this toll geofence can't overlap with a different
+    # test's leftover global geofence in the shared session-scoped test DB
+    # (see tests/conftest.py's _test_database — the DB persists for the whole
+    # module run, and app.services.geofence.detect_geofences treats every
+    # tenant_id=None geofence as visible to every tenant/trip).
+    toll_lat, toll_lng = -34.4012, 150.8931
+    geofence = Geofence(
+        tenant_id=tenant_id,
+        name="Test negotiated-fare toll",
+        kind=GEOFENCE_KIND_TOLL,
+        center_lat=toll_lat,
+        center_lng=toll_lng,
+        radius_m=400,
+        toll_amount=Decimal("4.82"),
+    )
+    session.add(geofence)
+    await session.commit()
+
+    trip = await _create_trip(
+        client, headers, tariff.id, negotiated_total="45.00", start_lat=toll_lat, start_lng=toll_lng
+    )
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    tick_resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": toll_lat, "lng": toll_lng, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=10)).isoformat()}
+            ]
+        },
+        headers=headers,
+    )
+    assert tick_resp.status_code == 200
+    assert Decimal(tick_resp.json()["tolls"]) == Decimal("4.82")
+
+    close_resp = await client.post(
+        f"/v1/trips/{trip['id']}/close", json={"include_psl": True}, headers=headers
+    )
+    assert close_resp.status_code == 200
+    body = close_resp.json()
+
+    # Metered components are zeroed out — negotiated_total replaces them.
+    assert body["flag_fall"] == "0.00"
+    assert body["dist_amount"] == "0.00"
+    assert body["wait_amount"] == "0.00"
+    assert body["peak_amount"] == "0.00"
+
+    assert Decimal(body["tolls"]) == Decimal("4.82")
+    assert Decimal(body["psl"]) == Decimal("1.32")
+    assert Decimal(body["negotiated_total"]) == Decimal("45.00")
+
+    expected_subtotal = Decimal("45.00") + Decimal("4.82") + Decimal("1.32")
+    assert Decimal(body["subtotal"]) == expected_subtotal
+    assert Decimal(body["total"]) == expected_subtotal + Decimal(body["surcharge"])
+    # Not negotiated_total alone.
+    assert Decimal(body["total"]) != Decimal("45.00")
+
+
+async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_negotiated(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="45.00")
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == "45.00"
+    assert body["subtotal"] == "45.00"

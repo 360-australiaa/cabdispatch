@@ -47,6 +47,20 @@ No column in the brief's list was renamed, dropped, or retyped.
    `app.services.trips.flag_trip_for_review` / `close_trip` and
    `app.services.payments.redeem_voucher` / `validate_account_reference` for
    the logic that populates/validates them.
+5. `negotiated_total` is added by a later feature step on top of the domain
+   brief's original field list — a competitor-matching "Set Price" fixed-fare
+   feature (driver enters a fixed price before starting the meter; NSW law
+   allows this for pre-arranged/negotiated fares). Reuses the same
+   fare-engine mechanism the pre-existing `airport_fixed` trip type uses
+   (`app.services.fare_engine.FareState.fixed_fare` /
+   `FareEngine.close`) via a sibling `negotiated_total` field on `FareState`,
+   but — unlike `airport_fixed` — PSL and tolls still accrue and add on top
+   of it (see `app.services.fare_engine`'s `NEGOTIATED_TOTAL_MIN`/`_MAX`
+   module comment for the exact rationale). Settable only at trip creation
+   (`TripCreate.negotiated_total`, not `TripUpdate` — matches the "set price
+   before starting the meter" UX this mirrors); stored on the trip row
+   distinct from `total` so it stays visible on the receipt/trip detail even
+   after tolls/PSL/surcharge are layered on top at close.
 """
 from __future__ import annotations
 
@@ -173,3 +187,11 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     voucher_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     account_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     split_payments: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True, default=list)
+
+    # --- negotiated / "Set Price" fixed fare (module docstring deviation #5).
+    # Set only at trip creation (see app.schemas.trips.TripCreate.negotiated_total
+    # / app.services.fare_engine.validate_negotiated_total for the sanity-cap
+    # validation). NULL means "this is a normal metered trip" — the fare
+    # engine falls back to its usual flag/distance/time computation whenever
+    # this column is NULL (see app.services.trips.build_fare_state).
+    negotiated_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)

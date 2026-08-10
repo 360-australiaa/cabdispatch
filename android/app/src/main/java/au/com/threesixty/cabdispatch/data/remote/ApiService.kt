@@ -3,6 +3,7 @@ package au.com.threesixty.cabdispatch.data.remote
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -12,6 +13,7 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * Retrofit contract for the Cab Dispatch backend (`backend/app/main.py`, FastAPI).
@@ -196,6 +198,51 @@ interface ApiService {
     @GET("/v1/shifts/{shiftId}/report")
     suspend fun shiftReport(@Path("shiftId") shiftId: String): ShiftReportDto
 
+    /** Single-shift read (`backend/app/api/v1/shifts.py::get_shift`, any authenticated tenant
+     * user) — added for the Plot Zone screen's "currently plotted in" indicator
+     * ([au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneViewModel]), which needs
+     * [ShiftDto.plottedZoneId] for the driver's own current shift on screen load. Not used by
+     * any pre-existing call site — [startShift]/[endShift]/[shiftReport] above never needed a
+     * plain re-read of one shift by id before this. */
+    @GET("/v1/shifts/{shiftId}")
+    suspend fun getShift(@Path("shiftId") shiftId: String): ShiftDto
+
+    // ---- Zones (named dispatch zones, "plot into a zone", live per-zone demand stats — matches
+    // a real competitor taxi meter's (MTI) zone-based demand screens, backend/app/api/v1/zones.py.
+    // Role policy per that router's own docstring: list/stats/plot/unplot are all any
+    // authenticated tenant user (a driver acting on their own current shift for plot/unplot,
+    // identity-scoped server-side via the bearer token — no driver_id is sent from this app);
+    // admin zone CRUD (create/update/delete) is owner/admin-only and deliberately NOT exposed
+    // here, a driver's tablet only ever reads the zone list/stats and plots itself. ----
+
+    /** Zone directory for the Plot screen's zone list — name/number per row, per
+     * [au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneScreen]. */
+    @GET("/v1/zones")
+    suspend fun listZones(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): ZoneListResponseDto
+
+    /** Live per-zone demand table for the Statistics screen — see
+     * [au.com.threesixty.cabdispatch.ui.screens.zones.ZoneStatisticsViewModel] for the polling
+     * loop that calls this every 15-30s while that screen is visible. Registered as `GET
+     * /v1/zones/stats` server-side ahead of `GET /v1/zones/{zone_id}` specifically so `"stats"`
+     * isn't captured as a zone id path segment — see `app/api/v1/zones.py`'s own comment. */
+    @GET("/v1/zones/stats")
+    suspend fun zoneStats(): List<ZoneStatsDto>
+
+    /** Plots the calling driver's own currently-open shift into [zoneId] — backend 404s if the
+     * zone doesn't exist for this tenant, 409s ([ZonePlotReadDto] never returned in that case) if
+     * the caller has no currently-open shift. No request body — identity/shift come from the
+     * bearer token server-side, same as [ApiService.logout]'s bodyless `@POST`. */
+    @POST("/v1/zones/{zoneId}/plot")
+    suspend fun plotIntoZone(@Path("zoneId") zoneId: String): ZonePlotReadDto
+
+    /** Clears the calling driver's own current shift's plot, if any — a no-op (not an error) if
+     * they weren't plotted into anything, per `app.services.zones.unplot`'s own contract. */
+    @POST("/v1/zones/unplot")
+    suspend fun unplotZone(): ZonePlotReadDto
+
     // ---- Jobs (dispatch/job-offer broadcast+accept — Available Trips, S11/S12.
     // shared/API_SUMMARY.md + shared/openapi.json "/v1/jobs*", added for the wheel redesign's
     // dispatch scope, spec TCT-DRIVER-APP-01.md §9) ----
@@ -265,6 +312,24 @@ interface ApiService {
     @POST("/v1/messages/{messageId}/read")
     suspend fun markMessageRead(@Path("messageId") messageId: String): MessageDto
 
+    /** Canned quick-tap template menu (driver-side: "No Job"/"Recall"/"Job Query"/"Other";
+     * dispatch-side: quick-status templates) — not tenant-specific, just requires an
+     * authenticated caller. Fetch once and cache client-side per
+     * `app.api.v1.messages.list_templates`'s doc. */
+    @GET("/v1/messages/templates")
+    suspend fun listMessageTemplates(): List<MessageTemplateDto>
+
+    /** Quick-tap send: resolves [code] to a canned template and creates a real message through
+     * the same path as [sendMessage] — shows up in the thread/live socket identically to a
+     * free-text send. [TemplateMessageCreateDto.note] is an optional free-text suffix, primarily
+     * for the driver-side "other" template. Same [MessageCreateDto.driverId] sender-attribution
+     * rule as [sendMessage]: ignored for a `driver`-role caller. */
+    @POST("/v1/messages/templates/{code}")
+    suspend fun sendTemplateMessage(
+        @Path("code") code: String,
+        @Body body: TemplateMessageCreateDto,
+    ): MessageDto
+
     // ---- Duress (panic/safety — contextual overlays S28-S30, spec §8 rows 28-30) ----
     //
     // Role policy (see backend/app/api/v1/duress.py header): trigger/cancel/gps are any
@@ -323,6 +388,40 @@ interface ApiService {
 
     @GET("/v1/compliance/vehicles/{vehicleId}/dossier")
     suspend fun getComplianceDossier(@Path("vehicleId") vehicleId: String): ComplianceDossierDto
+
+    // ---- Driver photo (Profile screen, 2026-08-10 driver-photo pass) ----
+    //
+    // Backend contract (`app/api/v1/users.py`): POST is multipart (`file` field), **self-or-staff
+    // gated** — any authenticated user may upload their OWN photo (matching this app's actual
+    // call site: the signed-in user updating their own Profile photo), and staff
+    // (owner/admin/dispatcher) may additionally upload on behalf of any user in their tenant.
+    // **Fixed during integration verification** — the endpoint originally shipped staff-only
+    // gated, which would have 403'd this exact call site for every real driver-role account;
+    // caught and fixed server-side (see backend/app/api/v1/users.py's own doc comment on
+    // upload_user_photo, and backend/tests/test_users.py::test_driver_can_upload_their_own_photo)
+    // rather than left as a standing client-side risk. GET has no gate at all beyond tenant
+    // membership (any authenticated tenant user), used here to load whatever photo (if any) is
+    // already on file when the Profile screen first opens.
+
+    /** `POST /v1/users/{userId}/photo` — multipart `file` field. Returns the updated
+     * [UserDto] (`photo_url` now set). See this section's header comment for the real
+     * staff-role-gate risk. */
+    @Multipart
+    @POST("/v1/users/{userId}/photo")
+    suspend fun uploadUserPhoto(
+        @Path("userId") userId: String,
+        @Part file: MultipartBody.Part,
+    ): UserDto
+
+    /** `GET /v1/users/{userId}/photo` — raw image bytes (backend `FileResponse`), not JSON,
+     * hence the plain [okhttp3.ResponseBody] return type + [Streaming] (avoids buffering the whole
+     * image into memory before [okhttp3.ResponseBody.byteStream] is read) rather than a DTO. 404s
+     * when the user has no photo yet or the on-disk file is missing — callers
+     * ([au.com.threesixty.cabdispatch.ui.screens.profile.ProfileViewModel]) treat that like every
+     * other "nothing there yet" case in this app: fall back to the initials avatar, never crash. */
+    @Streaming
+    @GET("/v1/users/{userId}/photo")
+    suspend fun getUserPhoto(@Path("userId") userId: String): ResponseBody
 }
 
 // ============================================================================
@@ -394,6 +493,12 @@ data class UserDto(
     val name: String,
     val email: String,
     val status: String,
+    /** Relative on-disk path, per the backend's own doc — not a directly-loadable absolute
+     * URL. `null` when no photo has ever been uploaded. Not used to build the image request
+     * (`ApiService.getUserPhoto` is called by user id, not by this path) — kept only so a
+     * `photo_url != null` check can drive "has a photo" UI state without an extra network round
+     * trip. See `ui/screens/profile/ProfileViewModel.kt`. */
+    @SerialName("photo_url") val photoUrl: String? = null,
 )
 
 @Serializable
@@ -561,6 +666,15 @@ data class TripCreateDto(
      * accept it either (a trip's total isn't known until close; split-fare is a close-time-only
      * payment method, see [TripCloseRequestDto.splitPayments]). */
     @SerialName("account_reference") val accountReference: String? = null,
+    /**
+     * Negotiated/fixed-fare total (2026-08-10 meter-polish pass, "Set Price" entry point) —
+     * mirrors the backend's `TripCreate.negotiated_total` exactly (`Decimal | None`, validated
+     * `[1.00, 500.00]` server-side via `app.services.fare_engine.validate_negotiated_total`).
+     * `null` = normal metered trip (the default, unchanged for every existing call site). Settable
+     * only at trip creation, same as the backend contract — there is deliberately no equivalent
+     * field on [TripCloseRequestDto].
+     */
+    @SerialName("negotiated_total") val negotiatedTotal: String? = null,
     @SerialName("time_class") val timeClass: String = "day", // day | night | holiday
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
@@ -616,6 +730,15 @@ data class TripDto(
     @SerialName("voucher_code") val voucherCode: String? = null,
     @SerialName("account_reference") val accountReference: String? = null,
     @SerialName("split_payments") val splitPayments: List<SplitPaymentEntryDto>? = null,
+    /** See [TripCreateDto.negotiatedTotal]'s doc. Nullable-defaulted (not required) per this
+     * file's own convention for a field added after this DTO already had live callers — a cached/
+     * mocked payload from before this pass still decodes fine. Not independently verified against
+     * a real `TripRead` response body from a running backend; the backend agent's own contract
+     * notes only explicitly list `negotiated_total` on `Trip`/`TripCreate`/`TripSyncItem`, not
+     * `TripRead` by name — assumed present here since every other model field this project's
+     * `TripRead` schemas expose so far has been 1:1 with the model, but flagged as the one
+     * unverified assumption in this DTO. */
+    @SerialName("negotiated_total") val negotiatedTotal: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )
@@ -705,6 +828,17 @@ data class TripSyncItemDto(
     @SerialName("voucher_code") val voucherCode: String? = null,
     @SerialName("account_reference") val accountReference: String? = null,
     @SerialName("split_payments") val splitPayments: List<SplitPaymentEntryDto>? = null,
+    /**
+     * See [TripCreateDto.negotiatedTotal]'s doc. Unlike [voucherCode]/[accountReference]/
+     * [splitPayments] above (whose own doc comment on this same class documents a real gap where
+     * the backend's `TripSyncItem` schema didn't carry them until the 2026-08-03 reconciliation
+     * pass fixed it), `negotiated_total` was declared on `TripSyncItem` from the start by the
+     * backend agent that added it this same session (2026-08-10) — per that agent's own contract
+     * notes, `TripSyncItem.negotiated_total` shares the exact same validation as `TripCreate`'s.
+     * No known gap here, but genuinely unverified against a real running backend either way (see
+     * this file's/HANDOFF.md's standing "never run through kotlinc" caveat).
+     */
+    @SerialName("negotiated_total") val negotiatedTotal: String? = null,
     @SerialName("time_class") val timeClass: String = "day",
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
@@ -771,6 +905,13 @@ data class ShiftDto(
     @SerialName("card_total") val cardTotal: String,
     @SerialName("psl_owed") val pslOwed: String,
     val reconciled: Boolean,
+    /** Zone-plotting fields (backend's `ShiftRead`, `app/models/shift.py`) — managed
+     * exclusively via [ApiService.plotIntoZone]/[ApiService.unplotZone], never settable via
+     * [ShiftStartDto]/[ShiftEndDto] above. Defaulted null so this DTO still decodes fine against
+     * any older cached/mocked payload that predates them, same `ignoreUnknownKeys`/nullable-
+     * default convention this file's header documents. */
+    @SerialName("plotted_zone_id") val plottedZoneId: String? = null,
+    @SerialName("plotted_at") val plottedAt: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )
@@ -897,6 +1038,28 @@ data class MessageListResponseDto(
     val limit: Int,
 )
 
+/** One entry of `GET /v1/messages/templates` — mirrors `app.schemas.messages.MessageTemplateRead`
+ * 1:1. [code] is the stable identifier passed to `POST /v1/messages/templates/{code}`; [label] is
+ * the human-readable button text; [senderType] is `driver` or `dispatch` — this app should only
+ * ever render the `driver`-typed entries as quick-tap buttons (a driver-role caller can't use a
+ * dispatch-side code, see [ApiService.sendTemplateMessage]'s doc / the 400 it maps to). */
+@Serializable
+data class MessageTemplateDto(
+    val code: String,
+    val label: String,
+    @SerialName("sender_type") val senderType: String, // dispatch | driver
+)
+
+/** Body for `POST /v1/messages/templates/{code}`. Same [MessageCreateDto.driverId] rule as a
+ * free-text send. [note] is an optional free-text suffix — the UI should only surface an input
+ * for it on the "other" template (see [ApiService.sendTemplateMessage]'s doc), though the backend
+ * accepts it on any code. */
+@Serializable
+data class TemplateMessageCreateDto(
+    @SerialName("driver_id") val driverId: String? = null,
+    val note: String? = null,
+)
+
 // ---- Duress DTOs — mirror shared/openapi.json DuressTriggerRequest/DuressCancelRequest/
 // DuressEventRead/DuressGpsPoint 1:1. ----
 
@@ -969,4 +1132,69 @@ data class ComplianceDossierDto(
     val items: List<ChecklistItemDto>,
     @SerialName("overall_compliant") val overallCompliant: Boolean,
     @SerialName("missing_items") val missingItems: List<String>,
+)
+
+// ---- Zones DTOs — mirror backend/app/schemas/zones.py ZoneRead/Page[ZoneRead]/ZonePlotRead/
+// ZoneStats 1:1. [ZoneDto.centerLat]/[centerLng]/[radiusM] are plain JSON numbers server-side
+// (Pydantic `float`, not `Decimal`), unlike this file's money-as-string convention — geometry
+// isn't money, so `Double` round-trips exactly like every other lat/lng field already in this
+// file (e.g. [JobDto.originLat]). ----
+
+/** Mirrors `ZoneRead` (`backend/app/schemas/zones.py`) — one named dispatch zone. [number] is
+ * the short driver-facing code (e.g. "17") shown on the Plot screen's zone rows, per
+ * [au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneScreen]. */
+@Serializable
+data class ZoneDto(
+    val id: String,
+    @SerialName("tenant_id") val tenantId: String,
+    val name: String,
+    val number: String,
+    @SerialName("center_lat") val centerLat: Double,
+    @SerialName("center_lng") val centerLng: Double,
+    @SerialName("radius_m") val radiusM: Double,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+/** Response for [ApiService.listZones] — mirrors the backend's generic `Page[ZoneRead]`, same
+ * items/total/skip/limit shape every other paginated list DTO in this file already uses (e.g.
+ * [JobListResponseDto]). */
+@Serializable
+data class ZoneListResponseDto(
+    val items: List<ZoneDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Response for [ApiService.plotIntoZone]/[ApiService.unplotZone] — mirrors `ZonePlotRead`, a
+ * thin projection of the calling driver's own current shift's plotting state (not the full
+ * [ShiftDto] shape — the caller only needs to know where, if anywhere, they're plotted).
+ * [plottedZoneId] null means "not currently plotted into any zone" (either never plotted this
+ * shift, or this is the response of an [ApiService.unplotZone] call). */
+@Serializable
+data class ZonePlotReadDto(
+    @SerialName("shift_id") val shiftId: String,
+    @SerialName("driver_id") val driverId: String,
+    @SerialName("vehicle_id") val vehicleId: String,
+    @SerialName("plotted_zone_id") val plottedZoneId: String? = null,
+    @SerialName("plotted_at") val plottedAt: String? = null,
+)
+
+/** One row of [ApiService.zoneStats] — mirrors `ZoneStats`
+ * (`backend/app/schemas/zones.py`; see `app.services.zones.compute_zone_stats` server-side for
+ * the exact definition/documented simplifications of every count below) — the Statistics
+ * screen's table, per
+ * [au.com.threesixty.cabdispatch.ui.screens.zones.ZoneStatisticsScreen]. */
+@Serializable
+data class ZoneStatsDto(
+    @SerialName("zone_id") val zoneId: String,
+    @SerialName("zone_name") val zoneName: String,
+    @SerialName("zone_number") val zoneNumber: String,
+    @SerialName("plotted_vehicles") val plottedVehicles: Int,
+    @SerialName("vacant_vehicles") val vacantVehicles: Int,
+    @SerialName("busy_vehicles") val busyVehicles: Int,
+    @SerialName("jobs_holding") val jobsHolding: Int,
+    @SerialName("bookings_last_hour") val bookingsLastHour: Int,
+    @SerialName("street_hails_last_hour") val streetHailsLastHour: Int,
 )

@@ -28,10 +28,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -58,6 +63,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -78,6 +84,7 @@ import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.LocationFix
+import au.com.threesixty.cabdispatch.domain.ShiftDurationLimit
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
 import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
@@ -102,6 +109,7 @@ import au.com.threesixty.cabdispatch.ui.wheel.wheelGesture
 import au.com.threesixty.cabdispatch.data.AppContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -159,7 +167,17 @@ fun WheelDashboardScreen(
 
     val startMeterEnabled = uiState.tariff != null && uiState.session != null && !isTransitioning
 
-    fun onStartMeterTapped() {
+    // --- Start-meter confirmation dialog + "Set Price" negotiated-fare entry point
+    // (2026-08-10 meter-polish pass, matching real competitor taxi-meter UX patterns). ---
+    var showStartConfirm by remember { mutableStateOf(false) }
+    var showSetPriceEntry by remember { mutableStateOf(false) }
+
+    /**
+     * [negotiatedTotal] is decimal-as-string ("45.00"), already validated against
+     * [NEGOTIATED_TOTAL_MIN]/[NEGOTIATED_TOTAL_MAX] by [SetPriceEntryScreen] before this is ever
+     * called — null for a normal metered Start Meter tap (the pre-existing, unchanged path).
+     */
+    fun onStartMeterTapped(negotiatedTotal: String? = null) {
         if (!startMeterEnabled) return
         isTransitioning = true
         scope.launch {
@@ -175,7 +193,7 @@ fun WheelDashboardScreen(
                     easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f),
                 ),
             )
-            val started = viewModel.startMeter()
+            val started = viewModel.startMeter(negotiatedTotal)
             if (started) {
                 // Verified (reconciliation pass): no sibling agent introduced a distinct
                 // wheel-redesign meter route — HIRED/S3 (ui/screens/hired/HiredScreen.kt) is the
@@ -207,7 +225,11 @@ fun WheelDashboardScreen(
             // map imagery underneath doesn't fight with card/wheel readability.
             Column(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    TopStatusStrip(status = uiState.status)
+                    TopStatusStrip(
+                        status = uiState.status,
+                        onZonesClick = { navController.navigate(CabDispatchRoutes.PLOT_ZONE) },
+                        session = uiState.session,
+                    )
                     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WheelColors.border))
                 }
 
@@ -237,7 +259,13 @@ fun WheelDashboardScreen(
 
             StartMeterButton(
                 enabled = startMeterEnabled,
-                onClick = ::onStartMeterTapped,
+                // Gated behind a confirmation dialog now (2026-08-10 meter-polish pass, matching
+                // a real competitor taxi-meter UX pattern) instead of firing on tap directly —
+                // see the AlertDialog below. Set Price (below) deliberately does NOT go through
+                // this same dialog: its own numeric-entry screen already ends in an explicit
+                // "Start meter" confirm action, so a second confirmation on top of that would be
+                // pure friction, not an extra safety check.
+                onClick = { showStartConfirm = true },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 36.dp)
@@ -254,6 +282,27 @@ fun WheelDashboardScreen(
                         )
                     },
             )
+
+            // "Set Price" — negotiated/fixed-fare entry point (2026-08-10 meter-polish pass),
+            // placed just above Start Meter rather than replacing it: a driver picking up a
+            // street hail still wants the normal metered flow most of the time, this is the
+            // secondary/occasional path (pre-arranged/negotiated fare, NSW Fares Order allows
+            // this for negotiated fares). Small `TextButton`, not another `StartMeterButton`-sized
+            // control, so it reads as clearly secondary at a glance.
+            TextButton(
+                onClick = { if (startMeterEnabled) showSetPriceEntry = true },
+                enabled = startMeterEnabled,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 132.dp),
+            ) {
+                Text(
+                    "Set Price",
+                    color = if (startMeterEnabled) WheelColors.goldSoft else WheelColors.textMuted,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                )
+            }
         }
 
         if (isTransitioning) {
@@ -279,6 +328,33 @@ fun WheelDashboardScreen(
                     fontSize = 16.sp,
                 )
             }
+        }
+
+        if (showStartConfirm) {
+            AlertDialog(
+                onDismissRequest = { showStartConfirm = false },
+                title = { Text("Start meter?") },
+                text = { Text("Are you sure you want to start the meter?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showStartConfirm = false
+                        onStartMeterTapped()
+                    }) { Text("Start meter") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showStartConfirm = false }) { Text("Cancel") }
+                },
+            )
+        }
+
+        if (showSetPriceEntry) {
+            SetPriceEntryScreen(
+                onCancel = { showSetPriceEntry = false },
+                onConfirm = { negotiatedTotal ->
+                    showSetPriceEntry = false
+                    onStartMeterTapped(negotiatedTotal = negotiatedTotal)
+                },
+            )
         }
 
         // Rows 28-30 — hidden duress gesture + its "Duress triggered"/"Duress active" contextual
@@ -522,7 +598,15 @@ private fun DriverPositionPin(modifier: Modifier = Modifier) {
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun TopStatusStrip(status: DashboardStatusStrip, modifier: Modifier = Modifier) {
+private fun TopStatusStrip(
+    status: DashboardStatusStrip,
+    onZonesClick: () -> Unit,
+    /** Feeds the shift-duration countdown chip below (2026-08-10 meter-polish pass) — null
+     * (chip hidden) whenever there's no signed-in session, same as every other session-gated
+     * piece of UI on this screen. */
+    session: DriverSession?,
+    modifier: Modifier = Modifier,
+) {
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -542,7 +626,21 @@ private fun TopStatusStrip(status: DashboardStatusStrip, modifier: Modifier = Mo
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(now.format(formatter), color = WheelColors.textSecondary, fontSize = 11.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            // Plot / Statistics entry point (zone-based demand screens, matching a real
+            // competitor taxi meter -- backend/app/api/v1/zones.py) -- see
+            // CabDispatchRoutes.PLOT_ZONE's own doc for why this lives here rather than as a 7th
+            // wheel slot. A plain clickable label, same visual weight as the status chips beside
+            // it rather than a full button, so it doesn't visually compete with StartMeterButton.
+            Row(
+                modifier = Modifier.clickable(onClick = onZonesClick),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("📍", fontSize = 11.sp)
+                Text("Zones", color = WheelColors.gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            ShiftCountdownChip(session = session, now = now)
             StatusChip("GPS", status.gpsOk)
             StatusChip("4G", status.networkOk)
             StatusChip("Printer", status.printerOk)
@@ -552,6 +650,40 @@ private fun TopStatusStrip(status: DashboardStatusStrip, modifier: Modifier = Mo
             )
         }
     }
+}
+
+/**
+ * Live "time remaining before shift-duration limit" chip (2026-08-10 meter-polish pass,
+ * matching real competitor taxi-meter UX). Recomputed off [now] — [TopStatusStrip]'s own 30s
+ * ticker above — rather than running an independent timer, so this stays a "live" countdown
+ * (updates on the same cadence the clock in this strip already does) without adding a second
+ * `LaunchedEffect`/coroutine to this composable. See [ShiftDurationLimit]'s own doc for the
+ * honest simplification behind the limit value itself (a hardcoded mirror of the backend's
+ * default `FATIGUE_SHIFT_DURATION_LIMIT_HOURS`, not a live-read tenant config value — no
+ * endpoint exposes that to this client today).
+ */
+@Composable
+private fun ShiftCountdownChip(session: DriverSession?, now: LocalDateTime) {
+    val remaining = remember(session?.shiftStartAt, now) {
+        ShiftDurationLimit.remaining(session?.shiftStartAt)
+    } ?: return
+
+    val overdue = remaining.isNegative
+    val magnitude = if (overdue) remaining.negated() else remaining
+    val hours = magnitude.toHours()
+    val minutes = magnitude.toMinutes() % 60
+    val label = if (overdue) {
+        "Shift limit exceeded (" + hours + "h " + minutes + "m over)"
+    } else {
+        "Shift: " + hours + "h " + minutes + "m left"
+    }
+    // Reuses StatusChip's dot+label visual language rather than a bespoke chip shape — this is
+    // still "one glance-zone status dot", just fed by a client-side computation instead of a
+    // device/network signal. `ok = !overdue` so it reads red exactly when the limit has actually
+    // been passed, amber/warn styling is StatusChip's own call (it only has an ok/not-ok binary
+    // today — a three-state "approaching the limit" warn tier is a real, deliberately-deferred
+    // follow-up, not silently assumed handled).
+    StatusChip(label, ok = !overdue)
 }
 
 @Composable
@@ -1216,5 +1348,122 @@ private fun StartMeterButton(enabled: Boolean, onClick: () -> Unit, modifier: Mo
             fontWeight = FontWeight.ExtraBold,
             fontSize = 21.sp,
         )
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// "Set Price" -- negotiated/fixed-fare numeric entry (2026-08-10 meter-polish pass)
+// ---------------------------------------------------------------------------------------------
+
+/** Mirrors the backend's app.services.fare_engine.NEGOTIATED_TOTAL_MIN/_MAX exactly (per the
+ * fare-set-price backend agent's own contract notes this same pass) -- client-side validation
+ * here is purely a nicer UX (fail fast before ever reaching the network/outbox); the real
+ * enforcement is still server-side (validate_negotiated_total, 422 on violation), since this
+ * app's actual live network path for a trip (POST /v1/trips/sync) only fires well after this
+ * screen is gone. */
+private val NEGOTIATED_TOTAL_MIN = BigDecimal("1.00")
+private val NEGOTIATED_TOTAL_MAX = BigDecimal("500.00")
+private const val CURRENCY_SIGN = "$"
+
+/**
+ * Full-screen numeric-entry overlay for a negotiated/pre-arranged fare, opened from the
+ * dashboard's Set Price secondary button. Deliberately a same-composable overlay (matching
+ * this screen's existing Starting meter overlay pattern above), not a new
+ * [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchNavHost] route -- this agent owns
+ * only the dashboard shell, and adding a nav route touches shared infra (CabDispatchNavHost.kt)
+ * several other concurrent passes may also be editing; a local overlay needs no such
+ * coordination.
+ *
+ * onConfirm receives the amount as a decimal-as-string (45.00, never a raw/unvalidated
+ * string) -- the confirm button below is only enabled once the input parses as a BigDecimal
+ * within NEGOTIATED_TOTAL_MIN/NEGOTIATED_TOTAL_MAX.
+ */
+@Composable
+private fun SetPriceEntryScreen(onCancel: () -> Unit, onConfirm: (String) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    val amount = remember(input) { input.toBigDecimalOrNull() }
+    val isValid = amount != null && amount >= NEGOTIATED_TOTAL_MIN && amount <= NEGOTIATED_TOTAL_MAX
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(WheelColors.bg)
+            .padding(24.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            TextButton(onClick = onCancel) { Text("< Cancel", color = WheelColors.textSecondary) }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Set Price",
+                color = WheelColors.textPrimary,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 24.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Enter the agreed fare for this trip.",
+                color = WheelColors.textSecondary,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(24.dp))
+
+            OutlinedTextField(
+                value = input,
+                onValueChange = { value ->
+                    val dotCount = value.count { it == '.' }
+                    val decimalsOk = value.substringAfter('.', "").length <= 2
+                    if (value.all { it.isDigit() || it == '.' } && dotCount <= 1 && decimalsOk) {
+                        input = value
+                    }
+                },
+                label = { Text("Fare amount") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (input.isNotEmpty() && !isValid) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Enter an amount between " + CURRENCY_SIGN + NEGOTIATED_TOTAL_MIN +
+                        " and " + CURRENCY_SIGN + NEGOTIATED_TOTAL_MAX,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            // Reference-screenshot wording, matched verbatim per the task brief.
+            Text(
+                "This price does not include levies and/or tolls",
+                color = WheelColors.textMuted,
+                fontSize = 12.sp,
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            val displayAmount = amount?.setScale(2, RoundingMode.HALF_UP)?.toPlainString()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isValid) WheelColors.gold else WheelColors.gold.copy(alpha = 0.4f))
+                    .clickable(enabled = isValid) {
+                        if (displayAmount != null) onConfirm(displayAmount)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (displayAmount != null) {
+                        "START METER AT " + CURRENCY_SIGN + displayAmount
+                    } else {
+                        "START METER"
+                    },
+                    color = CabDispatchColors.Indigo,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 16.sp,
+                )
+            }
+        }
     }
 }

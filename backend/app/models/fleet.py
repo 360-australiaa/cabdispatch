@@ -102,6 +102,43 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-100
     network: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "wifi", "4g", "offline"
 
+    # Meter re-verification due-date (operations-cycle tracking pass, on top of
+    # the compliance-expiry pass above). Same nullable, fail-open-on-missing-
+    # data convention as Vehicle.registration_expiry/insurance_expiry: null
+    # means "unknown", not "expired", and never blocks anything on its own.
+    # This is the meter's statutory periodic-calibration due-date (the
+    # taxi-meter equivalent of a cl 14 re-verification requirement), tracked
+    # on the Device (the tablet/kiosk unit the meter app runs on) rather than
+    # the Vehicle, since calibration is a property of the physical meter
+    # instrument, not the car it's currently paired to. See
+    # app.services.compliance_expiry for the expiring-soon/expired detection
+    # logic (calibration_expiring_soon/calibration_expired kinds) and
+    # GET /v1/fleet/compliance-expiry for the dashboard listing.
+    calibration_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class DeviceVersionHistory(Base, TenantScopedMixin):
+    """Append-only app_version history for a Device -- one row appended
+    whenever POST /v1/fleet/devices/{id}/heartbeat receives an app_version
+    different from the one currently stored on the Device row (see
+    app.services.fleet.record_heartbeat). Feeds the per-vehicle compliance
+    evidence pack (GET /v1/fleet/vehicles/{id}/evidence-pack, see
+    app.services.evidence_pack) so an auditor can see exactly when a
+    device's app was updated over time, not just its current version.
+
+    No TimestampMixin -- append-only with its own purpose-built `recorded_at`
+    timestamp, same convention as the sibling `app.models.tariffs.TariffChangeLog`
+    append-only audit table (no updated_at makes sense for a row that is
+    never updated).
+    """
+
+    __tablename__ = "device_version_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    device_id: Mapped[str] = mapped_column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
+    app_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
 
 class DevicePairingCode(Base, TimestampMixin, TenantScopedMixin):
     """Short-lived, single-use QR-pairing code minted for one vehicle at a time

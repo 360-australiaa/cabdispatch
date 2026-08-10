@@ -174,7 +174,7 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
      * without one) and a real [DriverSession]. Returns `false` (no-op) if either is missing so
      * the caller (the Start Meter button's tap animation) can skip navigating.
      */
-    fun startMeter(): Boolean {
+    fun startMeter(negotiatedTotal: String? = null): Boolean {
         val session = SessionHolder.session.value ?: return false
         val tariff = uiState.value.tariff ?: return false
         SessionHolder.setPendingTrip(
@@ -188,6 +188,10 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
                 driverId = session.driverId,
                 vehicleId = session.vehicleId,
                 shiftId = session.shiftId,
+                // "Set Price" entry point (2026-08-10 meter-polish pass) — see
+                // TripContext.negotiatedTotal's doc. Null (the default) for every ordinary
+                // metered Start Meter tap, exactly as before this pass.
+                negotiatedTotal = negotiatedTotal,
             ),
         )
         return true

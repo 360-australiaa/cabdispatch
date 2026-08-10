@@ -106,6 +106,7 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
         tolls=trip.tolls,
         extras=trip.extras,
         fixed_fare=fixed_fare,
+        negotiated_total=trip.negotiated_total,
     )
 
 
@@ -286,6 +287,7 @@ async def recompute_from_trace(
     payment_method: str,
     surcharge_pct: Decimal | None,
     include_psl: bool,
+    negotiated_total: Decimal | None = None,
 ) -> tuple[FareBreakdown, int, int, int]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
@@ -302,6 +304,7 @@ async def recompute_from_trace(
         tolls=tolls,
         extras=extras + cleaning_fee,
         fixed_fare=fixed_fare,
+        negotiated_total=negotiated_total,
     )
 
     prev_lat, prev_lng, prev_ts = start_lat, start_lng, start_at

@@ -128,6 +128,10 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 // breakdown is exactly and only true when FareEngineImpl
                 // applied the peak-hiring charge at startTrip() time.
                 isPeak = initial.breakdown.peakAmount.signum() > 0,
+                // "Set Price" entry point (2026-08-10 meter-polish pass) — see
+                // TripContext.negotiatedTotal's doc. Null for every ordinary metered trip
+                // (the pre-existing, unchanged default).
+                negotiatedTotal = tripContext.negotiatedTotal,
             )
             persistedTripClientUuid = trip.clientUuid
         }

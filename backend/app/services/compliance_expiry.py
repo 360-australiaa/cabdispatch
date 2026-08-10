@@ -41,6 +41,8 @@ from app.core.config import settings
 from app.models.fatigue_alert import (
     FATIGUE_ALERT_AUTHORITY_EXPIRED,
     FATIGUE_ALERT_AUTHORITY_EXPIRING_SOON,
+    FATIGUE_ALERT_CALIBRATION_EXPIRED,
+    FATIGUE_ALERT_CALIBRATION_EXPIRING_SOON,
     FATIGUE_ALERT_INSURANCE_EXPIRED,
     FATIGUE_ALERT_INSURANCE_EXPIRING_SOON,
     FATIGUE_ALERT_LICENSE_EXPIRED,
@@ -49,7 +51,7 @@ from app.models.fatigue_alert import (
     FATIGUE_ALERT_REGISTRATION_EXPIRING_SOON,
     FatigueAlert,
 )
-from app.models.fleet import Vehicle
+from app.models.fleet import Device, Vehicle
 from app.models.user import ROLE_DRIVER, User
 
 
@@ -229,6 +231,29 @@ async def check_vehicle_insurance_expiry(
     )
 
 
+async def check_device_calibration_expiry(
+    session: AsyncSession, *, tenant_id: str, device: Device, now: datetime | None = None
+) -> FatigueAlert | None:
+    """Meter re-verification due-date check (operations-cycle tracking pass).
+    Fails open (returns None, raises nothing) if the device isn't currently
+    paired to a vehicle — same reasoning as every other fail-open path in
+    this module: the alert is stored against `vehicle_id` (FatigueAlert has
+    no device_id column), so an unpaired device has nowhere to attach an
+    alert to."""
+    if device.calibration_due is None or device.vehicle_id is None:
+        return None
+    now = now if now is not None else datetime.now(UTC)
+    return await _raise_vehicle_alert(
+        session,
+        tenant_id=tenant_id,
+        vehicle_id=device.vehicle_id,
+        expiry=device.calibration_due,
+        expiring_soon_kind=FATIGUE_ALERT_CALIBRATION_EXPIRING_SOON,
+        expired_kind=FATIGUE_ALERT_CALIBRATION_EXPIRED,
+        now=now,
+    )
+
+
 async def run_driver_compliance_checks(
     session: AsyncSession, *, tenant_id: str, driver: User, now: datetime | None = None
 ) -> list[FatigueAlert]:
@@ -245,12 +270,23 @@ async def run_driver_compliance_checks(
 async def run_vehicle_compliance_checks(
     session: AsyncSession, *, tenant_id: str, vehicle: Vehicle, now: datetime | None = None
 ) -> list[FatigueAlert]:
-    """Runs both vehicle checks (registration + insurance). See
-    `run_driver_compliance_checks` above."""
+    """Runs both vehicle checks (registration + insurance), plus a
+    calibration-due check for every Device currently paired to this vehicle
+    (operations-cycle tracking pass — a vehicle can only have one *active*
+    paired device in practice, but this loops over all matches rather than
+    assuming exactly one, since nothing in app.models.fleet.Device enforces
+    that). See `run_driver_compliance_checks` above."""
     alerts = [
         await check_vehicle_registration_expiry(session, tenant_id=tenant_id, vehicle=vehicle, now=now),
         await check_vehicle_insurance_expiry(session, tenant_id=tenant_id, vehicle=vehicle, now=now),
     ]
+    device_result = await session.execute(
+        select(Device).where(Device.tenant_id == tenant_id, Device.vehicle_id == vehicle.id)
+    )
+    for device in device_result.scalars():
+        alerts.append(
+            await check_device_calibration_expiry(session, tenant_id=tenant_id, device=device, now=now)
+        )
     return [a for a in alerts if a is not None]
 
 
@@ -311,6 +347,29 @@ async def list_compliance_expiry(
                     "days_remaining": (expiry - today).days,
                 }
             )
+
+    # Device meter re-verification due-dates (operations-cycle tracking pass).
+    # entity_id/label are the DEVICE's own id/android_id (not the vehicle it's
+    # paired to) — calibration is a property of the physical meter instrument,
+    # not the car, so this stays correct across a re-pair. A device with no
+    # calibration_due set, or not currently paired to a vehicle (nothing for a
+    # dashboard consumer to action on without a vehicle context), is skipped.
+    device_result = await session.execute(select(Device).where(Device.tenant_id == tenant_id))
+    for device in device_result.scalars():
+        expiry = device.calibration_due
+        if expiry is None or expiry > horizon or device.vehicle_id is None:
+            continue
+        items.append(
+            {
+                "entity_type": "device",
+                "entity_id": device.id,
+                "label": device.android_id,
+                "field": "calibration_due",
+                "expiry_date": expiry,
+                "status": "expired" if expiry < today else "expiring_soon",
+                "days_remaining": (expiry - today).days,
+            }
+        )
 
     items.sort(key=lambda i: i["days_remaining"])
     return items

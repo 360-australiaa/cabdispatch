@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from app.core import security
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -120,4 +121,114 @@ async def test_delete_user(client, session):
 async def test_get_nonexistent_user_is_404(client, session):
     headers = await auth_headers(client, session, role="admin")
     resp = await client.get("/v1/users/does-not-exist", headers=headers)
+    assert resp.status_code == 404
+
+
+# --- photo -------------------------------------------------------------------
+
+
+async def test_upload_and_get_user_photo(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers)
+    user_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/users/{user_id}/photo",
+        files={"file": ("driver.jpg", b"selfie-bytes-fakejpeg", "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["photo_url"] is not None
+    assert body["photo_url"].startswith("uploads/")
+
+    resp = await client.get(f"/v1/users/{user_id}/photo", headers=headers)
+    assert resp.status_code == 200
+    assert resp.content == b"selfie-bytes-fakejpeg"
+
+
+async def test_upload_user_photo_requires_staff_role(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    driver_headers = await auth_headers(client, session, role="driver", tenant_id=None)
+    resp = await _create_driver(client, headers)
+    user_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/users/{user_id}/photo",
+        files={"file": ("driver.jpg", b"data", "image/jpeg")},
+        headers=driver_headers,
+    )
+    assert resp.status_code == 403
+
+
+async def test_driver_can_upload_their_own_photo(client, session):
+    """Self-or-staff gate (fixed during integration - a driver could not
+    upload their own photo at all under the original staff-only gate, which
+    would have 403'd against the Android app's actual Profile-screen upload
+    flow on every real device). A driver uploading their OWN photo (not
+    another user's) must succeed even though driver is not a staff role."""
+    driver_headers = await auth_headers(client, session, role="driver")
+    token = driver_headers["Authorization"].removeprefix("Bearer ")
+    driver_id = security.decode_token(token)["sub"]
+
+    resp = await client.post(
+        f"/v1/users/{driver_id}/photo",
+        files={"file": ("selfie.jpg", b"selfie-bytes-fakejpeg", "image/jpeg")},
+        headers=driver_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["photo_url"] is not None
+
+    resp = await client.get(f"/v1/users/{driver_id}/photo", headers=driver_headers)
+    assert resp.status_code == 200
+    assert resp.content == b"selfie-bytes-fakejpeg"
+
+
+async def test_upload_user_photo_rejects_empty_file(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers)
+    user_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/users/{user_id}/photo",
+        files={"file": ("empty.jpg", b"", "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_get_user_photo_404_when_none_uploaded(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers)
+    user_id = resp.json()["id"]
+
+    resp = await client.get(f"/v1/users/{user_id}/photo", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_user_photo_is_tenant_isolated(client, session):
+    headers_a = await auth_headers(client, session, role="admin", tenant_name="Photo Tenant A")
+    headers_b = await auth_headers(client, session, role="admin", tenant_name="Photo Tenant B")
+    resp = await _create_driver(client, headers_a)
+    user_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/users/{user_id}/photo",
+        files={"file": ("driver.jpg", b"data", "image/jpeg")},
+        headers=headers_a,
+    )
+    assert resp.status_code == 200
+
+    resp = await client.get(f"/v1/users/{user_id}/photo", headers=headers_b)
+    assert resp.status_code == 404
+
+
+async def test_upload_user_photo_404_for_unknown_user(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/users/does-not-exist/photo",
+        files={"file": ("driver.jpg", b"data", "image/jpeg")},
+        headers=headers,
+    )
     assert resp.status_code == 404

@@ -109,6 +109,7 @@ async def create_trip(
         tolls=payload.tolls,
         extras=payload.extras,
         gps_trace_ref=payload.gps_trace_ref,
+        negotiated_total=payload.negotiated_total,
     )
     session.add(trip)
     try:
@@ -165,6 +166,7 @@ async def sync_trips(
                 payment_method=item.payment_method,
                 surcharge_pct=item.surcharge_pct,
                 include_psl=item.include_psl,
+                negotiated_total=item.negotiated_total,
             )
         except UnknownTariffError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -240,6 +242,7 @@ async def sync_trips(
             max_fare_check_passed=variance_pct <= 1.0,
             variance_pct=variance_pct,
             receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
+            negotiated_total=item.negotiated_total,
         )
         session.add(trip)
         try:

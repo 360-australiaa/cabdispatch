@@ -80,5 +80,10 @@ class UserRead(UserBase):
     # Read-only after creation — see UserCreate.driver_code. None for every
     # non-driver user (and for drivers created before this field existed).
     driver_code: str | None = None
+    # Read-only — set via POST /v1/users/{id}/photo, never directly through
+    # UserCreate/UserUpdate. Relative (to BACKEND_ROOT) on-disk path, same
+    # convention as app.schemas.compliance.ComplianceDocumentRead.file_path.
+    # None until a photo is uploaded.
+    photo_url: str | None = None
     created_at: datetime
     updated_at: datetime

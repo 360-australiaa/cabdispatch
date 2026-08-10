@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -97,6 +98,11 @@ class DeviceBase(BaseModel):
     app_version: str | None = Field(default=None, max_length=30)
     vehicle_id: str | None = None
     kiosk_locked: bool = False
+    # Meter re-verification due-date (operations-cycle tracking pass). Null
+    # means "unknown", not "expired" — see app.models.fleet.Device's doc
+    # comment for the fail-open convention and
+    # app.services.compliance_expiry for the alerting logic.
+    calibration_due: date | None = Field(default=None)
 
 
 class DeviceCreate(DeviceBase):
@@ -112,6 +118,7 @@ class DeviceUpdate(BaseModel):
     app_version: str | None = None
     vehicle_id: str | None = None
     kiosk_locked: bool | None = None
+    calibration_due: date | None = None
 
 
 class DeviceRead(BaseModel):
@@ -130,6 +137,7 @@ class DeviceRead(BaseModel):
     last_seen_at: datetime | None
     battery: int | None
     network: str | None
+    calibration_due: date | None
     created_at: datetime
     updated_at: datetime
 
@@ -209,9 +217,13 @@ class VerifyAdminPinResponse(BaseModel):
 # (app.models.fleet.Vehicle), so a driver/vehicle with two lapsed fields (e.g.
 # both licence and authority) produces two separate items.
 
-ComplianceExpiryEntityType = Literal["driver", "vehicle"]
+ComplianceExpiryEntityType = Literal["driver", "vehicle", "device"]
 ComplianceExpiryField = Literal[
-    "driver_license_expiry", "driver_authority_expiry", "registration_expiry", "insurance_expiry"
+    "driver_license_expiry",
+    "driver_authority_expiry",
+    "registration_expiry",
+    "insurance_expiry",
+    "calibration_due",
 ]
 ComplianceExpiryStatus = Literal["expiring_soon", "expired"]
 
@@ -227,3 +239,67 @@ class ComplianceExpiryItem(BaseModel):
     status: ComplianceExpiryStatus
     # Negative once past expiry_date (e.g. -5 means "expired 5 days ago").
     days_remaining: int
+
+
+# --- Lifetime cumulative-totals register (operations-cycle tracking pass) ---
+# Response shape for `GET /v1/fleet/vehicles/{id}/lifetime-totals` — a
+# read-only SUM aggregation across every CLOSED Trip ever recorded against
+# this vehicle, mirroring the classic statutory cumulative-totals register a
+# physical taxi meter keeps (cl 14-style evidence). No new storage; this is
+# entirely computed from the existing `trips` table on every request. See
+# app.services.fleet_reports.vehicle_lifetime_totals.
+
+
+class VehicleLifetimeTotals(BaseModel):
+    vehicle_id: str
+    trip_count: int
+    total_fares: Decimal
+    total_psl: Decimal
+    total_tolls: Decimal
+    # GAP (flagged per task instructions): `app.models.trips.Trip` has no
+    # tips column anywhere in this codebase as of this pass — there is no
+    # real number to sum. Always null rather than a fabricated 0.00, so a
+    # consumer can tell "no tips field exists yet" apart from "tips exist and
+    # total zero". Wire this up for real the moment a tips field lands on
+    # Trip.
+    total_tips: Decimal | None
+    total_km: Decimal
+    generated_at: datetime
+
+
+# --- Pilot-report evidence pack (operations-cycle tracking pass) ------------
+# Response shape for `GET /v1/fleet/vehicles/{id}/pilot-report`. See
+# app.services.fleet_reports.vehicle_pilot_report for the exact
+# simplifications (documented per-field below and in that function's
+# docstring).
+
+
+class VehiclePilotReport(BaseModel):
+    vehicle_id: str
+    from_date: date
+    to_date: date
+    trip_count: int
+    # None when zero trips in range carry a non-null variance_pct (nothing to
+    # average).
+    avg_fare_accuracy_variance_pct: Decimal | None
+    # SIMPLIFICATION (flagged per task instructions): `Device` persists only
+    # a single, overwritten `last_seen_at` timestamp — there is no heartbeat
+    # log to compute a true "% of the requested window the device was
+    # reachable" from. This is a coarse recency proxy instead: 100 if the
+    # vehicle's most-recently-seen paired device last heartbeat within
+    # `UPTIME_STALENESS_HOURS` of `to_date`'s end, else 0. None if the
+    # vehicle has no paired device at all, or that device has never sent a
+    # heartbeat. See app.services.fleet_reports for the exact constant and
+    # reasoning — do not read this as a real uptime percentage.
+    device_uptime_estimate_pct: Decimal | None
+    # GAP (flagged per task instructions): `app.models.duress.DuressEvent`
+    # has no test_activation (or equivalent drill/test-mode) field as of this
+    # pass — checked directly, it is genuinely absent, not just unwired.
+    # Always null rather than a fabricated count.
+    duress_test_activation_count: int | None
+    # Real, non-fabricated bonus context (not part of the original spec):
+    # total duress events of ANY kind for this vehicle in range, since that
+    # number IS available even though the "test activation" subset isn't.
+    duress_event_count_total: int
+    flagged_for_review_count: int
+    generated_at: datetime
