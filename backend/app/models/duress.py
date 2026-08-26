@@ -133,3 +133,36 @@ class DuressEvent(Base, TenantScopedMixin, TimestampMixin):
     # SQLAlchemy's change-tracking reliably picks it up without a Mutable*
     # wrapper.
     escalation_log_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    # --- device-path correlation (physical CT-DPD-01 duress device) ---
+    # See docs/DURESS_DEVICE_INTEGRATION.md for the full two-path design: a
+    # tablet-triggered event and a device-triggered event for the same
+    # vehicle are correlated into this ONE row rather than two, so the
+    # Duress Desk shows a single incident with both GPS traces and both
+    # audio sources. Unconstrained String ref to duress_devices.id, same
+    # "no cross-domain FK" convention as vehicle_id/driver_id above.
+    device_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+
+    # Which side(s) have reported into this event -- "tablet" (opened via
+    # POST /v1/duress/trigger, the default/original path), "device" (opened
+    # via POST /v1/duress/device/alarm), or "both" once the second side's
+    # first report arrives for an event the other side already opened. See
+    # app.services.duress_device.open_or_attach_device_alarm for the
+    # correlation logic that sets this.
+    source: Mapped[str] = mapped_column(String(10), nullable=False, default="tablet")
+
+    # The device's OWN captured audio (its onboard mic, over its own SIM) --
+    # kept separate from audio_ref (the tablet's mic recording) so the
+    # Duress Desk can play either/both independently rather than one
+    # overwriting the other, unlike the tablet-only audio_ref precedent this
+    # column intentionally does NOT follow.
+    device_audio_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Outcome of the most recent operator "call the cab" action
+    # (POST /v1/duress/{id}/call -- dials the device's own SIM via Twilio so
+    # the call-centre can talk through its speaker/mic). Same
+    # {"mock": ...} shape as escalation_log_json's call_result/
+    # escalation_call_result, kept as its own field (not folded into the
+    # escalation cascade) since this call is operator-initiated on demand,
+    # not a fixed cascade stage.
+    device_call_result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)

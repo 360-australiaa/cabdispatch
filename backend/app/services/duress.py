@@ -4,6 +4,9 @@ machine, and the in-process GPS pub/sub used by the live websocket feed.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
 import os
 import uuid
@@ -433,3 +436,129 @@ class GPSBroadcaster:
 
 # Process-wide singleton. See class docstring for the Redis swap-in path.
 gps_broadcaster = GPSBroadcaster()
+
+
+# --- Twilio Voice "call the cab" operator action --------------------------------
+
+
+def _duress_call_twiml(event: DuressEvent) -> str:
+    """TwiML for the operator "call the cab" action: this call rings the
+    duress DEVICE's own SIM directly (not an emergency contact), and per the
+    device integration contract firmware is required to auto-answer it
+    silently (no ringtone played out its speaker) so the operator lands
+    straight on an open line. Once answered, `<Dial>` bridges that line to
+    the deployment's call-centre number so the operator can talk through the
+    device's speaker/mic.
+
+    `operator_number` reuses `settings.DURESS_ESCALATION_CALL_PHONE` --
+    deliberately -- since both represent "the human who should be on the
+    line for this incident", and this pass has no dedicated call-centre
+    number setting; a future pass could add a dedicated call-centre number
+    setting if the two ever need to differ.
+    """
+    operator_number = settings.DURESS_ESCALATION_CALL_PHONE
+    if not operator_number:
+        # Harmless fallback TwiML only -- place_duress_call refuses to place
+        # the call at all in this case rather than dialing with no bridge
+        # target (see its "no call-centre number configured" skip path
+        # below).
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Response><Say voice="alice">Connecting.</Say></Response>'
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Dial>{operator_number}</Dial></Response>"
+    )
+
+
+def place_duress_call(event: DuressEvent, device_phone: str) -> dict:
+    """Places a real (or mocked) Twilio Voice call to the duress DEVICE's own
+    SIM (`device_phone`) so a call-centre operator can talk through its
+    speaker/mic -- the operator "call the cab" action, distinct from
+    `place_escalation_call`'s call to an emergency contact. Mirrors
+    `place_escalation_call` exactly (same `httpx.Client` pattern, same
+    `except (httpx.HTTPError, ValueError)` -> log warning + fall back to
+    mock, same `_twilio_voice_configured()` real-vs-mock gate), except:
+
+    - From number: `settings.DURESS_CALL_FROM_NUMBER` if set, else
+      `settings.TWILIO_FROM_NUMBER`.
+    - To number: `device_phone` (the device's own SIM, not an emergency
+      contact).
+    - Refuses to dial at all if no call-centre bridge target is configured
+      (see `_duress_call_twiml`), returning a skipped result instead --
+      mirrors `_fire_escalation_call`'s "no phone configured -> skip, don't
+      dial" behavior.
+    """
+    twiml = _duress_call_twiml(event)
+
+    if not settings.DURESS_ESCALATION_CALL_PHONE:
+        # No call-centre bridge target configured -- refuse to dial rather
+        # than connect the device to a TwiML that just says "Connecting."
+        # and then hangs with nobody on the other end.
+        return {
+            "mock": True,
+            "skipped": True,
+            "reason": "no call-centre number configured (DURESS_ESCALATION_CALL_PHONE)",
+        }
+
+    from_number = settings.DURESS_CALL_FROM_NUMBER or settings.TWILIO_FROM_NUMBER
+
+    if _twilio_voice_configured():
+        try:
+            with httpx.Client(timeout=10.0) as http_client:
+                resp = http_client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls.json",
+                    auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
+                    # StatusCallback intentionally omitted -- this dev
+                    # environment has no publicly reachable base URL for
+                    # Twilio to call back to (grep confirmed no
+                    # PUBLIC_BASE_URL-style setting exists in
+                    # app.core.config). POST /v1/duress/twilio/status below
+                    # exists and is ready to receive callbacks once a real
+                    # deployment sets one via Twilio console webhook config
+                    # directly on the Twilio number, or a future pass adds a
+                    # PUBLIC_BASE_URL setting.
+                    data={"From": from_number, "To": device_phone, "Twiml": twiml},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            return {"mock": False, "to_phone": device_phone, "twilio_call_sid": data.get("sid")}
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "Twilio Voice call-the-cab call failed (%s) - returning mock call response.", exc
+            )
+
+    logger.info("Mock call-the-cab call to %s for duress event %s", device_phone, event.id)
+    return {"mock": True, "would_call": device_phone, "twiml": twiml}
+
+
+def verify_twilio_signature(url: str, params: dict, signature: str | None) -> bool:
+    """Verifies Twilio's `X-Twilio-Signature` header per Twilio's documented
+    RequestValidator algorithm: sort `params` by key, concatenate each
+    key+value pair onto `url`, HMAC-SHA1 the result keyed by
+    `settings.TWILIO_AUTH_TOKEN`, base64-encode, and compare to `signature`
+    using a constant-time comparison (`hmac.compare_digest`). Implemented
+    directly with hashlib/hmac/base64 -- no new dependency added.
+
+    Dev/mock mode: no auth token configured, signature check skipped -- if
+    `settings.TWILIO_AUTH_TOKEN` is unset (the same mock/dev state
+    `_twilio_voice_configured()` treats as "no real Twilio"), there is
+    nothing to verify a signature against, so this returns True
+    unconditionally, matching the mock-fallback spirit used throughout this
+    module.
+    """
+    if not settings.TWILIO_AUTH_TOKEN:
+        return True
+    if not signature:
+        return False
+
+    data = url
+    for key in sorted(params.keys()):
+        data += key + str(params[key])
+
+    computed = base64.b64encode(
+        hmac.new(settings.TWILIO_AUTH_TOKEN.encode("utf-8"), data.encode("utf-8"), hashlib.sha1).digest()
+    ).decode("utf-8")
+
+    return hmac.compare_digest(computed, signature)

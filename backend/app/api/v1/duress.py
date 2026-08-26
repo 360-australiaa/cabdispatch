@@ -36,6 +36,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -55,7 +56,10 @@ from app.core.security import (
     require_role,
 )
 from app.models.duress import DuressEvent
+from app.models.duress_device import DuressDevice
 from app.schemas.duress import (
+    DuressCallRequest,
+    DuressCallResponse,
     DuressCancelRequest,
     DuressCloseRequest,
     DuressEscalateRequest,
@@ -72,9 +76,12 @@ from app.services.duress import (
     close_event,
     escalate_event,
     gps_broadcaster,
+    logger,
+    place_duress_call,
     resolve_absolute_path,
     save_duress_audio,
     trigger_event,
+    verify_twilio_signature,
 )
 
 router = APIRouter(prefix="/v1/duress", tags=["duress"])
@@ -163,6 +170,112 @@ async def close(
     return await close_event(session, event, note=body.note)
 
 
+@router.post("/{event_id}/call", response_model=DuressCallResponse)
+async def call_device(
+    event_id: str,
+    body: DuressCallRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> DuressCallResponse:
+    """Operator "call the cab" action -- places a real (or mocked) Twilio
+    Voice call to the linked duress DEVICE's own SIM (not an emergency
+    contact -- see `/escalate`'s `emergency_contact_phone` for that separate
+    flow), so a call-centre operator can talk through the device's
+    speaker/mic once its firmware auto-answers. Requires the event to
+    already have a `device_id` (i.e. the physical CT-DPD-01 unit has
+    reported into this incident) and for that device to have a phone number
+    on file. See `app.services.duress.place_duress_call`.
+    """
+    event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+    if event.device_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No duress device linked to this incident yet",
+        )
+
+    result = await session.execute(
+        select(DuressDevice).where(
+            DuressDevice.id == event.device_id, DuressDevice.tenant_id == tenant_id
+        )
+    )
+    device = result.scalar_one_or_none()
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Linked duress device not found")
+    if not device.phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Linked duress device has no phone number on file",
+        )
+
+    call_result = place_duress_call(event, device.phone_number)
+    event.device_call_result_json = call_result
+    await session.commit()
+    await session.refresh(event)
+    return DuressCallResponse(**call_result)
+
+
+# Intentionally NOT nested under "/{event_id}/..." -- Twilio's async status
+# callback identifies the call by CallSid in its form body, not a path
+# param, and it is fired by Twilio itself (no bearer token to present), so
+# it cannot go through the same Depends(get_current_user)/tenant-scoping
+# chain as every other route in this file.
+@router.post("/twilio/status")
+async def twilio_status_callback(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Twilio's async status-callback webhook for a Voice call (e.g. one
+    placed by `POST /{event_id}/call`). Public -- Twilio calls this
+    directly, so there is no bearer token to require. Twilio posts
+    `application/x-www-form-urlencoded`, whose shape is Twilio-defined (not
+    ours), so this reads the raw form instead of a Pydantic body model.
+
+    Tenant-scoping exception: this module's own docstring names tenant_id
+    scoping as the sole isolation boundary in this codebase, and every other
+    route in this file honors it -- this webhook is the one deliberate,
+    narrow exception (matching the spirit of `_authenticate_websocket`
+    needing its own bespoke auth path above). Twilio's callback carries no
+    tenant context, only a `CallSid` -- a Twilio-generated opaque unique id,
+    not user-controllable -- so looking up the matching `DuressEvent` across
+    all tenants by `CallSid` is safe.
+    """
+    form = await request.form()
+    call_sid = form.get("CallSid")
+    call_status = form.get("CallStatus")
+
+    signature = request.headers.get("X-Twilio-Signature")
+    if not verify_twilio_signature(str(request.url), dict(form), signature):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")
+
+    # Simplest robust cross-tenant lookup: JSON containment queries are
+    # backend-portable-fragile (sqlite vs postgres), and duress events are
+    # not a huge table, so this pass just filters the (bounded) set of
+    # events with any device_call_result_json in Python. A future pass
+    # could store call_sid on its own indexed column if this table grows
+    # large.
+    result = await session.execute(
+        select(DuressEvent).where(DuressEvent.device_call_result_json.isnot(None))
+    )
+    matched_event = None
+    for candidate in result.scalars().all():
+        if (candidate.device_call_result_json or {}).get("twilio_call_sid") == call_sid:
+            matched_event = candidate
+            break
+
+    if matched_event is None:
+        # Twilio expects 200 regardless -- 404ing here could cause Twilio to
+        # retry aggressively. Log a warning instead.
+        logger.warning("Twilio status callback for unknown CallSid %s (status=%s)", call_sid, call_status)
+        return {"ok": True}
+
+    updated_result = dict(matched_event.device_call_result_json or {})
+    updated_result["status"] = call_status
+    matched_event.device_call_result_json = updated_result
+    await session.commit()
+    return {"ok": True}
+
+
 # --- live GPS relay -----------------------------------------------------------
 
 
@@ -182,6 +295,10 @@ async def post_gps(
     payload = point.model_dump(mode="json")
     payload["ts"] = payload.get("ts") or datetime.now(UTC).isoformat()
     payload["event_id"] = event.id
+    # Tags the tablet as the source, so a dashboard rendering both traces (see
+    # app.services.duress_device's device-path gps ingest, which tags
+    # source="device") can tell them apart on one map.
+    payload["source"] = "tablet"
 
     delivered = await gps_broadcaster.publish(event.id, payload)
     return {"delivered_to": delivered}

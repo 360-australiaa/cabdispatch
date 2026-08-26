@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Pencil, Phone, Trash2, X } from "lucide-react";
 import {
   Badge,
   Button,
@@ -11,18 +11,28 @@ import {
   Input,
   Modal,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import {
+  callDuressEvent,
   cancelDuressEvent,
   closeDuressEvent,
   deleteDuressEvent,
   escalateDuressEvent,
   getDuressEvent,
 } from "./api";
+import { DeviceCallSummary } from "./DeviceCallSummary";
 import { EscalationTimeline } from "./EscalationTimeline";
 import { GpsTracePanel } from "./GpsTracePanel";
 import { EditEventModal } from "./EditEventModal";
-import { formatDateTime, secondsUntil, statusBadgeVariant } from "./format";
+import {
+  formatCallResultSummary,
+  formatDateTime,
+  secondsUntil,
+  sourceBadgeVariant,
+  sourceLabel,
+  statusBadgeVariant,
+} from "./format";
 import { isTerminalStatus, ESCALATION_STAGES } from "./types";
 import { useDuressLiveGps } from "./useDuressLiveGps";
 
@@ -77,6 +87,13 @@ export function EventDetailPanel({
       invalidate();
     },
   });
+  const callMutation = useMutation({
+    mutationFn: () => callDuressEvent(eventId, { note: note || null }),
+    onSuccess: () => {
+      setNote("");
+      invalidate();
+    },
+  });
   const deleteMutation = useMutation({
     mutationFn: () => deleteDuressEvent(eventId),
     onSuccess: () => {
@@ -95,7 +112,10 @@ export function EventDetailPanel({
   );
 
   const anyActionPending =
-    cancelMutation.isPending || escalateMutation.isPending || closeMutation.isPending;
+    cancelMutation.isPending ||
+    escalateMutation.isPending ||
+    closeMutation.isPending ||
+    callMutation.isPending;
 
   const canCancel =
     !!event &&
@@ -106,6 +126,7 @@ export function EventDetailPanel({
     (event.status === "open" || event.status === "escalating") &&
     (event.escalation_log_json?.next_stage_index ?? 0) < ESCALATION_STAGES.length;
   const canClose = !!event && !isTerminalStatus(event.status);
+  const hasDevice = !!event?.device_id;
 
   return (
     <Card className="sticky top-4">
@@ -114,6 +135,9 @@ export function EventDetailPanel({
           <CardTitle className="flex items-center gap-2 text-base">
             <AlertTriangle className="h-4 w-4 text-brand-accent" />
             Duress event
+            {event && (
+              <Badge variant={sourceBadgeVariant(event.source)}>{sourceLabel(event.source)}</Badge>
+            )}
           </CardTitle>
           <p className="mt-0.5 font-mono text-xs text-muted-foreground">{eventId}</p>
         </div>
@@ -157,12 +181,27 @@ export function EventDetailPanel({
               <Field label="Audio ref">
                 <span className="break-all font-mono text-xs">{event.audio_ref ?? "—"}</span>
               </Field>
+              <Field label="Device ID">
+                <span className="break-all font-mono text-xs">{event.device_id ?? "—"}</span>
+              </Field>
+              <Field label="Device audio ref">
+                <span className="break-all font-mono text-xs">
+                  {event.device_audio_ref ?? "—"}
+                </span>
+              </Field>
             </dl>
 
             <div>
               <h3 className="mb-2 text-sm font-medium text-foreground">Escalation timeline</h3>
               <EscalationTimeline event={event} />
             </div>
+
+            {event.device_call_result_json && (
+              <div>
+                <h3 className="mb-2 text-sm font-medium text-foreground">Device call</h3>
+                <DeviceCallSummary result={event.device_call_result_json} />
+              </div>
+            )}
 
             {canWatchLiveGps ? (
               <GpsTracePanel status={gpsStatus} points={gpsPoints} />
@@ -210,12 +249,39 @@ export function EventDetailPanel({
                 >
                   {closeMutation.isPending ? "Closing…" : "Close / resolve"}
                 </Button>
+                <span title={!hasDevice ? "No duress device linked to this incident" : undefined}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!hasDevice || anyActionPending}
+                    onClick={() => callMutation.mutate()}
+                  >
+                    <Phone className="h-3.5 w-3.5" />
+                    {callMutation.isPending ? "Calling…" : "Call the cab"}
+                  </Button>
+                </span>
               </div>
 
-              {(cancelMutation.isError || escalateMutation.isError || closeMutation.isError) && (
+              {(cancelMutation.isError ||
+                escalateMutation.isError ||
+                closeMutation.isError ||
+                callMutation.isError) && (
                 <p className="text-xs text-destructive">
                   Action failed — the event may no longer be in a state that allows it. Refresh
                   and try again.
+                </p>
+              )}
+
+              {callMutation.isSuccess && callMutation.data && (
+                <p
+                  className={cn(
+                    "flex flex-wrap items-center gap-2 text-xs",
+                    callMutation.data.mock ? "text-muted-foreground" : "text-success",
+                  )}
+                >
+                  {!callMutation.data.mock && <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                  {formatCallResultSummary(callMutation.data)}
+                  {callMutation.data.mock && <Badge variant="outline">Simulated</Badge>}
                 </p>
               )}
             </div>

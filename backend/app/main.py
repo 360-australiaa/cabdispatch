@@ -73,6 +73,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
 from app.api.v1.compliance import router as compliance_router
 from app.api.v1.duress import router as duress_router
+from app.api.v1.duress_device import router as duress_device_router
 from app.api.v1.fatigue_alerts import router as fatigue_alerts_router
 from app.api.v1.fleet import router as fleet_router
 from app.api.v1.geofences import router as geofences_router
@@ -121,6 +122,7 @@ app.include_router(payments_router)
 app.include_router(payments_webhook_router)
 app.include_router(psl_ledger_router)
 app.include_router(duress_router)
+app.include_router(duress_device_router)
 app.include_router(live_ops_router)
 app.include_router(billing_router)
 app.include_router(compliance_router)

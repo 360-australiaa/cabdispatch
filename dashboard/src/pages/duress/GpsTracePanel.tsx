@@ -21,11 +21,19 @@ const STATUS_LABEL: Record<LiveGpsStatus, string> = {
   error: "Connection error",
 };
 
+const TABLET_COLOR = "var(--brand-primary)";
+const DEVICE_COLOR = "var(--brand-accent)";
+
 /**
  * Live GPS trace for a selected duress event, fed by
  * `useDuressLiveGps` (WS /v1/duress/{id}/live). Points are relayed only,
  * never persisted server-side — this panel is the only visible record of
  * the trace while the socket is open.
+ *
+ * Points carry an optional `source` ("tablet" | "device"). When fixes from
+ * both a tablet and a paired physical duress device are present, they're
+ * plotted as two distinct traces (colour-coded, with a small legend); a
+ * single-source feed renders exactly as before.
  */
 export function GpsTracePanel({
   status,
@@ -35,13 +43,22 @@ export function GpsTracePanel({
   points: DuressGpsPoint[];
 }) {
   const latest = points[points.length - 1] ?? null;
-  const chartData = points.map((p, i) => ({
-    i,
-    lat: p.lat,
-    lng: p.lng,
-    speed: p.speed_kmh ?? null,
-    ts: p.ts,
-  }));
+  const hasDeviceSource = points.some((p) => p.source === "device");
+  const hasTabletSource = points.some((p) => (p.source ?? "tablet") === "tablet");
+  const hasBothSources = hasDeviceSource && hasTabletSource;
+
+  const chartData = points.map((p, i) => {
+    const source = p.source ?? "tablet";
+    return {
+      i,
+      lat: p.lat,
+      lng: p.lng,
+      latTablet: source === "tablet" ? p.lat : undefined,
+      latDevice: source === "device" ? p.lat : undefined,
+      speed: p.speed_kmh ?? null,
+      ts: p.ts,
+    };
+  });
 
   return (
     <div className="flex flex-col gap-3">
@@ -61,6 +78,27 @@ export function GpsTracePanel({
           {status === "open" && ` · ${points.length} fix${points.length === 1 ? "" : "es"}`}
         </span>
       </div>
+
+      {hasBothSources && (
+        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: TABLET_COLOR }}
+              aria-hidden="true"
+            />
+            Tablet
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: DEVICE_COLOR }}
+              aria-hidden="true"
+            />
+            Device
+          </span>
+        </div>
+      )}
 
       {points.length === 0 ? (
         <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground">
@@ -95,15 +133,40 @@ export function GpsTracePanel({
                     payload?.[0]?.payload?.ts ? formatTime(payload[0].payload.ts as string) : ""
                   }
                 />
-                <Line
-                  type="monotone"
-                  dataKey="lat"
-                  stroke="var(--brand-primary)"
-                  strokeWidth={2}
-                  dot={{ r: 2 }}
-                  isAnimationActive={false}
-                  name="lat"
-                />
+                {hasBothSources ? (
+                  <>
+                    <Line
+                      type="monotone"
+                      dataKey="latTablet"
+                      stroke={TABLET_COLOR}
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                      isAnimationActive={false}
+                      connectNulls
+                      name="Tablet"
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="latDevice"
+                      stroke={DEVICE_COLOR}
+                      strokeWidth={2}
+                      dot={{ r: 2 }}
+                      isAnimationActive={false}
+                      connectNulls
+                      name="Device"
+                    />
+                  </>
+                ) : (
+                  <Line
+                    type="monotone"
+                    dataKey="lat"
+                    stroke="var(--brand-primary)"
+                    strokeWidth={2}
+                    dot={{ r: 2 }}
+                    isAnimationActive={false}
+                    name="lat"
+                  />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>

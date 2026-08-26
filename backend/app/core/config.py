@@ -149,6 +149,34 @@ class Settings(BaseSettings):
         "MC4CAQAwBQYDK2VwBCIEIFkwXAY2lpqyo1i90XuRlHd4cBPZBOZBe+m3wPrbdLLL"
     )
 
+    # --- Duress device (CT-DPD-01 hardware panic device) ---
+    # Fernet key used by `app.core.crypto` to encrypt each DuressDevice's
+    # shared secret at rest (see `app.models.duress_device.DuressDevice`).
+    # Must be reversible (unlike password hashing) because the server needs
+    # the plaintext secret back to verify the device's HMAC-signed auth
+    # requests -- see `app.services.duress_device.authenticate_device`.
+    #
+    # *** PLACEHOLDER KEY -- generate a real one for production, do NOT use
+    # this default outside dev. *** Same convention as TARIFF_SIGNING_PRIVATE_KEY
+    # above. Generate a real key with:
+    #   uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    SECRET_ENCRYPTION_KEY: str = "KemTJQFak_SLex3Px5lHbF5Qyx8inhoXWm2y0o09HK8="
+
+    # Lifetime of the short-lived device JWT minted by POST /v1/devices/auth
+    # (app.api.v1.duress_device) -- deliberately short since the device
+    # re-authenticates on every cellular reconnect rather than holding a
+    # long-lived credential in flash.
+    DURESS_DEVICE_JWT_EXPIRE_MINUTES: int = 60
+
+    # Deployment-wide default Twilio Caller ID used to dial a duress device's
+    # own SIM MSISDN for the "call the cab" operator action (blueprint: duress
+    # device integration contract, POST /v1/duress/{id}/call). Distinct from
+    # DURESS_ESCALATION_CALL_PHONE above, which is the *destination* dialed
+    # for the automated emergency-contact escalation call; this is the *from*
+    # number Twilio uses when calling the device instead. Falls back to
+    # TWILIO_FROM_NUMBER if unset.
+    DURESS_CALL_FROM_NUMBER: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

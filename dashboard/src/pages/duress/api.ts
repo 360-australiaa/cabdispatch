@@ -1,5 +1,6 @@
 import apiClient from "@/lib/apiClient";
 import type {
+  DuressCallResult,
   DuressEvent,
   DuressEventListParams,
   DuressEventListResponse,
@@ -37,6 +38,15 @@ export async function escalateDuressEvent(id: string, body: DuressNoteBody): Pro
 
 export async function closeDuressEvent(id: string, body: DuressNoteBody): Promise<DuressEvent> {
   const res = await apiClient.post<DuressEvent>(`/v1/duress/${id}/close`, body);
+  return res.data;
+}
+
+/** Dials the paired physical duress device's phone via Twilio (or returns a
+ * mock/skip result when no call-centre number is configured) —
+ * `POST /v1/duress/{id}/call`. Only meaningful once the event has a
+ * `device_id`. */
+export async function callDuressEvent(id: string, body: DuressNoteBody): Promise<DuressCallResult> {
+  const res = await apiClient.post<DuressCallResult>(`/v1/duress/${id}/call`, body);
   return res.data;
 }
 

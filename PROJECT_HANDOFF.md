@@ -10,11 +10,46 @@ here (NSW fare regulation, competitor positioning, phased delivery plan).
 
 | Part | Files | Real status |
 |---|---|---|
-| Backend (FastAPI) | 90 app + 31 tests | **Done and verified.** 480 tests passing (up from 404). Every Alembic migration (14 revisions) applies cleanly to a fresh sqlite DB. This pass added named dispatch zones + live per-zone demand stats (MTI-parity), negotiated/"Set Price" fixed fares, a platform-owner admin console, a per-vehicle evidence-pack export + lifetime-totals register + pilot-report, driver photos, and quick-tap message templates — every one independently re-exercised live over real HTTP, not just "tests pass". **Two real bugs found and fixed during this pass's verification, not left standing:** the platform tenant list ordered oldest-first with a 20-row default page, meaning a newly-onboarded tenant would never appear on the default page once >20 tenants exist (fixed: newest-first); and the driver-photo upload endpoint was staff-only gated, which would have 403'd a real driver uploading their own photo from their own Profile screen — the exact thing the Android app was built to do (fixed: self-or-staff gated, live-verified with a real driver token). A 16th planned agent (a monitoring-partner duress panel exposing driver PII/GPS/audio to an external third party) was correctly blocked by the safety classifier — that data-sharing decision needs your explicit authorization, not an inference from a business-planning PDF; not built, not worked around. |
+| Backend (FastAPI) | 90 app + 31 tests | **Done and verified.** 498 tests passing (up from 480). Every Alembic migration (14 revisions) applies cleanly to a fresh sqlite DB. This pass added named dispatch zones + live per-zone demand stats (MTI-parity), negotiated/"Set Price" fixed fares, a platform-owner admin console, a per-vehicle evidence-pack export + lifetime-totals register + pilot-report, driver photos, and quick-tap message templates — every one independently re-exercised live over real HTTP, not just "tests pass". **Two real bugs found and fixed during this pass's verification, not left standing:** the platform tenant list ordered oldest-first with a 20-row default page, meaning a newly-onboarded tenant would never appear on the default page once >20 tenants exist (fixed: newest-first); and the driver-photo upload endpoint was staff-only gated, which would have 403'd a real driver uploading their own photo from their own Profile screen — the exact thing the Android app was built to do (fixed: self-or-staff gated, live-verified with a real driver token). A 16th planned agent (a monitoring-partner duress panel exposing driver PII/GPS/audio to an external third party) was correctly blocked by the safety classifier — that data-sharing decision needs your explicit authorization, not an inference from a business-planning PDF; not built, not worked around. |
 | Dashboard (React) | 95+ | **Done and verified.** 18 ops modules now (+ Zones & Demand, Platform Admin, evidence-pack export, driver-photo display, vehicle lifetime-totals/pilot-report). `npm run build` is clean and every new page this pass was exercised live in a real browser against real data — including confirming the Platform Admin nav item is genuinely invisible to a non-platform-owner and a normal tenant owner gets a real 403 if they navigate to `/platform` directly. |
 | Android driver app (Kotlin) | ~90 | **Source-complete, unverified.** This pass added Plot + Statistics screens (zone-based demand parity with a real competitor meter), a "Set Price" negotiated-fare flow, a start-meter confirmation dialog, a boot-time terms screen, a permissions checklist, a live shift-duration countdown, driver-photo capture/upload, and quick-tap canned messages — 4 agents ran concurrently touching shared files (`AppContainer.kt`, `ApiService.kt`, `WheelDashboardScreen.kt`, `CabDispatchNavHost.kt`); reconciliation confirmed every shared-file edit merged cleanly with no duplicate declarations, no orphaned references, and the golden-vector fare engine (`domain/fare/`) completely untouched. **Still never compiled** — no Android SDK in this environment — so nothing here has been visually confirmed, only reasoned through and cross-checked file-by-file. |
 
 **2026-08-01 addition — Captain Taxis Driver App (`docs/TCT-DRIVER-APP-01.md`):** a design/product handover for a much richer driver-facing UI (rotating 6-slot wheel navigation, permanent live-map background, in-house job dispatch, driver↔dispatch messaging) with a working HTML/JS reference prototype at `docs/driver-dashboard-full-prototype.html` — open it in a browser directly to see/interact with the exact wheel drag-snap mechanics, meter styling, and payment flow the Android build was ported from. This extended the existing backend (new `jobs`/`messages` domain) and rebuilt the Android app's navigation shell around the wheel; it did not start a new project.
+
+**2026-08-26 addition -- Physical duress device integration (multi-agent pass, live-verified):**
+built the full server-side contract for the CT-DPD-01 physical panic-button hardware (own
+4G/GNSS/VoLTE SIM, BLE 5 link to the tablet) described in `docs/DURESS_DEVICE_INTEGRATION.md` --
+new `DuressDevice` domain (`app/models/duress_device.py`, `app/schemas/duress_device.py`,
+`app/services/duress_device.py`, `app/api/v1/duress_device.py`): the HMAC device-auth handshake
+(`POST /v1/devices/auth`), alarm open/correlation (a device alarm either attaches to an
+already-open tablet event -- flipping `source` to `"both"` -- or opens a fresh one, idempotently),
+device-path GPS batch ingest and audio upload (kept on separate `device_audio_ref`/`device_id`
+columns from the tablet's own, added to `DuressEvent`), heartbeat, and admin CRUD for provisioning
+devices. Also added the operator "call the cab" action on the existing tablet-side domain
+(`POST /v1/duress/{id}/call`, dials the device's own SIM via Twilio with the same mock-fallback
+convention as every other Twilio/Stripe/SendGrid integration here) and its async status webhook.
+Reversible secret-at-rest encryption (`app/core/crypto.py`, Fernet) was added specifically because
+HMAC verification -- unlike every password/PIN elsewhere in this codebase -- needs the plaintext
+secret back.
+
+**Two real bugs found and fixed during live end-to-end verification, not left standing:** (1) the
+new migration defined `created_at`/`updated_at` with no `server_default`, so every insert 500'd with
+a NOT NULL violation the instant it hit the real (alembic-migrated) dev database -- invisible to
+`pytest` because the test suite builds its schema via `Base.metadata.create_all()`, which reads the
+ORM model's default directly and never exercises the migration file at all; fixed by matching the
+initial schema's `server_default=sa.text('(CURRENT_TIMESTAMP)')` convention. (2) `device_code` had
+no per-tenant uniqueness constraint, so provisioning two devices with the same code corrupted the
+auth handshake's `scalar_one_or_none()` lookup into an unhandled `MultipleResultsFound` 500 the
+next time either device authenticated; fixed with a `UniqueConstraint("tenant_id", "device_code")`
+(migration `97da879e0540`, using `batch_alter_table` for SQLite per this project's existing
+convention) and a clean `409` response instead. Both fixes are regression-tested in the new
+`tests/test_duress_device.py` (17 tests, all passing alongside the full 498-test suite). The
+dashboard's Duress Desk (`dashboard/src/pages/duress/`) got a "Call the cab" button, a dual
+tablet/device GPS trace, a source badge, and a device-call summary panel -- `npm run lint`
+(`tsc --noEmit`) clean. Not yet built: the Android BLE client and front-camera capture (the
+integration doc's Section 2 BLE profile is a locked contract for that future work, not running
+code), and the physical hardware itself (see `docs/CT-DPD-01_Tech_Pack_for_TY-EMS.md`, at OEM
+evaluation stage with TY-EMS as of this writing).
 
 Nothing here has been deployed, load-tested, or security-reviewed for production. Treat all three
 as a working local-dev-verified MVP, not a production system, until the "Not done anywhere" list

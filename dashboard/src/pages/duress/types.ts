@@ -37,6 +37,25 @@ export interface EscalationLog {
   [key: string]: unknown;
 }
 
+/** Which side(s) contributed to this incident — a tablet trigger, a paired
+ * physical duress device, or both reporting in. */
+export type DuressEventSource = "tablet" | "device" | "both";
+
+/** Result of `POST /v1/duress/{id}/call` (and the persisted shape of
+ * `device_call_result_json`) — dialing the physical device's paired phone
+ * via Twilio, or a mock/skip fallback when no call-centre number is
+ * configured. `status` reflects the last Twilio status-webhook update, when
+ * one has landed. */
+export interface DuressCallResult {
+  mock: boolean;
+  to_phone: string | null;
+  twilio_call_sid: string | null;
+  skipped: boolean | null;
+  reason: string | null;
+  status?: string | null;
+  [key: string]: unknown;
+}
+
 export interface DuressEvent {
   id: string;
   tenant_id: string;
@@ -49,6 +68,10 @@ export interface DuressEvent {
   gps_stream_ref: string;
   audio_ref: string | null;
   escalation_log_json: EscalationLog;
+  device_id: string | null;
+  source: DuressEventSource | string;
+  device_audio_ref: string | null;
+  device_call_result_json: DuressCallResult | null;
   created_at: string;
   updated_at: string;
 }
@@ -91,7 +114,9 @@ export interface DuressNoteBody {
 
 /** A single fix broadcast over `WS /v1/duress/{id}/live` — the raw
  * `DuressGpsPoint` the caller POSTed to `/{id}/gps`, plus server-stamped
- * `ts`/`event_id` (see `app/api/v1/duress.py::post_gps`). Not persisted. */
+ * `ts`/`event_id` (see `app/api/v1/duress.py::post_gps`). Not persisted. Now
+ * also carries which side reported the fix, so the live trace can tell a
+ * device's points apart from the tablet's. */
 export interface DuressGpsPoint {
   lat: number;
   lng: number;
@@ -99,4 +124,5 @@ export interface DuressGpsPoint {
   accuracy_m?: number | null;
   ts?: string | null;
   event_id?: string;
+  source?: "tablet" | "device" | null;
 }

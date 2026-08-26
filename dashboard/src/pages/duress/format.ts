@@ -1,4 +1,4 @@
-import type { DuressStatus } from "./types";
+import type { DuressCallResult, DuressStatus } from "./types";
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -40,6 +40,52 @@ export function statusBadgeVariant(
     default:
       return "default";
   }
+}
+
+/** Human label for a `DuressEvent.source` value, for the incident header
+ * badge. */
+export function sourceLabel(source: string): string {
+  switch (source) {
+    case "tablet":
+      return "Tablet";
+    case "device":
+      return "Device";
+    case "both":
+      return "Both";
+    default:
+      return source;
+  }
+}
+
+export function sourceBadgeVariant(
+  source: string,
+): "default" | "primary" | "accent" | "success" | "destructive" | "outline" {
+  switch (source) {
+    case "tablet":
+      return "outline";
+    case "device":
+      return "accent";
+    case "both":
+      return "primary";
+    default:
+      return "default";
+  }
+}
+
+/** One-line summary of a `DuressCallResult` (either a fresh mutation result
+ * or the persisted `device_call_result_json`) for inline display next to the
+ * "Call the cab" action and in the device-call summary panel. */
+export function formatCallResultSummary(result: DuressCallResult): string {
+  if (result.mock && result.skipped) {
+    return "Simulated — no call-centre number configured";
+  }
+  if (result.to_phone && result.twilio_call_sid) {
+    return `Calling ${result.to_phone} (Twilio SID: ${result.twilio_call_sid})`;
+  }
+  if (result.to_phone) {
+    return `Calling ${result.to_phone}`;
+  }
+  return "Call placed.";
 }
 
 /** Whole seconds remaining until `deadlineIso`, clamped to >= 0. */

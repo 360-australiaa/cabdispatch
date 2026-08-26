@@ -90,6 +90,8 @@ class DuressEventUpdate(BaseModel):
     driver_id: str | None = None
     gps_stream_ref: str | None = None
     audio_ref: str | None = None
+    device_id: str | None = None
+    device_audio_ref: str | None = None
 
 
 class DuressEventRead(BaseModel):
@@ -106,6 +108,10 @@ class DuressEventRead(BaseModel):
     gps_stream_ref: str
     audio_ref: str | None
     escalation_log_json: dict
+    device_id: str | None
+    source: str
+    device_audio_ref: str | None
+    device_call_result_json: dict | None
     created_at: datetime
     updated_at: datetime
 
@@ -115,3 +121,27 @@ class DuressEventListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class DuressCallRequest(BaseModel):
+    """Body for POST /v1/duress/{id}/call -- the operators call the cab
+    action. Dials the duress DEVICE own SIM (not an emergency contact --
+    see DuressEscalateRequest.emergency_contact_phone for that separate
+    flow) via Twilio, so the call-centre can talk through its speaker/mic.
+    Requires the event to have a device_id (i.e. the physical CT-DPD-01 unit
+    has reported into this incident) -- see
+    app.services.duress.place_duress_call."""
+
+    note: str | None = Field(default=None, max_length=500)
+
+
+class DuressCallResponse(BaseModel):
+    """Result of a POST /v1/duress/{id}/call attempt -- same mock=... shape
+    as the escalation call result, folded onto
+    DuressEvent.device_call_result_json."""
+
+    mock: bool
+    to_phone: str | None = None
+    twilio_call_sid: str | None = None
+    skipped: bool | None = None
+    reason: str | None = None
