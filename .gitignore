@@ -13,6 +13,9 @@ backend/.ruff_cache/
 # Real secrets — only .env.example is tracked
 .env
 backend/.env
+backend/.env.production
+.env.production
+!.env.production.example
 
 # --- Dashboard (Vite / React / TS) ------------------------------------------
 dashboard/node_modules/

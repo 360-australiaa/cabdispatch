@@ -1,0 +1,6 @@
+# Shell scripts must always be stored and checked out with LF -- a CRLF
+# entrypoint.sh inside the Linux backend container fails with a
+# "bad interpreter" error against its #!/bin/sh shebang. Explicit here
+# rather than relying on core.autocrlf inference on whichever machine last
+# touched the file.
+*.sh text eol=lf

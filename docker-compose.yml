@@ -1,0 +1,86 @@
+# Cab Dispatch -- production/staging compose stack. Run from the repo root:
+#   docker compose --env-file .env.production up -d --build
+# IMPORTANT: --env-file .env.production is REQUIRED on every invocation (not
+# just the first) -- Docker Compose only auto-reads a file literally named
+# ".env" for the ${VAR} substitutions used below (POSTGRES_PASSWORD,
+# VITE_API_URL, VITE_MAPBOX_TOKEN); it will NOT find them in .env.production
+# without this flag, even though the backend service's own env_file: entry
+# further below (a completely separate mechanism -- container runtime env,
+# not YAML substitution) does point at .env.production correctly.
+# See docs/DEPLOY_UBUNTU.md for the full server setup runbook (first-time
+# server prep, secret generation, firewall, day-2 update workflow).
+#
+# Four services: postgres (db), redis (cache/session -- optional, backend
+# runs fine without it reachable, see app.core.security's fallback), backend
+# (FastAPI API, migrates itself on every boot via entrypoint.sh), dashboard
+# (the built React SPA served by nginx). No reverse proxy / TLS in this file
+# by design (see docs/DEPLOY_UBUNTU.md's "adding HTTPS later" section for
+# when you're ready) -- backend and dashboard are published directly on host
+# ports 8001 and 80.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cabdispatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: cabdispatch
+    volumes:
+      - cabdispatch_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cabdispatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env.production
+    environment:
+      # Overrides whatever DATABASE_URL/REDIS_URL are in .env.production --
+      # inside the compose network the DB/Redis are reached by service name,
+      # not localhost. Everything else (secrets, CORS_ORIGINS, Twilio, etc.)
+      # comes from the env_file above.
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://cabdispatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}@db:5432/cabdispatch
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - cabdispatch_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        # Vite bakes these into the static bundle at BUILD time -- see
+        # dashboard/Dockerfile's comment. Set VITE_API_URL in .env.production
+        # to http://<your-server-ip>:8001 (or your real API domain, once you
+        # have one) before building.
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL in .env.production, e.g. http://<server-ip>:8001}
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  cabdispatch_pgdata:
+  cabdispatch_uploads:
