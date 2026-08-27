@@ -16,6 +16,7 @@ from app.models.billing import Subscription
 from app.models.compliance import ComplianceDocument
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
+from app.models.duress_snapshot import DuressSnapshot
 from app.models.fatigue_alert import FatigueAlert
 from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
 from app.models.geofence import Geofence
@@ -43,6 +44,7 @@ __all__ = [
     "DriverAvailability",
     "DuressDevice",
     "DuressEvent",
+    "DuressSnapshot",
     "Extra",
     "FatigueAlert",
     "Geofence",

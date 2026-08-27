@@ -131,6 +131,45 @@ def resolve_absolute_path(relative_path: str) -> Path:
     return absolute_path
 
 
+# --- camera snapshot upload (still-frame gallery, event-scoped only) ----------
+#
+# Deliberately still frames, not continuous video -- see
+# app.models.duress_snapshot.DuressSnapshot's module docstring for the full
+# rationale (no WebRTC/TURN infra needed, reuses this exact local-disk-upload
+# convention, and never runs outside an open duress event).
+
+
+def duress_snapshot_dir(*, tenant_id: str, event_id: str) -> Path:
+    return UPLOADS_ROOT / _safe_component(tenant_id) / "duress" / _safe_component(event_id) / "snapshots"
+
+
+async def save_duress_snapshot(
+    *,
+    tenant_id: str,
+    event_id: str,
+    snapshot_id: str,
+    content: bytes,
+) -> str:
+    """Writes one JPEG frame under
+    `uploads/{tenant_id}/duress/{event_id}/snapshots/{snapshot_id}.jpg`
+    (created if missing). Unlike `save_duress_audio` (one deterministic
+    filename per event, overwritten on re-upload), every call here gets its
+    OWN file keyed by `snapshot_id` -- an incident is expected to accumulate
+    many frames, and the gallery needs every one of them, not just the
+    latest. Returns the *relative* (to BACKEND_ROOT) path to persist on the
+    new `DuressSnapshot.relative_path` row."""
+    if not content:
+        raise DuressAudioError("Uploaded snapshot image is empty")
+
+    target_dir = duress_snapshot_dir(tenant_id=tenant_id, event_id=event_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    absolute_path = target_dir / f"{_safe_component(snapshot_id)}.jpg"
+    absolute_path.write_bytes(content)
+
+    return absolute_path.relative_to(BACKEND_ROOT).as_posix()
+
+
 # --- Twilio Voice automated escalation call (blueprint 8.3) --------------------
 
 

@@ -389,6 +389,126 @@ async def test_audio_upload_is_tenant_isolated(client: AsyncClient, session: Asy
     assert resp.status_code == 404
 
 
+# --- camera snapshot gallery -----------------------------------------------------
+
+
+async def test_upload_snapshot_stores_row_and_serves_it_back_as_latest(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    fake_jpeg_bytes = b"\xff\xd8\xff\xe0fake-jpeg-not-real-image-bytes"
+    upload_resp = await client.post(
+        f"/v1/duress/{event_id}/snapshot",
+        files={"file": ("frame.jpg", fake_jpeg_bytes, "image/jpeg")},
+        headers=headers,
+    )
+    assert upload_resp.status_code == 201, upload_resp.text
+    body = upload_resp.json()
+    assert body["event_id"] == event_id
+    assert body["captured_at"]
+
+    latest_resp = await client.get(f"/v1/duress/{event_id}/snapshot/latest", headers=headers)
+    assert latest_resp.status_code == 200
+    assert latest_resp.content == fake_jpeg_bytes
+
+    specific_resp = await client.get(
+        f"/v1/duress/{event_id}/snapshot/{body['id']}", headers=headers
+    )
+    assert specific_resp.status_code == 200
+    assert specific_resp.content == fake_jpeg_bytes
+
+
+async def test_upload_snapshot_accepts_explicit_captured_at(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/duress/{event_id}/snapshot?captured_at=2026-08-27T10:00:00Z",
+        files={"file": ("frame.jpg", b"jpeg-bytes", "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["captured_at"].startswith("2026-08-27T10:00:00")
+
+
+async def test_list_snapshots_returns_newest_first(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    for captured_at in ("2026-08-27T10:00:00Z", "2026-08-27T10:00:05Z", "2026-08-27T10:00:10Z"):
+        resp = await client.post(
+            f"/v1/duress/{event_id}/snapshot?captured_at={captured_at}",
+            files={"file": ("frame.jpg", b"jpeg-bytes", "image/jpeg")},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    list_resp = await client.get(f"/v1/duress/{event_id}/snapshots", headers=headers)
+    assert list_resp.status_code == 200
+    body = list_resp.json()
+    assert body["total"] == 3
+    captured_ats = [item["captured_at"] for item in body["items"]]
+    assert captured_ats == sorted(captured_ats, reverse=True)
+
+
+async def test_upload_snapshot_rejects_empty_file(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/duress/{event_id}/snapshot",
+        files={"file": ("empty.jpg", b"", "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_upload_snapshot_unknown_event_404s(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    resp = await client.post(
+        f"/v1/duress/{uuid.uuid4()}/snapshot",
+        files={"file": ("frame.jpg", b"jpeg-bytes", "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_get_latest_snapshot_without_upload_404s(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="dispatcher")
+    trigger_resp = await client.post("/v1/duress/trigger", json=_trigger_body(), headers=headers)
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.get(f"/v1/duress/{event_id}/snapshot/latest", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_snapshot_upload_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    tenant_a_headers = await auth_headers(
+        client, session, role="admin", tenant_name="Duress Snapshot Tenant A"
+    )
+    tenant_b_headers = await auth_headers(
+        client, session, role="admin", tenant_name="Duress Snapshot Tenant B"
+    )
+
+    trigger_resp = await client.post(
+        "/v1/duress/trigger", json=_trigger_body(), headers=tenant_a_headers
+    )
+    event_id = trigger_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/duress/{event_id}/snapshot",
+        files={"file": ("frame.jpg", b"jpeg-bytes", "image/jpeg")},
+        headers=tenant_b_headers,
+    )
+    assert resp.status_code == 404
+
+
 # --- standard CRUD ----------------------------------------------------------------
 
 
@@ -576,6 +696,69 @@ def test_gps_points_broadcast_to_live_websocket_listeners(app):
             assert received["lat"] == -33.87
             assert received["lng"] == 151.21
             assert received["event_id"] == event_id
+
+
+def test_snapshot_upload_broadcasts_to_live_websocket_listeners(app):
+    """Same pattern as test_gps_points_broadcast_to_live_websocket_listeners --
+    confirms POST /{event_id}/snapshot pushes a kind="snapshot" notification
+    over the SAME WS /{event_id}/live feed the GPS relay uses, which is what
+    lets the dashboard auto-refresh the cabin-camera image without polling."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.core import security
+    from app.core.database import AsyncSessionLocal
+    from app.models import Tenant, User
+
+    async def _setup():
+        async with AsyncSessionLocal() as db:
+            tenant = Tenant(name=f"WS Snapshot Test Tenant {uuid.uuid4()}", plan="standard")
+            db.add(tenant)
+            await db.commit()
+            await db.refresh(tenant)
+
+            dispatcher = User(
+                tenant_id=tenant.id,
+                role="dispatcher",
+                name="Test Dispatcher",
+                email=f"{uuid.uuid4()}@example.com",
+                pin_hash=security.hash_password("Test-Passw0rd!"),
+                status="active",
+            )
+            db.add(dispatcher)
+            await db.commit()
+            await db.refresh(dispatcher)
+
+            token = security.create_access_token(
+                user_id=dispatcher.id, tenant_id=tenant.id, role=dispatcher.role
+            )
+        return token
+
+    token = asyncio.run(_setup())
+
+    with TestClient(app) as test_client:
+        trigger_resp = test_client.post(
+            "/v1/duress/trigger",
+            json=_trigger_body(),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert trigger_resp.status_code == 201, trigger_resp.text
+        event_id = trigger_resp.json()["id"]
+
+        with test_client.websocket_connect(f"/v1/duress/{event_id}/live?token={token}") as ws:
+            upload_resp = test_client.post(
+                f"/v1/duress/{event_id}/snapshot",
+                files={"file": ("frame.jpg", b"jpeg-bytes", "image/jpeg")},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload_resp.status_code == 201, upload_resp.text
+            snapshot_id = upload_resp.json()["id"]
+
+            received = ws.receive_json()
+            assert received["kind"] == "snapshot"
+            assert received["event_id"] == event_id
+            assert received["snapshot_id"] == snapshot_id
 
 
 def test_websocket_rejects_missing_token(app):
