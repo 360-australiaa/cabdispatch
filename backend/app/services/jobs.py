@@ -3,16 +3,25 @@ broadcast flow, the accept/decline (first-accept-wins) state machine, lazy
 offer expiry, and the in-process WS pub/sub used by `WS /v1/jobs/live`.
 
 Matching reads (read-only, never writes) the sibling `shift` and `trips`
-domains' tables to compose "is this driver currently available" — see
+domains' tables to compose "is this driver currently available" -- see
 `app.models.jobs.DriverAvailability`'s module docstring for the exact rule.
 This mirrors the read-only cross-domain join pattern already established by
 `app.services.live_ops` (which reads `Vehicle`/`Device`/`Trip`/`Shift`/`User`
 the same way, owning no table of its own).
+
+As of this pass, offers are also fanned out nearest-driver-first (by
+haversine distance from the job's origin to each driver's last known
+position, see `_haversine_km` / `create_job_and_broadcast` below) rather than
+in the arbitrary order `available_driver_ids` returns them -- closing the
+"proximity/ETA-ranked job matching" gap flagged in PROJECT_HANDOFF.md. This
+only changes offer *creation* order; acceptance is still first-accept-wins at
+the HTTP layer (see `accept_offer`'s docstring).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -44,6 +53,9 @@ logger = logging.getLogger("cab_dispatch.jobs")
 # created in the same instant, at job-creation time).
 OFFER_WINDOW_SECONDS = 20
 
+# Mean Earth radius in km, standard value used by _haversine_km below.
+_EARTH_RADIUS_KM = 6371.0
+
 
 class JobsError(Exception):
     """Base class for jobs-domain errors; the router translates each
@@ -71,7 +83,7 @@ class OfferNotAssignedToDriverError(JobsError):
 
 
 # ==================================================================================
-# In-process pub/sub, keyed by driver_id — see app.services.duress.GPSBroadcaster /
+# In-process pub/sub, keyed by driver_id -- see app.services.duress.GPSBroadcaster /
 # app.services.live_ops._FleetBroadcaster for the identical pattern this reuses.
 # ==================================================================================
 
@@ -83,7 +95,7 @@ class JobOfferBroadcaster:
 
     Keyed by `driver_id` rather than `tenant_id` (unlike
     `live_ops._FleetBroadcaster`) because offers are addressed to one specific
-    driver, not broadcast to a whole tenant's dashboard — a driver only ever
+    driver, not broadcast to a whole tenant's dashboard -- a driver only ever
     needs to hear about jobs offered to them. Not Redis-backed, same tradeoff
     as the sibling GPS/position broadcasters: best-effort, in-process only,
     lost on restart, and a later pass could swap this for Redis pub/sub
@@ -112,7 +124,7 @@ class JobOfferBroadcaster:
 
     async def publish(self, driver_id: str, message: dict) -> int:
         """Broadcasts `message` to every connection this driver currently has
-        open. Returns the number of connections reached (0 is normal — most
+        open. Returns the number of connections reached (0 is normal -- most
         offers are made to a driver whose app isn't connected right now; the
         offer row still exists and can be listed/accepted via HTTP)."""
         async with self._lock:
@@ -211,6 +223,51 @@ async def available_driver_ids(session: AsyncSession, *, tenant_id: str) -> list
     return sorted(on_shift_ids - mid_trip_ids)
 
 
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance between two lat/lng points, in km. Standard
+    haversine formula, mean Earth radius (`_EARTH_RADIUS_KM` = 6371 km).
+    Pure/stateless -- no DB access, no new dependency. Used by
+    `create_job_and_broadcast` to rank offer-eligible drivers nearest-first
+    against a job's origin."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+async def _nearest_first_driver_ids(
+    session: AsyncSession, *, tenant_id: str, driver_ids: list[str], origin_lat: float, origin_lng: float
+) -> list[str]:
+    """Re-orders `driver_ids` (already offer-eligible, from
+    `available_driver_ids`) nearest-to-`origin_lat`/`origin_lng` first, using
+    each driver's `DriverAvailability.last_lat`/`last_lng` (persisted by
+    `app.services.live_ops.publish_position`, see that module). A single
+    query fetches every candidate's row at once rather than one query per
+    driver. Drivers with no recorded position (new `DriverAvailability` row,
+    or one never enriched by a position publish) sort to the END of the
+    list -- unknown position is lowest priority, not an error, and they
+    still get an offer."""
+    if not driver_ids:
+        return []
+
+    result = await session.execute(
+        select(DriverAvailability).where(
+            DriverAvailability.tenant_id == tenant_id,
+            DriverAvailability.driver_id.in_(driver_ids),
+        )
+    )
+    positions = {row.driver_id: (row.last_lat, row.last_lng) for row in result.scalars().all()}
+
+    def _sort_key(driver_id: str) -> tuple[int, float]:
+        lat, lng = positions.get(driver_id, (None, None))
+        if lat is None or lng is None:
+            return (1, 0.0)
+        return (0, _haversine_km(origin_lat, origin_lng, lat, lng))
+
+    return sorted(driver_ids, key=_sort_key)
+
+
 # ==================================================================================
 # Create + broadcast
 # ==================================================================================
@@ -233,11 +290,23 @@ async def create_job_and_broadcast(
     """Creates the `Job` row, then fans out one pending `JobOffer` (20s
     window) to every currently-available driver in the tenant, broadcasting
     each via `job_offer_broadcaster` to that driver's `WS /v1/jobs/live`
-    connection (if any). If no driver is currently available the job is left
-    in `queued` with zero offers — there is no retry/re-broadcast loop in this
-    pass (no scheduler infra exists in this backend; see the module docstring
-    on `expire_stale_offers` for the lazy-expiry equivalent on the other end
-    of an offer's lifecycle)."""
+    connection (if any).
+
+    Offers are created (and therefore broadcast/sorted-for-listing)
+    nearest-driver-first: eligible driver_ids are re-ordered by
+    `_nearest_first_driver_ids` (haversine distance from this job's origin to
+    each driver's last known `DriverAvailability` position) before the
+    `JobOffer` rows are built, closing the "proximity/ETA-ranked job
+    matching" gap flagged in PROJECT_HANDOFF.md. A driver with no recorded
+    position still gets an offer, just sorted to the end. This changes
+    offer-creation order only -- acceptance is still first-accept-wins at the
+    HTTP layer regardless of this ordering (see `accept_offer`'s docstring).
+
+    If no driver is currently available the job is left in `queued` with zero
+    offers -- there is no retry/re-broadcast loop in this pass (no scheduler
+    infra exists in this backend; see the module docstring on
+    `expire_stale_offers` for the lazy-expiry equivalent on the other end of
+    an offer's lifecycle)."""
     now = datetime.now(UTC)
     job = Job(
         id=str(uuid.uuid4()),
@@ -258,6 +327,9 @@ async def create_job_and_broadcast(
     session.add(job)
 
     driver_ids = await available_driver_ids(session, tenant_id=tenant_id)
+    driver_ids = await _nearest_first_driver_ids(
+        session, tenant_id=tenant_id, driver_ids=driver_ids, origin_lat=origin_lat, origin_lng=origin_lng
+    )
 
     offers: list[JobOffer] = []
     if driver_ids:
@@ -330,7 +402,7 @@ def _offer_to_dict(offer: JobOffer) -> dict:
 
 
 # ==================================================================================
-# Lazy offer expiry — called on read, not a scheduled job (no scheduler infra
+# Lazy offer expiry -- called on read, not a scheduled job (no scheduler infra
 # exists in this backend; see the module docstring).
 # ==================================================================================
 
@@ -392,9 +464,13 @@ async def accept_offer(
     session: AsyncSession, *, tenant_id: str, job_id: str, offer_id: str, driver_id: str
 ) -> JobOffer:
     """First-accept-wins: whichever driver's accept lands first gets the job.
-    NOTE (intentional v1 scope cut): there is no proximity/ETA ranking here —
-    literally first HTTP request to reach this handler wins, full stop; a
-    later pass could add distance/ETA-based offer prioritization without
+    NOTE: offers are now created nearest-driver-first (see
+    `create_job_and_broadcast`), so the driver closest to the job's origin is
+    generally the one whose offer arrives -- and gets accepted -- first. But
+    that is only a soft, best-effort bias from creation order and delivery
+    latency, not a guarantee: acceptance itself remains first-accept-wins at
+    this HTTP layer, full stop, with no distance/ETA check here. A later pass
+    could add a harder proximity/ETA gate on acceptance itself without
     changing this endpoint's contract."""
     await expire_stale_offers(session, tenant_id=tenant_id, job_id=job_id)
 
@@ -413,7 +489,7 @@ async def accept_offer(
     job.status = JOB_STATUS_ACCEPTED
     job.accepted_by_driver_id = driver_id
 
-    # Expire every OTHER still-pending offer for this job — first-accept-wins.
+    # Expire every OTHER still-pending offer for this job -- first-accept-wins.
     siblings_result = await session.execute(
         select(JobOffer).where(
             JobOffer.job_id == job_id,
@@ -434,7 +510,7 @@ async def accept_offer(
 async def decline_offer(
     session: AsyncSession, *, tenant_id: str, job_id: str, offer_id: str, driver_id: str
 ) -> JobOffer:
-    """Declining doesn't change the job — it stays `offered` while any
+    """Declining doesn't change the job -- it stays `offered` while any
     sibling offers are still pending (or lapses to `expired` on its own via
     `expire_stale_offers` once every offer has been declined/expired; there is
     no auto re-broadcast to a fresh driver pool in this pass, see the module
@@ -499,7 +575,7 @@ async def cancel_job(session: AsyncSession, *, tenant_id: str, job_id: str) -> J
 
     job.status = JOB_STATUS_CANCELLED
 
-    # A cancelled job's outstanding offers are no longer actionable — flip
+    # A cancelled job's outstanding offers are no longer actionable -- flip
     # every still-pending one to expired rather than leaving them dangling
     # (a driver could otherwise still POST .../accept on a dead job).
     now = datetime.now(UTC)

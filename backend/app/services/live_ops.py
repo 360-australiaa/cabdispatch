@@ -3,26 +3,33 @@ trips, shift, and user domains' tables, plus an in-process pub/sub position
 broadcaster backing `WS /v1/fleet/live` and `POST /v1/fleet/positions`.
 
 This domain owns NO tables of its own (per the domain brief: "No new
-persisted table"). The models imported below — `Vehicle`/`Device` (fleet
+persisted table"). The models imported below -- `Vehicle`/`Device` (fleet
 domain), `Trip` (trips domain), `Shift` (shift domain), `User` (user domain)
-— all belong to sibling domains and are used strictly READ-ONLY: nothing in
-this module ever inserts, updates, or deletes a row in any of them.
+-- all belong to sibling domains and are used strictly READ-ONLY: nothing in
+this module ever inserts, updates, or deletes a row in any of them, with one
+narrow exception -- see `_persist_driver_position` below, which writes a
+best-effort last-known-position enrichment onto the `jobs` domain's own
+`DriverAvailability` row (not a table this module owns either, but the jobs
+domain's `create_job_and_broadcast` needs *some* way to learn a driver's last
+position for proximity-ranked offer matching, and this is the one place a
+position naturally arrives).
 
 Position broadcasting is a pure in-process, in-memory pub/sub keyed by
 tenant_id (the same "in-process pub/sub dict" pattern used by the sibling
 `duress` domain's live GPS broadcaster, just keyed by tenant_id here instead
-of by duress-event id — see `app.schemas.duress.DuressGpsPoint`'s docstring
+of by duress-event id -- see `app.schemas.duress.DuressGpsPoint`'s docstring
 referencing `app.services.duress.GPSBroadcaster`). Nothing published here is
 persisted to the database or shared across worker processes: a process
 restart, or running more than one uvicorn worker, loses all live-position
 state. That's an accepted tradeoff for this pass (flagged again in the domain
-summary) — `GET /v1/vehicles` degrades gracefully by falling back to each
+summary) -- `GET /v1/vehicles` degrades gracefully by falling back to each
 vehicle's open trip's last known tick position (persisted, from the trips
 domain) when nothing has been published live.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,13 +37,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Device, Vehicle
+from app.models.jobs import DriverAvailability
 from app.models.shift import Shift
 from app.models.trips import TRIP_STATUS_OPEN, Trip
 from app.models.user import ROLE_DRIVER, User
 
+logger = logging.getLogger("cab_dispatch.live_ops")
+
 # Fallback live_status used when a vehicle has never had a position published,
 # has no open trip, and its fleet-domain status is "active" (i.e. nothing else
-# to report — it's simply not known to be doing anything right now).
+# to report -- it's simply not known to be doing anything right now).
 DEFAULT_LIVE_STATUS = "offline"
 
 
@@ -63,7 +73,7 @@ class _FleetBroadcaster:
     listener currently connected for a tenant, plus a last-known-position
     cache used to enrich `GET /v1/vehicles` even when nobody is connected.
 
-    Not Redis-backed (unlike `app.core.security`'s JWT revocation store) —
+    Not Redis-backed (unlike `app.core.security`'s JWT revocation store) --
     position broadcast is inherently best-effort/ephemeral for this pass, and
     every consumer (the live vehicle list, the WS feed) tolerates a gap. A
     later pass could move the fan-out to Redis pub/sub for multi-worker
@@ -92,7 +102,7 @@ class _FleetBroadcaster:
     async def publish(self, tenant_id: str, position: dict[str, Any]) -> int:
         """Updates the last-known-position cache and fans the update out to
         every currently-connected subscriber for this tenant. Returns the
-        number of subscribers the update was delivered to (0 is normal — most
+        number of subscribers the update was delivered to (0 is normal -- most
         publishes happen with no dispatcher dashboard currently watching)."""
         async with self._lock:
             self._latest.setdefault(tenant_id, {})[position["vehicle_id"]] = position
@@ -117,7 +127,7 @@ class _FleetBroadcaster:
         return dict(self._latest.get(tenant_id, {}))
 
 
-# Module-level singleton — every request/connection shares this one instance
+# Module-level singleton -- every request/connection shares this one instance
 # for the lifetime of the process (same pattern as `app.core.security`'s
 # module-level `revocation_store`).
 fleet_broadcaster = _FleetBroadcaster()
@@ -133,15 +143,79 @@ def build_position(*, vehicle_id: str, lat: float, lng: float, status: str) -> d
     }
 
 
+async def _persist_driver_position(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, lat: float, lng: float
+) -> None:
+    """Best-effort enrichment for the jobs domain's proximity-ranked offer
+    matching (see `app.services.jobs.create_job_and_broadcast`). Resolves
+    vehicle_id -> the driver currently on an open `Shift` in that vehicle
+    (`Shift.end_at IS NULL`, the same "open shift IS the driver's current
+    session" convention already used by `_open_shifts_by_driver` /
+    `_open_trips_by_vehicle` above), then, if that driver already has a
+    `DriverAvailability` row (jobs domain; created only via
+    `POST /v1/jobs/availability`, never here), updates its
+    last_lat/last_lng/last_position_at.
+
+    Silently does nothing if there's no on-shift driver for this vehicle, or
+    no existing `DriverAvailability` row for them -- this only enriches an
+    existing row, it never creates one. Called from `publish_position` inside
+    a broad try/except: a failure in here must never raise past the caller,
+    since this is best-effort enrichment layered on top of the position
+    broadcast, not a hard requirement of it."""
+    shift_result = await session.execute(
+        select(Shift.driver_id).where(
+            Shift.tenant_id == tenant_id,
+            Shift.vehicle_id == vehicle_id,
+            Shift.end_at.is_(None),
+        )
+    )
+    driver_id = shift_result.scalars().first()
+    if driver_id is None:
+        return
+
+    availability_result = await session.execute(
+        select(DriverAvailability).where(
+            DriverAvailability.tenant_id == tenant_id,
+            DriverAvailability.driver_id == driver_id,
+        )
+    )
+    row = availability_result.scalar_one_or_none()
+    if row is None:
+        return
+
+    row.last_lat = lat
+    row.last_lng = lng
+    row.last_position_at = datetime.now(UTC)
+    await session.commit()
+
+
 async def publish_position(
     session: AsyncSession, *, tenant_id: str, vehicle_id: str, lat: float, lng: float, status: str
 ) -> dict[str, Any]:
     """Validates the vehicle belongs to the caller's tenant, then publishes
-    the position. Returns the broadcast position dict plus subscriber_count."""
+    the position. Returns the broadcast position dict plus subscriber_count.
+
+    Also best-effort persists lat/lng onto the currently-assigned driver's
+    `DriverAvailability` row (jobs domain), see `_persist_driver_position` --
+    additive enrichment layered on top of the existing broadcast above, never
+    a replacement for it. A failure there is logged and swallowed, never
+    raised, so it can't break or slow down the broadcast this function
+    already completed."""
     await get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
 
     position = build_position(vehicle_id=vehicle_id, lat=lat, lng=lng, status=status)
     delivered = await fleet_broadcaster.publish(tenant_id, position)
+
+    try:
+        await _persist_driver_position(session, tenant_id=tenant_id, vehicle_id=vehicle_id, lat=lat, lng=lng)
+    except Exception:
+        logger.warning(
+            "Live ops: failed to persist last-known position for vehicle %s (tenant %s), continuing",
+            vehicle_id,
+            tenant_id,
+            exc_info=True,
+        )
+
     return {**position, "subscriber_count": delivered}
 
 
@@ -245,7 +319,7 @@ async def list_vehicles_live(
     """Filters that map directly onto Vehicle columns (status, vehicle_class,
     rego) are pushed down to SQL. `live_status` is a derived field (joined
     from the live-position cache / open trips) so it's applied in Python after
-    composing each row — fleets are small enough per-tenant that this is fine,
+    composing each row -- fleets are small enough per-tenant that this is fine,
     and it keeps the join logic in one place (`_compose_vehicle_live`) instead
     of duplicated as a second SQL-side implementation."""
     stmt = select(Vehicle).where(Vehicle.tenant_id == tenant_id)

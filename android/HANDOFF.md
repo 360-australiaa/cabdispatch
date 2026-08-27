@@ -1,5 +1,134 @@
 # Android meter — finish-it checklist (read this first)
 
+
+## SYSTEM REFERENCE (2026-08-27) -- read this before writing any v2 UI code
+
+This section exists because nobody working on this app has full context across backend + Figma +
+deployment at once. Read it fully before touching screens. It answers: which of the 33 Figma v2
+screens are actually built, which backend APIs are proven working against the real deployed
+server (not just unit-tested), and the exact end-to-end flow this app is supposed to drive.
+
+### The live server
+
+- API: `http://72.61.107.107:8001` (plain HTTP, no domain/TLS yet -- see
+  `docs/DEPLOY_UBUNTU.md`'s "Adding HTTPS later"). `android/local.properties`'s `API_BASE_URL` key
+  should already point here (see `app/build.gradle.kts`'s `apiBaseUrlOverride`).
+- `android/app/src/main/res/xml/network_security_config.xml` permits cleartext to this ONE IP only
+  -- temporary, delete it (and the `AndroidManifest.xml` reference) the day this server gets HTTPS.
+- Demo driver: Driver ID `GL2HY`, PIN `123456` (numeric -- the app's PIN keypad is numeric-only,
+  do not reuse alphanumeric passwords for driver PINs anywhere, including test fixtures you write).
+- Demo staff: `owner@lillycabs.test` / `ChangeMe123!` (dashboard login, not the meter app).
+
+### Figma v2 prototype -> Android reality, screen by screen
+
+Figma file: `https://www.figma.com/design/JhEhok3n9bntRNS5Y1u3Yc`, page "Home v2 -- Map-First".
+Every screen below was fully designed, wired, and QA'd in Figma. **The column that matters is the
+last one** -- do not assume a polished Figma screen means the matching Android screen exists or
+matches its layout; most exist as different, older UI (the pre-map-first wheel-navigation design),
+not the Figma v2 design.
+
+| Figma screen | Android file | Status |
+|---|---|---|
+| 01 Splash | `ui/screens/splash/SplashScreen.kt` | Built, v1-styled |
+| 02 Terms | `ui/screens/terms/TermsDisclaimerScreen.kt` | Built, v1-styled |
+| 03 Permissions | `ui/screens/permissions/PermissionsChecklistScreen.kt` | Built, v1-styled |
+| 04 Driver Login | `ui/screens/login/LoginVehicleBindScreen.kt` | Built -- combined with Vehicle Bind (06) into one screen/flow, not two |
+| 05 MFA | -- | **NOT BUILT.** No Android screen exists. Backend supports MFA (`app.core.security` TOTP); nothing on this side implements it |
+| 06 Vehicle Bind | `ui/screens/login/LoginVehicleBindScreen.kt` | Built (see 04) |
+| 07 Pre-Shift Inspection | -- | **NOT BUILT.** No checklist screen found anywhere in the codebase |
+| 08 Shift Start Confirm | `ui/screens/shiftstart/ShiftStartScreen.kt` | Built, v1-styled |
+| Home (expanded/collapsed) | `ui/screens/dashboard/WheelDashboardScreen.kt` | **Built, but a DIFFERENT design entirely** -- this is the old rotating 6-slot wheel-navigation paradigm, not the Figma v2 map-first + collapsible bottom-dock design. This is the single biggest visual gap between Figma and the real app. Reskinning this to match Figma v2 is real UI-architecture work, not a token/color pass |
+| My Trips (menu) | `ui/screens/trips/TripsWheelViewModel.kt` + `TripsWheelContent.kt` | Built as a wheel-slot, not the Figma v2 dock-menu layout |
+| Plot (menu) | `ui/screens/zones/PlotZoneScreen.kt` + ViewModel | Built |
+| Available Trips (menu) | `ui/wheel/content/AvailableTripsWheelContent.kt` + ViewModel | Built as a wheel-slot |
+| Statistics (menu) | `ui/screens/zones/ZoneStatisticsScreen.kt` + ViewModel | Built |
+| Messages (menu) | `ui/screens/messages/MessagesWheelContent.kt` + `MessageThreadScreen.kt` | Built |
+| Trip History (menu) | -- | Not found as a distinct screen -- may be folded into Trips/TripDetail, needs verification |
+| Navigate (menu) | -- | **NOT BUILT.** No turn-by-turn / full-bleed nav screen exists |
+| 16 Start Meter Confirm | Overlay inside `WheelDashboardScreen.kt` | Built as an in-file overlay, not a separate screen (matches Figma's intent, different implementation shape) |
+| 17 Set Price | `SetPriceEntryScreen` overlay inside `WheelDashboardScreen.kt` | Built, real end-to-end wire to `TripSyncItem.negotiated_total` |
+| 18 Meter -- Hired | `ui/screens/hired/HiredScreen.kt` + `HiredViewModel.kt` | Built, v1-styled |
+| 19 Close & Pay | `ui/screens/closepay/CloseAndPayScreen.kt` + ViewModel | Built |
+| 20 Voucher / 21 Split Fare | Sub-states inside `CloseAndPayScreen.kt`'s `MethodPickerScreen` | Built as sub-states, not separate Figma-matching screens |
+| 22 Receipt | Inside `CloseAndPayScreen.kt` | Built inline, not a separate screen file |
+| 23 Job Offer | `ui/screens/availabletrips/AvailableTripOfferScreen.kt` + ViewModel | Built |
+| 24 Trip Detail & Dispute | `ui/screens/tripdetail/TripDetailScreen.kt` + ViewModel | Built |
+| 25 Shift Report | `ui/screens/shiftreport/ShiftReportScreen.kt` + ViewModel + `ShiftWheelContent.kt` | Built |
+| 26 Shift Submitted | `ui/screens/shiftsubmitted/ShiftSubmittedScreen.kt` | Built |
+| 27 Profile | `ui/screens/profile/ProfileScreen.kt` + ViewModel | Built |
+| 28 Settings & Diagnostics | `ui/screens/settings/SettingsScreen.kt` + ViewModel | Built |
+| 29 Admin PIN Gate | -- | **NOT BUILT.** Backend endpoint exists (`verify-admin-pin`); no Android UI calls it |
+| 30 Duress Triggered / 31 Duress Stealth | `domain/DuressController.kt`'s `DuressUiState`, rendered as contextual overlays inside Hired/Dashboard/TripDetail/CloseAndPay/ShiftSubmitted/ShiftStart/Settings screens | Built, **different shape than Figma** -- an overlay system, not the two dedicated full-screen designs Figma shows. Functionally should be equivalent; visually will not match Figma 1:1 without deliberate work |
+| 32 Offline & Sync | -- | **NOT BUILT.** No dedicated sync-status screen; the outbox/`SyncWorker` machinery is real and running, just not surfaced to the driver visually |
+| 33 Log Off | Not confirmed as a distinct screen | Needs verification -- likely a menu action/dialog, not checked in this pass |
+
+**Bottom line:** roughly two-thirds of the Figma v2 screens have SOME Android equivalent, but almost
+all of them are still the OLD v1 wheel-navigation visual language, not reskinned to Figma v2 yet.
+Five screens (MFA, Pre-Shift Inspection, Navigate, Admin PIN Gate, Offline & Sync) do not exist in
+Android at all. The Home dashboard itself is a fundamentally different navigation paradigm (wheel vs.
+map+dock) -- that is the biggest single piece of work if the goal is to match Figma v2 visually.
+
+### API readiness -- what is actually proven to work against THIS live server
+
+Legend: VERIFIED = hit for real against `72.61.107.107` this session, with a real response confirmed.
+UNIT-TESTED ONLY = passes `pytest`, never exercised by a real device against the live deployment.
+NOT IMPLEMENTED = does not exist yet on either side.
+
+| Area | Endpoint(s) | Status |
+|---|---|---|
+| Health | `GET /health` | VERIFIED |
+| Auth (staff) | `POST /v1/auth/login` | VERIFIED (owner, platform admin) |
+| Auth (driver) | `POST /v1/auth/driver-login` | VERIFIED (just fixed live -- PIN was stale on the server, patched via `PATCH /v1/users/{id}`) |
+| Users CRUD | `POST/GET/PATCH /v1/users` | VERIFIED (used to create/inspect/fix the demo driver directly) |
+| Tariffs | `GET /v1/tariffs/signing-key`, `GET /v1/tariffs/active` | UNIT-TESTED ONLY -- the app has never successfully completed this fetch against the live server yet (blocked until the cleartext fix + PIN fix just landed). This is the very next thing to confirm -- Start Meter depends on it |
+| Trips | `PATCH /v1/trips/{id}/tick`, `POST /v1/trips/{id}/close`, `POST /v1/trips/sync` | UNIT-TESTED ONLY -- no real trip has been driven through the live server yet |
+| Fleet / device pairing | `POST /v1/fleet/vehicles/{id}/pairing-code`, `POST /v1/fleet/devices/register` | UNIT-TESTED ONLY -- this tablet has never been through the real QR-pairing flow against this server |
+| Live position | `POST /v1/fleet/positions` (heartbeat, 30s) | UNIT-TESTED ONLY |
+| Duress (tablet path) | `POST /v1/duress/trigger`, `/gps`, `/audio`, `/escalate`, `/close`, `WS /{id}/live` | UNIT-TESTED ONLY against this deployment (was live-verified in an earlier local pass, not against this server) |
+| Duress (physical device path) | `POST /v1/devices/auth`, `/duress/device/alarm`, `/duress/device/{id}/gps`, `/duress/device/{id}/audio` | NOT IMPLEMENTED on the Android side at all -- no BLE client exists yet. Backend is real and tested; nothing on this app talks to it |
+| Jobs / dispatch | `POST /v1/jobs`, `WS /v1/jobs/live`, accept/decline | UNIT-TESTED ONLY against this deployment |
+| Messages | `WS /v1/messages/live`, quick-tap templates | UNIT-TESTED ONLY against this deployment |
+
+**Read this plainly: almost nothing has been proven against the real server yet except login.**
+That is not a criticism of the app -- it is simply the honest current state, and it is exactly what
+the current five-step verification pass (tariff fetch, Start Meter, offline maps, a real trip) exists
+to close, one item at a time, with real evidence each time (logcat, screenshots), not assumptions.
+
+### The full operational flow, end to end
+
+1. **Setup (once per tablet):** admin generates a pairing code on the dashboard
+   (`POST /v1/fleet/vehicles/{id}/pairing-code`) -> tablet scans/enters it ->
+   `POST /v1/fleet/devices/register` binds this Android install to that vehicle permanently.
+2. **Driver login:** `POST /v1/auth/driver-login` with `{driver_code, pin}` -> JWT stored, session
+   held in `SessionHolder`.
+3. **Tariff sync:** app fetches `GET /v1/tariffs/signing-key` (Ed25519 public key, cached), then
+   `GET /v1/tariffs/active?region=...` -- verifies the Ed25519 signature locally before writing it
+   to Room. Only a verified, cached tariff enables Start Meter (`uiState.tariff != null`).
+4. **On shift:** `LivePositionHeartbeat` posts `POST /v1/fleet/positions` every 30s -- this is what
+   feeds the dashboard's Live Map.
+5. **Start Meter:** requires session + verified tariff (see #3). Opens a local `Trip` row
+   (Room, tagged with a client-generated UUID).
+6. **During the trip:** `PATCH /v1/trips/{id}/tick` sends telemetry; fare computes live from the
+   cached, signed tariff (no network needed mid-trip).
+7. **Close:** `POST /v1/trips/{id}/close` finalizes server-side via the fare engine. If offline at
+   any point, everything queues in a local outbox and flushes via `POST /v1/trips/sync`
+   (idempotent on `client_uuid`) the moment connectivity returns.
+8. **Dashboard visibility:** the instant a trip syncs, `GET /v1/trips` on the dashboard shows it --
+   same table, no separate pipeline.
+9. **Duress:** trigger opens an event, streams GPS every 5s, dashboard's Duress Desk watches
+   `WS /v1/duress/{id}/live` in real time; unresolved escalation fires a real Twilio call.
+
+### Priority order for this session
+
+1. Finish the five-step verification already in progress (tariff fetch -> Start Meter enabled ->
+   offline map download -> a real trip synced) -- do not skip ahead of this.
+2. Only once all five are confirmed working: begin reskinning `WheelDashboardScreen.kt` toward the
+   Figma v2 map-first design -- this is the biggest visual gap and the highest-value next step.
+3. Flag (do not silently skip) any of the five NOT BUILT screens above if a real product decision
+   is needed on them (Navigate, Admin PIN Gate, Offline & Sync, MFA, Pre-Shift Inspection) -- these
+   are real product gaps, not implementation details you should invent alone.
+
+
 You (Claude Code, running via the JetBrains plugin inside Android Studio) have **no memory of
 the session that generated this code**. This file is written to be fully self-contained so you
 can pick the work up cold. Read it fully before touching code.

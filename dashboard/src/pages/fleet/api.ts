@@ -257,9 +257,10 @@ export function useRebootDevice() {
 }
 
 // ---------------------------------------------------------------------------
-// Drivers — READ-ONLY rollup from /v1/drivers. The backend exposes no
-// create/update/delete for the user domain (see API_SUMMARY.md router map),
-// so there is no real endpoint to wire a driver CRUD form to.
+// Drivers — the list itself is a READ-ONLY live-status rollup from
+// /v1/drivers (a User joined with on-shift status; no PATCH/DELETE exists
+// for it). Creation goes through the general user endpoint instead: see
+// useCreateDriver below, which POSTs /v1/users with role="driver".
 // ---------------------------------------------------------------------------
 
 export interface DriverFilters {
@@ -277,6 +278,42 @@ export function useDrivers(skip: number, filters: DriverFilters) {
       return data;
     },
     placeholderData: (prev) => prev,
+  });
+}
+
+/** Form input for creating a driver via `POST /v1/users` (`UserCreate`,
+ * `role` fixed to `"driver"`). `driver_code` is intentionally omitted — the
+ * backend auto-generates one when not supplied. */
+export interface CreateDriverInput {
+  name: string;
+  email: string;
+  /** Becomes the login PIN for the meter app. The meter keypad is numeric
+   * only, so this should be digits-only in practice, though the backend
+   * accepts any string of at least 6 characters. */
+  password: string;
+  phone?: string;
+  driver_licence_no?: string;
+}
+
+/** `POST /v1/users` with `role: "driver"` — the real driver-creation
+ * endpoint. Invalidates the `["fleet", "drivers"]` query-key prefix so every
+ * open drivers list (any skip/filters combination) refetches, matching the
+ * prefix-invalidation pattern used by `useUploadDriverPhoto` below. */
+export function useCreateDriver() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (values: CreateDriverInput) => {
+      const { data } = await apiClient.post<{ id: string }>("/v1/users", {
+        name: values.name.trim(),
+        email: values.email.trim(),
+        password: values.password,
+        role: "driver",
+        phone: values.phone?.trim() || null,
+        driver_licence_no: values.driver_licence_no?.trim() || null,
+      });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "drivers"] }),
   });
 }
 

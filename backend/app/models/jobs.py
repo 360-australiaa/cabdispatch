@@ -1,26 +1,26 @@
-"""Jobs domain models — the in-house dispatch/job-offer system.
+"""Jobs domain models -- the in-house dispatch/job-offer system.
 
 `Job` is a ride request (pickup + destination, fare estimate) that needs a
 driver. `JobOffer` is one broadcast of a `Job` to one specific driver, with its
 own 20-second accept/decline window (`app.services.jobs.OFFER_WINDOW_SECONDS`).
 A single `Job` fans out to *many* `JobOffer` rows at once (one per currently
-available driver) — first driver to accept wins, every sibling offer is then
+available driver) -- first driver to accept wins, every sibling offer is then
 flipped to `expired` (see `app.services.jobs.accept_offer`).
 
 `DriverAvailability` is the minimal new concept this domain adds to answer "is
 this driver currently available for a job offer". Per the task brief: a driver
-is only offer-eligible when ALL of the following hold —
+is only offer-eligible when ALL of the following hold --
 
     1. `DriverAvailability.is_available` is True (a driver-toggled flag; see
-       `POST /v1/jobs/availability`) — being on shift does NOT imply willing to
+       `POST /v1/jobs/availability`) -- being on shift does NOT imply willing to
        take dispatch jobs (e.g. a driver working rank/hail only).
     2. They have a currently-open `Shift` (`app.models.shift.Shift.end_at IS
-       NULL`) — no shift, no dispatch offers.
+       NULL`) -- no shift, no dispatch offers.
     3. They do NOT have a currently-open `Trip` (`app.models.trips.Trip.status
-       == 'open'`) — already mid-fare, can't take a new job.
+       == 'open'`) -- already mid-fare, can't take a new job.
 
 This table is intentionally tiny (one boolean + the usual tenant/timestamp
-columns) — it does NOT duplicate or redesign shift/trip state, it only adds
+columns) -- it does NOT duplicate or redesign shift/trip state, it only adds
 the one bit of state (a driver's own dispatch-availability toggle) that
 doesn't already exist anywhere in the `shift`/`user` domains (checked both
 before adding this).
@@ -63,7 +63,7 @@ JOB_STATUSES = {
     JOB_STATUS_EXPIRED,
     JOB_STATUS_CANCELLED,
 }
-# Terminal — no further state transitions permitted once here.
+# Terminal -- no further state transitions permitted once here.
 JOB_TERMINAL_STATUSES = {JOB_STATUS_ACCEPTED, JOB_STATUS_EXPIRED, JOB_STATUS_CANCELLED}
 
 # --- JobOffer status enum -----------------------------------------------------
@@ -121,12 +121,22 @@ class JobOffer(Base, TenantScopedMixin, TimestampMixin):
 
 
 class DriverAvailability(Base, TenantScopedMixin, TimestampMixin):
-    """One row per (tenant, driver) — the driver's own dispatch-availability
+    """One row per (tenant, driver) -- the driver's own dispatch-availability
     toggle. See module docstring for the full eligibility rule this feeds
     (available flag AND open shift AND not mid-trip). Toggled via
     `POST /v1/jobs/availability`; there is deliberately no separate read
-    endpoint beyond what's echoed back from that call — the matching logic in
-    `app.services.jobs` is the only other reader."""
+    endpoint beyond what's echoed back from that call -- the matching logic in
+    `app.services.jobs` is the only other reader.
+
+    `last_lat` / `last_lng` / `last_position_at` are best-effort last-known-
+    position enrichment, persisted onto this same row by
+    `app.services.live_ops.publish_position` (resolving vehicle_id -> the
+    currently-assigned driver_id via their open `Shift`) whenever a position
+    is published for a vehicle whose driver has an availability row here.
+    Feeds `app.services.jobs.create_job_and_broadcast`'s nearest-first offer
+    ordering. All nullable, no defaults -- a driver who has never reported a
+    position (or whose position has never been correlated back to a driver)
+    simply has NULLs here, meaning "unknown position", not "at 0,0"."""
 
     __tablename__ = "driver_availability"
     __table_args__ = (
@@ -137,3 +147,8 @@ class DriverAvailability(Base, TenantScopedMixin, TimestampMixin):
     # Unconstrained cross-domain ref, see module docstring.
     driver_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # --- best-effort last-known position, see class docstring -----------------
+    last_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_position_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
