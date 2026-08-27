@@ -23,6 +23,16 @@ val localProperties = Properties().apply {
 }
 val mapboxAccessToken: String = localProperties.getProperty("MAPBOX_ACCESS_TOKEN", "")
 
+// Debug-build API base URL override, same local.properties (gitignored,
+// machine-specific) convention as mapboxAccessToken above. Lets each
+// developer/tester point their own debug build at whatever backend they
+// are actually using -- a real device on the LAN, a live deployed server
+// (e.g. the pilot Ubuntu server), or a staging URL -- without editing
+// this committed file. Falls back to the emulator-only 10.0.2.2 alias
+// (see ApiService.kt header comment) when local.properties does not set
+// it, preserving the previous zero-config emulator behavior.
+val apiBaseUrlOverride: String = localProperties.getProperty("API_BASE_URL", "http://10.0.2.2:8001")
+
 android {
     namespace = "au.com.threesixty.cabdispatch"
     compileSdk = 35
@@ -34,12 +44,11 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        // Android emulators reach the host machine's localhost via the special
-        // alias 10.0.2.2 (not 127.0.0.1/localhost) — see ApiService.kt header
-        // comment for the full explanation. Overridden per build type below so
-        // a real device on the same LAN/VPN can point at the host's LAN IP or a
-        // staging URL without code changes.
-        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:8001\"")
+        // See apiBaseUrlOverride above -- set API_BASE_URL in your own
+        // local.properties to point a debug build at a real device on
+        // the LAN, a live deployed backend, or a staging URL. Unset =
+        // the 10.0.2.2 emulator-only alias, same as before.
+        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrlOverride\"")
         // Runtime map token — set programmatically at startup via MapboxOptions.accessToken
         // (CabDispatchApp.kt), which is what the actual Maps SDK v11 API expects (not a manifest
         // meta-data entry, that was the older v9/v10 pattern).
