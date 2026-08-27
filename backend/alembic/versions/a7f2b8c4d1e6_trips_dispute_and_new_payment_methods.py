@@ -37,7 +37,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column('trips', sa.Column('flagged_for_review', sa.Boolean(), server_default=sa.text('0'), nullable=False))
+        # sa.false() (not sa.text('0')) -- '0' is a SQLite-only boolean literal;
+    # Postgres rejects an integer-typed default on a BOOLEAN column outright
+    # (DatatypeMismatchError), which this add_column never hit until it first
+    # ran against real Postgres.
+    op.add_column('trips', sa.Column('flagged_for_review', sa.Boolean(), server_default=sa.false(), nullable=False))
     op.add_column('trips', sa.Column('review_notes', sa.Text(), nullable=True))
     op.add_column('trips', sa.Column('voucher_code', sa.String(length=50), nullable=True))
     op.add_column('trips', sa.Column('account_reference', sa.String(length=100), nullable=True))

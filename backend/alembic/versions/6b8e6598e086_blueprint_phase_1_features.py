@@ -39,8 +39,16 @@ def upgrade() -> None:
     op.create_index(op.f('ix_fatigue_alerts_kind'), 'fatigue_alerts', ['kind'], unique=False)
     op.create_index(op.f('ix_fatigue_alerts_shift_id'), 'fatigue_alerts', ['shift_id'], unique=False)
     op.create_index(op.f('ix_fatigue_alerts_tenant_id'), 'fatigue_alerts', ['tenant_id'], unique=False)
-    op.add_column('devices', sa.Column('locate_requested', sa.Boolean(), server_default=sa.text('0'), nullable=False))
-    op.add_column('devices', sa.Column('reboot_requested', sa.Boolean(), server_default=sa.text('0'), nullable=False))
+        # sa.false() (not sa.text('0')) -- '0' is a SQLite-only boolean literal;
+    # Postgres rejects an integer-typed default on a BOOLEAN column outright
+    # (DatatypeMismatchError), which this add_column never hit until it first
+    # ran against real Postgres.
+    op.add_column('devices', sa.Column('locate_requested', sa.Boolean(), server_default=sa.false(), nullable=False))
+        # sa.false() (not sa.text('0')) -- '0' is a SQLite-only boolean literal;
+    # Postgres rejects an integer-typed default on a BOOLEAN column outright
+    # (DatatypeMismatchError), which this add_column never hit until it first
+    # ran against real Postgres.
+    op.add_column('devices', sa.Column('reboot_requested', sa.Boolean(), server_default=sa.false(), nullable=False))
     # ### end Alembic commands ###
 
 
