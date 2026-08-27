@@ -307,6 +307,7 @@ export function DriversPanel() {
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Password / PIN *</label>
             <Input
+              type="password"
               value={createForm.password}
               onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
               minLength={6}
