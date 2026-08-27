@@ -173,6 +173,25 @@ async def sync_trips(
 
         variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
 
+        # Real gap found live (2026-08-27, first-ever real device sync against a real
+        # deployed backend): a trip failing its own max-fare-variance check (device_total
+        # vs the server's independent gps_trace-based recomputation) was silently recorded
+        # in variance_pct/max_fare_check_passed with flagged_for_review left False -- those
+        # two columns existed purely for a human to separately query by hand, never actually
+        # surfacing on the dashboard's flagged-trips view (GET /v1/trips?flagged_for_review=true)
+        # the way a genuine dispute (PATCH /v1/trips/{id}/flag) does. A real trip synced during
+        # that test failed the check by 19% (nineteen times the 1% tolerance) and was never
+        # flagged. Auto-flag here instead of only via the manual Dispute button -- this is
+        # exactly the kind of fare-accuracy signal the NSW cl.14 self-certification story this
+        # whole Compliance Vault module exists for needs to actually be visible, not silent.
+        fare_check_passed = variance_pct <= 1.0
+        auto_flag_reason: str | None = None
+        if not fare_check_passed:
+            auto_flag_reason = (
+                f"Auto-flagged: fare variance {variance_pct}% exceeds 1% tolerance "
+                f"(device reported {item.device_total}, server recomputed {breakdown.grand_total})"
+            )
+
         # New payment methods (blueprint 5.2.5), same validate-before-persist contract as
         # close_trip (app/services/trips.py) — voucher/account/split_fare are validated against
         # the just-recomputed breakdown BEFORE any Trip row is constructed for this item, so a
@@ -239,8 +258,10 @@ async def sync_trips(
             account_reference=item.account_reference,
             split_payments=split_payments_to_store,
             gps_trace_ref=item.gps_trace_ref,
-            max_fare_check_passed=variance_pct <= 1.0,
+            max_fare_check_passed=fare_check_passed,
             variance_pct=variance_pct,
+            flagged_for_review=not fare_check_passed,
+            review_notes=auto_flag_reason,
             receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
             negotiated_total=item.negotiated_total,
         )

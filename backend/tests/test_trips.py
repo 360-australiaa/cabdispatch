@@ -594,6 +594,18 @@ async def test_sync_flags_variance_over_tolerance(client: AsyncClient, session: 
     trip = resp.json()["results"][0]["trip"]
     assert trip["max_fare_check_passed"] is False
     assert Decimal(trip["variance_pct"]) > Decimal("1.0")
+    # This test own name claimed the trip gets flagged -- until now nothing actually
+    # asserted that. Found live (2026-08-27) via a real device sync: a trip failed this
+    # exact check by 19% and flagged_for_review stayed False, invisible on the
+    # dashboard flagged-trips view unless someone thought to query variance_pct by
+    # hand. Now auto-flagged with a real reason, same as a manual Dispute would set.
+    assert trip["flagged_for_review"] is True
+    assert trip["review_notes"] and "variance" in trip["review_notes"].lower()
+
+    # The dashboard actual flagged-trips filter must be able to find it.
+    list_resp = await client.get("/v1/trips", params={"flagged_for_review": True}, headers=headers)
+    assert list_resp.status_code == 200
+    assert trip["id"] in {t["id"] for t in list_resp.json()["items"]}
 
 
 async def test_sync_is_idempotent_on_client_uuid(client: AsyncClient, session: AsyncSession):
