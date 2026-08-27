@@ -26,6 +26,14 @@ import kotlin.math.roundToInt
  */
 object MapboxStaticImage {
 
+    // Ben's own custom Mapbox Studio style was tried here first
+    // (`mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za`, provided 2026-08-28) but checked live
+    // (direct curl, both over Karachi and over NYC as a known data-rich sanity check) and found to
+    // render a blank/all-white PNG everywhere — an unpublished/broken Studio style, not a token or
+    // request-shape problem on this app's side (the real token itself works fine — see below).
+    // Reverted to the stock `mapbox/dark-v11` style so the dashboard shows a real map instead of a
+    // blank square; swap BASE_URL's username back to "benfarid" and STYLE to the custom id above
+    // once that style actually renders something server-side.
     private const val BASE_URL = "https://api.mapbox.com/styles/v1/mapbox"
 
     /** Dark style to match the wheel dashboard's dark theme (`WheelColors.bg`/`surface`). */

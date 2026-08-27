@@ -1,6 +1,10 @@
 package au.com.threesixty.cabdispatch.ui.screens.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,20 +12,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,24 +29,43 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
+import au.com.threesixty.cabdispatch.ui.deck.DeckButton
+import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
+import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
+import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
-private enum class SettingsSubScreen { MAIN, PRINTER_PAIRING, FARE_SCHEDULE }
+private enum class SettingsSubScreen { MAIN, PRINTER_PAIRING, FARE_SCHEDULE, FACTORY_RESET_PIN }
 
 /**
- * S6 — Settings/Diagnostics (spec B5). See [SettingsViewModel] for the data
- * flow; this file is presentation-only. [onFactoryReset] is called once the
- * device has been wiped, so the caller (NavHost) can pop back to S1 with an
- * empty back stack. [navController] is used only for the "< Back" affordance
- * below — S6 is reachable from every other screen (settings icon in each
- * screen's header/corner), so it needs an explicit way back to wherever the
- * driver came from, not just the system back gesture.
+ * 31 · Settings & Diagnostics — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node
+ * `28:107`). Presentation-only rewrite: every [SettingsViewModel] read/call below (GPS/network
+ * polling, printer discovery/pairing, offline-map download states, fare schedule, force-update +
+ * heartbeat, MDM locate response, admin-PIN-gated factory reset) is the exact same [SettingsUiState]
+ * surface as before, and [onFactoryReset] still fires via `LaunchedEffect(factoryResetComplete)`.
+ *
+ * The old scrolling two-pane layout is replaced by the frame's no-scroll 2×4 diagnostics grid
+ * (100dp tiles: emoji · name · live sub-line · status dot, amber border on warn) plus a row of
+ * outline action buttons and a ghost "← Dashboard". Grid tiles double as tap targets where a real
+ * action exists (Printer → pairing, Offline maps → download, Tariff signature → fare schedule).
+ *
+ * Frame deviations, flagged: the "Live heartbeat" tile binds to the real one-shot device
+ * heartbeat this ViewModel already sends on open ([SettingsUiState.forceUpdateStatus] — there is
+ * no periodic 30s publisher on this screen, see [SettingsViewModel.loadDeviceStatus]'s doc), not
+ * the frame's "every 30 s · last 4:05:12 PM" sample. "Meter calibration" has no backing state
+ * anywhere ([SettingsUiState] has none) so that slot instead shows the real MDM locate-request
+ * diagnostic when one is active. "🔔 TEST ALARM" has no backing action and is replaced by the
+ * real FARE SCHEDULE / PERMISSIONS / OFFLINE & SYNC entries this screen has always offered. The
+ * status strip is dashboard-owned state — omitted (ShiftStart/Permissions port precedent).
  */
 @Composable
 fun SettingsScreen(
@@ -58,8 +75,6 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var subScreen by remember { mutableStateOf(SettingsSubScreen.MAIN) }
-    var showResetDialog by remember { mutableStateOf(false) }
-    var pinInput by remember { mutableStateOf("") }
 
     LaunchedEffect(state.factoryResetComplete) {
         if (state.factoryResetComplete) onFactoryReset()
@@ -71,14 +86,13 @@ fun SettingsScreen(
             onBack = { navController.popBackStack() },
             onOpenPrinterPairing = { subScreen = SettingsSubScreen.PRINTER_PAIRING },
             onOpenFareSchedule = { subScreen = SettingsSubScreen.FARE_SCHEDULE },
-            onFactoryResetClick = { showResetDialog = true },
+            onFactoryResetClick = {
+                viewModel.clearFactoryResetError()
+                subScreen = SettingsSubScreen.FACTORY_RESET_PIN
+            },
             onDownloadOfflineMaps = viewModel::downloadOfflineMaps,
-            // Permissions checklist (2026-08-10 meter-polish pass) -- a real nav route
-            // (au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen),
-            // not a SettingsSubScreen case, since it needs no SettingsViewModel state at all --
-            // matches this file's own precedent of using navController directly for a
-            // destination outside this screen's own sub-screen enum (see onBack above).
             onOpenPermissions = { navController.navigate(CabDispatchRoutes.PERMISSIONS_CHECKLIST) },
+            onOpenOfflineSync = { navController.navigate(CabDispatchRoutes.OFFLINE_SYNC) },
         )
         SettingsSubScreen.PRINTER_PAIRING -> PrinterPairingContent(
             state = state,
@@ -89,48 +103,15 @@ fun SettingsScreen(
             state = state,
             onBack = { subScreen = SettingsSubScreen.MAIN },
         )
-    }
-
-    if (showResetDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showResetDialog = false
-                pinInput = ""
+        SettingsSubScreen.FACTORY_RESET_PIN -> AdminPinGateScreen(
+            subtitle = "Enter the admin PIN to wipe all local trip/shift data and sign out. This cannot be undone.",
+            errorMessage = state.factoryResetError,
+            verifying = state.factoryResetInProgress,
+            onCancel = {
                 viewModel.clearFactoryResetError()
+                subScreen = SettingsSubScreen.MAIN
             },
-            title = { Text("Factory reset") },
-            text = {
-                Column {
-                    Text("Enter the admin PIN to wipe all local trip/shift data and sign out. This cannot be undone.")
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = pinInput,
-                        onValueChange = { pinInput = it },
-                        label = { Text("Admin PIN") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (state.factoryResetError != null) {
-                        Text(state.factoryResetError, color = MaterialTheme.colorScheme.error)
-                    }
-                    if (state.factoryResetInProgress) {
-                        CircularProgressIndicator(modifier = Modifier.padding(top = 8.dp))
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.attemptFactoryReset(pinInput) },
-                    enabled = !state.factoryResetInProgress,
-                ) { Text("Wipe device") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showResetDialog = false
-                    pinInput = ""
-                    viewModel.clearFactoryResetError()
-                }) { Text("Cancel") }
-            },
+            onVerify = { pin -> viewModel.attemptFactoryReset(pin) },
         )
     }
 }
@@ -144,245 +125,366 @@ private fun MainSettingsContent(
     onFactoryResetClick: () -> Unit,
     onDownloadOfflineMaps: () -> Unit,
     onOpenPermissions: () -> Unit,
+    onOpenOfflineSync: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Deck.canvas)
+            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
     ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack) { Text("< Back") }
+        Text("Settings & diagnostics", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
+        Spacer(Modifier.height(20.dp))
+
+        // --- 2×4 diagnostics grid (frame `diagGrid`, 100dp tiles) — all live ViewModel state ---
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                GpsTile(state, Modifier.weight(1f))
+                NetworkTile(state, Modifier.weight(1f))
             }
-        }
-        item { Text("Settings / Diagnostics", style = MaterialTheme.typography.headlineSmall) }
-
-        item {
-            DiagnosticsCard(state)
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("App version", style = MaterialTheme.typography.titleMedium)
-                    Text(state.appVersion)
-                    val (label, color) = when (state.forceUpdateStatus) {
-                        ForceUpdateStatus.UNKNOWN_NO_DEVICE -> "Update status unknown (device not paired)" to MaterialTheme.colorScheme.onSurfaceVariant
-                        ForceUpdateStatus.UNKNOWN_OFFLINE -> "Update status unknown (offline)" to MaterialTheme.colorScheme.onSurfaceVariant
-                        ForceUpdateStatus.UP_TO_DATE -> "Up to date" to MaterialTheme.colorScheme.primary
-                        ForceUpdateStatus.REQUIRED -> "Update required" to MaterialTheme.colorScheme.error
-                    }
-                    Text(label, color = color)
-                }
-            }
-        }
-
-        item {
-            OutlinedButton(onClick = onOpenPrinterPairing, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    if (state.pairedPrinter != null) {
-                        "Receipt printer: ${state.pairedPrinter.name}"
-                    } else {
-                        "Pair a receipt printer"
-                    },
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                DiagTile(
+                    emoji = "🖨",
+                    name = "Printer",
+                    sub = state.pairedPrinter?.let { "Paired · ${it.name}" } ?: "Not paired — tap to pair",
+                    tone = if (state.pairedPrinter != null) DiagTone.OK else DiagTone.WARN,
+                    onClick = onOpenPrinterPairing,
+                    modifier = Modifier.weight(1f),
                 )
+                OfflineMapsTile(state, onDownloadOfflineMaps, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                DiagTile(
+                    emoji = "🔏",
+                    name = "Tariff signature",
+                    sub = state.fareSchedule?.let { "${it.name} · cached" } ?: "No cached tariff",
+                    tone = if (state.fareSchedule != null) DiagTone.OK else DiagTone.WARN,
+                    onClick = onOpenFareSchedule,
+                    modifier = Modifier.weight(1f),
+                )
+                AppVersionTile(state, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                HeartbeatTile(state, Modifier.weight(1f))
+                LocateTile(state, Modifier.weight(1f))
             }
         }
 
-        item {
-            OutlinedButton(onClick = onOpenFareSchedule, modifier = Modifier.fillMaxWidth()) {
-                Text("Fare schedule (passenger display)")
-            }
-        }
+        Spacer(Modifier.weight(1f))
 
-        item {
-            // 2026-08-10 meter-polish pass -- see PermissionsChecklistScreen's own doc for why
-            // this is read-only status, not a request flow.
-            OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.fillMaxWidth()) {
-                Text("App permissions")
+        // --- Action row (frame `settingsActions`, 68dp outline buttons) ---
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            ActionTile("💲 FARE SCHEDULE", onClick = onOpenFareSchedule, modifier = Modifier.weight(1f))
+            val mapsLabel = when (state.offlineMapDownload) {
+                is OfflineMapDownloadState.Downloading -> "🗺 DOWNLOADING…"
+                is OfflineMapDownloadState.Failed -> "🗺 RETRY MAPS"
+                is OfflineMapDownloadState.Completed -> "🗺 MAPS READY"
+                is OfflineMapDownloadState.NotStarted -> "🗺 UPDATE MAPS"
             }
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Offline maps", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Download the Sydney metro region so the dashboard's map background keeps " +
-                            "working with zero signal — the meter itself already works fully offline, " +
-                            "this just covers the map imagery too.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    when (val dl = state.offlineMapDownload) {
-                        is OfflineMapDownloadState.NotStarted ->
-                            OutlinedButton(onClick = onDownloadOfflineMaps, modifier = Modifier.fillMaxWidth()) {
-                                Text("Download offline maps")
-                            }
-                        is OfflineMapDownloadState.Downloading -> {
-                            LinearProgressIndicator(
-                                progress = { dl.progressPercent / 100f },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Text("Downloading… ${dl.progressPercent}%", style = MaterialTheme.typography.bodySmall)
-                        }
-                        is OfflineMapDownloadState.Completed -> Text(
-                            "Offline maps ready",
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        is OfflineMapDownloadState.Failed -> Column {
-                            Text("Download failed: ${dl.message}", color = MaterialTheme.colorScheme.error)
-                            OutlinedButton(onClick = onDownloadOfflineMaps, modifier = Modifier.fillMaxWidth()) {
-                                Text("Retry")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Button(
+            ActionTile(
+                mapsLabel,
+                onClick = onDownloadOfflineMaps,
+                enabled = state.offlineMapDownload !is OfflineMapDownloadState.Downloading,
+                modifier = Modifier.weight(1f),
+            )
+            ActionTile("🔐 PERMISSIONS", onClick = onOpenPermissions, modifier = Modifier.weight(1f))
+            ActionTile("⇅ OFFLINE & SYNC", onClick = onOpenOfflineSync, modifier = Modifier.weight(1f))
+            ActionTile(
+                "⚠ FACTORY RESET · ADMIN PIN",
                 onClick = onFactoryResetClick,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Factory reset") }
+                danger = true,
+                modifier = Modifier.weight(1.4f),
+            )
         }
+
+        Spacer(Modifier.height(16.dp))
+        DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp), onClick = onBack)
     }
+}
+
+// --- Diagnostics tiles ---
+
+private enum class DiagTone(val dot: Color) {
+    OK(Deck.forHire),
+    WARN(Deck.stopped),
+    BAD(Deck.hired),
 }
 
 @Composable
-private fun DiagnosticsCard(state: SettingsUiState) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            val (gpsLabel, gpsColor) = when (state.gpsQuality) {
-                GpsQuality.GOOD -> "Good (${state.gpsAccuracyM?.toInt()}m)" to MaterialTheme.colorScheme.primary
-                GpsQuality.FAIR -> "Fair (${state.gpsAccuracyM?.toInt()}m)" to MaterialTheme.colorScheme.tertiary
-                GpsQuality.POOR -> "Poor (${state.gpsAccuracyM?.toInt()}m)" to MaterialTheme.colorScheme.error
-                GpsQuality.NO_FIX -> "No fix" to MaterialTheme.colorScheme.error
-                GpsQuality.PERMISSION_DENIED -> "Location permission not granted" to MaterialTheme.colorScheme.error
-            }
-            DiagnosticRow("GPS quality", gpsLabel, gpsColor)
-
-            val (netLabel, netColor) = when (state.networkStatus) {
-                NetworkStatus.WIFI -> "Wi-Fi" to MaterialTheme.colorScheme.primary
-                NetworkStatus.CELLULAR -> "Cellular" to MaterialTheme.colorScheme.primary
-                NetworkStatus.OTHER -> "Connected" to MaterialTheme.colorScheme.primary
-                NetworkStatus.OFFLINE -> "Offline" to MaterialTheme.colorScheme.error
-            }
-            DiagnosticRow("Network", netLabel, netColor)
-
-            // Idle (no locate request seen this screen-visit) deliberately renders nothing — see
-            // LocateResponseState's doc: this row should only appear once an admin has actually
-            // used the dashboard's "Locate" command against this device.
-            val locateRow = when (state.locateResponse) {
-                LocateResponseState.Idle -> null
-                LocateResponseState.Sent -> "Position sent" to MaterialTheme.colorScheme.primary
-                LocateResponseState.NoFixYet -> "Waiting for GPS fix" to MaterialTheme.colorScheme.error
-                LocateResponseState.NoVehicleBound -> "No vehicle bound" to MaterialTheme.colorScheme.error
-                is LocateResponseState.Failed -> "Failed to send" to MaterialTheme.colorScheme.error
-            }
-            if (locateRow != null) {
-                val (locateLabel, locateColor) = locateRow
-                DiagnosticRow("Locate request", locateLabel, locateColor)
-            }
-        }
+private fun GpsTile(state: SettingsUiState, modifier: Modifier) {
+    val (sub, tone) = when (state.gpsQuality) {
+        GpsQuality.GOOD -> "Lock · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.OK
+        GpsQuality.FAIR -> "Fair · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.OK
+        GpsQuality.POOR -> "Poor · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.WARN
+        GpsQuality.NO_FIX -> "No fix" to DiagTone.BAD
+        GpsQuality.PERMISSION_DENIED -> "Location permission not granted" to DiagTone.BAD
     }
+    DiagTile(emoji = "🛰", name = "GPS", sub = sub, tone = tone, modifier = modifier)
 }
 
 @Composable
-private fun DiagnosticRow(label: String, value: String, valueColor: Color) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = valueColor)
+private fun NetworkTile(state: SettingsUiState, modifier: Modifier) {
+    val (sub, tone) = when (state.networkStatus) {
+        NetworkStatus.WIFI -> "Wi-Fi · connected to fleet server" to DiagTone.OK
+        NetworkStatus.CELLULAR -> "Cellular · connected to fleet server" to DiagTone.OK
+        NetworkStatus.OTHER -> "Connected to fleet server" to DiagTone.OK
+        NetworkStatus.OFFLINE -> "Offline" to DiagTone.BAD
+    }
+    DiagTile(emoji = "📶", name = "Network", sub = sub, tone = tone, modifier = modifier)
+}
+
+@Composable
+private fun OfflineMapsTile(state: SettingsUiState, onDownload: () -> Unit, modifier: Modifier) {
+    val (sub, tone) = when (val dl = state.offlineMapDownload) {
+        is OfflineMapDownloadState.Completed -> "Sydney metro · up to date" to DiagTone.OK
+        is OfflineMapDownloadState.Downloading -> "Downloading… ${dl.progressPercent}%" to DiagTone.WARN
+        is OfflineMapDownloadState.Failed -> "Download failed — ${dl.message}" to DiagTone.BAD
+        is OfflineMapDownloadState.NotStarted -> "Not downloaded — tap to fetch" to DiagTone.WARN
+    }
+    DiagTile(
+        emoji = "🗺",
+        name = "Offline maps",
+        sub = sub,
+        tone = tone,
+        onClick = if (state.offlineMapDownload is OfflineMapDownloadState.Downloading) null else onDownload,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun AppVersionTile(state: SettingsUiState, modifier: Modifier) {
+    val (label, tone) = when (state.forceUpdateStatus) {
+        ForceUpdateStatus.UNKNOWN_NO_DEVICE -> "unknown (device not paired)" to DiagTone.WARN
+        ForceUpdateStatus.UNKNOWN_OFFLINE -> "unknown (offline)" to DiagTone.WARN
+        ForceUpdateStatus.UP_TO_DATE -> "up to date" to DiagTone.OK
+        ForceUpdateStatus.REQUIRED -> "update required" to DiagTone.BAD
+    }
+    DiagTile(emoji = "📦", name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)
+}
+
+/** Binds the frame's "Live heartbeat" tile to the real one-shot heartbeat result — see class doc. */
+@Composable
+private fun HeartbeatTile(state: SettingsUiState, modifier: Modifier) {
+    val (sub, tone) = when (state.forceUpdateStatus) {
+        ForceUpdateStatus.UP_TO_DATE, ForceUpdateStatus.REQUIRED ->
+            "Sent on open · acknowledged by fleet server" to DiagTone.OK
+        ForceUpdateStatus.UNKNOWN_OFFLINE -> "Failed — offline or server unreachable" to DiagTone.BAD
+        ForceUpdateStatus.UNKNOWN_NO_DEVICE -> "Not sent — device not registered" to DiagTone.WARN
+    }
+    DiagTile(emoji = "💓", name = "Device heartbeat", sub = sub, tone = tone, modifier = modifier)
+}
+
+/** MDM locate-response diagnostic — only meaningful once an admin has requested a locate;
+ * renders a quiet placeholder tile otherwise (the frame's 8th grid slot). */
+@Composable
+private fun LocateTile(state: SettingsUiState, modifier: Modifier) {
+    val row = when (val locate = state.locateResponse) {
+        LocateResponseState.Idle -> null
+        LocateResponseState.Sent -> "Position sent to fleet server" to DiagTone.OK
+        LocateResponseState.NoFixYet -> "Waiting for GPS fix" to DiagTone.WARN
+        LocateResponseState.NoVehicleBound -> "No vehicle bound" to DiagTone.WARN
+        is LocateResponseState.Failed -> "Failed to send — ${locate.message}" to DiagTone.BAD
+    }
+    if (row == null) {
+        Spacer(modifier)
+    } else {
+        DiagTile(emoji = "📡", name = "Locate request", sub = row.first, tone = row.second, modifier = modifier)
     }
 }
+
+/** One 100dp diagnostics tile (frame node 28:136 etc): emoji 26 · name 17 semibold · sub 14 ·
+ * 12dp status dot; amber/red 1.5dp border when non-nominal. */
+@Composable
+private fun DiagTile(
+    emoji: String,
+    name: String,
+    sub: String,
+    tone: DiagTone,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    val borderMod = when (tone) {
+        DiagTone.OK -> Modifier.border(1.dp, Deck.strokeSubtle, shape)
+        DiagTone.WARN -> Modifier.border(1.5.dp, Deck.stopped.copy(alpha = 0.7f), shape)
+        DiagTone.BAD -> Modifier.border(1.5.dp, Deck.hired.copy(alpha = 0.7f), shape)
+    }
+    Row(
+        modifier = modifier
+            .height(100.dp)
+            .clip(shape)
+            .background(Deck.panel)
+            .then(borderMod)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Text(emoji, fontSize = 26.sp)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(name, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Deck.textPrimary)
+            Text(
+                sub,
+                fontFamily = InterFamily,
+                fontSize = 14.sp,
+                color = if (tone == DiagTone.OK) Deck.textMuted else tone.dot,
+            )
+        }
+        Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(tone.dot))
+    }
+}
+
+/** 68dp outline action button (frame `settingsActions`); red-tinted for the factory reset. */
+@Composable
+private fun ActionTile(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    val borderColor = if (danger) Deck.hired.copy(alpha = 0.6f) else Deck.strokeStrong
+    Box(
+        modifier = modifier
+            .height(68.dp)
+            .clip(shape)
+            .background(Deck.card)
+            .border(1.5.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            color = if (danger) Deck.hired else Deck.textSecondary,
+        )
+    }
+}
+
+// --- Sub-screens (same SettingsViewModel wiring as before, reskinned to Deck tokens) ---
 
 @Composable
 private fun PrinterPairingContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("< Back") }
-        }
-        Text("Printer pairing", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(12.dp))
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Deck.canvas)
+            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
+    ) {
+        Text("Printer pairing", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
+        Spacer(Modifier.height(8.dp))
         Text(
-            if (state.pairedPrinter != null) "Paired: ${state.pairedPrinter.name}" else "No printer paired",
-            style = MaterialTheme.typography.bodyMedium,
+            state.pairedPrinter?.let { "Paired: ${it.name}" } ?: "No printer paired",
+            fontFamily = InterFamily,
+            fontSize = 15.sp,
+            color = Deck.textSecondary,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(20.dp))
 
-        Button(onClick = viewModel::discoverPrinters, enabled = !state.printerDiscovering) {
-            Text(if (state.printerDiscovering) "Scanning..." else "Scan for printers")
-        }
-        Spacer(Modifier.height(12.dp))
+        DeckButton(
+            text = if (state.printerDiscovering) "SCANNING…" else "SCAN FOR PRINTERS",
+            kind = DeckButtonKind.Primary,
+            enabled = !state.printerDiscovering,
+            modifier = Modifier.width(320.dp),
+            onClick = viewModel::discoverPrinters,
+        )
+        Spacer(Modifier.height(20.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(state.discoveredPrinters) { device: PrinterDevice ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(device.name)
-                        OutlinedButton(onClick = { viewModel.pairPrinter(device.id) }) { Text("Pair") }
-                    }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Deck.panel)
+                        .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(device.name, fontFamily = InterFamily, fontSize = 15.sp, color = Deck.textPrimary)
+                    DeckButton(
+                        text = "PAIR",
+                        kind = DeckButtonKind.Primary,
+                        heightDp = 44,
+                        fontSize = 13,
+                        modifier = Modifier.width(110.dp),
+                    ) { viewModel.pairPrinter(device.id) }
                 }
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
     }
 }
 
 @Composable
 private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("< Back") }
-        }
-        Text("Fare schedule", style = MaterialTheme.typography.headlineSmall)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Deck.canvas)
+            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
+    ) {
+        Text("Fare schedule", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
         Text(
             "Rates displayed to passengers per the taxi fare regulations (cl.15 display requirement).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = InterFamily,
+            fontSize = 13.sp,
+            color = Deck.textMuted,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(20.dp))
 
         val tariff = state.fareSchedule
         when {
-            state.fareScheduleLoading -> CircularProgressIndicator()
-            tariff == null -> Text("No cached fare schedule available.")
-            else -> {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(tariff.name, style = MaterialTheme.typography.titleMedium)
-                        HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                        FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
-                        if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
-                        FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
-                        FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
-                        FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
-                        FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
-                        if (tariff.holidayRate1 != "0") {
-                            FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
-                        }
-                        if (tariff.holidayRate2 != "0") {
-                            FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
-                        }
-                        FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
-                        FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
-                    }
+            state.fareScheduleLoading -> CircularProgressIndicator(color = Deck.yellow)
+            tariff == null -> Text(
+                "No cached fare schedule available.",
+                fontFamily = InterFamily,
+                fontSize = 15.sp,
+                color = Deck.textSecondary,
+            )
+            else -> Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Deck.panel)
+                    .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(18.dp))
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Deck.textPrimary)
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Deck.strokeSubtle))
+                FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
+                if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
+                FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
+                FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
+                FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
+                FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
+                if (tariff.holidayRate1 != "0") {
+                    FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
                 }
+                if (tariff.holidayRate2 != "0") {
+                    FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
+                }
+                FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
+                FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
             }
         }
+
+        Spacer(Modifier.weight(1f))
+        DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
     }
 }
 
 @Composable
 private fun FareScheduleRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-        Text("$$value", style = MaterialTheme.typography.bodyMedium)
+        Text(label, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.textSecondary)
+        Text("$$value", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Deck.textPrimary)
     }
 }

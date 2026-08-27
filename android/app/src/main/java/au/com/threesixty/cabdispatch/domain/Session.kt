@@ -19,6 +19,22 @@ data class DriverSession(
     val driverId: String,
     val driverName: String,
     val vehicleId: String,
+    /**
+     * The real fleet-vehicle UUID for [vehicleId] (a driver-entered/QR'd rego, e.g. `"KHI-01"`),
+     * resolved by [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.bindVehicle]
+     * via a live `GET /v1/fleet/vehicles` lookup — see that method's own doc. Deliberately a
+     * *separate* field rather than replacing [vehicleId]: every existing display
+     * ([au.com.threesixty.cabdispatch.ui.screens.shiftstart.ShiftStartScreen]'s VEHICLE row, the
+     * dashboard identity chip, the inspection screen's subtitle) and every existing API call that
+     * already worked against the rego string (`startShift`, duress trigger) stay exactly as they
+     * were; only [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat], which found live
+     * that `POST /v1/fleet/positions` 404s on anything but the real UUID, reads this field —
+     * falling back to skipping that tick's publish (not to [vehicleId]) if it's `null`, the same
+     * "nothing honest to send yet" posture that class already uses for a missing GPS fix. `null`
+     * whenever the lookup fails or finds no match (offline bind, typo'd rego, vehicle not yet
+     * seeded server-side) — a real, silently-degrading gap, not a crash.
+     */
+    val vehicleUuid: String? = null,
     val shiftId: String?,
     /**
      * ISO-8601 shift-start timestamp (`ShiftDto.startAt`, backend-assigned at

@@ -113,6 +113,24 @@ interface ApiService {
     @POST("/v1/fleet/positions")
     suspend fun publishPosition(@Body body: PositionPublishRequestDto): PositionPublishResponseDto
 
+    /** `GET /v1/fleet/vehicles` — tenant-scoped vehicle roster (the same list a dispatcher sees
+     * on Fleet & Drivers), callable with a driver-role token too (checked live: a real driver JWT
+     * gets a real 200, tenant-filtered same as staff). Added so [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.bindVehicle]
+     * can resolve a manually-typed rego to the real vehicle UUID [publishPosition] actually
+     * requires in [PositionPublishRequestDto.vehicleId] — found live: that endpoint 404s
+     * "Vehicle not found" on a rego string, only ever accepting the real `id`. No server-side
+     * rego filter is assumed/used here; the caller fetches the page and matches client-side. */
+    @GET("/v1/fleet/vehicles")
+    suspend fun listVehicles(
+        @Query("skip") skip: Int = 0,
+        // Backend caps this at 100 (checked live: 200 -> real 422 "Input should be less than or
+        // equal to 100"). A tenant with a fleet bigger than one page is a real, silently-degrading
+        // gap here — this call has no pagination loop — but matches this app's existing
+        // best-effort posture elsewhere rather than adding one for a fleet-roster lookup this pass
+        // wasn't scoped to build out fully.
+        @Query("limit") limit: Int = 100,
+    ): VehiclePageDto
+
     // ---- Tariffs (B6 fare engine reads these; server is the source of truth,
     // cached + signed on-device per B7 offline behaviour) ----
 
@@ -137,6 +155,20 @@ interface ApiService {
      * [au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache]. */
     @GET("/v1/tariffs/signing-public-key")
     suspend fun tariffSigningPublicKey(): TariffSigningPublicKeyDto
+
+    /** Named tariff presets (MTI parity / blueprint 5.2.3) — powers the v2 Tariff Select screen
+     * (`17b`, Command Deck redesign). Mirrors `GET /v1/tariffs/presets` -> `list[TariffPresetRead]`. */
+    @GET("/v1/tariffs/presets")
+    suspend fun tariffPresets(): List<TariffPresetDto>
+
+    /** Auto-suggest the best-matching tariff for a position (blueprint 9.1) — v2 Tariff Select's
+     * "suggested" chip. Mirrors `GET /v1/tariffs/suggest`. */
+    @GET("/v1/tariffs/suggest")
+    suspend fun suggestTariff(
+        @Query("lat") lat: Double,
+        @Query("lng") lng: Double,
+        @Query("vehicle_class") vehicleClass: String? = null,
+    ): TariffSuggestionDto
 
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
@@ -183,6 +215,38 @@ interface ApiService {
         @Path("tripId") tripId: String,
         @Body body: TripFlagRequestDto,
     ): TripDto
+
+    /** Emails the trip's PDF receipt (Command Deck v2 Receipt screen, `22`). Mirrors
+     * `POST /v1/trips/{trip_id}/receipt/email` — mock-aware response (`mock=true` when no
+     * SendGrid key is configured server-side; still generates/returns the PDF path). */
+    @POST("/v1/trips/{tripId}/receipt/email")
+    suspend fun emailReceipt(
+        @Path("tripId") tripId: String,
+        @Body body: ReceiptEmailRequestDto,
+    ): ReceiptEmailResponseDto
+
+    /** SMSes the trip's receipt link — `POST /v1/trips/{trip_id}/receipt/sms`, same mock-aware
+     * convention as [emailReceipt]. */
+    @POST("/v1/trips/{tripId}/receipt/sms")
+    suspend fun smsReceipt(
+        @Path("tripId") tripId: String,
+        @Body body: ReceiptSmsRequestDto,
+    ): ReceiptSmsResponseDto
+
+    /** Driver/vehicle accreditation-expiry feed (`GET /v1/fleet/compliance-expiry`) — the v2
+     * Profile screen's compliance-warning cards. */
+    @GET("/v1/fleet/compliance-expiry")
+    suspend fun complianceExpiry(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 50,
+    ): ComplianceExpiryPageDto
+
+    /** Fatigue alerts (`GET /v1/fatigue-alerts`) — the v2 Shift screen's fatigue strip. */
+    @GET("/v1/fatigue-alerts")
+    suspend fun fatigueAlerts(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): FatigueAlertPageDto
 
     // ---- Shifts (S1 open, S5 close/report) ----
 
@@ -379,6 +443,20 @@ interface ApiService {
         @Part file: MultipartBody.Part,
     ): DuressEventDto
 
+    /** Cabin-camera still-frame upload (duress snapshot gallery, 2026-08-27 — backend/dashboard
+     * already shipped, see `android/HANDOFF.md`). Mirrors
+     * `POST /v1/duress/{event_id}/snapshot` — multipart `file` field, optional `captured_at`
+     * (ISO 8601) query param; response is `{id, event_id, captured_at, created_at}`, none of
+     * which this device needs to act on — the upload firing is what matters, same as
+     * [uploadDuressAudio]. */
+    @Multipart
+    @POST("/v1/duress/{eventId}/snapshot")
+    suspend fun uploadDuressSnapshot(
+        @Path("eventId") eventId: String,
+        @Part file: MultipartBody.Part,
+        @Query("captured_at") capturedAt: String? = null,
+    ): DuressSnapshotDto
+
     // ---- Compliance Vault (read-only on-device — Profile > Compliance, spec §8 rows 20-21) ----
     //
     // Full CRUD (upload/edit/delete) is owner/admin/dispatcher-only server-side
@@ -561,12 +639,33 @@ data class DeviceDto(
  * documented examples ("available"/"on_trip"/"offline"/"break") — any short non-empty string
  * round-trips fine.
  */
+/** One row of `GET /v1/fleet/vehicles` — only the fields [ApiService.listVehicles]'s one caller
+ * actually needs (`rego` to match against, `id` to resolve to); the real response carries more
+ * (vin/vehicle_class/status/...) that this app has no use for yet, left off rather than guessed. */
+@Serializable
+data class VehicleDto(
+    val id: String,
+    val rego: String,
+)
+
+@Serializable
+data class VehiclePageDto(
+    val items: List<VehicleDto>,
+    val total: Int,
+)
+
 @Serializable
 data class PositionPublishRequestDto(
     @SerialName("vehicle_id") val vehicleId: String,
     val lat: Double,
     val lng: Double,
     val status: String,
+    /** 0-100, or `null` if unreadable (see [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat]'s
+     * read site). Optional/additive — same `POST /v1/fleet/positions` call, no new endpoint. */
+    val battery: Int? = null,
+    /** `"wifi"` / `"4g"` / `"offline"` (or similar transport-derived categories) — see this
+     * field's read site for the exact mapping. Optional/additive, same reasoning as [battery]. */
+    val network: String? = null,
 )
 
 /** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`
@@ -1197,4 +1296,115 @@ data class ZoneStatsDto(
     @SerialName("jobs_holding") val jobsHolding: Int,
     @SerialName("bookings_last_hour") val bookingsLastHour: Int,
     @SerialName("street_hails_last_hour") val streetHailsLastHour: Int,
+)
+
+
+// ---- Command Deck v2 additions (2026-08-27 redesign port) ----------------------------------
+
+/** Mirrors `TariffPresetRead` (`backend/app/schemas/tariffs.py`). Only the fields the Tariff
+ * Select screen renders are declared — `ignoreUnknownKeys` drops the rest safely. */
+@Serializable
+data class TariffPresetDto(
+    val key: String,
+    val label: String,
+    val description: String,
+    val defaults: TariffPresetDefaultsDto,
+)
+
+@Serializable
+data class TariffPresetDefaultsDto(
+    val region: String,
+    val booked: Boolean,
+    @SerialName("flag_fall") val flagFall: String,
+    @SerialName("dist_rate_1") val distRate1: String,
+    @SerialName("dist_rate_2") val distRate2: String,
+    @SerialName("night_rate_1") val nightRate1: String,
+    @SerialName("night_rate_2") val nightRate2: String,
+    @SerialName("waiting_rate_per_min") val waitingRatePerMin: String,
+)
+
+/** Mirrors `TariffSuggestionRead`. */
+@Serializable
+data class TariffSuggestionDto(
+    @SerialName("tariff_id") val tariffId: String,
+    @SerialName("tariff_name") val tariffName: String,
+    @SerialName("time_class") val timeClass: String,
+    val reason: String,
+)
+
+/** Mirrors `ReceiptEmailRequest`/`ReceiptSmsRequest`. */
+@Serializable
+data class ReceiptEmailRequestDto(@SerialName("to_email") val toEmail: String)
+
+@Serializable
+data class ReceiptSmsRequestDto(@SerialName("to_phone") val toPhone: String)
+
+/** Mock-aware responses (see `ReceiptEmailResponse`'s own doc server-side): `mock=true` +
+ * `would_send_to` when no provider key is configured; real-send fields otherwise. */
+@Serializable
+data class ReceiptEmailResponseDto(
+    val mock: Boolean,
+    @SerialName("would_send_to") val wouldSendTo: String? = null,
+    @SerialName("to_email") val toEmail: String? = null,
+    @SerialName("receipt_ref") val receiptRef: String? = null,
+    @SerialName("pdf_relative_path") val pdfRelativePath: String,
+)
+
+@Serializable
+data class ReceiptSmsResponseDto(
+    val mock: Boolean,
+    @SerialName("would_send_to") val wouldSendTo: String? = null,
+    @SerialName("to_phone") val toPhone: String? = null,
+    @SerialName("receipt_ref") val receiptRef: String? = null,
+    @SerialName("pdf_relative_path") val pdfRelativePath: String,
+)
+
+/** One row of `GET /v1/fleet/compliance-expiry` — `ComplianceExpiryItem`. */
+@Serializable
+data class ComplianceExpiryItemDto(
+    @SerialName("entity_type") val entityType: String,
+    @SerialName("entity_id") val entityId: String,
+    val label: String,
+    val field: String,
+    @SerialName("expiry_date") val expiryDate: String,
+    val status: String,
+    @SerialName("days_remaining") val daysRemaining: Int,
+)
+
+@Serializable
+data class ComplianceExpiryPageDto(
+    val items: List<ComplianceExpiryItemDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors `FatigueAlertRead` (subset — the fields the Shift screen renders). */
+@Serializable
+data class FatigueAlertDto(
+    val id: String,
+    @SerialName("driver_id") val driverId: String? = null,
+    @SerialName("vehicle_id") val vehicleId: String? = null,
+    @SerialName("shift_id") val shiftId: String? = null,
+    val kind: String,
+    @SerialName("triggered_at") val triggeredAt: String,
+)
+
+@Serializable
+data class FatigueAlertPageDto(
+    val items: List<FatigueAlertDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors the backend's duress-snapshot upload response (`app/schemas/duress.py`, or the
+ * equivalent inline response model — see `POST /v1/duress/{event_id}/snapshot`'s doc). Not
+ * consumed for anything today, same as [DuressEventDto] from [ApiService.uploadDuressAudio]. */
+@Serializable
+data class DuressSnapshotDto(
+    val id: String,
+    @SerialName("event_id") val eventId: String,
+    @SerialName("captured_at") val capturedAt: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )

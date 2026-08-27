@@ -7,10 +7,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import au.com.threesixty.cabdispatch.ui.screens.availabletrips.AvailableTripOfferScreen
 import au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen
-import au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen
+import au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen
 import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
+import au.com.threesixty.cabdispatch.ui.screens.logoff.LogOffScreen
 import au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessageThreadScreen
+import au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen
+import au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncScreen
 import au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen
 import au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen
 import au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen
@@ -93,6 +96,18 @@ object CabDispatchRoutes {
     const val PLOT_ZONE = "plot_zone"
     const val ZONE_STATISTICS = "zone_statistics"
 
+    /** Dock-menu v2 pass (2026-08-26): "Navigate" placeholder. Figma node `35:356` ("15 · Navigate",
+     * fileKey `JhEhok3n9bntRNS5Y1u3Yc`) mocks up a full-screen in-trip turn-by-turn banner/ETA
+     * overlay, but this codebase has no turn-by-turn navigation feature anywhere to back it with —
+     * the only real "navigate" affordance that exists is
+     * [au.com.threesixty.cabdispatch.ui.overlays.NavigateOverlay]/`openInMaps`, a one-shot deep
+     * link out to the device's own Maps app (no live route/ETA/speed state this app owns). This
+     * route is a visual-only placeholder screen matching the Figma layout with clearly-labelled
+     * static/mock figures — see [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s
+     * doc. TODO(product decision): a real Navigate feature needs a turn-by-turn/ETA data source
+     * (e.g. Mapbox Navigation SDK) this app does not currently have. */
+    const val NAVIGATE_PLACEHOLDER = "navigate_placeholder"
+
     /** Boot-time Terms and Conditions / Privacy Policy disclaimer (2026-08-10 meter-polish
      * pass), registered ahead of S1 -- see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]
      * for the gate deciding whether this is ever actually shown (once per app-version, per
@@ -105,6 +120,19 @@ object CabDispatchRoutes {
      * read-only status display of every runtime permission this app uses. See
      * [au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen]. */
     const val PERMISSIONS_CHECKLIST = "permissions_checklist"
+
+    /** Row 35 — Offline & Sync status (Phase B v2 pass, fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
+     * `20:114`): a new, dedicated read-only view over the outbox-drain/tariff-cache machinery that
+     * already existed with no UI of its own before this pass (see
+     * [au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncViewModel]'s doc).
+     * Reachable from Settings & Diagnostics (S6). */
+    const val OFFLINE_SYNC = "offline_sync"
+
+    /** Row 36 — Log Off confirmation (Phase B v2 pass, fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
+     * `20:137`): a confirmation step in front of the dashboard's "LOG OFF" chip, which previously
+     * jumped straight to [SHIFT_REPORT] with no confirmation at all. See
+     * [au.com.threesixty.cabdispatch.ui.screens.logoff.LogOffScreen]'s doc. */
+    const val LOG_OFF = "log_off"
 }
 
 @Composable
@@ -120,13 +148,12 @@ fun CabDispatchNavHost(
             LoginVehicleBindScreen(navController = navController)
         }
         composable(CabDispatchRoutes.IDLE) {
-            // Wheel-redesign home surface (dashboard shell agent) — replaces the old S2/Idle
-            // screen; still registered under the same IDLE route key so every sibling
-            // navigate(CabDispatchRoutes.IDLE) call above/elsewhere keeps working unchanged. The
-            // old ui/screens/idle/IdleScreen.kt + IdleViewModel.kt are left in the tree
-            // (unreferenced) rather than deleted, since their available-toggle/today's-stats
-            // logic is what WheelDashboardViewModel's equivalent wiring was ported from.
-            WheelDashboardScreen(navController = navController)
+            // Command Deck v2 home (2026-08-27 redesign port) — replaces the rotating-wheel
+            // dashboard; still registered under the same IDLE route key so every sibling
+            // navigate(CabDispatchRoutes.IDLE) call keeps working unchanged. The old
+            // WheelDashboardScreen (and the older IdleScreen before it) are left in the tree
+            // unreferenced; DeckHomeScreen reuses WheelDashboardViewModel as-is.
+            DeckHomeScreen(navController = navController)
         }
         composable(CabDispatchRoutes.HIRED) {
             HiredScreen(navController = navController)
@@ -203,6 +230,15 @@ fun CabDispatchNavHost(
         }
         composable(CabDispatchRoutes.PERMISSIONS_CHECKLIST) {
             PermissionsChecklistScreen(navController = navController)
+        }
+        composable(CabDispatchRoutes.OFFLINE_SYNC) {
+            OfflineSyncScreen(navController = navController)
+        }
+        composable(CabDispatchRoutes.LOG_OFF) {
+            LogOffScreen(navController = navController)
+        }
+        composable(CabDispatchRoutes.NAVIGATE_PLACEHOLDER) {
+            NavigatePlaceholderScreen(navController = navController)
         }
     }
 }

@@ -86,9 +86,10 @@ class TariffCache(
      * verify against at all, and failing is correct, not a false positive).
      */
     private suspend fun verifySignatureOrThrow(dto: TariffDto) {
+        val cachedKey = signingKeyCache.getCachedPublicKey()
         val signature = dto.signature
             ?: throw TariffSignatureException("Tariff ${dto.id} has no signature — refusing to cache")
-        val publicKeyBase64 = signingKeyCache.getCachedPublicKey()
+        val publicKeyBase64 = cachedKey
             ?: runCatching { signingKeyCache.refresh() }.getOrNull()
             ?: throw TariffSignatureException(
                 "No tariff-signing public key available (never cached, and a fresh fetch failed " +

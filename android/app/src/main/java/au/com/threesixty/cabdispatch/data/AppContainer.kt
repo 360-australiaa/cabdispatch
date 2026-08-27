@@ -26,6 +26,7 @@ import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
 import au.com.threesixty.cabdispatch.domain.ZonesRepository
 import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
+import au.com.threesixty.cabdispatch.domain.duress.DuressCameraCapture
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
 import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
 import au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway
@@ -303,11 +304,17 @@ object AppContainer {
      * process-lifetime application [appContext] — see that class's doc for the permission/
      * simplification write-up. */
     val duressAudioRecorder: DuressAudioRecorder by lazy { DuressAudioRecorder(appContext) }
+
+    /** Real CameraX-backed duress cabin-camera still-frame capture (snapshot gallery,
+     * 2026-08-27), same "process-lifetime appContext, nothing more" shape as
+     * [duressAudioRecorder] — see that class's doc for the permission/lifecycle write-up. */
+    val duressCameraCapture: DuressCameraCapture by lazy { DuressCameraCapture(appContext) }
     val duressController: DuressController by lazy {
         DuressController(
             duressRepository,
             CoroutineScope(SupervisorJob() + Dispatchers.Default),
             duressAudioRecorder,
+            duressCameraCapture,
         )
     }
 
@@ -322,7 +329,7 @@ object AppContainer {
     // for it to react to [au.com.threesixty.cabdispatch.domain.SessionHolder.session] (shift
     // open/closed) for the rest of the process lifetime with zero wiring in any screen/ViewModel.
     val livePositionHeartbeat: LivePositionHeartbeat by lazy {
-        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default), appContext)
     }
 
     // --- Zones (Plot / Statistics screens — named dispatch zones, "plot into a zone", live

@@ -42,15 +42,18 @@ const val DEMO_DRIVER_PIN = "ChangeMe123!"
  * placeholder items for now.
  */
 val PRE_SHIFT_CHECKLIST_ITEMS = listOf(
-    "tyres" to "Tyres & tread condition",
-    "lights" to "Head/tail/indicator lights",
+    // Command Deck v2 checklist (Figma `h0PSsXQ971dOJvt25tN7BA` node `10:111`, 3×3 grid) —
+    // keys are free-form as far as the backend is concerned (`POST /v1/shifts/start` accepts
+    // inspection_json as an arbitrary map), so the set follows the design's nine cards.
+    "tyres" to "Tyres & wheels",
+    "lights" to "Lights & indicators",
     "brakes" to "Brakes",
-    "seatbelts" to "Seatbelts (all seats)",
-    "meter_seal" to "Meter seal intact",
-    "fire_extinguisher" to "Fire extinguisher present",
-    "first_aid" to "First aid kit present",
-    "cleanliness" to "Vehicle cleanliness",
-    "id_displayed" to "Driver ID/photo displayed",
+    "meter_tablet" to "Meter tablet",
+    "duress" to "Duress button",
+    "interior" to "Interior",
+    "cameras" to "Cameras / safety equipment",
+    "fare_card" to "Fare schedule card",
+    "first_aid" to "First-aid & extinguisher",
 )
 
 data class LoginVehicleBindUiState(
@@ -70,6 +73,11 @@ data class LoginVehicleBindUiState(
     val mfaCodeInput: String = "",
     val vehicleIdInput: String = "",
     val boundVehicleId: String? = null,
+    /** Real fleet-vehicle UUID for [boundVehicleId], resolved in the background by [LoginVehicleBindViewModel.bindVehicle]
+     * — see [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]'s own doc for why
+     * this is a separate field and what `null` means here (still resolving, offline, or no match;
+     * [LoginVehicleBindViewModel.startShift] does not block on it either way). */
+    val resolvedVehicleUuid: String? = null,
     val qrScanAttempted: Boolean = false,
     val checklist: Map<String, Boolean> = PRE_SHIFT_CHECKLIST_ITEMS.associate { it.first to false },
     val isStartingShift: Boolean = false,
@@ -96,6 +104,11 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
      * so testing on-device doesn't mean retyping the same PIN every rebuild/reinstall.
      */
     fun quickLoginDemoDriver() {
+        // TEMPORARY: seed the offline-login cache so `login()` below succeeds via its existing
+        // network-failure fallback even when no backend is reachable at all (see
+        // DriverAuthRepository.seedOfflineDemoDriver's doc). Remove once a reachable backend is
+        // the normal dev/test setup.
+        driverAuthRepository.seedOfflineDemoDriver(DEMO_DRIVER_ID, DEMO_DRIVER_PIN)
         _uiState.update { it.copy(driverIdInput = DEMO_DRIVER_ID, pinInput = DEMO_DRIVER_PIN) }
         login()
     }
@@ -183,7 +196,19 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     fun bindVehicle() {
         val vehicleId = _uiState.value.vehicleIdInput.trim()
         if (vehicleId.isBlank()) return
-        _uiState.update { it.copy(boundVehicleId = vehicleId, step = LoginStep.INSPECTION) }
+        _uiState.update { it.copy(boundVehicleId = vehicleId, resolvedVehicleUuid = null, step = LoginStep.INSPECTION) }
+        // Resolve rego -> real fleet-vehicle UUID in the background (see DriverSession.vehicleUuid's
+        // doc for why). Deliberately does not block the bind flow's transition to INSPECTION above —
+        // same "don't stall the driver on a background lookup" posture the rest of this app's
+        // best-effort network calls already use; a failed/offline lookup just leaves
+        // resolvedVehicleUuid null, and startShift() below reads whatever is in state at that point.
+        viewModelScope.launch {
+            runCatching { AppContainer.apiService.listVehicles() }
+                .onSuccess { page ->
+                    val match = page.items.firstOrNull { it.rego.equals(vehicleId, ignoreCase = true) }
+                    if (match != null) _uiState.update { it.copy(resolvedVehicleUuid = match.id) }
+                }
+        }
     }
 
     fun toggleChecklistItem(key: String) {
@@ -208,6 +233,7 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                         driverId = driverId,
                         driverName = state.loggedInDriverName ?: driverId,
                         vehicleId = vehicleId,
+                        vehicleUuid = _uiState.value.resolvedVehicleUuid,
                         shiftId = shift.id,
                         // Feeds the dashboard's shift-duration countdown (2026-08-10 meter-polish
                         // pass) — see DriverSession.shiftStartAt's own doc.

@@ -1,5 +1,9 @@
 package au.com.threesixty.cabdispatch.domain
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import kotlinx.coroutines.CoroutineScope
@@ -66,19 +70,24 @@ import kotlinx.coroutines.launch
  * temporary gap in the dispatcher's ambient view, not user-facing/money-adjacent data that must
  * eventually land.
  *
- * ### Not done here, flagged rather than silently omitted
- * The blueprint's line also names "status, battery" alongside GPS —
- * [PositionPublishRequestDto] has no battery field at all (the backend's
- * `PositionPublishRequest` doesn't carry one, see that DTO's own doc), so this class cannot
- * honestly publish battery without a backend/DTO change first; left out rather than silently
- * dropped into some other field. `status` is published as the same honest fixed placeholder
- * [SettingsViewModel.respondToLocateRequest] already uses, for the same reason: this app has no
- * other real-time on-trip/available/break signal it can read from here yet.
+ * ### Battery / network (2026-08-28 pass)
+ * The blueprint's line also names "status, battery" alongside GPS. [PositionPublishRequestDto]
+ * now carries both `battery`/`network` as optional fields on this same call (no new endpoint) —
+ * read fresh on every [publishOnce] tick via [BatteryManager.BATTERY_PROPERTY_CAPACITY] and
+ * [ConnectivityManager]'s active-network [NetworkCapabilities], same "best-effort, silent-on-
+ * failure" posture as the rest of this class: either reads `null` rather than throwing (see
+ * [readBatteryPercent]/[readNetworkType]), so a device with a flaky battery/connectivity service
+ * still gets its GPS heartbeat through with those two fields simply omitted.
+ *
+ * `status` is still published as the same honest fixed placeholder
+ * [SettingsViewModel.respondToLocateRequest] already uses — this app has no other real-time
+ * on-trip/available/break signal it can read from here yet.
  */
 class LivePositionHeartbeat(
     private val apiService: ApiService,
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
+    private val appContext: Context,
 ) {
 
     /** The currently-running publish loop, or `null` while off-shift. Only ever touched from the
@@ -99,12 +108,19 @@ class LivePositionHeartbeat(
      * dedupes structurally-equal consecutive values on its own, so this does not re-launch on a
      * no-op re-emission of the same [DriverSession].
      */
+    // Keyed off [DriverSession.vehicleUuid], not [DriverSession.vehicleId] — found live that
+    // `POST /v1/fleet/positions` 404s "Vehicle not found" on the driver-entered rego string
+    // ([DriverSession.vehicleId]) and only ever accepts the real fleet-vehicle UUID. A session
+    // whose rego->UUID lookup hasn't resolved yet (still in flight, offline, or no server-side
+    // match) has no publish loop running at all — same "nothing honest to send" posture as
+    // [publishOnce]'s own missing-GPS-fix skip, just one level up: it degrades to *no heartbeat
+    // this shift* rather than a guaranteed-404 spammed every 30s.
     fun start() {
         scope.launch {
             SessionHolder.session.collect { session ->
                 publishJob?.cancel()
-                val onShiftVehicleId = session?.takeIf { it.shiftId != null }?.vehicleId
-                publishJob = onShiftVehicleId?.let { vehicleId -> scope.launch { publishLoop(vehicleId) } }
+                val onShiftVehicleUuid = session?.takeIf { it.shiftId != null }?.vehicleUuid
+                publishJob = onShiftVehicleUuid?.let { vehicleUuid -> scope.launch { publishLoop(vehicleUuid) } }
             }
         }
     }
@@ -112,9 +128,9 @@ class LivePositionHeartbeat(
     /** Publishes immediately (so a dispatcher sees a fresh dot the moment a shift starts, not up
      * to [HEARTBEAT_INTERVAL_MS] later) and then every [HEARTBEAT_INTERVAL_MS] after that — same
      * "act then delay" shape as [DuressController.runActivePhase]'s own poll loop. */
-    private suspend fun publishLoop(vehicleId: String) {
+    private suspend fun publishLoop(vehicleUuid: String) {
         while (scope.isActive) {
-            publishOnce(vehicleId)
+            publishOnce(vehicleUuid)
             delay(HEARTBEAT_INTERVAL_MS)
         }
     }
@@ -122,19 +138,50 @@ class LivePositionHeartbeat(
     /** Skips silently (not an error) when there is no fix yet — same "nothing honest to publish
      * yet" reasoning as [SettingsViewModel.respondToLocateRequest]: no permission granted, cold
      * start, no signal. */
-    private suspend fun publishOnce(vehicleId: String) {
+    private suspend fun publishOnce(vehicleUuid: String) {
         val fix = speedSource.locationFix.value ?: return
         runCatching {
             apiService.publishPosition(
                 PositionPublishRequestDto(
-                    vehicleId = vehicleId,
+                    vehicleId = vehicleUuid,
                     lat = fix.lat,
                     lng = fix.lng,
                     status = HEARTBEAT_STATUS,
+                    battery = readBatteryPercent(),
+                    network = readNetworkType(),
                 ),
             )
         }
     }
+
+    /** [BatteryManager.BATTERY_PROPERTY_CAPACITY] on the system [Context.BATTERY_SERVICE] —
+     * returns `null` (never throws) if the service is unavailable or reports an invalid
+     * percentage, matching this class's existing "skip silently, try again next tick" posture. */
+    private fun readBatteryPercent(): Int? = runCatching {
+        val batteryManager = appContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: return null
+        val pct = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        pct.takeIf { it in 0..100 }
+    }.getOrNull()
+
+    /** Maps the active network's [NetworkCapabilities] transport to the categories the backend
+     * expects — `"wifi"` / `"4g"` (any cellular transport; this app has no way to distinguish
+     * 3G/4G/5G from [NetworkCapabilities] alone, and the blueprint's own example string is `"4g"`,
+     * not a generic `"cellular"`) / `"offline"` (no active network, or one with neither transport
+     * — e.g. VPN-only). Returns `null` (not `"offline"`) only if [ConnectivityManager] itself is
+     * unavailable, so a real "no network" reading is never confused with "couldn't check". */
+    private fun readNetworkType(): String? = runCatching {
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return null
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        when {
+            caps == null -> "offline"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "4g"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "wifi"
+            else -> "offline"
+        }
+    }.getOrNull()
 
     private companion object {
         const val HEARTBEAT_INTERVAL_MS = 30_000L
