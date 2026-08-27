@@ -33,7 +33,7 @@ from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import Trip  # noqa: F401 — see module docstring
 from app.services.fare_engine import round_half_up
-from app.services.trips import haversine_km
+from app.services.trips import compute_variance_pct, haversine_km
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -578,6 +578,42 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     assert trip["max_fare_check_passed"] is True
     assert Decimal(trip["variance_pct"]) <= Decimal("1.0")
     assert Decimal(trip["total"]) == expected_fare_total
+
+
+def test_compute_variance_pct_clamps_to_column_precision():
+    # Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug
+    # found live (2026-08-27): an unclamped wildly-wrong device_total produced a
+    # variance percentage the column could not store, which SQLite silently accepted
+    # (loose NUMERIC affinity) but Postgres rejected with a real, unhandled 500
+    # (NumericValueOutOfRange), aborting the whole sync batch for one bad item.
+    huge = compute_variance_pct(Decimal("5.00"), Decimal("999999.00"))
+    assert huge == Decimal("9999.99")
+
+    # A realistic, in-range variance is untouched by the clamp.
+    normal = compute_variance_pct(Decimal("5.00"), Decimal("6.00"))
+    assert normal == Decimal("20.00")
+
+
+async def test_sync_survives_absurd_device_total_without_500(client: AsyncClient, session: AsyncSession):
+    # Integration-level proof, not just the unit-level clamp above: the actual
+    # POST /v1/trips/sync endpoint must not crash on a pathological device_total --
+    # a corrupted value, a driver typo, or a currency-unit mistake, not just an
+    # adversarial test. This is the exact request shape that 500'd against real
+    # Postgres before the clamp fix (reproduced live, then locally, before fixing).
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 0, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="999999.00")
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert Decimal(trip["variance_pct"]) == Decimal("9999.99")
+    assert trip["max_fare_check_passed"] is False
+    assert trip["flagged_for_review"] is True
 
 
 async def test_sync_flags_variance_over_tolerance(client: AsyncClient, session: AsyncSession):
