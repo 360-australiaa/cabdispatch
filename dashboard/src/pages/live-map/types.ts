@@ -26,6 +26,11 @@ export interface VehicleLiveRead {
   vehicle_status: string;
   device_id: string | null;
   device_last_seen_at: string | null;
+  /** 0-100 tablet battery pct -- freshest of a live position publish or a
+   * plain device heartbeat, whichever reported last. Null if never reported. */
+  battery: number | null;
+  /** e.g. "wifi" / "4g" / "offline" -- same source/freshness rule as battery. */
+  network: string | null;
   lat: number | null;
   lng: number | null;
   /** Best-known live status, e.g. available | on_trip | offline | break. */
@@ -68,4 +73,6 @@ export interface PublishPositionRequest {
   lat: number;
   lng: number;
   status: string;
+  battery?: number | null;
+  network?: string | null;
 }

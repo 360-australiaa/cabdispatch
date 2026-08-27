@@ -18,6 +18,13 @@ export function mergeLivePosition(
     lat: live.lat,
     lng: live.lng,
     live_status: live.status,
+    // Coalesce, don't overwrite: a position publish carrying no telemetry
+    // (battery/network both null on the WS payload) must not blank out a
+    // value the REST-fetched row already had from an earlier publish or a
+    // plain device heartbeat -- see PositionPublishRequest.battery's own doc
+    // (backend/app/schemas/live_ops.py) for why both are optional per-call.
+    battery: live.battery ?? vehicle.battery,
+    network: live.network ?? vehicle.network,
     position_updated_at: live.updated_at,
     position_source: "live",
   };
@@ -58,4 +65,37 @@ export function formatRelativeTime(iso: string | null): string {
 export function formatLatLng(lat: number | null, lng: number | null): string {
   if (lat == null || lng == null) return "—";
   return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+}
+
+
+/** Color for a battery-pct chip -- red under 20%, amber under 40%, green
+ * otherwise. Null (never reported) is handled by the caller, not here. */
+export function batteryColor(pct: number): string {
+  if (pct < 20) return "var(--destructive)";
+  if (pct < 40) return "var(--warning, #d97706)";
+  return "var(--success)";
+}
+
+/** Human label + badge variant for a Device.network value. Unknown/unmapped
+ * values (e.g. a future "5g") still render, just with the neutral variant. */
+export function networkBadgeVariant(
+  network: string | null,
+): "success" | "accent" | "destructive" | "outline" {
+  if (network === "wifi") return "success";
+  if (network === "offline") return "destructive";
+  if (network != null) return "accent"; // "4g" / "3g" / etc.
+  return "outline";
+}
+
+/** Whether a position/telemetry timestamp is old enough to flag visually --
+ * 3x the Android app's own 30s live-position heartbeat interval
+ * (LivePositionHeartbeat.kt), so a single missed beat (network hiccup)
+ * does not flicker stale, only a genuinely dropped connection does. */
+const STALE_THRESHOLD_MS = 90_000;
+
+export function isStale(iso: string | null): boolean {
+  if (!iso) return false;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return false;
+  return Date.now() - then > STALE_THRESHOLD_MS;
 }

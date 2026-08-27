@@ -95,9 +95,14 @@ function buildMarkerElement(
   el.style.background = color;
   el.style.border = "2px solid var(--card)";
   el.style.boxShadow = "0 1px 3px rgba(0,0,0,0.45)";
+  const telemetryBits = [
+    vehicle.battery != null ? `${vehicle.battery}% battery` : null,
+    vehicle.network != null ? vehicle.network : null,
+  ].filter(Boolean);
+  const telemetrySuffix = telemetryBits.length > 0 ? ` — ${telemetryBits.join(", ")}` : "";
   el.title = duressEvent
     ? `${vehicle.rego} — active duress event`
-    : `${vehicle.rego} (${vehicle.live_status})`;
+    : `${vehicle.rego} (${vehicle.live_status})${telemetrySuffix}`;
 
   if (duressEvent) {
     el.style.cursor = "pointer";
