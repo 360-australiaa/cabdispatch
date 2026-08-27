@@ -43,6 +43,12 @@ from app.services import fare_engine as fe
 from app.services.user import generate_unique_driver_code
 
 DEMO_PASSWORD = "ChangeMe123!"
+# Separate from DEMO_PASSWORD: the meter/driver app PIN entry keypad is
+# numeric-only (0-9, no letters, no symbols) -- it cannot physically type
+# ChangeMe123! (confirmed live against the real app, 2026-08). The demo
+# driver needs its own real, typeable PIN; staff (dashboard) logins keep
+# using DEMO_PASSWORD since the dashboard is a real keyboard.
+DEMO_DRIVER_PIN = "123456"
 PLATFORM_TENANT_NAME = "TCT"
 DEMO_TENANT_NAME = "Lilly Cabs"
 
@@ -311,7 +317,7 @@ async def seed() -> None:
             tenant_id=demo_tenant.id,
             role=ROLE_DRIVER,
             name="Demo Driver",
-            password=DEMO_PASSWORD,
+            password=DEMO_DRIVER_PIN,
             driver_code=demo_driver_code,
         )
 
@@ -324,7 +330,7 @@ async def seed() -> None:
         print("    driver@lillycabs.test     (Lilly Cabs driver — meter/app 'Driver ID' login)")
         print(
             f"  Demo driver_code: {demo_driver.driver_code}  "
-            "(POST /v1/auth/driver-login with pin 'ChangeMe123!')"
+            f"(POST /v1/auth/driver-login with pin {DEMO_DRIVER_PIN!r})"
         )
 
 

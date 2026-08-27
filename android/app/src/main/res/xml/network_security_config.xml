@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TEMPORARY, scoped exception permitting plain-HTTP (cleartext) traffic to
+  the pilot Ubuntu server, by IP only. Android has blocked cleartext traffic
+  by default since API 28 -- with no entry here, every plain http:// request
+  is rejected before it ever leaves the device
+  (java.net.UnknownServiceException: CLEARTEXT communication ... not
+  permitted), confirmed live against the real app (2026-08).
+
+  This is deliberately narrow: only this one literal IP is allowed, nothing
+  else. It exists only because the pilot deployment has no domain/TLS yet
+  (see docs/DEPLOY_UBUNTU.md's "Adding HTTPS later" section) -- once the
+  backend is served over https://, DELETE this file and the
+  android:networkSecurityConfig reference in AndroidManifest.xml entirely.
+  Do not add more domains/IPs here as a shortcut; fix TLS at the server
+  instead.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">72.61.107.107</domain>
+    </domain-config>
+</network-security-config>
