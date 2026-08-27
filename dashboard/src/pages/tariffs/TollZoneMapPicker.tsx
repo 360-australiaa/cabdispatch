@@ -69,7 +69,7 @@ function MapboxCenterPicker({ lat, lng, radiusM, onPick }: TollZoneMapPickerProp
     mapboxgl.accessToken = MAPBOX_TOKEN as string;
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
+      style: "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za",
       center: lat != null && lng != null ? [lng, lat] : SYDNEY_CENTER,
       zoom: lat != null && lng != null ? PICKED_ZOOM : DEFAULT_ZOOM,
     });

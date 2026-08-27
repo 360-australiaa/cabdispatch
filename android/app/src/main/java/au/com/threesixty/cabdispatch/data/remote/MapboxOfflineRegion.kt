@@ -10,7 +10,6 @@ import com.mapbox.common.TileStoreOptions
 import com.mapbox.geojson.Point
 import com.mapbox.geojson.Polygon
 import com.mapbox.maps.OfflineManager
-import com.mapbox.maps.Style
 import com.mapbox.maps.TilesetDescriptorOptions
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -105,7 +104,7 @@ object MapboxOfflineRegion {
 
         val tilesetDescriptor = offlineManager.createTilesetDescriptor(
             TilesetDescriptorOptions.Builder()
-                .styleURI(Style.DARK)
+                .styleURI("mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za") // custom global style (2026-08-27), see MapboxStaticImage.STYLE
                 // Plain Int, NOT .toByte() -- verified 2026-08-27 against Mapbox's real
                 // v11.4.0 createTilesetDescriptor docs sample (.minZoom(0).maxZoom(16), no
                 // Byte conversion anywhere). Kotlin does not implicitly widen Byte<->Int, so

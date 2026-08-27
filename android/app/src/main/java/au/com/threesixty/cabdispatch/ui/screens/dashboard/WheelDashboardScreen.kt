@@ -77,7 +77,6 @@ import coil.compose.AsyncImagePainter
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
-import com.mapbox.maps.Style
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
 import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
@@ -499,7 +498,7 @@ private fun RealMapboxMapView(fix: LocationFix?, modifier: Modifier = Modifier) 
         factory = { context ->
             MapView(context).also { view ->
                 mapView.value = view
-                view.mapboxMap.loadStyle(Style.DARK)
+                view.mapboxMap.loadStyle("mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za") // custom global style (2026-08-27), see MapboxStaticImage.STYLE
                 view.mapboxMap.setCamera(cameraFor(fix))
                 // Background map, not a navigation tool — the wheel/dashboard chrome sits on top
                 // of this, so gestures reaching the map underneath a control would be confusing.

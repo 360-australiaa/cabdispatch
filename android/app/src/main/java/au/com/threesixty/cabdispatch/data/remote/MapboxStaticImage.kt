@@ -26,10 +26,14 @@ import kotlin.math.roundToInt
  */
 object MapboxStaticImage {
 
-    private const val BASE_URL = "https://api.mapbox.com/styles/v1/mapbox"
+    private const val BASE_URL = "https://api.mapbox.com/styles/v1/benfarid"
 
-    /** Dark style to match the wheel dashboard's dark theme (`WheelColors.bg`/`surface`). */
-    private const val STYLE = "dark-v11"
+    /** Custom global style (2026-08-27, for field testing outside Sydney -- e.g. Karachi,
+     * Pakistan) -- was "dark-v11" (Mapbox's own default dark style, matched via BASE_URL's
+     * old "mapbox" username segment above). Mapbox's own dark-v11 still works fine anywhere
+     * in the world; this swap is purely a shared branding/style choice with the dashboard's
+     * Live Map (mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za), not a functional fix. */
+    private const val STYLE = "cmtbnyhe4000e01pcgx2t51za"
 
     /** Mapbox Static Images API hard limit — width/height (pre-`@2x` multiplication) must each be <= 1280. */
     private const val MAX_DIMENSION_PX = 1280
