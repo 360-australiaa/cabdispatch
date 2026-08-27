@@ -40,9 +40,13 @@ same bytes:
 - `id` / `tenant_id` / `region`: plain JSON strings. `tenant_id` is `null`
   only for the (currently unreachable via `/active`, tenant-scoped) global
   Fares Order reference row.
-- `effective_from` / `effective_to`: ISO 8601 via Python's
-  `datetime.isoformat()` on a timezone-aware UTC datetime, e.g.
-  `"2025-11-03T00:00:00+00:00"`. `effective_to` is JSON `null` when unset.
+- `effective_from` / `effective_to`: ISO 8601 on a timezone-aware UTC
+  datetime, with a `Z` suffix (NOT `+00:00`) -- e.g. `"2025-11-03T00:00:00Z"`.
+  This matches Pydantic v2's actual JSON encoding of these fields on
+  `GET /v1/tariffs/active`'s response exactly (verify this against a live
+  response if in doubt -- do not trust this doc comment over the real wire
+  format, that mismatch is exactly the bug this rule now exists to prevent).
+  `effective_to` is JSON `null` when unset.
 - `booked`: JSON `true`/`false`.
 - Every rate field (Decimal in the DB) is serialized as a **decimal string**
   (never a JSON number/float — floats round-trip lossily), quantized to
@@ -57,7 +61,7 @@ same bytes:
 
 Example (abbreviated) signed payload:
 
-    {"id":"...","tenant_id":"...","region":"urban","effective_from":"2025-11-03T00:00:00+00:00","effective_to":null,"booked":false,"flag_fall":"5.0000","peak_charge":"2.5600",...}
+    {"id":"...","tenant_id":"...","region":"urban","effective_from":"2025-11-03T00:00:00Z","effective_to":null,"booked":false,"flag_fall":"5.0000","peak_charge":"2.5600",...}
 
 The signature is `base64(Ed25519.sign(utf8_bytes(payload)))`, standard
 (non-URL-safe) Base64 — matching the existing RSA verifier's Base64
@@ -111,6 +115,35 @@ def _fmt_rate(value: Decimal) -> str:
     return str(Decimal(value).quantize(_RATE_QUANT, rounding=ROUND_HALF_UP))
 
 
+def _iso_utc(dt) -> str:
+    """ISO-8601 formatting that exactly matches the actual GET /v1/tariffs/active
+    wire response -- Pydantic v2's default JSON encoding for a UTC-aware datetime
+    emits a Z suffix (e.g. "2025-11-03T00:00:00Z"), NOT Python stdlib
+    datetime.isoformat()'s +00:00 (e.g. "2025-11-03T00:00:00+00:00").
+
+    REAL BUG this fixes (found live, 2026-08-27, via a real Android device against
+    the deployed server): canonical_tariff_payload previously called .isoformat()
+    directly, so the server SIGNED the +00:00 string while the actual response
+    shipped the Z string. Any spec-compliant independent verifier (rebuilding the
+    canonical payload from the wire JSON, exactly as it must) would reconstruct the
+    Z string, which never matches what was signed -- every tariff signature failed
+    to verify, for every device, always, since this signing feature was added. This
+    was not caught by tests because tests/test_tariffs.py's own
+    _reconstruct_canonical_payload helper had the identical bug (re-parsed the wire
+    string via datetime.fromisoformat(...).isoformat(), which round-trips back to
+    +00:00) -- fixed in the same pass to use the raw wire string directly, matching
+    what a genuinely independent client does.
+
+    Only the exact +00:00 suffix is rewritten to Z (a plain string operation, not a
+    reparse-and-reformat) -- any other offset is left untouched, matching how
+    Pydantic only special-cases exact UTC.
+    """
+    iso = dt.isoformat()
+    if iso.endswith("+00:00"):
+        iso = iso[:-6] + "Z"
+    return iso
+
+
 def canonical_tariff_payload(tariff: Tariff) -> bytes:
     """The exact UTF-8 byte string that gets Ed25519-signed / must be
     verified against. See this module's docstring for the field-by-field
@@ -120,8 +153,8 @@ def canonical_tariff_payload(tariff: Tariff) -> bytes:
         ("id", tariff.id),
         ("tenant_id", tariff.tenant_id),
         ("region", tariff.region),
-        ("effective_from", tariff.effective_from.isoformat()),
-        ("effective_to", tariff.effective_to.isoformat() if tariff.effective_to else None),
+        ("effective_from", _iso_utc(tariff.effective_from)),
+        ("effective_to", _iso_utc(tariff.effective_to) if tariff.effective_to else None),
         ("booked", tariff.booked),
     ]
     fields.extend((name, _fmt_rate(getattr(tariff, name))) for name in RATE_FIELDS)

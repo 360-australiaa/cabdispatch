@@ -383,13 +383,14 @@ def _reconstruct_canonical_payload(tariff_json: dict) -> bytes:
         ("id", tariff_json["id"]),
         ("tenant_id", tariff_json["tenant_id"]),
         ("region", tariff_json["region"]),
-        ("effective_from", datetime.fromisoformat(tariff_json["effective_from"]).isoformat()),
-        (
-            "effective_to",
-            datetime.fromisoformat(tariff_json["effective_to"]).isoformat()
-            if tariff_json["effective_to"]
-            else None,
-        ),
+        # Use the RAW wire string as-is -- do NOT reparse via
+        # datetime.fromisoformat(...).isoformat(), that round-trips a Z-suffixed
+        # UTC string back to +00:00 and silently launders exactly the kind of
+        # signing/serialization mismatch this test exists to catch (this is the
+        # real bug that was here before -- found live, 2026-08-27). A genuinely
+        # independent client has no reason to reparse a string it already has.
+        ("effective_from", tariff_json["effective_from"]),
+        ("effective_to", tariff_json["effective_to"]),
         ("booked", tariff_json["booked"]),
     ]
     fields.extend(
