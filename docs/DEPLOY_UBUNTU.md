@@ -82,6 +82,8 @@ cp .env.production.example .env.production
 nano .env.production   # or vim/vi -- fill in every "change-me" line
 ```
 
+**Set POSTGRES_PASSWORD correctly the FIRST time -- Postgres only reads it on its very first boot against an empty data volume.** If you change it later (after `docker compose up` has already run once), the backend will fail with `asyncpg.exceptions.InvalidPasswordError` because Postgres kept the old password from its already-initialized volume while the backend reads the new one. If that happens before you have any real data, the fix is `docker compose --env-file .env.production down -v` (the `-v` wipes the Postgres + uploads volumes -- only safe pre-data) then `up -d --build` again to let Postgres re-initialize fresh. Once you have real data, changing the password instead requires connecting to Postgres directly and running `ALTER USER cabdispatch WITH PASSWORD '...';`.
+
 At minimum you MUST replace: `POSTGRES_PASSWORD`, `JWT_SECRET`,
 `SECRET_ENCRYPTION_KEY`, `TARIFF_SIGNING_PRIVATE_KEY`, `VITE_API_URL` (set
 to `http://<this-server's-public-IP>:8001`), and `CORS_ORIGINS` (include
