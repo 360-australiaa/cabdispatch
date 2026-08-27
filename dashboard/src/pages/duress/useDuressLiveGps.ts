@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { API_BASE_URL, getAccessToken } from "@/lib/apiClient";
-import type { DuressGpsPoint } from "./types";
+import type { DuressGpsPoint, DuressSnapshotNotification } from "./types";
 
 export type LiveGpsStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
@@ -23,10 +23,12 @@ function buildWsUrl(eventId: string): string {
 export function useDuressLiveGps(eventId: string | null, enabled: boolean) {
   const [status, setStatus] = useState<LiveGpsStatus>("idle");
   const [points, setPoints] = useState<DuressGpsPoint[]>([]);
+  const [latestSnapshot, setLatestSnapshot] = useState<DuressSnapshotNotification | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     setPoints([]);
+    setLatestSnapshot(null);
 
     if (!eventId || !enabled) {
       setStatus("idle");
@@ -42,8 +44,12 @@ export function useDuressLiveGps(eventId: string | null, enabled: boolean) {
     ws.onerror = () => setStatus("error");
     ws.onmessage = (event: MessageEvent<string>) => {
       try {
-        const point = JSON.parse(event.data) as DuressGpsPoint;
-        setPoints((prev) => [...prev.slice(-(MAX_POINTS - 1)), point]);
+        const parsed = JSON.parse(event.data) as DuressGpsPoint | DuressSnapshotNotification;
+        if ("kind" in parsed && parsed.kind === "snapshot") {
+          setLatestSnapshot(parsed);
+          return;
+        }
+        setPoints((prev) => [...prev.slice(-(MAX_POINTS - 1)), parsed as DuressGpsPoint]);
       } catch {
         // Malformed frame — drop it, live feed keeps going.
       }
@@ -55,5 +61,5 @@ export function useDuressLiveGps(eventId: string | null, enabled: boolean) {
     };
   }, [eventId, enabled]);
 
-  return { status, points, latest: points[points.length - 1] ?? null };
+  return { status, points, latest: points[points.length - 1] ?? null, latestSnapshot };
 }

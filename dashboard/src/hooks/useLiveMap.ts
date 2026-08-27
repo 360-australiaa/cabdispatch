@@ -10,6 +10,8 @@ export interface LivePosition {
   lat: number;
   lng: number;
   status: string;
+  battery: number | null;
+  network: string | null;
   updated_at: string;
 }
 

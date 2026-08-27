@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Radio, RadioTower } from "lucide-react";
+import { AlertTriangle, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Radio, RadioTower, WifiOff } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/lib/auth";
 import {
@@ -22,7 +22,15 @@ import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 import { FleetMapCanvas } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
-import { formatLatLng, formatRelativeTime, mergeLivePosition, statusBadgeVariant } from "./utils";
+import {
+  batteryColor,
+  formatLatLng,
+  formatRelativeTime,
+  isStale,
+  mergeLivePosition,
+  networkBadgeVariant,
+  statusBadgeVariant,
+} from "./utils";
 
 const TABLE_PAGE_SIZE = 10;
 const MAP_FETCH_LIMIT = 100; // GET /v1/vehicles caps `limit` at 100 server-side.
@@ -35,6 +43,16 @@ const LIVE_STATUS_OPTIONS = [
 ];
 
 const CAN_PUBLISH_ROLES = new Set(["owner", "admin", "dispatcher"]);
+
+/** Battery-level icon matching batteryColor's own red/amber/green thresholds
+ * (utils.ts) -- kept local to this page since nothing else needs it yet. */
+function BatteryIcon({ pct }: { pct: number }) {
+  const className = "h-3.5 w-3.5";
+  if (pct < 20) return <BatteryWarning className={className} />;
+  if (pct < 40) return <BatteryLow className={className} />;
+  if (pct < 75) return <BatteryMedium className={className} />;
+  return <BatteryFull className={className} />;
+}
 
 export default function LiveMapPage() {
   const { user } = useAuth();
@@ -154,12 +172,47 @@ export default function LiveMapPage() {
       header: "Updated",
       sortable: true,
       sortAccessor: (v) => v.position_updated_at ?? "",
-      render: (v) => <span className="text-muted-foreground">{formatRelativeTime(v.position_updated_at)}</span>,
+      render: (v) => (
+        <span
+          className={isStale(v.position_updated_at) ? "font-medium text-destructive" : "text-muted-foreground"}
+          title={isStale(v.position_updated_at) ? "No update in over 90s -- may have lost connectivity" : undefined}
+        >
+          {formatRelativeTime(v.position_updated_at)}
+        </span>
+      ),
     },
     {
       key: "position_source",
       header: "Source",
       render: (v) => <Badge variant="outline">{v.position_source}</Badge>,
+    },
+    {
+      key: "battery",
+      header: "Battery",
+      sortable: true,
+      sortAccessor: (v) => v.battery ?? -1,
+      render: (v) =>
+        v.battery == null ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <span className="flex items-center gap-1.5" style={{ color: batteryColor(v.battery) }}>
+            <BatteryIcon pct={v.battery} />
+            {v.battery}%
+          </span>
+        ),
+    },
+    {
+      key: "network",
+      header: "Connectivity",
+      render: (v) =>
+        v.network == null ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <Badge variant={networkBadgeVariant(v.network)} className="gap-1">
+            {v.network === "offline" && <WifiOff className="h-3 w-3" />}
+            {v.network}
+          </Badge>
+        ),
     },
   ];
 

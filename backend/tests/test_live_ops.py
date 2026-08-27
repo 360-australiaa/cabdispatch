@@ -353,6 +353,114 @@ async def test_publish_position_updates_cache_and_vehicle_list(client, session):
     assert len(resp.json()) == 1
 
 
+async def test_publish_position_with_battery_and_network_reaches_vehicle_list(client, session):
+    """battery/network are optional on PositionPublishRequest -- when given,
+    they show up on the live cache (GET /v1/fleet/positions/{id}) AND on the
+    composed GET /v1/vehicles rollup, same call, no second heartbeat needed."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Battery")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-BATT")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={
+            "vehicle_id": vehicle.id,
+            "lat": -33.86,
+            "lng": 151.2,
+            "status": "available",
+            "battery": 72,
+            "network": "4g",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["battery"] == 72
+    assert resp.json()["network"] == "4g"
+
+    resp = await client.get(f"/v1/fleet/positions/{vehicle.id}", headers=headers)
+    assert resp.json()["battery"] == 72
+    assert resp.json()["network"] == "4g"
+
+    resp = await client.get(f"/v1/vehicles/{vehicle.id}", headers=headers)
+    assert resp.json()["battery"] == 72
+    assert resp.json()["network"] == "4g"
+
+
+async def test_publish_position_battery_and_network_persist_onto_device_row(client, session):
+    """The paired Device row's own battery/network columns get updated too
+    (durable, survives a broadcaster restart), not just the ephemeral live
+    cache -- see app.services.live_ops._persist_device_telemetry."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Battery Device")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-BATT-DEV")
+    device = await _make_device(session, tenant_id=tenant_id, vehicle_id=vehicle.id, android_id="and-batt")
+    assert device.battery is None
+    assert device.network is None
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={
+            "vehicle_id": vehicle.id,
+            "lat": -33.86,
+            "lng": 151.2,
+            "status": "available",
+            "battery": 55,
+            "network": "wifi",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    await session.refresh(device)
+    assert device.battery == 55
+    assert device.network == "wifi"
+    assert device.last_seen_at is not None
+
+
+async def test_vehicle_falls_back_to_device_row_battery_when_no_live_position(client, session):
+    """A device that already reported battery/network via a plain heartbeat
+    (POST /v1/fleet/devices/{id}/heartbeat) should still show up on
+    GET /v1/vehicles even before any position has ever been published for
+    that vehicle."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Battery Fallback")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-BATT-FALLBACK")
+    device = await _make_device(session, tenant_id=tenant_id, vehicle_id=vehicle.id, android_id="and-fallback")
+    device.battery = 40
+    device.network = "offline"
+    await session.commit()
+
+    resp = await client.get(f"/v1/vehicles/{vehicle.id}", headers=headers)
+    body = resp.json()
+    assert body["battery"] == 40
+    assert body["network"] == "offline"
+    assert body["lat"] is None  # still no position published
+
+
+async def test_publish_position_without_battery_or_network_leaves_device_row_untouched(client, session):
+    """A plain lat/lng/status publish (no battery/network) must NOT overwrite
+    an already-known Device.battery/network with None, and must not touch
+    last_seen_at either -- only a heartbeat/publish that actually carries
+    telemetry should update it."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant No Telemetry")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-NO-TELEM")
+    device = await _make_device(session, tenant_id=tenant_id, vehicle_id=vehicle.id, android_id="and-no-telem")
+    device.battery = 90
+    device.network = "wifi"
+    await session.commit()
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["battery"] is None
+    assert resp.json()["network"] is None
+
+    await session.refresh(device)
+    assert device.battery == 90  # unchanged
+    assert device.network == "wifi"  # unchanged
+    assert device.last_seen_at is None  # untouched -- this publish carried no telemetry
+
+
 async def test_publish_position_requires_vehicle_to_exist_in_tenant(client, session):
     _, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant 2")
     resp = await client.post(

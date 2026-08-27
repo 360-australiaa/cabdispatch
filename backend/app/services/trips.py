@@ -341,14 +341,29 @@ async def recompute_from_trace(
     return breakdown, distance_m, moving_s, waiting_s
 
 
+# Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug
+# found live (2026-08-27): a Postgres-only NumericValueOutOfRange crash (500, whole
+# sync batch aborted) the moment a device_total is wildly off from the server's
+# recomputation -- e.g. a corrupted/garbage value, a driver typo, or a currency-unit
+# mistake, not just an adversarial test. SQLite's loose NUMERIC affinity silently
+# accepted any value regardless of declared precision, so this was invisible until
+# tested against real Postgres. A wildly-wrong device_total should still close the
+# trip and flag it for review (see the sync router's auto-flag on max_fare_check_passed)
+# -- it must never crash the request.
+_MAX_VARIANCE_PCT = Decimal("9999.99")
+
+
 def compute_variance_pct(recomputed_total: Decimal, device_total: Decimal) -> Decimal:
-    """abs(recomputed - device) / recomputed * 100, half-up to 2dp. If the
-    recomputed total is exactly zero, treat any nonzero device total as 100%
-    variance (avoids a ZeroDivisionError) and a matching zero as 0%."""
+    """abs(recomputed - device) / recomputed * 100, half-up to 2dp, clamped to
+    _MAX_VARIANCE_PCT (see that constant's doc -- the column cannot store more, and an
+    already-catastrophic variance doesn't need more precision than "it's capped-out
+    bad" to trigger max_fare_check_passed=False downstream). If the recomputed total
+    is exactly zero, treat any nonzero device total as 100% variance (avoids a
+    ZeroDivisionError) and a matching zero as 0%."""
     if recomputed_total == 0:
         return Decimal("100.00") if device_total != 0 else Decimal("0.00")
     variance = abs(recomputed_total - device_total) / recomputed_total * Decimal(100)
-    return round_half_up(variance)
+    return min(round_half_up(variance), _MAX_VARIANCE_PCT)
 
 
 # --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------

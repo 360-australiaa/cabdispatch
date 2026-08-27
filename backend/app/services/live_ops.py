@@ -1,18 +1,14 @@
-"""Live Ops domain: read-only fleet/driver rollups joined from the fleet,
+﻿"""Live Ops domain: read-only fleet/driver rollups joined from the fleet,
 trips, shift, and user domains' tables, plus an in-process pub/sub position
 broadcaster backing `WS /v1/fleet/live` and `POST /v1/fleet/positions`.
 
 This domain owns NO tables of its own (per the domain brief: "No new
 persisted table"). The models imported below -- `Vehicle`/`Device` (fleet
 domain), `Trip` (trips domain), `Shift` (shift domain), `User` (user domain)
--- all belong to sibling domains and are used strictly READ-ONLY: nothing in
-this module ever inserts, updates, or deletes a row in any of them, with one
-narrow exception -- see `_persist_driver_position` below, which writes a
-best-effort last-known-position enrichment onto the `jobs` domain's own
-`DriverAvailability` row (not a table this module owns either, but the jobs
-domain's `create_job_and_broadcast` needs *some* way to learn a driver's last
-position for proximity-ranked offer matching, and this is the one place a
-position naturally arrives).
+-- all belong to sibling domains and are used strictly READ-ONLY, with two
+narrow, explicitly-scoped exceptions -- see `_persist_driver_position` and
+`_persist_device_telemetry` below, both best-effort enrichments written on
+top of the position-publish broadcast, never in place of it.
 
 Position broadcasting is a pure in-process, in-memory pub/sub keyed by
 tenant_id (the same "in-process pub/sub dict" pattern used by the sibling
@@ -25,6 +21,21 @@ state. That's an accepted tradeoff for this pass (flagged again in the domain
 summary) -- `GET /v1/vehicles` degrades gracefully by falling back to each
 vehicle's open trip's last known tick position (persisted, from the trips
 domain) when nothing has been published live.
+
+`battery`/`network` (2026-08-28, real-time telemetry pass): `PositionPublishRequest`
+gained these two optional fields so a device's existing periodic position
+heartbeat can carry tablet battery/connectivity in the SAME call, rather than
+needing a second call to `POST /v1/fleet/devices/{id}/heartbeat` (which this
+codebase's own Android side has only ever called reactively, when the driver
+happens to open Settings -- see `android/HANDOFF.md`'s standing "locate only
+answered when S6 opens" gap). When present, `publish_position` both includes
+them in the live broadcast/cache (freshest, but ephemeral) AND best-effort
+persists them onto the paired `Device` row (durable, survives a broadcaster
+restart, also visible via `GET /v1/fleet/devices`) -- see
+`_persist_device_telemetry`. `_compose_vehicle_live` prefers the live cache
+value when present, falling back to the Device row's last-persisted value
+otherwise, so `GET /v1/vehicles` always shows the best information available
+regardless of which path most recently reported it.
 """
 from __future__ import annotations
 
@@ -127,18 +138,28 @@ class _FleetBroadcaster:
         return dict(self._latest.get(tenant_id, {}))
 
 
-# Module-level singleton -- every request/connection shares this one instance
+# Process-wide singleton -- every request/connection shares this one instance
 # for the lifetime of the process (same pattern as `app.core.security`'s
 # module-level `revocation_store`).
 fleet_broadcaster = _FleetBroadcaster()
 
 
-def build_position(*, vehicle_id: str, lat: float, lng: float, status: str) -> dict[str, Any]:
+def build_position(
+    *,
+    vehicle_id: str,
+    lat: float,
+    lng: float,
+    status: str,
+    battery: int | None = None,
+    network: str | None = None,
+) -> dict[str, Any]:
     return {
         "vehicle_id": vehicle_id,
         "lat": lat,
         "lng": lng,
         "status": status,
+        "battery": battery,
+        "network": network,
         "updated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -189,21 +210,69 @@ async def _persist_driver_position(
     await session.commit()
 
 
+async def _persist_device_telemetry(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, battery: int | None, network: str | None
+) -> None:
+    """Best-effort enrichment: writes `battery`/`network` (and refreshes
+    `last_seen_at`, since this call IS evidence the device is alive) onto the
+    `Device` row currently paired to `vehicle_id`, when the position-publish
+    payload carried either field. See module docstring's "battery/network"
+    section for why -- this lets an existing periodic position heartbeat also
+    keep `Device.battery`/`Device.network` fresh, not just
+    `POST /v1/fleet/devices/{id}/heartbeat` (which this app's Android side has
+    only ever called reactively, per `android/HANDOFF.md`).
+
+    No-ops (does not even query) when both `battery` and `network` are `None`
+    -- most publishers won't send them yet, and a plain lat/lng/status publish
+    must not touch `last_seen_at`/overwrite a real value with nothing merely
+    because this call fired. Silently does nothing if no `Device` is currently
+    paired to this vehicle. Same broad-try/except-in-the-caller contract as
+    `_persist_driver_position` -- a failure here must never raise past
+    `publish_position`."""
+    if battery is None and network is None:
+        return
+
+    result = await session.execute(
+        select(Device).where(Device.tenant_id == tenant_id, Device.vehicle_id == vehicle_id)
+    )
+    device = result.scalars().first()
+    if device is None:
+        return
+
+    if battery is not None:
+        device.battery = battery
+    if network is not None:
+        device.network = network
+    device.last_seen_at = datetime.now(UTC)
+    await session.commit()
+
+
 async def publish_position(
-    session: AsyncSession, *, tenant_id: str, vehicle_id: str, lat: float, lng: float, status: str
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    vehicle_id: str,
+    lat: float,
+    lng: float,
+    status: str,
+    battery: int | None = None,
+    network: str | None = None,
 ) -> dict[str, Any]:
     """Validates the vehicle belongs to the caller's tenant, then publishes
     the position. Returns the broadcast position dict plus subscriber_count.
 
     Also best-effort persists lat/lng onto the currently-assigned driver's
-    `DriverAvailability` row (jobs domain), see `_persist_driver_position` --
-    additive enrichment layered on top of the existing broadcast above, never
-    a replacement for it. A failure there is logged and swallowed, never
-    raised, so it can't break or slow down the broadcast this function
-    already completed."""
+    `DriverAvailability` row (jobs domain, see `_persist_driver_position`) and
+    `battery`/`network` (if given) onto the paired `Device` row (fleet
+    domain, see `_persist_device_telemetry`) -- both additive enrichment
+    layered on top of the existing broadcast above, never a replacement for
+    it. A failure in either is logged and swallowed, never raised, so neither
+    can break or slow down the broadcast this function already completed."""
     await get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
 
-    position = build_position(vehicle_id=vehicle_id, lat=lat, lng=lng, status=status)
+    position = build_position(
+        vehicle_id=vehicle_id, lat=lat, lng=lng, status=status, battery=battery, network=network
+    )
     delivered = await fleet_broadcaster.publish(tenant_id, position)
 
     try:
@@ -211,6 +280,18 @@ async def publish_position(
     except Exception:
         logger.warning(
             "Live ops: failed to persist last-known position for vehicle %s (tenant %s), continuing",
+            vehicle_id,
+            tenant_id,
+            exc_info=True,
+        )
+
+    try:
+        await _persist_device_telemetry(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, battery=battery, network=network
+        )
+    except Exception:
+        logger.warning(
+            "Live ops: failed to persist device telemetry for vehicle %s (tenant %s), continuing",
             vehicle_id,
             tenant_id,
             exc_info=True,
@@ -288,6 +369,19 @@ def _compose_vehicle_live(
         else:
             live_status = DEFAULT_LIVE_STATUS
 
+    # Prefer whatever the live position publish carried (freshest -- an
+    # ephemeral in-memory value, gone after a process restart) over the
+    # Device row's own last-persisted value (durable, but can lag behind by
+    # up to one heartbeat interval). Either can be None; either can also have
+    # been reported without the other (e.g. a plain lat/lng/status publish
+    # carries neither).
+    battery = (live_position or {}).get("battery")
+    if battery is None and device is not None:
+        battery = device.battery
+    network = (live_position or {}).get("network")
+    if network is None and device is not None:
+        network = device.network
+
     return {
         "id": vehicle.id,
         "tenant_id": vehicle.tenant_id,
@@ -296,6 +390,8 @@ def _compose_vehicle_live(
         "vehicle_status": vehicle.status,
         "device_id": device.id if device else None,
         "device_last_seen_at": device.last_seen_at if device else None,
+        "battery": battery,
+        "network": network,
         "lat": lat,
         "lng": lng,
         "live_status": live_status,

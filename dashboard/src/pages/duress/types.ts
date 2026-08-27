@@ -126,3 +126,29 @@ export interface DuressGpsPoint {
   event_id?: string;
   source?: "tablet" | "device" | null;
 }
+
+/** One captured cabin-camera still-frame -- app/schemas/duress_snapshot.py.
+ * See app/models/duress_snapshot.py for why this is a still-frame gallery
+ * (POST /v1/duress/{id}/snapshot, called every ~2-5s while an event stays
+ * open) rather than continuous video. */
+export interface DuressSnapshotMeta {
+  id: string;
+  event_id: string;
+  captured_at: string;
+  created_at: string;
+}
+
+export interface DuressSnapshotListResponse {
+  items: DuressSnapshotMeta[];
+  total: number;
+}
+
+/** Broadcast over the SAME WS /v1/duress/{id}/live feed as DuressGpsPoint,
+ * tagged kind: "snapshot" (GPS points never carry that key) so
+ * useDuressLiveGps can route the two apart on one socket. */
+export interface DuressSnapshotNotification {
+  kind: "snapshot";
+  event_id: string;
+  snapshot_id: string;
+  captured_at: string;
+}

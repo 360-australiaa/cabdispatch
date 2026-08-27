@@ -28,6 +28,7 @@ Role policy:
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import (
@@ -57,6 +58,7 @@ from app.core.security import (
 )
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
+from app.models.duress_snapshot import DuressSnapshot
 from app.schemas.duress import (
     DuressCallRequest,
     DuressCallResponse,
@@ -70,6 +72,7 @@ from app.schemas.duress import (
     DuressGpsPoint,
     DuressTriggerRequest,
 )
+from app.schemas.duress_snapshot import DuressSnapshotListResponse, DuressSnapshotRead
 from app.services.duress import (
     DuressAudioError,
     cancel_event,
@@ -80,6 +83,7 @@ from app.services.duress import (
     place_duress_call,
     resolve_absolute_path,
     save_duress_audio,
+    save_duress_snapshot,
     trigger_event,
     verify_twilio_signature,
 )
@@ -375,6 +379,178 @@ async def get_audio(
         )
 
     return FileResponse(path=absolute_path, filename=absolute_path.name)
+
+
+# --- camera snapshot gallery (upload/list/read) --------------------------------
+#
+# Still frames, not continuous video -- see
+# app.models.duress_snapshot.DuressSnapshot's module docstring for the full
+# rationale. Same role policy as audio: any authenticated tenant user may
+# upload (a driver-tablet action) or read (dispatch reviewing an incident).
+
+
+async def _get_owned_snapshot(
+    session: AsyncSession, *, tenant_id: str, event_id: str, snapshot_id: str
+) -> DuressSnapshot:
+    result = await session.execute(
+        select(DuressSnapshot).where(
+            DuressSnapshot.id == snapshot_id,
+            DuressSnapshot.event_id == event_id,
+            DuressSnapshot.tenant_id == tenant_id,
+        )
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Duress snapshot not found")
+    return snapshot
+
+
+def _snapshot_file_response(snapshot: DuressSnapshot) -> FileResponse:
+    try:
+        absolute_path = resolve_absolute_path(snapshot.relative_path)
+    except DuressAudioError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not absolute_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Duress snapshot row exists but its image file is missing on disk",
+        )
+    return FileResponse(path=absolute_path, media_type="image/jpeg", filename=absolute_path.name)
+
+
+@router.post("/{event_id}/snapshot", response_model=DuressSnapshotRead, status_code=status.HTTP_201_CREATED)
+async def upload_snapshot(
+    event_id: str,
+    file: UploadFile = File(...),
+    captured_at: datetime | None = Query(
+        default=None,
+        description="Device-reported capture time. Defaults to server receipt time if omitted.",
+    ),
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DuressSnapshot:
+    """Multipart upload of ONE captured camera still-frame (e.g. an Android
+    `ImageCapture` JPEG) for an open duress event -- a driver-tablet action,
+    same role policy as `/trigger` / `/cancel` / `/gps` / `/audio`. The
+    tablet is expected to call this repeatedly (every ~2-5s) for as long as
+    the event stays open, and to stop the moment it closes/cancels -- this
+    endpoint does not itself enforce that cadence or refuse uploads against a
+    closed event, since a few trailing frames in flight at close time are
+    harmless and simpler to allow than to race against.
+
+    Saves via `save_duress_snapshot` (own file per upload, unlike audio's
+    single overwritten file) and broadcasts a lightweight notification over
+    the SAME `WS /v1/duress/{event_id}/live` feed the GPS relay uses, tagged
+    `kind: "snapshot"` (GPS points never carry that key) so a connected
+    Duress Desk can fetch the new frame immediately instead of polling."""
+    event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+
+    content = await file.read()
+    snapshot_id = str(uuid.uuid4())
+    try:
+        relative_path = await save_duress_snapshot(
+            tenant_id=tenant_id,
+            event_id=event.id,
+            snapshot_id=snapshot_id,
+            content=content,
+        )
+    except DuressAudioError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    snapshot = DuressSnapshot(
+        id=snapshot_id,
+        tenant_id=tenant_id,
+        event_id=event.id,
+        relative_path=relative_path,
+        captured_at=captured_at or datetime.now(UTC),
+    )
+    session.add(snapshot)
+    await session.commit()
+    await session.refresh(snapshot)
+
+    await gps_broadcaster.publish(
+        event.id,
+        {
+            "kind": "snapshot",
+            "event_id": event.id,
+            "snapshot_id": snapshot.id,
+            "captured_at": snapshot.captured_at.isoformat(),
+        },
+    )
+    return snapshot
+
+
+@router.get("/{event_id}/snapshots", response_model=DuressSnapshotListResponse)
+async def list_snapshots(
+    event_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Lists this event's captured frames, newest first -- for the Duress
+    Desk's post-incident scrub bar. 404s if the event itself does not exist
+    (an empty gallery on a real event returns `items: []`, not a 404)."""
+    await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+
+    filters = [DuressSnapshot.event_id == event_id, DuressSnapshot.tenant_id == tenant_id]
+    total = (await session.execute(select(func.count(DuressSnapshot.id)).where(*filters))).scalar_one()
+    result = await session.execute(
+        select(DuressSnapshot)
+        .where(*filters)
+        .order_by(DuressSnapshot.captured_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = result.scalars().all()
+    return {"items": items, "total": total}
+
+
+@router.get("/{event_id}/snapshot/latest")
+async def get_latest_snapshot(
+    event_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Streams back the most recently captured frame for this event -- the
+    Duress Desk points a plain `<img>` at this URL (re-fetching on every
+    `kind: "snapshot"` websocket notification) for a near-live view without
+    any WebRTC/streaming infrastructure. 404s if no frame has been captured
+    yet."""
+    await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+
+    result = await session.execute(
+        select(DuressSnapshot)
+        .where(DuressSnapshot.event_id == event_id, DuressSnapshot.tenant_id == tenant_id)
+        .order_by(DuressSnapshot.captured_at.desc())
+        .limit(1)
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No camera snapshot captured yet for this duress event",
+        )
+    return _snapshot_file_response(snapshot)
+
+
+@router.get("/{event_id}/snapshot/{snapshot_id}")
+async def get_snapshot(
+    event_id: str,
+    snapshot_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Streams back one specific captured frame, for the Duress Desk's scrub
+    bar (paired with `GET /{event_id}/snapshots` for the id list)."""
+    snapshot = await _get_owned_snapshot(
+        session, tenant_id=tenant_id, event_id=event_id, snapshot_id=snapshot_id
+    )
+    return _snapshot_file_response(snapshot)
 
 
 async def _authenticate_websocket(websocket: WebSocket) -> dict | None:

@@ -16,7 +16,12 @@ const WIDTH = 900;
 const HEIGHT = 460;
 const PADDING = 32;
 
-const SYDNEY_CENTER: [number, number] = [151.2093, -33.8688];
+// Field-testing default (2026-08-27): Karachi, Pakistan -- swap back to Sydney CBD
+// ([151.2093, -33.8688]) once Karachi field testing wraps. Only matters before any
+// vehicle position has loaded -- fitToVehicles() below re-centers on real GPS the
+// moment a vehicle publishes, from anywhere in the world (the custom global style
+// set below isn't tied to any region).
+const DEFAULT_CENTER: [number, number] = [67.0011, 24.8607];
 const DEFAULT_ZOOM = 10.5;
 const SINGLE_VEHICLE_ZOOM = 13;
 
@@ -31,8 +36,8 @@ interface MapDataProps {
 }
 
 /**
- * Live fleet map. Renders a real Mapbox GL JS map (dark style, Sydney-centered
- * or fit to the fleet's bounding box) when VITE_MAPBOX_TOKEN is configured;
+ * Live fleet map. Renders a real Mapbox GL JS map (custom global style, default-region-
+ * centered or fit to the fleet's bounding box) when VITE_MAPBOX_TOKEN is configured;
  * otherwise falls back to a plain-SVG lat/lng plot so the page never breaks
  * for anyone without a token set up (see PlainCanvasMap below).
  */
@@ -90,9 +95,14 @@ function buildMarkerElement(
   el.style.background = color;
   el.style.border = "2px solid var(--card)";
   el.style.boxShadow = "0 1px 3px rgba(0,0,0,0.45)";
+  const telemetryBits = [
+    vehicle.battery != null ? `${vehicle.battery}% battery` : null,
+    vehicle.network != null ? vehicle.network : null,
+  ].filter(Boolean);
+  const telemetrySuffix = telemetryBits.length > 0 ? ` — ${telemetryBits.join(", ")}` : "";
   el.title = duressEvent
     ? `${vehicle.rego} — active duress event`
-    : `${vehicle.rego} (${vehicle.live_status})`;
+    : `${vehicle.rego} (${vehicle.live_status})${telemetrySuffix}`;
 
   if (duressEvent) {
     el.style.cursor = "pointer";
@@ -142,8 +152,8 @@ function MapboxFleetMap({ plotted, duressByVehicleId }: MapDataProps) {
     mapboxgl.accessToken = MAPBOX_TOKEN as string;
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
-      center: SYDNEY_CENTER,
+      style: "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za",
+      center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
     });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
@@ -181,8 +191,8 @@ function MapboxFleetMap({ plotted, duressByVehicleId }: MapDataProps) {
       <div ref={containerRef} className="h-[460px] w-full rounded-md border border-border" />
       {plotted.length === 0 && (
         <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow">
-          No live vehicle positions yet — showing Sydney. Positions appear here once a device
-          publishes via POST /v1/fleet/positions.
+          No live vehicle positions yet — showing the default region (Karachi, currently, for field
+          testing). Positions appear here once a device publishes via POST /v1/fleet/positions.
         </div>
       )}
     </div>

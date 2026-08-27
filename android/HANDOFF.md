@@ -1,6 +1,149 @@
 # Android meter — finish-it checklist (read this first)
 
 
+## 2026-08-27 (newest) -- Duress cabin-camera snapshot gallery: backend + dashboard DONE, Android capture NOT started
+
+New feature, explicitly scoped by the owner: cabin-camera visibility on the dashboard during a
+duress incident. Scope decision already made (owner's own call, do not re-litigate it): frames
+ONLY while a duress event is open (same governing principle as
+docs/DURESS_DEVICE_INTEGRATION.md's "camera/mic active ONLY during an active duress event, never a
+standby listen mode") -- NOT continuous/always-on monitoring -- and periodic JPEG STILL FRAMES
+(every ~2-5s), NOT true WebRTC video streaming. That second choice means zero new streaming
+infrastructure (no signaling server, no STUN/TURN) -- it reuses the exact same local-disk-upload
+convention already proven for duress audio.
+
+### Backend + dashboard: done, tested, verified live (this pass)
+
+- `app/models/duress_snapshot.py` -- new `DuressSnapshot` table (own table, not a single column on
+  `DuressEvent`, because an incident accumulates MANY frames and the Duress Desk needs to browse
+  them, not just see the latest one).
+- `app/services/duress.py` -- `save_duress_snapshot` / `duress_snapshot_dir` (own file per upload,
+  unlike audio's one-file-overwritten convention).
+- `app/api/v1/duress.py` -- new routes, same role policy as audio (any authenticated tenant user):
+    - `POST /v1/duress/{event_id}/snapshot` -- multipart `file` field, optional `?captured_at=`
+      query param (ISO 8601; defaults to server receipt time). Broadcasts a
+      `{"kind": "snapshot", "event_id", "snapshot_id", "captured_at"}` notification over the SAME
+      `WS /v1/duress/{event_id}/live` feed the GPS relay already uses (GPS points never carry a
+      `kind` key, so a listener can tell them apart on one socket).
+    - `GET /v1/duress/{event_id}/snapshots` -- list, newest first.
+    - `GET /v1/duress/{event_id}/snapshot/latest` -- streams the JPEG bytes of the most recent frame.
+    - `GET /v1/duress/{event_id}/snapshot/{snapshot_id}` -- streams one specific frame.
+- Migration `0201776e9446_duress_camera_snapshots.py` -- applied and verified.
+- Tests: `tests/test_duress.py` -- 9 new tests (upload/list/latest/specific-by-id/empty-file-400/
+  unknown-event-404/tenant-isolation/explicit-captured_at/the WS broadcast itself via a real
+  `TestClient` websocket connection, same pattern as the existing GPS-broadcast test). Full suite:
+  516+ passed, 0 failed.
+- **Independently live-verified beyond the test suite** (per this project's standing "verify
+  honestly" rule): ran a real local `uvicorn` instance against a fresh SQLite DB, seeded it, logged
+  in over real HTTP, triggered a real duress event, uploaded a real (fake-bytes) JPEG via `curl`
+  multipart, confirmed the row appeared in the list endpoint, confirmed `GET .../snapshot/latest`
+  streamed back byte-identical content with `content-type: image/jpeg`, confirmed fetch-by-id also
+  worked. Not just TestClient -- a real running server, real bytes over the wire.
+- Dashboard: `src/pages/duress/CameraSnapshotPanel.tsx` (new) -- renders the latest frame as an
+  `<img>` (fetched via `apiClient` as a blob + object URL, since `<img src>` can't carry the
+  bearer-auth header the endpoint requires), wired into `EventDetailPanel.tsx` right below the
+  live-GPS panel. Auto-refreshes off the `kind: "snapshot"` websocket notification
+  (`useDuressLiveGps.ts` was extended to route that notification kind separately from GPS points,
+  returned as `latestSnapshot`) for dispatch-role viewers who hold that socket open; other
+  authenticated roles (who can still read the endpoint, matching audio's role policy) get a 4s
+  polling fallback instead, since they don't have the websocket permission. `npm run build` clean
+  (`tsc -b && vite build`), `npm run lint` (`tsc --noEmit`) clean.
+
+### Android: NOT STARTED -- this is the actual next Ryzen task on this feature
+
+Nothing has been written on the Android side yet. The prompt below is ready to paste into the
+Ryzen session once it is free (finish the Fable Figma redesign work first, or run this in parallel
+if you'd rather -- they touch different files: this is `domain/duress/*` + `data/remote/*`, the
+Fable work is screens under `ui/screens/*`).
+
+---
+
+**PROMPT FOR RYZEN (paste as-is):**
+
+Add cabin-camera still-frame capture to the duress flow, mirroring the existing duress-audio
+capture exactly (same file shapes, same graceful-degradation permission pattern, same
+wiring point in `DuressController`). Read these three files FIRST, in this order, before writing
+anything -- they are the pattern to copy, not just references:
+
+1. `domain/duress/DuressAudioRecorder.kt` -- the class shape to mirror (permission check that
+   returns `false` on denial rather than throwing, `withContext(Dispatchers.IO)`, a
+   `start(eventId)` / `stop(): File?` pair, a `companion object` constant for its cadence).
+2. `domain/DuressRepository.kt` -- see `uploadAudio` for the exact multipart-upload shape to copy
+   for the new `uploadSnapshot` method.
+3. `domain/DuressController.kt` -- see how `audioRecorder`/`runActivePhase` starts the recorder the
+   moment `DuressUiState.Active` is reached with a real event id, and stops it on the 60s cap or a
+   terminal status, then calls `uploadAudio` -- this is where the new capture loop plugs in.
+
+**What to build:**
+
+1. `domain/duress/DuressCameraCapture.kt` -- new class, same shape as `DuressAudioRecorder`:
+   - Uses CameraX (`androidx.camera.core.ImageCapture` + `ProcessCameraProvider`) against the
+     FRONT (cabin-facing) camera -- this is capturing the driver's cabin, not the road ahead.
+     `implementation("androidx.camera:camera-camera2:...")` /
+     `androidx.camera:camera-lifecycle` / `androidx.camera:camera-core` will need adding to
+     `app/build.gradle.kts` if not already present -- check first.
+   - `start(eventId)`: checks `Manifest.permission.CAMERA` via `ContextCompat.checkSelfPermission`
+     -- returns `false` (silent no-op, exactly like `DuressAudioRecorder.start`) if not granted.
+     Binds a headless `ImageCapture` use case (no `PreviewView` needed -- this never shows a
+     viewfinder to the driver, it just captures in the background) to a `ProcessLifecycleOwner`
+     or an app-scoped lifecycle, then starts a repeating capture loop (`SNAPSHOT_INTERVAL_MS`,
+     suggest 3000L to land in the middle of the already-agreed 2-5s range) that calls
+     `imageCapture.takePicture(...)` into a JPEG byte array (use the `OutputFileOptions`-free
+     in-memory `ImageCapture.OnImageCapturedCallback` + `ImageProxy` -> `ByteArray` path, not a
+     file-based capture -- these frames get uploaded immediately, not kept on disk).
+   - `stop()`: cancels the repeating loop and unbinds the camera use case. No file cleanup needed
+     (nothing was written to disk) -- this is the one place this class differs from
+     `DuressAudioRecorder`, which does own a file.
+   - Expose captured frames however fits the coroutine style already in this codebase -- a
+     `Flow<ByteArray>` the controller collects, or a callback passed into `start(eventId, onFrame)`
+     -- match whichever pattern reads more naturally against `DuressController`'s existing
+     coroutine scope, your call.
+
+2. `data/remote/DuressGpsPointDto.kt`-adjacent DTOs / `ApiService.kt` -- add the multipart endpoint:
+   `POST /v1/duress/{eventId}/snapshot` (optional `?captured_at=` query param, ISO 8601 -- send it
+   if you have a real capture timestamp, omit it and let the server default if not). Response body
+   is `{id, event_id, captured_at, created_at}` -- doesn't need to be consumed for anything, the
+   upload firing is what matters.
+
+3. `domain/DuressRepository.kt` -- add
+   `suspend fun uploadSnapshot(eventId: String, jpegBytes: ByteArray): Result<Unit>`, same
+   `runCatching { ... }` shape as `uploadAudio`, `"image/jpeg".toMediaType()`,
+   `MultipartBody.Part.createFormData("file", "frame.jpg", body)`. Best-effort -- a single dropped
+   frame is not worth surfacing an error for; `DuressController` should just fire-and-forget each
+   frame the same way it fires GPS points, not block anything else in the active-phase loop
+   waiting on the upload.
+
+4. `domain/DuressController.kt` -- start `DuressCameraCapture` alongside `audioRecorder` the moment
+   `DuressUiState.Active` is reached with a real event id (same `runActivePhase` spot), stop it on
+   the SAME triggers that already stop the audio recorder (60s cap is audio-specific -- camera
+   capture should instead just run for as long as the event stays open, stopping only on terminal
+   status, since a duress incident is exactly the scenario where MORE frames over a longer window
+   is the point, unlike the audio 60s cap which was an explicit blueprint-mandated ring-buffer
+   simplification that has no camera equivalent here). Each captured frame calls
+   `repository.uploadSnapshot(eventId, bytes)` fire-and-forget as it arrives.
+
+5. `AndroidManifest.xml` -- confirm `<uses-permission android:name="android.permission.CAMERA" />`
+   is present (grep for it first -- the Profile-photo-capture feature already added it for
+   `ProfileScreen.kt`'s camera intent, so it likely already is -- if so, nothing to add here).
+
+6. `ui/screens/permissions/PermissionsChecklistScreen.kt` -- confirm CAMERA is already listed
+   (again, likely already true given the profile-photo feature) -- if the checklist text is
+   audio-recording-specific right now, broaden its copy to also mention the cabin camera so a
+   driver isn't confused about why the app wants it.
+
+**What NOT to build:** no in-app viewfinder/preview UI for the driver (this is a silent background
+capture, the driver never sees what's being captured -- matches the already-agreed "event-scoped
+only" design), no local frame storage/gallery on the device (frames upload and are done, nothing
+persists locally), no continuous/always-on capture outside an open duress event.
+
+**Verification once it compiles:** trigger duress on a real device/emulator, confirm the app
+requests CAMERA permission if not already granted, confirm
+`GET /v1/duress/{event_id}/snapshots` on the deployed server shows new rows appearing every
+~3s while the event stays open, confirm the Duress Desk's new camera panel on the dashboard shows
+the frame updating live. Report back with the actual verification output, not just "should work."
+
+---
+
 ## SYSTEM REFERENCE (2026-08-27) -- read this before writing any v2 UI code
 
 This section exists because nobody working on this app has full context across backend + Figma +

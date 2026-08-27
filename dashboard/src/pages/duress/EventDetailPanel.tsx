@@ -21,6 +21,7 @@ import {
   escalateDuressEvent,
   getDuressEvent,
 } from "./api";
+import { CameraSnapshotPanel } from "./CameraSnapshotPanel";
 import { DeviceCallSummary } from "./DeviceCallSummary";
 import { EscalationTimeline } from "./EscalationTimeline";
 import { GpsTracePanel } from "./GpsTracePanel";
@@ -106,7 +107,7 @@ export function EventDetailPanel({
   const event = eventQuery.data;
   const canWatchLiveGps = !!user && LIVE_GPS_ROLES.has(user.role);
   const isSelected = !!event;
-  const { status: gpsStatus, points: gpsPoints } = useDuressLiveGps(
+  const { status: gpsStatus, points: gpsPoints, latestSnapshot } = useDuressLiveGps(
     isSelected ? eventId : null,
     isSelected && canWatchLiveGps,
   );
@@ -210,6 +211,13 @@ export function EventDetailPanel({
                 Live GPS relay is restricted to owner/admin/dispatcher roles.
               </p>
             )}
+
+            <CameraSnapshotPanel
+              eventId={event.id}
+              enabled
+              refreshSignal={latestSnapshot?.snapshot_id ?? null}
+              pollIntervalMs={canWatchLiveGps ? undefined : 4000}
+            />
 
             <div className="flex flex-col gap-2 border-t border-border pt-4">
               <label htmlFor="duress-note" className="text-xs font-medium text-muted-foreground">
