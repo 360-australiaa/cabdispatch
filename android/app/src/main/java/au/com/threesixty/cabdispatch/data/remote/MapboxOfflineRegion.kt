@@ -106,8 +106,17 @@ object MapboxOfflineRegion {
         val tilesetDescriptor = offlineManager.createTilesetDescriptor(
             TilesetDescriptorOptions.Builder()
                 .styleURI(Style.DARK)
-                .minZoom(MIN_ZOOM.toInt().toByte())
-                .maxZoom(MAX_ZOOM.toInt().toByte())
+                // Plain Int, NOT .toByte() -- verified 2026-08-27 against Mapbox's real
+                // v11.4.0 createTilesetDescriptor docs sample (.minZoom(0).maxZoom(16), no
+                // Byte conversion anywhere). Kotlin does not implicitly widen Byte<->Int, so
+                // the previous .toByte() call was very likely a genuine compile error the
+                // moment this file was first built against the real SDK jar -- fixed before
+                // that ever needed to be discovered the hard way. If this still doesn't
+                // compile, minZoom/maxZoom's real signature has moved again since this doc
+                // was checked -- re-verify against docs.mapbox.com's CURRENT offline guide,
+                // don't just guess a different numeric type.
+                .minZoom(MIN_ZOOM.toInt())
+                .maxZoom(MAX_ZOOM.toInt())
                 .build(),
         )
 
