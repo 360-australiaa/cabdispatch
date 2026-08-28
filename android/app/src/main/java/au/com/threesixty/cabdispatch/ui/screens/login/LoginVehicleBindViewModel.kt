@@ -183,9 +183,9 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    fun scanQr() {
+    fun scanQr(activity: android.app.Activity) {
         viewModelScope.launch {
-            val code = AppContainer.qrScanner.scan()
+            val code = AppContainer.qrScanner.scan(activity)
             _uiState.update {
                 it.copy(
                     qrScanAttempted = true,

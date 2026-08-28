@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -327,6 +328,9 @@ private fun MfaStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindV
 
 @Composable
 private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
+    // Real QR scan (2026-08-28) needs an Activity to host its scan UI — this app is
+    // single-activity (see MainActivity's own doc), so LocalContext.current always is one here.
+    val activity = LocalContext.current as android.app.Activity
     Column(modifier = Modifier.fillMaxSize().padding(start = 72.dp, end = 72.dp, top = 64.dp, bottom = 48.dp)) {
         Text("Bind to vehicle", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = Deck.textPrimary)
         Spacer(Modifier.height(8.dp))
@@ -346,7 +350,7 @@ private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
                     .clip(RoundedCornerShape(Deck.R_XL.dp))
                     .background(Deck.panel)
                     .border(2.dp, Deck.strokeStrong, RoundedCornerShape(Deck.R_XL.dp))
-                    .clickable { viewModel.scanQr() },
+                    .clickable { viewModel.scanQr(activity) },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -360,7 +364,11 @@ private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
                 Text("Point camera at vehicle QR", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = Deck.textPrimary)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (state.qrScanAttempted) "No scanner on this build — use manual entry" else "Pairing code is single-use and expires in 10 minutes",
+                    if (state.qrScanAttempted && state.vehicleIdInput.isBlank()) {
+                        "No code detected — tap to try again, or use manual entry"
+                    } else {
+                        "Pairing code is single-use and expires in 10 minutes"
+                    },
                     fontFamily = InterFamily,
                     fontSize = 14.sp,
                     color = Deck.textMuted,

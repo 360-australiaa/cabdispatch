@@ -14,13 +14,13 @@ import au.com.threesixty.cabdispatch.domain.JobsRepository
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
+import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
-import au.com.threesixty.cabdispatch.domain.StubQrScanner
 import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
@@ -260,7 +260,9 @@ object AppContainer {
     // not-persisted-across-restart stub named identically to this one, in a
     // different package). That stub is now deleted; IdleViewModel reads
     // tariffs through [tariffCache] like every other screen.
-    val qrScanner: QrScanner by lazy { StubQrScanner() }
+    // Real ML Kit code-scanner impl (2026-08-28) — see RealQrScanner's own doc. StubQrScanner
+    // stays defined for tests/no-camera environments, just no longer what this constructs.
+    val qrScanner: QrScanner by lazy { RealQrScanner() }
     val tripStatsRepository: TripStatsRepository by lazy { StubTripStatsRepository() }
     val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
 

@@ -159,6 +159,14 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
 
+    // -- QR vehicle pairing (2026-08-28, real implementation replacing the StubQrScanner —
+    // domain/QrScanner.kt) — the ML Kit "Google code scanner" module (Play Services on-device
+    // model, not the full bundled ML Kit SDK): a ready-made full-screen scan UI + camera
+    // permission handling launched via GmsBarcodeScanning.getClient(activity).startScan(), no
+    // custom CameraX PreviewView/analyzer needed. Public Google Maven artifact, no secret token
+    // (unlike Mapbox's downloads repo) — resolves from the already-declared google() repo. --
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+
     // -- Image loading — Coil, used by MapboxStaticImage.kt's fallback path (kept as the
     // loading/error-state and no-secret-token fallback, see WheelDashboardScreen.kt's
     // MapBackground) and by any other async-image needs elsewhere in the app. --
