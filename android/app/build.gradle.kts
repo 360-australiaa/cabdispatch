@@ -164,16 +164,17 @@ dependencies {
     // MapBackground) and by any other async-image needs elsewhere in the app. --
     implementation("io.coil-kt:coil-compose:2.6.0")
 
-    // -- Mapbox Maps SDK — TEMPORARILY DISABLED on this machine. This dependency only resolves
-    // from Mapbox's PRIVATE Maven repo using a secret MAPBOX_DOWNLOADS_TOKEN (sk.*), which is not
-    // available here, so leaving it enabled fails Gradle resolution with a 401 before anything
-    // compiles. With it removed, the map renders via the built-in non-SDK fallback
-    // (MapboxStaticImage.kt — a plain authenticated REST GET, needs only the pk.* runtime token,
-    // degrades to an illustrative grid if that's absent too), and MapboxOfflineRegion.kt is
-    // stubbed to a no-op that reports "SDK not bundled". To restore live interactive maps +
-    // offline downloads: add a real sk.* token to local.properties and un-comment the line below,
-    // then revert the stub in MapboxOfflineRegion.kt and the MapView in WheelDashboardScreen.kt.
-    // implementation("com.mapbox.maps:android:11.8.1")
+    // -- Mapbox Maps SDK (real interactive map + genuine offline region download, added
+    // 2026-08-02 once a secret MAPBOX_DOWNLOADS_TOKEN became available — see
+    // settings.gradle.kts's Maven-credentials block for why this specific dependency needs that
+    // separate secret token to resolve at all, and HANDOFF.md's offline-maps section for the
+    // full writeup). PIN NOTE: 11.8.1 was the most recent version this was written against
+    // Mapbox's documented v11 API surface for — check Mapbox's actual release notes and bump if
+    // meaningfully newer by the time this is first compiled; the offline-region API in
+    // particular (TileStore/OfflineManager) has had real signature changes across v11 minor
+    // versions historically, so this dependency (more than anything else in this project) may
+    // need small adjustments once someone can actually build against it. --
+    implementation("com.mapbox.maps:android:11.8.1")
 
     // -- BouncyCastle (pure-JVM crypto provider) — needed only for Ed25519 signature
     // verification (security/TariffSignatureVerifier.kt's Ed25519TariffSignatureVerifier,
