@@ -163,6 +163,112 @@ async def test_tick_under_shift_duration_threshold_creates_no_alert(client: Asyn
     assert result.scalars().all() == []
 
 
+# --- no-break-taken alert -------------------------------------------------------
+
+
+async def test_tick_past_no_break_threshold_with_no_break_creates_alert(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+    half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
+    over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
+    shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_half_start)
+
+    trip = await _create_trip(
+        client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id, shift_id=shift["id"]
+    )
+
+    # Tick three times to prove dedup: still only ever one no_break_taken alert.
+    for _ in range(3):
+        resp = await client.patch(
+            f"/v1/trips/{trip['id']}/tick", json={"points": [_point(speed_kmh=40.0)]}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+
+    result = await session.execute(
+        select(FatigueAlert).where(
+            FatigueAlert.tenant_id == tenant_id,
+            FatigueAlert.shift_id == shift["id"],
+            FatigueAlert.kind == "no_break_taken",
+        )
+    )
+    alerts = result.scalars().all()
+    assert len(alerts) == 1
+    assert alerts[0].driver_id == driver_id
+    assert alerts[0].acknowledged is False
+
+
+async def test_tick_past_no_break_threshold_with_break_taken_creates_no_alert(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+    half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
+    over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
+    shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_half_start)
+
+    # Driver actually takes a break before ticking.
+    resp = await client.post(f"/v1/shifts/{shift['id']}/break/start", json={}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(f"/v1/shifts/{shift['id']}/break/end", json={}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["break_taken"] is True
+
+    trip = await _create_trip(
+        client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id, shift_id=shift["id"]
+    )
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick", json={"points": [_point(speed_kmh=40.0)]}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    result = await session.execute(
+        select(FatigueAlert).where(
+            FatigueAlert.tenant_id == tenant_id,
+            FatigueAlert.shift_id == shift["id"],
+            FatigueAlert.kind == "no_break_taken",
+        )
+    )
+    assert result.scalars().all() == []
+
+
+async def test_tick_under_no_break_threshold_creates_no_alert(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+    shift = await _start_shift(
+        client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=datetime.now(UTC)
+    )
+    trip = await _create_trip(
+        client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id, shift_id=shift["id"]
+    )
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick", json={"points": [_point(speed_kmh=40.0)]}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    result = await session.execute(
+        select(FatigueAlert).where(
+            FatigueAlert.tenant_id == tenant_id,
+            FatigueAlert.shift_id == shift["id"],
+            FatigueAlert.kind == "no_break_taken",
+        )
+    )
+    assert result.scalars().all() == []
+
+
 # --- speed alert ---------------------------------------------------------------
 
 

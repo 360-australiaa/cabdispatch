@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   downloadComplianceDocument,
+  downloadVehicleDossierPdf,
   useComplianceDocumentsQuery,
   useDeleteDocumentMutation,
   useVehicleDossierQuery,
@@ -112,6 +113,8 @@ function VaultView() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadingDossierPdf, setDownloadingDossierPdf] = useState(false);
+  const [dossierPdfError, setDossierPdfError] = useState<string | null>(null);
 
   // Default to the first vehicle once the picker loads.
   useEffect(() => {
@@ -152,6 +155,19 @@ function VaultView() {
       setDownloadError(extractErrorMessage(err));
     } finally {
       setDownloadingId(null);
+    }
+  }
+
+  async function handleDownloadDossierPdf() {
+    if (!vehicleId) return;
+    setDossierPdfError(null);
+    setDownloadingDossierPdf(true);
+    try {
+      await downloadVehicleDossierPdf(vehicleId);
+    } catch (err) {
+      setDossierPdfError(extractErrorMessage(err));
+    } finally {
+      setDownloadingDossierPdf(false);
     }
   }
 
@@ -261,13 +277,25 @@ function VaultView() {
                 Present/missing status per required document type for this vehicle.
               </CardDescription>
             </div>
-            {dossierQuery.data && (
-              <Badge variant={dossierQuery.data.overall_compliant ? "success" : "destructive"}>
-                {dossierQuery.data.overall_compliant ? "Compliant" : "Non-compliant"}
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {dossierQuery.data && (
+                <Badge variant={dossierQuery.data.overall_compliant ? "success" : "destructive"}>
+                  {dossierQuery.data.overall_compliant ? "Compliant" : "Non-compliant"}
+                </Badge>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={downloadingDossierPdf}
+                onClick={handleDownloadDossierPdf}
+              >
+                <Download className="h-4 w-4" />
+                {downloadingDossierPdf ? "Preparing…" : "Download PDF"}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="pt-0">
+            {dossierPdfError && <p className="mb-3 text-sm text-destructive">{dossierPdfError}</p>}
             {dossierQuery.isLoading ? (
               <p className="text-sm text-muted-foreground">Loading checklist…</p>
             ) : dossierQuery.isError ? (

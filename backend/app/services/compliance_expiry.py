@@ -33,6 +33,7 @@ here is ever triggered by, or blocks anything on, a null expiry date.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +55,20 @@ from app.models.fatigue_alert import (
 from app.models.fleet import Device, Vehicle
 from app.models.user import ROLE_DRIVER, User
 
+# Compliance expiry (licence/rego/insurance/calibration) is a calendar-date
+# concept and must be evaluated against the NSW local calendar date, not the
+# UTC calendar date -- right around the UTC/Sydney day boundary these can
+# differ by a whole day. Every current-date value derived in this module goes
+# through _sydney_today() below rather than calling .date() on a UTC datetime.
+SYDNEY_TZ = ZoneInfo('Australia/Sydney')
+
+
+def _sydney_today(now: datetime | None = None) -> date:
+    moment = now if now is not None else datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(SYDNEY_TZ).date()
+
 
 def is_expired(expiry: date | None, *, today: date | None = None) -> bool:
     """True only if `expiry` is a real date strictly in the past. A null
@@ -63,7 +78,7 @@ def is_expired(expiry: date | None, *, today: date | None = None) -> bool:
     to touch the alerting machinery below."""
     if expiry is None:
         return False
-    today = today if today is not None else datetime.now(UTC).date()
+    today = today if today is not None else _sydney_today()
     return expiry < today
 
 
@@ -108,7 +123,7 @@ async def _raise_driver_alert(
     expired_kind: str,
     now: datetime,
 ) -> FatigueAlert | None:
-    today = now.date()
+    today = _sydney_today(now)
     outcome = _status_for(expiry, today=today)
     if outcome is None:
         return None
@@ -139,7 +154,7 @@ async def _raise_vehicle_alert(
     expired_kind: str,
     now: datetime,
 ) -> FatigueAlert | None:
-    today = now.date()
+    today = _sydney_today(now)
     outcome = _status_for(expiry, today=today)
     if outcome is None:
         return None
@@ -302,7 +317,7 @@ async def list_compliance_expiry(
     User/Vehicle expiry columns, so it stays correct even if an alert was
     acknowledged or never raised yet. Sorted soonest-expiring (most negative
     days_remaining) first."""
-    today = datetime.now(UTC).date()
+    today = _sydney_today()
     horizon = today + timedelta(days=within_days)
     items: list[dict] = []
 

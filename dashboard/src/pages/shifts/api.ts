@@ -37,6 +37,42 @@ export function useShiftReportQuery(shiftId: string | null) {
   });
 }
 
+/** Streams GET /v1/shifts/{id}/report.pdf via the authenticated apiClient
+ * (no public download URL) and triggers a browser save via a throwaway
+ * object URL + anchor click -- same pattern as downloadComplianceDocument
+ * and downloadNswPtpExport. */
+export async function downloadShiftReportPdf(shiftId: string): Promise<void> {
+  const res = await apiClient.get(`/v1/shifts/${shiftId}/report.pdf`, {
+    responseType: "blob",
+  });
+  const blob = new Blob([res.data], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `shift_report_${shiftId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Streams GET /v1/shifts/{id}/report.csv via the authenticated apiClient
+ * and triggers a browser save the same way as downloadShiftReportPdf. */
+export async function downloadShiftReportCsv(shiftId: string): Promise<void> {
+  const res = await apiClient.get(`/v1/shifts/${shiftId}/report.csv`, {
+    responseType: "blob",
+  });
+  const blob = new Blob([res.data], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `shift_report_${shiftId}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** Lookup lists for the create/edit forms and for resolving id -> label in
  * the table. Capped at each endpoint's server-side max. */
 export function useDriversLookupQuery() {

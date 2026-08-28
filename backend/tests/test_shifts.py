@@ -7,6 +7,8 @@ will pass once that registration lands; run in isolation today they will 404.
 """
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -175,6 +177,77 @@ async def test_end_shift_recomputes_aggregates_from_trips(
     assert body["reconciled"] is True
 
 
+async def test_start_and_end_break_happy_path(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+    assert start_resp.json()["break_started_at"] is None
+    assert start_resp.json()["break_taken"] is False
+
+    start_break_resp = await client.post(f"/v1/shifts/{shift_id}/break/start", json={}, headers=headers)
+    assert start_break_resp.status_code == 200, start_break_resp.text
+    body = start_break_resp.json()
+    assert body["break_started_at"] is not None
+    assert body["break_taken"] is False
+
+    end_break_resp = await client.post(f"/v1/shifts/{shift_id}/break/end", json={}, headers=headers)
+    assert end_break_resp.status_code == 200, end_break_resp.text
+    body = end_break_resp.json()
+    assert body["break_started_at"] is None
+    assert body["break_taken"] is True
+
+
+async def test_break_start_conflicts_when_already_in_progress(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    first = await client.post(f"/v1/shifts/{shift_id}/break/start", json={}, headers=headers)
+    assert first.status_code == 200
+
+    second = await client.post(f"/v1/shifts/{shift_id}/break/start", json={}, headers=headers)
+    assert second.status_code == 409
+
+
+async def test_break_start_conflicts_when_shift_already_ended(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    end_resp = await client.post(
+        f"/v1/shifts/{shift_id}/end", json={"psl_owed": "0", "reconciled": True}, headers=headers
+    )
+    assert end_resp.status_code == 200
+
+    break_resp = await client.post(f"/v1/shifts/{shift_id}/break/start", json={}, headers=headers)
+    assert break_resp.status_code == 409
+
+
+async def test_break_end_conflicts_when_no_break_in_progress(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    resp = await client.post(f"/v1/shifts/{shift_id}/break/end", json={}, headers=headers)
+    assert resp.status_code == 409
+
+
 async def test_end_shift_twice_conflicts(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
     start_resp = await client.post(
@@ -319,3 +392,83 @@ async def test_tenant_isolation_on_shifts(client: AsyncClient, session: AsyncSes
 
     cross_tenant_resp = await client.get(f"/v1/shifts/{shift_id}", headers=tenant_b_headers)
     assert cross_tenant_resp.status_code == 404
+
+
+async def test_report_pdf_endpoint_returns_pdf(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    await client.post(
+        f"/v1/shifts/{shift_id}/end",
+        json={"psl_owed": "1.32", "reconciled": True},
+        headers=headers,
+    )
+
+    resp = await client.get(f"/v1/shifts/{shift_id}/report.pdf", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content.startswith(b"%PDF")
+    assert len(resp.content) > 0
+
+
+async def test_report_csv_endpoint_returns_csv(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    await client.post(
+        f"/v1/shifts/{shift_id}/end",
+        json={"psl_owed": "1.32", "reconciled": True},
+        headers=headers,
+    )
+
+    resp = await client.get(f"/v1/shifts/{shift_id}/report.csv", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert len(resp.content) > 0
+
+    rows = list(csv.reader(io.StringIO(resp.content.decode("utf-8"))))
+    assert len(rows) == 2
+    header, values = rows
+    assert header[0] == "shift_id"
+    assert header[1] == "tenant_id"
+    assert values[0] == shift_id
+
+
+async def test_report_pdf_not_found(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.get(f"/v1/shifts/{uuid.uuid4()}/report.pdf", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_report_csv_not_found(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.get(f"/v1/shifts/{uuid.uuid4()}/report.csv", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_report_pdf_csv_tenant_isolation(client: AsyncClient, session: AsyncSession):
+    tenant_a_headers = await auth_headers(client, session, role="admin", tenant_name="Report Tenant A")
+    tenant_b_headers = await auth_headers(client, session, role="admin", tenant_name="Report Tenant B")
+
+    start_resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": str(uuid.uuid4())},
+        headers=tenant_a_headers,
+    )
+    shift_id = start_resp.json()["id"]
+
+    pdf_resp = await client.get(f"/v1/shifts/{shift_id}/report.pdf", headers=tenant_b_headers)
+    assert pdf_resp.status_code == 404
+
+    csv_resp = await client.get(f"/v1/shifts/{shift_id}/report.csv", headers=tenant_b_headers)
+    assert csv_resp.status_code == 404

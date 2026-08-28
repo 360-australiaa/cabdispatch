@@ -85,10 +85,11 @@ class ChecklistItemRead(BaseModel):
 class ComplianceDossierRead(BaseModel):
     """Response for `GET /v1/compliance/vehicles/{vehicle_id}/dossier`.
 
-    TODO(compliance-vault): a real PDF render of this dossier (the artifact an
-    operator would actually hand to a P2P Commissioner inspector) is out of
-    scope for this pass — this endpoint returns the equivalent JSON summary
-    only. A follow-up should add a `GET .../dossier.pdf` variant.
+    A real PDF render of this dossier (the artifact an operator would
+    actually hand to a P2P Commissioner inspector) is served by the sibling
+    `GET /v1/compliance/vehicles/{vehicle_id}/dossier.pdf` route -- see
+    `app.services.compliance.render_dossier_pdf`. That variant returns raw
+    `application/pdf` bytes, not this schema.
     """
 
     tenant_id: str

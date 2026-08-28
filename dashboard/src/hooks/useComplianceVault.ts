@@ -210,3 +210,21 @@ export async function downloadComplianceDocument(doc: ComplianceDocument): Promi
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+/** Same authenticated-fetch-to-blob pattern as downloadComplianceDocument
+ * above, for the cl.14 dossier PDF render
+ * (GET /v1/compliance/vehicles/{vehicle_id}/dossier.pdf). */
+export async function downloadVehicleDossierPdf(vehicleId: string): Promise<void> {
+  const res = await apiClient.get(`/v1/compliance/vehicles/${vehicleId}/dossier.pdf`, {
+    responseType: "blob",
+  });
+  const blob = new Blob([res.data], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dossier_${vehicleId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

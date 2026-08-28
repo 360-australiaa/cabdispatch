@@ -1,6 +1,7 @@
-import { type ReactNode } from "react";
-import { Badge, Modal } from "@/components/ui";
-import { useShiftReportQuery } from "./api";
+import { type ReactNode, useState } from "react";
+import { Download } from "lucide-react";
+import { Badge, Button, Modal } from "@/components/ui";
+import { downloadShiftReportCsv, downloadShiftReportPdf, useShiftReportQuery } from "./api";
 import {
   formatDateTime,
   formatDurationMinutes,
@@ -27,6 +28,26 @@ export function ShiftReportModal({
   const reportQuery = useShiftReportQuery(shiftId);
   const report = reportQuery.data;
 
+  const [downloading, setDownloading] = useState<"pdf" | "csv" | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  async function handleDownload(kind: "pdf" | "csv") {
+    if (!shiftId) return;
+    setDownloadError(null);
+    setDownloading(kind);
+    try {
+      if (kind === "pdf") {
+        await downloadShiftReportPdf(shiftId);
+      } else {
+        await downloadShiftReportCsv(shiftId);
+      }
+    } catch {
+      setDownloadError(`Could not download the ${kind.toUpperCase()}. Try again.`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
   return (
     <Modal
       open={shiftId != null}
@@ -34,6 +55,33 @@ export function ShiftReportModal({
       title="Shift report"
       description={shiftId ? `Shift ${shiftId.slice(0, 8)}` : undefined}
       className="max-w-xl"
+      footer={
+        report ? (
+          <>
+            {downloadError && (
+              <span className="mr-auto self-center text-xs text-destructive">{downloadError}</span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={downloading != null}
+              onClick={() => handleDownload("csv")}
+            >
+              <Download className="h-4 w-4" />
+              {downloading === "csv" ? "Downloading…" : "Download CSV"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={downloading != null}
+              onClick={() => handleDownload("pdf")}
+            >
+              <Download className="h-4 w-4" />
+              {downloading === "pdf" ? "Downloading…" : "Download PDF"}
+            </Button>
+          </>
+        ) : undefined
+      }
     >
       {reportQuery.isLoading && (
         <p className="py-6 text-center text-sm text-muted-foreground">Loading report…</p>

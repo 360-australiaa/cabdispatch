@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,8 @@ _require_write_role = require_role(*_WRITE_ROLES)
 def _compliance_error_to_http(exc: compliance_service.ComplianceError) -> HTTPException:
     if isinstance(exc, compliance_service.DocumentNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compliance document not found")
+    if isinstance(exc, compliance_service.VehicleNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
     if isinstance(exc, compliance_service.InvalidUploadError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -239,9 +241,8 @@ async def get_vehicle_dossier(
     session: AsyncSession = Depends(get_session),
 ):
     """Cl.14-checklist summary of which required doc types are on file for this
-    vehicle and which are missing. NOTE: a real PDF render of this dossier is
-    out of scope for this pass — see the TODO on
-    `app.schemas.compliance.ComplianceDossierRead`."""
+    vehicle and which are missing. See the sibling GET .../dossier.pdf route below
+    for a real PDF render of this same data."""
     dossier = await compliance_service.build_dossier(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
     return ComplianceDossierRead(
         tenant_id=dossier["tenant_id"],
@@ -250,4 +251,35 @@ async def get_vehicle_dossier(
         overall_compliant=dossier["overall_compliant"],
         missing_items=dossier["missing_items"],
         items=[ChecklistItemRead(**item) for item in dossier["items"]],
+    )
+
+
+@router.get("/vehicles/{vehicle_id}/dossier.pdf")
+async def get_vehicle_dossier_pdf(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Real PDF render of the same cl.14-checklist dossier the JSON route
+    above returns -- see app.services.compliance.render_dossier_pdf. Unlike
+    that JSON route, this one 404s when vehicle_id does not correspond to a
+    real fleet.Vehicle row for this tenant (see
+    compliance_service.VehicleNotFoundError's docstring for why): handing an
+    inspector a PDF for a vehicle that does not exist would be misleading in
+    a way an empty JSON checklist is not.
+    """
+    try:
+        vehicle = await compliance_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    except compliance_service.ComplianceError as exc:
+        raise _compliance_error_to_http(exc) from exc
+
+    dossier = await compliance_service.build_dossier(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    dossier["vehicle_rego"] = vehicle.rego
+    pdf_bytes = compliance_service.render_dossier_pdf(dossier)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="dossier_{vehicle_id}.pdf"'},
     )

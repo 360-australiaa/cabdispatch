@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,15 @@ from app.schemas.shift import (
     ShiftStart,
     ShiftUpdate,
 )
-from app.services.shift import build_report, end_shift, start_shift
+from app.services.shift import (
+    build_report,
+    end_break as end_break_service,
+    end_shift,
+    render_report_csv,
+    render_report_pdf,
+    start_break as start_break_service,
+    start_shift,
+)
 
 router = APIRouter(prefix="/v1/shifts", tags=["shifts"])
 
@@ -92,6 +100,45 @@ async def end(
     )
 
 
+@router.post("/{shift_id}/break/start", response_model=ShiftRead)
+async def start_break(
+    shift_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Shift:
+    """Starts a break on an open shift, stamping break_started_at = now.
+    409s if a break is already in progress, or if the shift has already
+    ended."""
+    shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    if shift.end_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Shift is already closed"
+        )
+    if shift.break_started_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="A break is already in progress"
+        )
+    return await start_break_service(session, shift)
+
+
+@router.post("/{shift_id}/break/end", response_model=ShiftRead)
+async def end_break(
+    shift_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Shift:
+    """Ends the in-progress break on a shift: clears break_started_at and
+    sets break_taken = True. 409s if no break is currently in progress."""
+    shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    if shift.break_started_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="No break is currently in progress"
+        )
+    return await end_break_service(session, shift)
+
+
 @router.get("/{shift_id}/report", response_model=ShiftReport)
 async def report(
     shift_id: str,
@@ -99,10 +146,52 @@ async def report(
     _user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """JSON summary of the shift. TODO(reporting): PDF/CSV export — see
-    app.services.shift.build_report docstring; no PDF library in this pass."""
+    """JSON summary of the shift. Real PDF/CSV export is available at
+    GET /{shift_id}/report.pdf and GET /{shift_id}/report.csv below."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
     return build_report(shift)
+
+
+@router.get("/{shift_id}/report.pdf")
+async def report_pdf(
+    shift_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Real PDF render of the same summary the JSON report route above
+    returns, see app.services.shift.render_report_pdf. Mirrors
+    app.api.v1.compliance's GET /vehicles/{id}/dossier.pdf route shape
+    (inline Content-Disposition, plain fastapi.Response)."""
+    shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    report_data = ShiftReport(**build_report(shift))
+    pdf_bytes = render_report_pdf(report_data)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="shift_report_{shift_id}.pdf"'},
+    )
+
+
+@router.get("/{shift_id}/report.csv")
+async def report_csv(
+    shift_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Real CSV render of the same summary the JSON report route above
+    returns, see app.services.shift.render_report_csv. Mirrors
+    app.api.v1.reports's format=csv attachment-download shape (plain
+    fastapi.Response, text/csv, attachment Content-Disposition)."""
+    shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    report_data = ShiftReport(**build_report(shift))
+    csv_body = render_report_csv(report_data)
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="shift_report_{shift_id}.csv"'},
+    )
 
 
 # --- standard CRUD ------------------------------------------------------------

@@ -91,6 +91,11 @@ class ShiftRead(BaseModel):
     # ShiftCreate/ShiftUpdate above.
     plotted_zone_id: str | None = None
     plotted_at: datetime | None = None
+    # Break-tracking fields (see app.models.shift.Shift DEVIATION note) --
+    # managed exclusively via POST /v1/shifts/{id}/break/start and
+    # POST /v1/shifts/{id}/break/end, not settable via ShiftCreate/ShiftUpdate.
+    break_started_at: datetime | None = None
+    break_taken: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -103,11 +108,9 @@ class ShiftListResponse(BaseModel):
 
 
 class ShiftReport(BaseModel):
-    """`GET /v1/shifts/{id}/report` payload.
-
-    TODO(reporting): this is JSON-only for now. A later pass should add PDF/CSV
-    export (e.g. weasyprint/reportlab for PDF, stdlib csv for CSV) built on top
-    of this same summary shape — no PDF library is available in this pass.
+    """`GET /v1/shifts/{id}/report` payload. Also rendered to real PDF/CSV
+    bytes by app.services.shift.render_report_pdf / render_report_csv, served
+    by GET /v1/shifts/{id}/report.pdf and /report.csv.
     """
 
     shift_id: str

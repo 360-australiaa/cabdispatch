@@ -15,7 +15,7 @@ established the convention for this domain).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -28,6 +28,7 @@ from app.models.duress import DuressEvent
 from app.models.fatigue_alert import FatigueAlert
 from app.models.fleet import Device, Vehicle
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPE_RANK_HAIL, Trip
+from app.services.compliance_expiry import _sydney_today as _today
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -95,7 +96,7 @@ async def test_run_vehicle_compliance_checks_raises_calibration_expiring_soon(
 
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=date.today() + timedelta(days=10)
+        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=_today() + timedelta(days=10)
     )
 
     await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
@@ -119,7 +120,7 @@ async def test_run_vehicle_compliance_checks_raises_calibration_expired(client: 
 
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=date.today() - timedelta(days=2)
+        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=_today() - timedelta(days=2)
     )
 
     await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
@@ -146,7 +147,7 @@ async def test_calibration_check_skips_null_and_unpaired_device(client: AsyncCli
     await _create_device_row(session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=None)
     # Set calibration_due but not paired to any vehicle -- fail-open, no alert.
     await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=None, calibration_due=date.today() - timedelta(days=1)
+        session, tenant_id=tenant_id, vehicle_id=None, calibration_due=_today() - timedelta(days=1)
     )
 
     await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
@@ -164,7 +165,7 @@ async def test_calibration_dedup_does_not_duplicate_unacknowledged_alert(client:
 
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=date.today() - timedelta(days=1)
+        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=_today() - timedelta(days=1)
     )
 
     await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
@@ -190,7 +191,7 @@ async def test_list_compliance_expiry_includes_device_calibration(client: AsyncC
 
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     device = await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=date.today() - timedelta(days=3)
+        session, tenant_id=tenant_id, vehicle_id=vehicle.id, calibration_due=_today() - timedelta(days=3)
     )
 
     resp = await client.get("/v1/fleet/compliance-expiry", headers=headers)
@@ -214,7 +215,7 @@ async def test_list_compliance_expiry_skips_unpaired_device(client: AsyncClient,
     tenant_id = await _tenant_of(headers)
 
     await _create_device_row(
-        session, tenant_id=tenant_id, vehicle_id=None, calibration_due=date.today() - timedelta(days=1)
+        session, tenant_id=tenant_id, vehicle_id=None, calibration_due=_today() - timedelta(days=1)
     )
 
     resp = await client.get("/v1/fleet/compliance-expiry", headers=headers)
@@ -231,7 +232,7 @@ async def test_device_calibration_due_round_trips_via_api(client: AsyncClient, s
     assert vehicle_resp.status_code == 201, vehicle_resp.text
     vehicle_id = vehicle_resp.json()["id"]
 
-    due = (date.today() + timedelta(days=200)).isoformat()
+    due = (_today() + timedelta(days=200)).isoformat()
     resp = await client.post(
         "/v1/fleet/devices",
         json={"android_id": f"AND-{uuid.uuid4().hex[:8]}", "vehicle_id": vehicle_id, "calibration_due": due},
@@ -242,7 +243,7 @@ async def test_device_calibration_due_round_trips_via_api(client: AsyncClient, s
     assert body["calibration_due"] == due
 
     device_id = body["id"]
-    new_due = (date.today() + timedelta(days=10)).isoformat()
+    new_due = (_today() + timedelta(days=10)).isoformat()
     patch_resp = await client.patch(
         f"/v1/fleet/devices/{device_id}", json={"calibration_due": new_due}, headers=headers
     )

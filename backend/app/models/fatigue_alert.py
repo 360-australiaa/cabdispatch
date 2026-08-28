@@ -7,8 +7,7 @@ Alerts are raised server-side by `app.services.fatigue`, never created
 directly through the API — `app/api/v1/fatigue_alerts.py` only lists and
 acknowledges them. See that service module for the exact trigger logic and
 its documented simplifications (flat speed-limit assumption, no
-tenant-settings table for the shift-duration threshold, `no_break_taken`
-defined but not yet wired to a trigger).
+tenant-settings table for the shift-duration or no-break-taken thresholds).
 
 DEVIATION (flagged per task instructions, matching the precedent already set
 by the sibling `shifts`/`trips`/`duress` domains): `driver_id`, `vehicle_id`
@@ -42,12 +41,10 @@ from app.core.database import Base, TenantScopedMixin, TimestampMixin
 # same convention as app.models.fleet's VEHICLE_CLASS_* constants) -----------
 
 FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED = "shift_duration_exceeded"
-# Defined per the blueprint's "mandatory break alerts" requirement, but NOT
-# wired to any trigger in this pass — the Shift model has no persisted
-# break-start/break-end fields to check against (see app.models.shift), so
-# there is nothing to detect a missed break from yet. Kept here so the kind
-# is a real, stable value the moment break-tracking is added, rather than a
-# second migration later.
+# Wired to a real trigger by the break-tracking pass (see app.services.shift
+# start_break/end_break and app.services.fatigue.check_no_break_taken) --
+# the Shift model now carries break_started_at/break_taken (see
+# app.models.shift.Shift's break-tracking DEVIATION note) to check against.
 FATIGUE_ALERT_NO_BREAK_TAKEN = "no_break_taken"
 FATIGUE_ALERT_SPEED_EXCEEDED = "speed_exceeded"
 

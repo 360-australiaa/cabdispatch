@@ -37,6 +37,27 @@ at the application layer by `app.services.zones.plot_into_zone` looking the
 zone up scoped to the caller's own tenant_id before setting it. Managed
 exclusively via `POST /v1/zones/{id}/plot` and `POST /v1/zones/unplot` (see
 `app.services.zones`); not exposed on `ShiftCreate`/`ShiftUpdate`.
+
+DEVIATION (break-tracking pass, added on top of the original shift domain, to
+wire the previously-unwired `no_break_taken` fatigue alert -- see the
+comment on `app.models.fatigue_alert.FATIGUE_ALERT_NO_BREAK_TAKEN` and
+`app.services.fatigue.check_no_break_taken`): `break_started_at` and
+`break_taken` are added here, following the exact same nullable-extra-column
+precedent as `plotted_zone_id`/`plotted_at` above, rather than a new table.
+Deliberately kept as ONE break slot per shift (not a full break-history log
+of every break taken during the shift) -- the only question the fatigue
+check needs answered is whether ANY break was taken this shift, not
+when/how many/how long; a full history table would be more correct for a
+driver-facing break log feature but is unneeded complexity for this alert.
+`break_started_at` is nullable and cleared back to `None` when the break
+ends -- no break currently in progress is the default/common state.
+`break_taken` is a plain non-nullable `Boolean` defaulting to `False` that
+latches permanently to `True` the moment a break is ended (it does not reset
+until this shift itself ends; a new `Shift` row starts fresh with
+`break_taken=False` by default). Managed exclusively via
+`POST /v1/shifts/{id}/break/start` and `POST /v1/shifts/{id}/break/end`
+(see `app.services.shift.start_break` and `app.services.shift.end_break`);
+not exposed on `ShiftCreate`/`ShiftUpdate`.
 """
 from __future__ import annotations
 
@@ -85,3 +106,7 @@ class Shift(Base, TenantScopedMixin, TimestampMixin):
     # --- zone plotting (see class docstring DEVIATION note) ---
     plotted_zone_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     plotted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- break tracking (see class docstring DEVIATION note) ---
+    break_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    break_taken: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

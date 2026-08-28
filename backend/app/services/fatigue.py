@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.fatigue_alert import (
+    FATIGUE_ALERT_NO_BREAK_TAKEN,
     FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
     FATIGUE_ALERT_SPEED_EXCEEDED,
     FatigueAlert,
@@ -120,6 +121,77 @@ async def check_shift_duration(
         details_json={
             "elapsed_hours": round(elapsed_hours, 2),
             "limit_hours": limit_hours,
+        },
+        acknowledged=False,
+    )
+    session.add(alert)
+    return alert
+
+
+# --- no-break-taken alert -------------------------------------------------------
+# Threshold: HALF of the shift-duration limit (settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS),
+# i.e. 6 hours at the default 12-hour limit. Not a value the blueprint pins down
+# explicitly ("mandatory break alerts") -- half of the shift-duration limit is
+# the most defensible reading (a driver who is already halfway to the point
+# we consider fatigue-worthy, with no break taken at all yet, is a reasonable
+# early-warning signal), so that is what is implemented. Swap in a distinct
+# tenant-configurable value here if a real policy number becomes available --
+# same DEVIATION as shift_duration_limit_hours above (no persisted per-tenant
+# settings table exists yet).
+NO_BREAK_ALERT_FRACTION_OF_SHIFT_LIMIT = 0.5
+
+
+async def _no_break_taken_alert_exists(session: AsyncSession, *, tenant_id: str, shift_id: str) -> bool:
+    result = await session.execute(
+        select(FatigueAlert.id).where(
+            FatigueAlert.tenant_id == tenant_id,
+            FatigueAlert.shift_id == shift_id,
+            FatigueAlert.kind == FATIGUE_ALERT_NO_BREAK_TAKEN,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def check_no_break_taken(
+    session: AsyncSession, *, tenant_id: str, shift: Shift, now: datetime | None = None
+) -> FatigueAlert | None:
+    """Raises (adds to the session; does NOT commit) a no_break_taken alert if
+    `shift` has been open longer than NO_BREAK_ALERT_FRACTION_OF_SHIFT_LIMIT of
+    the configured shift-duration threshold, `shift.break_taken` is still
+    False, and one does not already exist for this shift. Mirrors
+    check_shift_duration exact shape: same add()-only-no-commit contract,
+    same "does an alert of this kind already exist for this shift" dedup
+    (bounded-per-shift, unlike compliance_expiry.py unacknowledged-only
+    dedup for renewable kinds like licences) -- idempotent, safe to call on
+    every tick. Returns the new alert, or None if no alert was needed (shift
+    already closed, still under the threshold, a break was already taken, or
+    already alerted)."""
+    if shift.end_at is not None:
+        return None
+
+    if shift.break_taken:
+        return None
+
+    now_aware = _as_aware(now) if now is not None else datetime.now(UTC)
+    start_aware = _as_aware(shift.start_at)
+    elapsed_hours = (now_aware - start_aware).total_seconds() / 3600.0
+
+    threshold_hours = shift_duration_limit_hours(tenant_id) * NO_BREAK_ALERT_FRACTION_OF_SHIFT_LIMIT
+    if elapsed_hours <= threshold_hours:
+        return None
+
+    if await _no_break_taken_alert_exists(session, tenant_id=tenant_id, shift_id=shift.id):
+        return None
+
+    alert = FatigueAlert(
+        tenant_id=tenant_id,
+        driver_id=shift.driver_id,
+        shift_id=shift.id,
+        kind=FATIGUE_ALERT_NO_BREAK_TAKEN,
+        triggered_at=now_aware,
+        details_json={
+            "elapsed_hours": round(elapsed_hours, 2),
+            "threshold_hours": round(threshold_hours, 2),
         },
         acknowledged=False,
     )

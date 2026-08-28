@@ -18,6 +18,8 @@ import BillingPage from "@/pages/billing";
 import WhiteLabelPage from "@/pages/settings/white-label";
 import SecuritySettingsPage from "@/pages/settings/security";
 import PlatformConsolePage from "@/pages/platform";
+import AuditLogPage from "@/pages/audit-log";
+import PaymentReconciliationPage from "@/pages/payment-recon";
 
 /**
  * Route table for the fleet-ops dashboard. Public: /login. Everything else
@@ -51,6 +53,8 @@ export const router = createBrowserRouter([
       { path: "fleet", element: <FleetPage /> },
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
+      { path: "payment-recon", element: <PaymentReconciliationPage /> },
+      { path: "audit-log", element: <AuditLogPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
       { path: "settings/security", element: <SecuritySettingsPage /> },
       {

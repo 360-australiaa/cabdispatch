@@ -19,7 +19,9 @@ import uuid
 
 import pytest
 
+from app.models import Tenant
 from app.models.compliance import ComplianceDocument  # noqa: F401
+from app.models.fleet import Vehicle
 from app.services.compliance import BACKEND_ROOT
 from tests.conftest import auth_headers
 
@@ -264,3 +266,60 @@ async def test_dossier_is_tenant_scoped(client, session):
     body = resp.json()
     calibration_item = next(i for i in body["items"] if i["key"] == "calibration")
     assert calibration_item["satisfied"] is False  # tenant B sees none of tenant A's docs
+
+
+# --- dossier PDF ---------------------------------------------------------------
+
+
+async def _tenant_and_headers(client, session, *, role="admin", tenant_name="Dossier PDF Tenant"):
+    tenant = Tenant(name=tenant_name, plan="standard")
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    headers = await auth_headers(client, session, role=role, tenant_id=tenant.id)
+    return tenant.id, headers
+
+
+async def _make_vehicle(session, *, tenant_id, rego="TX-DOSSIER"):
+    vehicle = Vehicle(tenant_id=tenant_id, rego=rego, vehicle_class="standard", status="active")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+    return vehicle
+
+
+async def test_dossier_pdf_returns_real_pdf_for_seeded_vehicle(client, session):
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Dossier PDF Seeded Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-PDF1")
+
+    await _upload(client, headers, vehicle_id=vehicle.id, doc_type="calibration_record")
+    await _upload(client, headers, vehicle_id=vehicle.id, doc_type="mounting_photo")
+
+    resp = await client.get(f"/v1/compliance/vehicles/{vehicle.id}/dossier.pdf", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content.startswith(b"%PDF")
+    assert len(resp.content) > 0
+
+
+async def test_dossier_pdf_404_for_unknown_vehicle(client, session):
+    _tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Dossier PDF Unknown Tenant")
+    unknown_vehicle_id = str(uuid.uuid4())
+
+    resp = await client.get(f"/v1/compliance/vehicles/{unknown_vehicle_id}/dossier.pdf", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_dossier_pdf_is_tenant_isolated(client, session):
+    tenant_a_id, headers_a = await _tenant_and_headers(client, session, tenant_name="Dossier PDF Tenant A")
+    _tenant_b_id, headers_b = await _tenant_and_headers(client, session, tenant_name="Dossier PDF Tenant B")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_a_id, rego="TX-PDF2")
+
+    await _upload(client, headers_a, vehicle_id=vehicle.id, doc_type="calibration_record")
+
+    resp = await client.get(f"/v1/compliance/vehicles/{vehicle.id}/dossier.pdf", headers=headers_a)
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"%PDF")
+
+    resp = await client.get(f"/v1/compliance/vehicles/{vehicle.id}/dossier.pdf", headers=headers_b)
+    assert resp.status_code == 404

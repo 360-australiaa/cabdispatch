@@ -441,6 +441,7 @@ async def tick_trip(
         shift = await fatigue_service.get_shift_or_none(session, tenant_id=tenant_id, shift_id=trip.shift_id)
         if shift is not None:
             await fatigue_service.check_shift_duration(session, tenant_id=tenant_id, shift=shift)
+            await fatigue_service.check_no_break_taken(session, tenant_id=tenant_id, shift=shift)
 
     driver_result = await session.execute(
         select(User).where(User.id == trip.driver_id, User.tenant_id == tenant_id)

@@ -13,6 +13,8 @@ import {
   CreditCard,
   Palette,
   ShieldCheck,
+  Landmark,
+  ClipboardList,
   LogOut,
   Building2,
   MapPinned,
@@ -42,6 +44,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/fleet", label: "Fleet & Drivers", icon: Car },
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
+  { to: "/payment-recon", label: "Payment Reconciliation", icon: Landmark },
+  { to: "/audit-log", label: "Audit Log", icon: ClipboardList },
   { to: "/settings/white-label", label: "White-label", icon: Palette },
   { to: "/settings/security", label: "Security", icon: ShieldCheck },
 ];
