@@ -39,7 +39,10 @@ enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, R
 sealed interface OfflineMapDownloadState {
     data object NotStarted : OfflineMapDownloadState
     data class Downloading(val progressPercent: Int) : OfflineMapDownloadState
-    data object Completed : OfflineMapDownloadState
+    /** [regionLabel] is a driver-facing name ("Sydney metro" / "Karachi metro") for whichever
+     * region [MapboxOfflineRegion.downloadRegionNear] actually picked — was a hardcoded "Sydney
+     * metro" string in SettingsScreen regardless of the real region until 2026-08-28. */
+    data class Completed(val regionLabel: String) : OfflineMapDownloadState
     data class Failed(val message: String) : OfflineMapDownloadState
 }
 
@@ -393,7 +396,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     is MapboxOfflineRegion.DownloadState.Started -> OfflineMapDownloadState.Downloading(0)
                     is MapboxOfflineRegion.DownloadState.InProgress ->
                         OfflineMapDownloadState.Downloading(state.progressPercent)
-                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed
+                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed(
+                        regionLabel = when (state.regionId) {
+                            MapboxOfflineRegion.KARACHI_METRO_REGION_ID -> "Karachi metro"
+                            else -> "Sydney metro"
+                        },
+                    )
                     is MapboxOfflineRegion.DownloadState.Failed -> OfflineMapDownloadState.Failed(state.message)
                 }
                 _uiState.update { it.copy(offlineMapDownload = mapped) }

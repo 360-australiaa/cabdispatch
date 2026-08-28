@@ -102,7 +102,11 @@ object MapboxOfflineRegion {
         /** [progressPercent] is 0-100, derived from the SDK's completed/required-resource-count
          * progress callback. */
         data class InProgress(val progressPercent: Int) : DownloadState
-        data object Completed : DownloadState
+        /** [regionId] is one of [SYDNEY_METRO_REGION_ID]/[KARACHI_METRO_REGION_ID] — added
+         * 2026-08-28 alongside [downloadRegionNear] so callers can show which region actually
+         * downloaded rather than assuming it was always Sydney (see SettingsScreen's
+         * `OfflineMapsTile`, which used to hardcode "Sydney metro" regardless). */
+        data class Completed(val regionId: String) : DownloadState
         data class Failed(val message: String) : DownloadState
     }
 
@@ -169,7 +173,7 @@ object MapboxOfflineRegion {
             },
             { expected: Expected<TileRegionError, com.mapbox.common.TileRegion> ->
                 if (expected.isValue) {
-                    trySend(DownloadState.Completed)
+                    trySend(DownloadState.Completed(region.id))
                 } else {
                     trySend(DownloadState.Failed(expected.error?.message ?: "Unknown offline-download error"))
                 }

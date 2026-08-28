@@ -236,7 +236,7 @@ private fun NetworkTile(state: SettingsUiState, modifier: Modifier) {
 @Composable
 private fun OfflineMapsTile(state: SettingsUiState, onDownload: () -> Unit, modifier: Modifier) {
     val (sub, tone) = when (val dl = state.offlineMapDownload) {
-        is OfflineMapDownloadState.Completed -> "Sydney metro · up to date" to DiagTone.OK
+        is OfflineMapDownloadState.Completed -> "${dl.regionLabel} · up to date" to DiagTone.OK
         is OfflineMapDownloadState.Downloading -> "Downloading… ${dl.progressPercent}%" to DiagTone.WARN
         is OfflineMapDownloadState.Failed -> "Download failed — ${dl.message}" to DiagTone.BAD
         is OfflineMapDownloadState.NotStarted -> "Not downloaded — tap to fetch" to DiagTone.WARN
