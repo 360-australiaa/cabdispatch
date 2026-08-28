@@ -382,7 +382,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         _uiState.update { it.copy(offlineMapDownload = OfflineMapDownloadState.Downloading(0)) }
         viewModelScope.launch {
-            MapboxOfflineRegion.downloadSydneyMetroRegion(token).collect { state ->
+            // Downloads whichever metro region (Sydney or Karachi) is nearest the driver's
+            // current GPS fix (2026-08-28, active Karachi field-test fix) — was always
+            // downloadSydneyMetroRegion regardless of device location, which wasted bandwidth
+            // downloading Sydney tiles a Karachi-based test device would never actually use
+            // offline. See MapboxOfflineRegion.downloadRegionNear's doc.
+            val fix = AppContainer.speedSource.locationFix.value
+            MapboxOfflineRegion.downloadRegionNear(token, fix).collect { state ->
                 val mapped = when (state) {
                     is MapboxOfflineRegion.DownloadState.Started -> OfflineMapDownloadState.Downloading(0)
                     is MapboxOfflineRegion.DownloadState.InProgress ->
