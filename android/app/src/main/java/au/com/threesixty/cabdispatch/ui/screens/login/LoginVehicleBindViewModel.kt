@@ -228,7 +228,13 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(isStartingShift = true, shiftError = null) }
         viewModelScope.launch {
             val inspectionJson = state.checklist.mapValues { if (it.value) "ok" else "fail" }
-            val result = AppContainer.shiftRepository.startShift(driverId, vehicleId, inspectionJson)
+            // Send the real fleet-vehicle UUID when the background rego->UUID lookup has resolved
+            // (2026-08-28): shifts previously always sent the rego while the position heartbeat
+            // sent the UUID — mixed identifiers on the same shift's vehicle. The backend now also
+            // canonicalizes rego->UUID server-side (services/shift.py), so the rego fallback here
+            // stays safe for the offline/unresolved case.
+            val vehicleIdForApi = _uiState.value.resolvedVehicleUuid ?: vehicleId
+            val result = AppContainer.shiftRepository.startShift(driverId, vehicleIdForApi, inspectionJson)
             result.onSuccess { shift ->
                 SessionHolder.set(
                     DriverSession(
