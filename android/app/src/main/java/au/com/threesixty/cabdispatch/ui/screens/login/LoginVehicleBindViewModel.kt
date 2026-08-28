@@ -19,21 +19,23 @@ enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
 /**
  * Debug-only quick-login convenience, see [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a
- * secret (the PIN is committed to the repo's own seed script), but still gated to debug builds so
+ * secret (committed to the repo, gated to debug builds only), but still gated to debug builds so
  * it never renders in a release build.
  *
- * **Known stale-until-fixed gap:** [DEMO_DRIVER_ID] is the seeded demo driver's *email*
- * (`driver@lillycabs.test`), not its `driver_code` — now that [LoginVehicleBindViewModel.login]
- * calls the real `POST /v1/auth/driver-login` (`driver_code` + `pin`, not email + password), this
- * button will submit the email as a driver code and get a real 401 back. `backend/scripts/seed.py`
- * mints a random `driver_code` per fresh DB and only prints it to stdout at seed time (see that
- * script's final summary) — there is no fixed value to hardcode here. Whoever picks this up next:
- * either read the printed code off your own `uv run python scripts/seed.py` output and paste it in
- * for local testing, or extend seed.py to also write it to a well-known file/env var this constant
- * can read at debug-build time.
+ * **Fixed 2026-08-28 (was previously stale):** this used to hold the seeded demo driver's *email*
+ * (`driver@lillycabs.test`), which 401s against `POST /v1/auth/driver-login` (that endpoint takes
+ * `driver_code` + `pin`, not email + password) — confirmed live against the deployed server
+ * (`72.61.107.107:8001`): `{"detail":"Invalid driver code or PIN"}`. Falling through to
+ * [au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository]'s offline cache
+ * masked the failure in the UI (login "succeeded") but left [AppContainer.accessToken] unset, so
+ * every authenticated call after — starting with the tariff fetch — 401'd too and the meter could
+ * never actually start via this button. Replaced with `GL2HY` / `123456`, this tenant's real seeded
+ * driver code, verified live the same day (`POST /v1/auth/driver-login` → `200 OK`, real access +
+ * refresh tokens issued). If a fresh `backend/scripts/seed.py` run ever mints a different code,
+ * update these two constants to match its stdout output.
  */
-const val DEMO_DRIVER_ID = "driver@lillycabs.test"
-const val DEMO_DRIVER_PIN = "ChangeMe123!"
+const val DEMO_DRIVER_ID = "GL2HY"
+const val DEMO_DRIVER_PIN = "123456"
 
 /**
  * Standard pre-shift check items, per spec B5 S1 ("pre-shift inspection
@@ -99,9 +101,9 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
 
     /**
      * Debug-build convenience only (see [DEMO_DRIVER_ID]/[DEMO_DRIVER_PIN] and the button's
-     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills the seeded demo driver's
-     * credentials (`backend/scripts/seed.py`'s `driver@lillycabs.test`) and submits immediately,
-     * so testing on-device doesn't mean retyping the same PIN every rebuild/reinstall.
+     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills this tenant's real seeded
+     * driver credentials and submits immediately, so testing on-device doesn't mean retyping the
+     * same driver code/PIN every rebuild/reinstall.
      */
     fun quickLoginDemoDriver() {
         // TEMPORARY: seed the offline-login cache so `login()` below succeeds via its existing
