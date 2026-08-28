@@ -144,7 +144,28 @@ fun DeckHomeScreen(
                                 TripDetailHandoff.set(clientUuid)
                                 navController.navigate(CabDispatchRoutes.TRIP_DETAIL)
                             },
-                            onOpenActiveTrip = { navController.navigate(CabDispatchRoutes.HIRED) },
+                            // Real bug found + fixed 2026-08-28 (live-reproduced: an app kill/crash
+                            // mid-fare leaves a TripEntity with status=OPEN in Room forever — no
+                            // code path ever resumes it). This CTA used to navigate straight to
+                            // HIRED, but HiredViewModel only starts the live ticking fare engine
+                            // from SessionHolder.pendingTrip (in-memory, gone after any process
+                            // death) — so the driver landed on a HIRED screen showing a fresh
+                            // $0.00 meter totally disconnected from the real trip, with no way to
+                            // actually finalize/pay it out, and it never synced to the backend.
+                            // CLOSE_PAY is the correct destination: CloseAndPayViewModel already
+                            // reactively reads TripRepository.observeActiveTrip() straight from
+                            // Room (see its own init) and reconstructs the real accrued fare from
+                            // the trip's last-persisted distance/waiting counters — no
+                            // SessionHolder dependency, so it works correctly however the driver
+                            // got here. Deliberately NOT resuming the *live* ticking meter here:
+                            // that needs bridging two non-interchangeable FareState types (the
+                            // live domain.FareState vs. the offline-reconstruction domain.fare.FareState
+                            // used here), which is real, higher-risk financial-calculation work —
+                            // flagged to the user as a follow-up product decision, not invented
+                            // silently. Closing out promptly on the accrued total is the safe
+                            // default: it recovers the trip and gets it paid/synced rather than
+                            // leaving it lost forever.
+                            onOpenActiveTrip = { navController.navigate(CabDispatchRoutes.CLOSE_PAY) },
                             onShiftReportClick = { selectedTab = DeckTab.SHIFT },
                         )
                     }
