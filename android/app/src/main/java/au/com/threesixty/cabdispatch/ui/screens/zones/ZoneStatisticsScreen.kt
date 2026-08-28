@@ -3,7 +3,6 @@ package au.com.threesixty.cabdispatch.ui.screens.zones
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -25,6 +23,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -32,14 +33,27 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * Statistics screen: a table of zones and their live demand stats (plotted/vacant/busy vehicles,
- * jobs holding, bookings/street-hails in the last hour), auto-refreshing every 15-30s while
- * visible (see ZoneStatisticsViewModel doc) -- matches a real competitor taxi meter zone-demand
- * screen (backend/app/api/v1/zones.py doc). Reached from PlotZoneScreen's "Stats" header link;
- * "Back" here pops back to Plot, not the dashboard, since that's how it was opened.
+ * 26 · Zone Statistics — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` nodes `25:175`
+ * populated / `25:340` unavailable). [ZoneStatisticsViewModel]/[ZoneStatisticsUiState] and the
+ * 20s polling loop are unchanged — layout/tokens only. The frame's "⟳ auto-refresh 20 s" chip
+ * states the ViewModel's REAL refresh interval.
+ *
+ * Chrome note: same as [PlotZoneScreen] — the frames' status strip/nav rail belong to the home
+ * shell; this standalone route owns the whole canvas without chrome.
+ *
+ * Honesty notes:
+ * - The unavailable frame's "⟳ RETRY NOW" button is NOT reproduced: the ViewModel exposes no
+ *   manual-refresh method (refreshOnce is private to its polling loop), so the card states the
+ *   truth instead — retries happen automatically every 20 s. Its "Last snapshot: 4:01 PM" line
+ *   is likewise dropped (no snapshot timestamp exists on the state).
+ * - The frame's hot-zone highlight/tip is computed from the REAL rows (highest bookings+hails
+ *   demand, shown only when any demand exists) — never hardcoded to "Airport".
+ * - Rows beyond the fixed table height scroll INSIDE the table container only.
  */
 @Composable
 fun ZoneStatisticsScreen(
@@ -51,115 +65,285 @@ fun ZoneStatisticsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(WheelColors.bg)
-            .padding(24.dp),
+            .background(Deck.canvas)
+            .padding(start = 72.dp, end = 72.dp, top = 44.dp, bottom = 36.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        // Header (Figma 25:226 + 25:338): title · auto-refresh chip · back-to-plot.
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "‹ Back",
-                color = WheelColors.textSecondary,
-                fontSize = 14.sp,
-                modifier = Modifier.clickable { navController.popBackStack() },
+                "Zone statistics — live supply & demand",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 28.sp,
+                color = Deck.textPrimary,
             )
-            Text("Zone statistics", color = WheelColors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(48.dp))
+            Spacer(Modifier.weight(1f))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Deck.card)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    "⟳ auto-refresh 20 s",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
+                    color = Deck.textSecondary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .width(220.dp)
+                    .height(52.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Deck.card)
+                    .clickable { navController.popBackStack() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "← BACK TO PLOT",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = Deck.textSecondary,
+                )
+            }
         }
+
         Spacer(Modifier.height(20.dp))
 
         when {
-            state.loading && state.stats.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = WheelColors.gold)
+            state.loading && state.stats.isEmpty() -> Box(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = Deck.yellow)
             }
-            state.error != null && state.stats.isEmpty() -> Text(state.error!!, color = WheelColors.duress, fontSize = 14.sp)
-            state.stats.isEmpty() -> Text("No zones configured yet.", color = WheelColors.textSecondary, fontSize = 14.sp)
-            else -> ZoneStatsTable(stats = state.stats, error = state.error)
+            state.stats.isEmpty() -> UnavailableCard(
+                modifier = Modifier.weight(1f),
+                error = state.error,
+            )
+            else -> {
+                StatsTable(stats = state.stats, modifier = Modifier.weight(1f))
+                Spacer(Modifier.height(14.dp))
+                if (state.error != null) {
+                    Text(
+                        "Refresh failed — showing the last received figures. ${state.error}",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = Deck.hired,
+                        modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
+                    )
+                }
+                HotZoneTip(stats = state.stats)
+            }
+        }
+    }
+}
+
+// Column widths — Figma 25:231's exact 1084 split, kept as weights of the available width.
+private const val ZONE_COL = 300f
+private const val PLOTTED_COL = 130f
+private const val VACANT_COL = 130f
+private const val BUSY_COL = 130f
+private const val JOBS_COL = 140f
+private const val BOOKINGS_COL = 130f
+private const val HAILS_COL = 124f
+
+/** Frame `25:291`'s hot-row amber-tinted fill — introduced by the populated frame. */
+private val HotRowBg = Color(0xFF22160B)
+
+/** The zone this table should call out as hottest: most demand (bookings + hails last hour),
+ * only when any demand exists at all. Pure derivation from the real rows. */
+private fun hottestZone(stats: List<ZoneStatsDto>): ZoneStatsDto? =
+    stats.maxByOrNull { it.bookingsLastHour + it.streetHailsLastHour }
+        ?.takeIf { it.bookingsLastHour + it.streetHailsLastHour > 0 }
+
+/** Figma `25:230` — panel table, 52dp card-toned header row + 72dp rows. Rows scroll inside. */
+@Composable
+private fun StatsTable(stats: List<ZoneStatsDto>, modifier: Modifier = Modifier) {
+    val hot = hottestZone(stats)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Deck.panel)
+            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(18.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(52.dp).background(Deck.card),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HeaderCell("ZONE", ZONE_COL, align = TextAlign.Start)
+            HeaderCell("PLOTTED", PLOTTED_COL)
+            HeaderCell("VACANT", VACANT_COL)
+            HeaderCell("BUSY", BUSY_COL)
+            HeaderCell("JOBS HOLDING", JOBS_COL)
+            HeaderCell("BOOKINGS/HR", BOOKINGS_COL)
+            HeaderCell("HAILS/HR", HAILS_COL)
+        }
+        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            items(stats, key = { it.zoneId }) { row ->
+                StatsRow(row = row, hot = row.zoneId == hot?.zoneId)
+            }
         }
     }
 }
 
 @Composable
-private fun ZoneStatsTable(stats: List<ZoneStatsDto>, error: String?) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (error != null) {
+private fun StatsRow(row: ZoneStatsDto, hot: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .background(if (hot) HotRowBg else Deck.panel),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.weight(ZONE_COL).padding(start = 24.dp)) {
             Text(
-                error,
-                color = WheelColors.duress,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 10.dp),
+                "${row.zoneNumber} · ${row.zoneName}",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+                color = if (hot) Deck.stopped else Deck.textPrimary,
+                maxLines = 1,
             )
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-        ) {
-            ZoneStatsHeaderRow()
-            Box(Modifier.fillMaxWidth().height(1.dp).background(WheelColors.border))
-            LazyColumn(modifier = Modifier.width(TABLE_WIDTH_DP.dp)) {
-                items(stats, key = { it.zoneId }) { row ->
-                    ZoneStatsRow(row)
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(WheelColors.border))
-                }
-            }
-        }
+        NumberCell(row.plottedVehicles, PLOTTED_COL)
+        NumberCell(row.vacantVehicles, VACANT_COL)
+        NumberCell(row.busyVehicles, BUSY_COL)
+        NumberCell(row.jobsHolding, JOBS_COL)
+        NumberCell(row.bookingsLastHour, BOOKINGS_COL, demand = true)
+        NumberCell(row.streetHailsLastHour, HAILS_COL, demand = true)
     }
 }
 
 @Composable
-private fun ZoneStatsHeaderRow() {
-    Row(
-        modifier = Modifier.width(TABLE_WIDTH_DP.dp).padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TableCell("Zone", width = ZONE_COL_DP, header = true, align = TextAlign.Start)
-        TableCell("Plotted", width = STAT_COL_DP, header = true)
-        TableCell("Vacant", width = STAT_COL_DP, header = true)
-        TableCell("Busy", width = STAT_COL_DP, header = true)
-        TableCell("Jobs", width = STAT_COL_DP, header = true)
-        TableCell("Bkgs/hr", width = STAT_COL_DP, header = true)
-        TableCell("Hails/hr", width = STAT_COL_DP, header = true)
-    }
-}
-
-@Composable
-private fun ZoneStatsRow(row: ZoneStatsDto) {
-    Row(
-        modifier = Modifier.width(TABLE_WIDTH_DP.dp).padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TableCell("${row.zoneName} #${row.zoneNumber}", width = ZONE_COL_DP, align = TextAlign.Start, bold = true)
-        TableCell(row.plottedVehicles.toString(), width = STAT_COL_DP)
-        TableCell(row.vacantVehicles.toString(), width = STAT_COL_DP)
-        TableCell(row.busyVehicles.toString(), width = STAT_COL_DP)
-        TableCell(row.jobsHolding.toString(), width = STAT_COL_DP)
-        TableCell(row.bookingsLastHour.toString(), width = STAT_COL_DP)
-        TableCell(row.streetHailsLastHour.toString(), width = STAT_COL_DP)
-    }
-}
-
-@Composable
-private fun TableCell(
+private fun androidx.compose.foundation.layout.RowScope.HeaderCell(
     text: String,
-    width: Int,
-    header: Boolean = false,
-    bold: Boolean = false,
+    weight: Float,
     align: TextAlign = TextAlign.Center,
 ) {
     Text(
         text,
-        color = if (header) WheelColors.textMuted else WheelColors.textPrimary,
-        fontSize = if (header) 11.sp else 13.sp,
-        fontWeight = if (header || bold) FontWeight.Bold else FontWeight.Normal,
+        fontFamily = InterFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        color = Deck.textMuted,
         textAlign = align,
         maxLines = 1,
-        modifier = Modifier.width(width.dp).padding(horizontal = 4.dp),
+        modifier = Modifier
+            .weight(weight)
+            .padding(start = if (align == TextAlign.Start) 24.dp else 0.dp),
     )
 }
 
-private const val ZONE_COL_DP = 140
-private const val STAT_COL_DP = 78
-private const val TABLE_WIDTH_DP = ZONE_COL_DP + STAT_COL_DP * 6
+/** Chakra Petch 22 figure — muted at 0, primary otherwise; demand columns go amber when high
+ * (≥5/hr), matching the populated frame's amber demand figures (a presentation threshold). */
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.NumberCell(
+    value: Int,
+    weight: Float,
+    demand: Boolean = false,
+) {
+    Text(
+        value.toString(),
+        fontFamily = ChakraPetch,
+        fontWeight = FontWeight.Medium,
+        fontSize = 22.sp,
+        color = when {
+            value == 0 -> Deck.textMuted
+            demand && value >= 5 -> Deck.stopped
+            else -> Deck.textPrimary
+        },
+        textAlign = TextAlign.Center,
+        modifier = Modifier.weight(weight),
+    )
+}
+
+/** Figma `25:336` — amber hot-zone tip bar, composed from the real hottest row (hidden when no
+ * zone reports any demand). */
+@Composable
+private fun HotZoneTip(stats: List<ZoneStatsDto>) {
+    val hot = hottestZone(stats) ?: return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .clip(RoundedCornerShape(Deck.R_MD.dp))
+            .background(Deck.stopped.copy(alpha = 0.1f))
+            .border(1.dp, Deck.stopped.copy(alpha = 0.5f), RoundedCornerShape(Deck.R_MD.dp))
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "🔥 ${hot.zoneName}: ${hot.streetHailsLastHour} street hails + ${hot.bookingsLastHour} bookings " +
+                "in the last hour and ${hot.vacantVehicles} vacant cars — best plot right now",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 17.sp,
+            color = Deck.stopped,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 26b — unavailable state (Figma `25:392`): big panel card with 📡, headline, explanation, and
+ * the frame's three fading skeleton bars. Doubles as the no-zones-configured state (no dedicated
+ * frame exists for it) with matching honest copy. No RETRY button — see file doc.
+ */
+@Composable
+private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(Deck.panel)
+            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(24.dp))
+            .padding(horizontal = 32.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Spacer(Modifier.weight(1f))
+        Text("📡", fontSize = 52.sp)
+        Text(
+            text = if (error != null) {
+                "Statistics unavailable — reconnecting to the fleet server"
+            } else {
+                "No zones reporting statistics yet"
+            },
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 24.sp,
+            color = Deck.textPrimary,
+        )
+        Text(
+            text = if (error != null) {
+                "Live supply & demand needs a data connection. The meter itself keeps working " +
+                    "offline; zone stats retry automatically every 20 s while this screen is open. ($error)"
+            } else {
+                "Your operator has not published zone demand data for this region yet. This screen " +
+                    "refreshes automatically every 20 s while it is open."
+            },
+            fontFamily = InterFamily,
+            fontSize = 16.sp,
+            color = Deck.textSecondary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(620.dp),
+        )
+        listOf(0.6f, 0.45f, 0.3f).forEach { a ->
+            Box(
+                modifier = Modifier
+                    .width(900.dp)
+                    .height(26.dp)
+                    .alpha(a)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(Deck.card),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+    }
+}

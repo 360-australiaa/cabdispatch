@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dummy/placeholder driver photo (2026-08-27 fidelity pass, driver-photo dashboard feature).
+
+  No real driver photo asset existed anywhere in the repo before this (confirmed: the whole
+  res/ tree had zero person/avatar drawables). The Figma design system itself never draws an
+  actual photo here either: every "Avatar / Driver" instance in the approved dashboard frame
+  (fileKey JhEhok3n9bntRNS5Y1u3Yc, node 26:20) is a generic white person-glyph icon on a dark
+  gradient circle, not a photo. This is a deliberate step beyond that: a small illustrated
+  headshot (simple flat-color face/hair/shoulders on a warm gradient background) standing in for
+  a real uploaded photo, so the dashboard identity chip reads as "a person's photo" rather than
+  "an icon". Used only as the fallback shown until ProfileViewModel's real photo-upload flow
+  (see ProfileScreen.kt's IdentityHeader) has a genuine photo loaded for this driver.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+  <!-- Background circle: warm gradient, matching the app's gold/amber CTA language. -->
+  <path android:pathData="M64,64m-64,0a64,64 0,1 1,128 0a64,64 0,1 1,-128 0">
+    <aapt:attr xmlns:aapt="http://schemas.android.com/aapt" name="android:fillColor">
+      <gradient
+          android:type="linear"
+          android:startX="20"
+          android:startY="10"
+          android:endX="108"
+          android:endY="128"
+          android:startColor="#F7CE3C"
+          android:endColor="#B8860B" />
+    </aapt:attr>
+  </path>
+
+  <!-- Shoulders / shirt -->
+  <path
+      android:pathData="M14,128 C14,101 36,90 64,90 C92,90 114,101 114,128 Z"
+      android:fillColor="#2A2344" />
+  <path
+      android:pathData="M14,128 C14,101 36,90 64,90 C92,90 114,101 114,128 L114,128 C104,116 86,108 64,108 C42,108 24,116 14,128 Z"
+      android:fillColor="#3A3160" />
+
+  <!-- Neck -->
+  <path
+      android:pathData="M52,74 L76,74 L76,94 C76,101 68,106 64,106 C60,106 52,101 52,94 Z"
+      android:fillColor="#C98A56" />
+
+  <!-- Head -->
+  <path
+      android:pathData="M64,20 C79,20 89,32 89,48 C89,66 77,80 64,80 C51,80 39,66 39,48 C39,32 49,20 64,20 Z"
+      android:fillColor="#DDA06B" />
+
+  <!-- Hair -->
+  <path
+      android:pathData="M64,16 C46,16 36,29 36,45 C36,50 37,55 39,59 C39,50 41,44 45,44 C45,38 50,26 64,26 C78,26 83,38 83,44 C87,44 89,50 89,59 C91,55 92,50 92,45 C92,29 82,16 64,16 Z"
+      android:fillColor="#3B2A1E" />
+
+  <!-- Simple face details: eyes + smile, kept minimal/friendly -->
+  <path android:pathData="M54,49 m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" android:fillColor="#2A2344" />
+  <path android:pathData="M74,49 m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" android:fillColor="#2A2344" />
+  <path
+      android:pathData="M53,61 C57,66 71,66 75,61"
+      android:strokeColor="#8A5A34"
+      android:strokeWidth="3"
+      android:strokeLineCap="round"
+      android:fillColor="#00000000" />
+
+  <!-- Outer ring highlight, matching the app's gold-CTA border language -->
+  <path
+      android:pathData="M64,3 C97.24,3 124,29.76 124,63.99 C124,98.24 97.24,125 64,125 C30.76,125 4,98.24 4,63.99 C4,29.76 30.76,3 64,3 Z"
+      android:strokeColor="#F4C300"
+      android:strokeWidth="3"
+      android:fillColor="#00000000" />
+</vector>

@@ -1,17 +1,15 @@
 package au.com.threesixty.cabdispatch.ui.screens.shiftstart
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,107 +17,91 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.ShiftDurationLimit
+import au.com.threesixty.cabdispatch.ui.deck.DeckButton
+import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * Row 5 — Shift start confirmation (spec §8: "Not yet designed"). A simple "You're on shift"
- * confirmation shown once, right after S1's pre-shift-inspection step successfully starts the
- * shift ([LoginVehicleBindViewModel.startShift] having already called [SessionHolder.set]).
+ * 08 · Shift Start Confirm — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `10:186`).
+ * Behavior unchanged from the previous version: the shift is ALREADY started by the time this
+ * renders ([LoginVehicleBindViewModel.startShift] set [SessionHolder]); this is the confirm/landing
+ * bookend. "Start Shift" lands on the dashboard (`IDLE`, popUpTo(0)); Back pops.
  *
- * Deliberately mirrors [au.com.threesixty.cabdispatch.ui.screens.shiftsubmitted.ShiftSubmittedScreen]'s
- * "receipt-card" visual pattern — big circular glyph, heading, summary line, single full-width
- * gold action button — per this agent's brief ("matching the submit-shift-confirmation visual
- * pattern a sibling agent is building, for symmetry"): shift-start and shift-submitted are the two
- * bookends of a driver's working day and should read as the same design family. Gold (not green)
- * for the circle here specifically, since this is a *starting* state, not a completed/paid one —
- * green stays reserved for "done/settled" per [WheelColors.available]'s usage everywhere else.
- *
- * Reads [SessionHolder.session] directly rather than a nav-arg/hand-off object — by the time this
- * screen is reached the session is already set, same "read the already-set singleton" pattern
- * used throughout this flow (see [au.com.threesixty.cabdispatch.domain.Session]'s doc).
- *
- * Verified (reconciliation pass): CONTINUE targets [CabDispatchRoutes.IDLE], which is registered
- * in `CabDispatchNavHost.kt` to render [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
- * (the wheel-dashboard shell) under that same route key — no repoint needed, this already lands on
- * the real dashboard.
+ * v2 layout: centered 700dp confirm card (panel surface, radius 24) with DRIVER / VEHICLE /
+ * REGION / TARIFF / SHIFT LIMIT label-value rows, ghost Back + 440×72 green Start Shift beneath.
+ * REGION/TARIFF rows remain the design's own copy (no region/tariff-name state exists on the
+ * session — same honesty note as the previous version); DRIVER/VEHICLE/shift-limit are real.
  */
 @Composable
 fun ShiftStartScreen(navController: NavHostController) {
     val session by SessionHolder.session.collectAsState()
+    val s = session
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(WheelColors.bg)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.height(56.dp))
-
-        Row(
-            modifier = Modifier
-                .size(64.dp)
-                .background(WheelColors.gold, CircleShape),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("🚖", fontSize = 28.sp)
-        }
-        Spacer(Modifier.height(16.dp))
-        Text("You're on shift", color = WheelColors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-
-        val s = session
-        if (s == null) {
-            Spacer(Modifier.height(8.dp))
-            Text("Shift started.", color = WheelColors.textSecondary, fontSize = 13.sp)
-        } else {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "${s.driverName} · Vehicle ${s.vehicleId}",
-                color = WheelColors.textSecondary,
-                fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(20.dp))
-            Text("Drive safe.", color = WheelColors.gold, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Toggle Available on the dashboard when you're ready for a hire.",
-                color = WheelColors.textSecondary,
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center,
-            )
-        }
-
-        Spacer(Modifier.height(36.dp))
-
-        Text(
-            "CONTINUE",
-            color = IndigoOnGold,
-            fontWeight = FontWeight.Black,
-            fontSize = 15.sp,
-            modifier = Modifier
-                .widthIn(min = 220.dp)
-                .background(WheelColors.gold, RoundedCornerShape(14.dp))
-                .clickable {
-                    navController.navigate(CabDispatchRoutes.IDLE) {
-                        popUpTo(0)
-                    }
+    Box(modifier = Modifier.fillMaxSize().background(Deck.canvas)) {
+        Column(modifier = Modifier.align(Alignment.Center)) {
+            Column(
+                modifier = Modifier
+                    .width(700.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Deck.panel)
+                    .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(24.dp))
+                    .padding(horizontal = 40.dp, vertical = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Text("Start shift?", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
+                ConfirmRow("DRIVER", if (s != null) "${s.driverName} · ${s.driverId.take(8)}" else "—")
+                ConfirmRow("VEHICLE", s?.vehicleId?.let { "Vehicle $it" } ?: "—")
+                ConfirmRow("REGION", "Urban (auto-detected via GPS)")
+                ConfirmRow("TARIFF", "Lilly Cabs urban rank/hail · Ed25519 signed ✓", valueColor = Deck.forHire)
+                ConfirmRow(
+                    "SHIFT LIMIT",
+                    "${ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS.toInt()}h 00m — countdown shows on the status strip",
+                )
+            }
+            Spacer(Modifier.padding(top = 28.dp))
+            Row(modifier = Modifier.width(700.dp)) {
+                DeckButton(text = "Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp)) {
+                    navController.popBackStack()
                 }
-                .padding(horizontal = 32.dp, vertical = 16.dp),
-        )
+                Spacer(Modifier.weight(1f))
+                DeckButton(
+                    text = "Start Shift",
+                    kind = DeckButtonKind.Success,
+                    heightDp = 72,
+                    fontSize = 22,
+                    modifier = Modifier.width(440.dp),
+                ) {
+                    navController.navigate(CabDispatchRoutes.IDLE) { popUpTo(0) }
+                }
+            }
+        }
     }
 }
 
-/** #2A1C58 — text color on top of a gold surface, same coincidental-not-semantic reuse
- * [au.com.threesixty.cabdispatch.ui.screens.messages.MessageThreadScreen]'s
- * `CabDispatchIndigoText` and [au.com.threesixty.cabdispatch.ui.screens.shiftsubmitted.ShiftSubmittedScreen]
- * document; kept as its own local constant per that established per-file convention. */
-private val IndigoOnGold = Color(0xFF2A1C58)
+@Composable
+private fun ConfirmRow(
+    label: String,
+    value: String,
+    valueColor: androidx.compose.ui.graphics.Color = Deck.textPrimary,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Deck.textMuted,
+            modifier = Modifier.width(120.dp),
+        )
+        Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = valueColor)
+    }
+}

@@ -3,6 +3,8 @@ package au.com.threesixty.cabdispatch.ui.screens.shiftreport
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -12,7 +14,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -20,7 +24,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionSummary
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.ui.screens.earnings.StatGrid
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
 import java.time.Duration
 import java.time.Instant
 
@@ -63,11 +67,19 @@ fun ShiftWheelContent(
 
     when {
         state.loading -> CircularProgressIndicator()
-        state.shiftClientUuid == null -> Text("No active shift.", color = WheelColors.textSecondary, fontSize = 14.sp)
+        state.shiftClientUuid == null -> Text("No active shift.", color = WheelColorsV2.mutedFigure, fontSize = 14.sp)
         else -> ShiftWheelBody(state, viewModel, modifier)
     }
 }
 
+/**
+ * **2026-08-27 fidelity pass:** was the second v1-[WheelColors] straggler found alongside
+ * [StatGrid] (both flagged in the same audit) — migrated to [WheelColorsV2]. Also replaced the
+ * plain gold text pill (labeled "SUBMIT SHIFT") with Figma's actual CTA for this action (node
+ * 8:305, "Chip / CTA_ENDSHIFT"): a full-width red button reading "END SHIFT & RECONCILE" — a
+ * more honest visual signal for what is, functionally, an irreversible end-of-shift action
+ * ([ShiftReportViewModel.submitShift], unchanged).
+ */
 @Composable
 private fun ShiftWheelBody(state: ShiftReportUiState, vm: ShiftReportViewModel, modifier: Modifier) {
     Column(modifier = modifier) {
@@ -81,22 +93,25 @@ private fun ShiftWheelBody(state: ShiftReportUiState, vm: ShiftReportViewModel, 
         )
 
         if (state.submitError != null) {
-            Text(state.submitError, color = WheelColors.duress, fontSize = 13.sp)
+            Text(state.submitError, color = WheelColorsV2.dangerText, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
         }
 
         if (state.submitting) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp), color = WheelColorsV2.dangerText)
         } else {
             Text(
-                "SUBMIT SHIFT",
-                color = WheelColors.surfaceRaised,
-                fontWeight = FontWeight.Black,
-                fontSize = 14.sp,
+                "END SHIFT & RECONCILE",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center,
                 modifier = Modifier
                     .padding(top = 16.dp)
-                    .background(WheelColors.gold, RoundedCornerShape(12.dp))
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .background(WheelColorsV2.dangerText, RoundedCornerShape(12.dp))
                     .clickable(onClick = vm::submitShift)
-                    .padding(horizontal = 26.dp, vertical = 14.dp),
+                    .padding(vertical = 16.dp),
             )
         }
     }

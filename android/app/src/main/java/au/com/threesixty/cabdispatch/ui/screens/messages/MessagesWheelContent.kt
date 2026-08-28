@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.ui.screens.messages
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,23 +14,26 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
 
 /**
  * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES] wheel-slot content, per design spec
@@ -38,9 +42,12 @@ import au.com.threesixty.cabdispatch.ui.theme.WheelColors
  * `.list-row` markup for the Messages slot (docs/driver-dashboard-full-prototype.html lines
  * ~332-351), newest message first.
  *
- * This composable renders only the content-pane *body* (the prototype's `#detailBody` — the list
- * itself), not the pane's `eyebrow`/`hero` title chrome, which the wheel-dashboard host screen
- * owns for every slot uniformly (see spec §4's "Left content pane" intro).
+ * Phase B v2 reskin (2026-08-26 dock-menu pass, Figma fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
+ * `35:2`): rows restyled as left/right chat-style bubbles (dispatch left in a neutral glass
+ * bubble, driver's own replies right in a gold bubble) matching the Figma "Messages" screen's
+ * layout, instead of v1's flat list-row table. [MessagesViewModel]/unread-count/[onOpenThread] are
+ * unchanged — this file still renders only the content-pane *body*, not the eyebrow/hero title
+ * chrome, which the hosting screen owns uniformly for every slot (spec §4 intro).
  *
  * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
  * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES], wiring
@@ -56,93 +63,116 @@ fun MessagesWheelContent(
     val state by viewModel.uiState.collectAsState()
 
     Column(modifier = modifier.fillMaxWidth()) {
+        val error = state.error
         when {
             state.loading -> Text(
                 "Loading messages…",
-                color = WheelColors.textSecondary,
+                color = Color.White.copy(alpha = 0.6f),
                 fontSize = 14.sp,
             )
-            state.error != null -> Text(
-                state.error,
-                color = WheelColors.duress,
+            error != null -> Text(
+                error,
+                color = WheelColorsV2.dangerText,
                 fontSize = 14.sp,
             )
             state.messages.isEmpty() -> Text(
                 "No messages yet.",
-                color = WheelColors.textSecondary,
+                color = Color.White.copy(alpha = 0.6f),
                 fontSize = 14.sp,
             )
             else -> {
-                val newestFirst = state.messages.sortedByDescending { it.sentAt }
-                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-                    items(newestFirst, key = { it.id }) { message ->
-                        MessageListRow(message = message, onClick = onOpenThread)
-                        HorizontalDivider(color = WheelColors.border, thickness = 1.dp)
+                val oldestFirst = state.messages.sortedBy { it.sentAt }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(oldestFirst, key = { it.id }) { message ->
+                        MessageBubbleRow(message = message, onClick = onOpenThread)
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
-        Box(modifier = Modifier.clickable(onClick = onOpenThread)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(WheelColorsV2.greenCtaBrush)
+                .clickable(onClick = onOpenThread)
+                .padding(vertical = 14.dp),
+        ) {
             Text(
                 text = if (state.unreadCount > 0) {
                     "VIEW FULL THREAD & REPLY (${state.unreadCount} unread)"
                 } else {
                     "VIEW FULL THREAD & REPLY"
                 },
-                color = WheelColors.gold,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp,
+                color = WheelColorsV2.onGreenCta,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp,
+                modifier = Modifier.align(Alignment.Center),
             )
         }
     }
 }
 
 @Composable
-private fun MessageListRow(message: MessageDto, onClick: () -> Unit) {
+private fun MessageBubbleRow(message: MessageDto, onClick: () -> Unit) {
+    val fromDispatch = message.senderType == "dispatch"
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        horizontalArrangement = if (fromDispatch) Arrangement.Start else Arrangement.End,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = senderLabel(message),
-                    color = WheelColors.textPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (message.senderType == "dispatch" && message.readAt == null) {
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(WheelColors.gold, shape = CircleShape),
-                    )
+        Column(
+            modifier = Modifier.widthIn(max = 320.dp),
+            horizontalAlignment = if (fromDispatch) Alignment.Start else Alignment.End,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(bottom = 3.dp, start = 4.dp, end = 4.dp),
+            ) {
+                if (fromDispatch && message.readAt == null) {
+                    Box(modifier = Modifier.size(6.dp).background(WheelColorsV2.amberFigure, CircleShape))
                 }
+                Text(senderLabel(message), color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
             }
-            Spacer(Modifier.height(2.dp))
+            val bubbleShape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (fromDispatch) 4.dp else 16.dp,
+                bottomEnd = if (fromDispatch) 16.dp else 4.dp,
+            )
+            Box(
+                modifier = Modifier
+                    .then(
+                        if (fromDispatch) {
+                            Modifier.background(Color(0xEB221B3E), bubbleShape)
+                        } else {
+                            Modifier.background(WheelColorsV2.goldCtaBrush, bubbleShape)
+                        },
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    text = message.body,
+                    color = if (fromDispatch) Color.White.copy(alpha = 0.94f) else WheelColorsV2.onGoldCta,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
-                text = message.body,
-                color = WheelColors.textSecondary,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                text = formatMessageRelativeTime(message.sentAt),
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 3.dp, start = 4.dp, end = 4.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = formatMessageRelativeTime(message.sentAt),
-            color = WheelColors.textMuted,
-            fontSize = 11.sp,
-        )
     }
 }
 

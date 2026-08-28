@@ -113,6 +113,11 @@ dependencies {
     // -- Lifecycle --
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    // ProcessLifecycleOwner — used by domain/duress/DuressCameraCapture.kt to bind CameraX's
+    // ImageCapture use case to the app-process lifecycle (this app is always single-activity/
+    // foreground-kiosk, so "process lifecycle" and "the driver can see the screen" coincide;
+    // there is no separate Activity/Fragment lifecycle worth binding to instead here).
+    implementation("androidx.lifecycle:lifecycle-process:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     // Explicit for `viewModelScope` (used throughout ui/screens/*/ ViewModels).
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4")
@@ -144,6 +149,23 @@ dependencies {
 
     // -- Location (fare engine GPS fusion, sibling agent) --
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // -- CameraX (duress cabin-camera still-frame capture, blueprint 4.3/8.3's camera-during-
+    // active-duress-only feature — see domain/duress/DuressCameraCapture.kt). camera-core +
+    // camera-camera2 (the real Camera2-backed implementation) + camera-lifecycle (binds the
+    // ImageCapture use case to a LifecycleOwner) — no camera-view, this never shows a
+    // PreviewView/viewfinder to the driver, it's a silent background capture only. --
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+
+    // -- QR vehicle pairing (2026-08-28, real implementation replacing the StubQrScanner —
+    // domain/QrScanner.kt) — the ML Kit "Google code scanner" module (Play Services on-device
+    // model, not the full bundled ML Kit SDK): a ready-made full-screen scan UI + camera
+    // permission handling launched via GmsBarcodeScanning.getClient(activity).startScan(), no
+    // custom CameraX PreviewView/analyzer needed. Public Google Maven artifact, no secret token
+    // (unlike Mapbox's downloads repo) — resolves from the already-declared google() repo. --
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     // -- Image loading — Coil, used by MapboxStaticImage.kt's fallback path (kept as the
     // loading/error-state and no-secret-token fallback, see WheelDashboardScreen.kt's

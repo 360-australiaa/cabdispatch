@@ -12,7 +12,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
 import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 
 enum class GpsQuality { NO_FIX, POOR, FAIR, GOOD, PERMISSION_DENIED }
 enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
@@ -39,7 +42,10 @@ enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, R
 sealed interface OfflineMapDownloadState {
     data object NotStarted : OfflineMapDownloadState
     data class Downloading(val progressPercent: Int) : OfflineMapDownloadState
-    data object Completed : OfflineMapDownloadState
+    /** [regionLabel] is a driver-facing name ("Sydney metro" / "Karachi metro") for whichever
+     * region [MapboxOfflineRegion.downloadRegionNear] actually picked — was a hardcoded "Sydney
+     * metro" string in SettingsScreen regardless of the real region until 2026-08-28. */
+    data class Completed(val regionLabel: String) : OfflineMapDownloadState
     data class Failed(val message: String) : OfflineMapDownloadState
 }
 
@@ -74,7 +80,26 @@ data class SettingsUiState(
     val factoryResetComplete: Boolean = false,
     val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,
     val locateResponse: LocateResponseState = LocateResponseState.Idle,
+    val pairMeter: PairMeterState = PairMeterState.Idle,
 )
+
+/** Real meter/device pairing (2026-08-28 — backend spec: `POST /v1/fleet/devices/register`,
+ * device.id persisted so [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]'s
+ * existing heartbeat call finally has a non-null [au.com.threesixty.cabdispatch.domain.SessionHolder.deviceId]
+ * to fire against). See [SettingsViewModel.submitPairingCode]. */
+sealed interface PairMeterState {
+    data object Idle : PairMeterState
+    data object Submitting : PairMeterState
+    data class Success(val vehicleId: String?) : PairMeterState
+    /** [message] is shown verbatim — for the 409 "vehicle has an open shift" case this is the
+     * server's own explanatory text (spec: "show the server's message text directly"). */
+    data class Error(val message: String) : PairMeterState
+}
+
+/** FastAPI's default error-body shape, e.g. `{"detail":"Invalid driver code or PIN"}` — same
+ * convention this backend uses everywhere (see driver-login's 401). */
+@Serializable
+private data class PairErrorDto(val detail: String? = null)
 
 /**
  * S6 — Settings/Diagnostics (spec B5). [AndroidViewModel] (not a plain
@@ -382,16 +407,91 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         _uiState.update { it.copy(offlineMapDownload = OfflineMapDownloadState.Downloading(0)) }
         viewModelScope.launch {
-            MapboxOfflineRegion.downloadSydneyMetroRegion(token).collect { state ->
+            // Downloads whichever metro region (Sydney or Karachi) is nearest the driver's
+            // current GPS fix (2026-08-28, active Karachi field-test fix) — was always
+            // downloadSydneyMetroRegion regardless of device location, which wasted bandwidth
+            // downloading Sydney tiles a Karachi-based test device would never actually use
+            // offline. See MapboxOfflineRegion.downloadRegionNear's doc.
+            val fix = AppContainer.speedSource.locationFix.value
+            MapboxOfflineRegion.downloadRegionNear(token, fix).collect { state ->
                 val mapped = when (state) {
                     is MapboxOfflineRegion.DownloadState.Started -> OfflineMapDownloadState.Downloading(0)
                     is MapboxOfflineRegion.DownloadState.InProgress ->
                         OfflineMapDownloadState.Downloading(state.progressPercent)
-                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed
+                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed(
+                        regionLabel = when (state.regionId) {
+                            MapboxOfflineRegion.KARACHI_METRO_REGION_ID -> "Karachi metro"
+                            else -> "Sydney metro"
+                        },
+                    )
                     is MapboxOfflineRegion.DownloadState.Failed -> OfflineMapDownloadState.Failed(state.message)
                 }
                 _uiState.update { it.copy(offlineMapDownload = mapped) }
             }
+        }
+    }
+
+    // --- Meter/device pairing (2026-08-28, backend spec) ---
+
+    fun clearPairMeterError() = _uiState.update { it.copy(pairMeter = PairMeterState.Idle) }
+
+    fun scanPairingQr(activity: android.app.Activity) {
+        viewModelScope.launch {
+            val code = AppContainer.qrScanner.scan(activity)
+            if (code != null) submitPairingCode(code)
+        }
+    }
+
+    /** [pairingCode] is the 8-char code an admin generated for a specific vehicle
+     * (`POST /v1/fleet/vehicles/{id}/pairing-code` on the dashboard side). Registers this
+     * physical tablet as that vehicle's meter and persists the resulting device id so
+     * [loadDeviceStatus]'s existing heartbeat call — previously a structural no-op, see
+     * [au.com.threesixty.cabdispatch.domain.SessionHolder.deviceId]'s own long-standing TODO —
+     * finally has something real to fire against. */
+    fun submitPairingCode(pairingCode: String) {
+        val normalized = pairingCode.trim().uppercase()
+        if (normalized.isBlank()) return
+        _uiState.update { it.copy(pairMeter = PairMeterState.Submitting) }
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val androidId = android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID,
+            )
+            val result = runCatching {
+                AppContainer.apiService.registerDevice(
+                    DeviceRegisterRequestDto(
+                        androidId = androidId,
+                        pairingCode = normalized,
+                        model = android.os.Build.MODEL,
+                        appVersion = BuildConfig.VERSION_NAME,
+                    ),
+                )
+            }
+            result.onSuccess { device ->
+                SessionHolder.deviceId = device.id
+                AppContainer.devicePairingStore.saveDeviceId(device.id)
+                _uiState.update { it.copy(pairMeter = PairMeterState.Success(device.vehicleId)) }
+                loadDeviceStatus() // re-fires heartbeat now that deviceId is real
+            }.onFailure { error ->
+                _uiState.update { it.copy(pairMeter = PairMeterState.Error(pairErrorMessage(error))) }
+            }
+        }
+    }
+
+    /** Extracts the backend's own `{"detail": "..."}` message off a Retrofit [retrofit2.HttpException]
+     * (matches this API's error shape everywhere else, e.g. driver-login's 401 body) — the 409
+     * "vehicle has an open shift" case in particular must show the server's real explanatory text
+     * per spec, not a generic fallback. Network/5xx/anything unparseable falls back to a plain
+     * message; never throws. */
+    private fun pairErrorMessage(error: Throwable): String {
+        val http = error as? retrofit2.HttpException ?: return error.message ?: "Could not pair — check your connection and try again"
+        val body = runCatching { http.response()?.errorBody()?.string() }.getOrNull()
+        val detail = body?.let { runCatching { cabDispatchJson.decodeFromString<PairErrorDto>(it).detail }.getOrNull() }
+        return detail ?: when (http.code()) {
+            404, 410 -> "Invalid or expired code — check it and try again"
+            409 -> "Cannot pair — this vehicle currently has an open shift"
+            else -> "Could not pair (server said ${http.code()}) — try again"
         }
     }
 

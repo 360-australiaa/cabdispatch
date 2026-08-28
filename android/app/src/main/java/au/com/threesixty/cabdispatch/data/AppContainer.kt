@@ -11,21 +11,24 @@ import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
+import au.com.threesixty.cabdispatch.domain.DevicePairingStore
+import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
-import au.com.threesixty.cabdispatch.domain.StubQrScanner
 import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
 import au.com.threesixty.cabdispatch.domain.ZonesRepository
 import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
+import au.com.threesixty.cabdispatch.domain.duress.DuressCameraCapture
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
 import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
 import au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway
@@ -113,8 +116,17 @@ object AppContainer {
     lateinit var appContext: Context
         private set
 
+    lateinit var devicePairingStore: DevicePairingStore
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
+
+        // Restore the paired device id across process death (2026-08-28 device-pairing pass) —
+        // SessionHolder.deviceId is in-memory only; without this, every cold start forgot pairing
+        // and heartbeat silently went back to a no-op even after a real pairing had succeeded.
+        devicePairingStore = DevicePairingStore(appContext)
+        SessionHolder.deviceId = devicePairingStore.getDeviceId()
 
         database = Room.databaseBuilder(
             appContext,
@@ -259,7 +271,9 @@ object AppContainer {
     // not-persisted-across-restart stub named identically to this one, in a
     // different package). That stub is now deleted; IdleViewModel reads
     // tariffs through [tariffCache] like every other screen.
-    val qrScanner: QrScanner by lazy { StubQrScanner() }
+    // Real ML Kit code-scanner impl (2026-08-28) — see RealQrScanner's own doc. StubQrScanner
+    // stays defined for tests/no-camera environments, just no longer what this constructs.
+    val qrScanner: QrScanner by lazy { RealQrScanner() }
     val tripStatsRepository: TripStatsRepository by lazy { StubTripStatsRepository() }
     val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
 
@@ -303,11 +317,17 @@ object AppContainer {
      * process-lifetime application [appContext] — see that class's doc for the permission/
      * simplification write-up. */
     val duressAudioRecorder: DuressAudioRecorder by lazy { DuressAudioRecorder(appContext) }
+
+    /** Real CameraX-backed duress cabin-camera still-frame capture (snapshot gallery,
+     * 2026-08-27), same "process-lifetime appContext, nothing more" shape as
+     * [duressAudioRecorder] — see that class's doc for the permission/lifecycle write-up. */
+    val duressCameraCapture: DuressCameraCapture by lazy { DuressCameraCapture(appContext) }
     val duressController: DuressController by lazy {
         DuressController(
             duressRepository,
             CoroutineScope(SupervisorJob() + Dispatchers.Default),
             duressAudioRecorder,
+            duressCameraCapture,
         )
     }
 
@@ -322,7 +342,7 @@ object AppContainer {
     // for it to react to [au.com.threesixty.cabdispatch.domain.SessionHolder.session] (shift
     // open/closed) for the rest of the process lifetime with zero wiring in any screen/ViewModel.
     val livePositionHeartbeat: LivePositionHeartbeat by lazy {
-        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default), appContext)
     }
 
     // --- Zones (Plot / Statistics screens — named dispatch zones, "plot into a zone", live

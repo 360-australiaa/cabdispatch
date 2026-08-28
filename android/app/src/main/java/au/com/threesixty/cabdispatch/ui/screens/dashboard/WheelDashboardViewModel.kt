@@ -134,7 +134,9 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
             // active when this ViewModel was created. refresh() throws on failure — the dashboard
             // already has a cached tariff to render from observeActiveTariff above in the common
             // case, so a failed refresh here just means "using whatever's already cached".
-            region.collect { r -> runCatching { AppContainer.tariffCache.refresh(r) } }
+            region.collect { r ->
+                runCatching { AppContainer.tariffCache.refresh(r) }
+            }
         }
         viewModelScope.launch {
             while (isActive) {

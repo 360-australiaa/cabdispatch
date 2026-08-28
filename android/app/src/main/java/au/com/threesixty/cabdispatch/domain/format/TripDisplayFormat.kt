@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
  * functions (no Compose dependency), matching the purity of
  * [au.com.threesixty.cabdispatch.ui.screens.messages.formatMessageRelativeTime]
  * (`MessageTimeFormat.kt`), the sibling Messages feature's equivalent. Lives
- * in `domain/format` rather than under any one feature's `ui/screens/*`
+ * in `domain/format` rather than under any one feature's `ui/screens` sub-
  * package since 4 different feature packages (trips, earnings, shiftreport,
  * tripdetail) consume it — a neutral home avoids implying any one of them
  * owns it.

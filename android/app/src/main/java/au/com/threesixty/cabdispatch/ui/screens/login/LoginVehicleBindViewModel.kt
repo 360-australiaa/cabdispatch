@@ -19,21 +19,23 @@ enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
 /**
  * Debug-only quick-login convenience, see [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a
- * secret (the PIN is committed to the repo's own seed script), but still gated to debug builds so
+ * secret (committed to the repo, gated to debug builds only), but still gated to debug builds so
  * it never renders in a release build.
  *
- * **Known stale-until-fixed gap:** [DEMO_DRIVER_ID] is the seeded demo driver's *email*
- * (`driver@lillycabs.test`), not its `driver_code` — now that [LoginVehicleBindViewModel.login]
- * calls the real `POST /v1/auth/driver-login` (`driver_code` + `pin`, not email + password), this
- * button will submit the email as a driver code and get a real 401 back. `backend/scripts/seed.py`
- * mints a random `driver_code` per fresh DB and only prints it to stdout at seed time (see that
- * script's final summary) — there is no fixed value to hardcode here. Whoever picks this up next:
- * either read the printed code off your own `uv run python scripts/seed.py` output and paste it in
- * for local testing, or extend seed.py to also write it to a well-known file/env var this constant
- * can read at debug-build time.
+ * **Fixed 2026-08-28 (was previously stale):** this used to hold the seeded demo driver's *email*
+ * (`driver@lillycabs.test`), which 401s against `POST /v1/auth/driver-login` (that endpoint takes
+ * `driver_code` + `pin`, not email + password) — confirmed live against the deployed server
+ * (`72.61.107.107:8001`): `{"detail":"Invalid driver code or PIN"}`. Falling through to
+ * [au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository]'s offline cache
+ * masked the failure in the UI (login "succeeded") but left [AppContainer.accessToken] unset, so
+ * every authenticated call after — starting with the tariff fetch — 401'd too and the meter could
+ * never actually start via this button. Replaced with `GL2HY` / `123456`, this tenant's real seeded
+ * driver code, verified live the same day (`POST /v1/auth/driver-login` → `200 OK`, real access +
+ * refresh tokens issued). If a fresh `backend/scripts/seed.py` run ever mints a different code,
+ * update these two constants to match its stdout output.
  */
-const val DEMO_DRIVER_ID = "driver@lillycabs.test"
-const val DEMO_DRIVER_PIN = "ChangeMe123!"
+const val DEMO_DRIVER_ID = "GL2HY"
+const val DEMO_DRIVER_PIN = "123456"
 
 /**
  * Standard pre-shift check items, per spec B5 S1 ("pre-shift inspection
@@ -42,15 +44,18 @@ const val DEMO_DRIVER_PIN = "ChangeMe123!"
  * placeholder items for now.
  */
 val PRE_SHIFT_CHECKLIST_ITEMS = listOf(
-    "tyres" to "Tyres & tread condition",
-    "lights" to "Head/tail/indicator lights",
+    // Command Deck v2 checklist (Figma `h0PSsXQ971dOJvt25tN7BA` node `10:111`, 3×3 grid) —
+    // keys are free-form as far as the backend is concerned (`POST /v1/shifts/start` accepts
+    // inspection_json as an arbitrary map), so the set follows the design's nine cards.
+    "tyres" to "Tyres & wheels",
+    "lights" to "Lights & indicators",
     "brakes" to "Brakes",
-    "seatbelts" to "Seatbelts (all seats)",
-    "meter_seal" to "Meter seal intact",
-    "fire_extinguisher" to "Fire extinguisher present",
-    "first_aid" to "First aid kit present",
-    "cleanliness" to "Vehicle cleanliness",
-    "id_displayed" to "Driver ID/photo displayed",
+    "meter_tablet" to "Meter tablet",
+    "duress" to "Duress button",
+    "interior" to "Interior",
+    "cameras" to "Cameras / safety equipment",
+    "fare_card" to "Fare schedule card",
+    "first_aid" to "First-aid & extinguisher",
 )
 
 data class LoginVehicleBindUiState(
@@ -70,6 +75,11 @@ data class LoginVehicleBindUiState(
     val mfaCodeInput: String = "",
     val vehicleIdInput: String = "",
     val boundVehicleId: String? = null,
+    /** Real fleet-vehicle UUID for [boundVehicleId], resolved in the background by [LoginVehicleBindViewModel.bindVehicle]
+     * — see [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]'s own doc for why
+     * this is a separate field and what `null` means here (still resolving, offline, or no match;
+     * [LoginVehicleBindViewModel.startShift] does not block on it either way). */
+    val resolvedVehicleUuid: String? = null,
     val qrScanAttempted: Boolean = false,
     val checklist: Map<String, Boolean> = PRE_SHIFT_CHECKLIST_ITEMS.associate { it.first to false },
     val isStartingShift: Boolean = false,
@@ -91,11 +101,16 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
 
     /**
      * Debug-build convenience only (see [DEMO_DRIVER_ID]/[DEMO_DRIVER_PIN] and the button's
-     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills the seeded demo driver's
-     * credentials (`backend/scripts/seed.py`'s `driver@lillycabs.test`) and submits immediately,
-     * so testing on-device doesn't mean retyping the same PIN every rebuild/reinstall.
+     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills this tenant's real seeded
+     * driver credentials and submits immediately, so testing on-device doesn't mean retyping the
+     * same driver code/PIN every rebuild/reinstall.
      */
     fun quickLoginDemoDriver() {
+        // TEMPORARY: seed the offline-login cache so `login()` below succeeds via its existing
+        // network-failure fallback even when no backend is reachable at all (see
+        // DriverAuthRepository.seedOfflineDemoDriver's doc). Remove once a reachable backend is
+        // the normal dev/test setup.
+        driverAuthRepository.seedOfflineDemoDriver(DEMO_DRIVER_ID, DEMO_DRIVER_PIN)
         _uiState.update { it.copy(driverIdInput = DEMO_DRIVER_ID, pinInput = DEMO_DRIVER_PIN) }
         login()
     }
@@ -168,9 +183,9 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    fun scanQr() {
+    fun scanQr(activity: android.app.Activity) {
         viewModelScope.launch {
-            val code = AppContainer.qrScanner.scan()
+            val code = AppContainer.qrScanner.scan(activity)
             _uiState.update {
                 it.copy(
                     qrScanAttempted = true,
@@ -183,7 +198,19 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     fun bindVehicle() {
         val vehicleId = _uiState.value.vehicleIdInput.trim()
         if (vehicleId.isBlank()) return
-        _uiState.update { it.copy(boundVehicleId = vehicleId, step = LoginStep.INSPECTION) }
+        _uiState.update { it.copy(boundVehicleId = vehicleId, resolvedVehicleUuid = null, step = LoginStep.INSPECTION) }
+        // Resolve rego -> real fleet-vehicle UUID in the background (see DriverSession.vehicleUuid's
+        // doc for why). Deliberately does not block the bind flow's transition to INSPECTION above —
+        // same "don't stall the driver on a background lookup" posture the rest of this app's
+        // best-effort network calls already use; a failed/offline lookup just leaves
+        // resolvedVehicleUuid null, and startShift() below reads whatever is in state at that point.
+        viewModelScope.launch {
+            runCatching { AppContainer.apiService.listVehicles() }
+                .onSuccess { page ->
+                    val match = page.items.firstOrNull { it.rego.equals(vehicleId, ignoreCase = true) }
+                    if (match != null) _uiState.update { it.copy(resolvedVehicleUuid = match.id) }
+                }
+        }
     }
 
     fun toggleChecklistItem(key: String) {
@@ -201,13 +228,20 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(isStartingShift = true, shiftError = null) }
         viewModelScope.launch {
             val inspectionJson = state.checklist.mapValues { if (it.value) "ok" else "fail" }
-            val result = AppContainer.shiftRepository.startShift(driverId, vehicleId, inspectionJson)
+            // Send the real fleet-vehicle UUID when the background rego->UUID lookup has resolved
+            // (2026-08-28): shifts previously always sent the rego while the position heartbeat
+            // sent the UUID — mixed identifiers on the same shift's vehicle. The backend now also
+            // canonicalizes rego->UUID server-side (services/shift.py), so the rego fallback here
+            // stays safe for the offline/unresolved case.
+            val vehicleIdForApi = _uiState.value.resolvedVehicleUuid ?: vehicleId
+            val result = AppContainer.shiftRepository.startShift(driverId, vehicleIdForApi, inspectionJson)
             result.onSuccess { shift ->
                 SessionHolder.set(
                     DriverSession(
                         driverId = driverId,
                         driverName = state.loggedInDriverName ?: driverId,
                         vehicleId = vehicleId,
+                        vehicleUuid = _uiState.value.resolvedVehicleUuid,
                         shiftId = shift.id,
                         // Feeds the dashboard's shift-duration countdown (2026-08-10 meter-polish
                         // pass) — see DriverSession.shiftStartAt's own doc.

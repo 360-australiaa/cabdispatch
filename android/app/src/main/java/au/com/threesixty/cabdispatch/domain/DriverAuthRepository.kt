@@ -127,6 +127,31 @@ class SharedPreferencesDriverAuthRepository(
             .apply()
     }
 
+    /**
+     * TEMPORARY debug-only helper: pre-populates this device's offline-login cache (the same
+     * cache [login]'s network-failure fallback already reads from above) with a fabricated demo
+     * driver record, so [login] can succeed fully offline on a device that has never reached a
+     * real backend — e.g. testing the app's screens/navigation with no backend deployed yet.
+     * Only called from [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.quickLoginDemoDriver]'s
+     * debug-gated button. Remove once a reachable backend is the normal dev/test setup — this is
+     * a stopgap, not a real auth path.
+     */
+    fun seedOfflineDemoDriver(driverId: String, pin: String) {
+        cacheDriver(
+            driverId,
+            pin,
+            UserDto(
+                id = "demo-driver-offline",
+                tenantId = null,
+                role = "driver",
+                name = "Demo Driver",
+                email = driverId,
+                status = "active",
+                photoUrl = null,
+            ),
+        )
+    }
+
     private fun hashKey(driverId: String) = "hash_$driverId"
     private fun userKey(driverId: String) = "user_$driverId"
 
