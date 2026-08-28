@@ -25,9 +25,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import android.content.pm.PackageManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
@@ -56,7 +58,22 @@ fun SplashScreen(navController: NavHostController) {
     LaunchedEffect(Unit) {
         delay(SPLASH_MIN_DWELL_MS)
         val termsAccepted = TermsAcceptance.isAccepted(context, BuildConfig.VERSION_CODE)
-        val destination = if (termsAccepted) postAuthDestination() else CabDispatchRoutes.TERMS_DISCLAIMER
+        val normalDestination = if (termsAccepted) postAuthDestination() else CabDispatchRoutes.TERMS_DISCLAIMER
+        // Permissions launch gate (2026-08-28): if the meter-critical location permission isn't
+        // granted yet, land on the permissions screen first — it auto-prompts and then proceeds to
+        // `normalDestination`. Gated on fine-location alone (not the whole set) so returning
+        // drivers who've already granted it aren't nagged every cold start; the permissions screen
+        // still lets them top up the rest. Without this, nothing ever requested runtime
+        // permissions and the app simply ran denied (GPS never fixed, meter/map degraded).
+        val needsPermissions = ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+        ) != PackageManager.PERMISSION_GRANTED
+        val destination = if (needsPermissions) {
+            "${CabDispatchRoutes.PERMISSIONS_CHECKLIST}?next=$normalDestination"
+        } else {
+            normalDestination
+        }
         navController.navigate(destination) {
             popUpTo(CabDispatchRoutes.SPLASH) { inclusive = true }
         }

@@ -4,9 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -16,6 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -29,10 +35,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import au.com.threesixty.cabdispatch.ui.theme.Deck
+import kotlin.math.abs
+import kotlin.math.min
 import au.com.threesixty.cabdispatch.ui.theme.DeckState
 import au.com.threesixty.cabdispatch.ui.theme.DeckType
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -207,10 +218,138 @@ fun DeckNavRail(
     }
 }
 
+private val RAIL_CAROUSEL_W = 108.dp
+private val RAIL_CAROUSEL_ITEM_H = 88.dp
+
 /**
- * Standard in-shift screen shell: status strip on top, nav rail on the left, [content] filling
- * the rest on the canvas surface. Boot/login/full-takeover screens (splash, meter) intentionally
- * do NOT use this — they own their whole 1280×800.
+ * `c/nav-rail` v3 (2026-08-28, right-side movable carousel per Ben's request) — a draggable
+ * vertical wheel where only the item nearest the vertical centre is enlarged + gold-highlighted;
+ * neighbours shrink and fade toward the edges. Dragging up/down rotates the wheel and the settled
+ * centre item becomes the selected tab (soft-snaps to centre on release); tapping any item scrolls
+ * it to the centre and selects it. Replaces the old fixed [DeckNavRail] (kept below, unused, for
+ * reference) and is mounted on the RIGHT of [DeckScaffold] rather than the left.
+ *
+ * Centring maths: the [LazyColumn] gets symmetric vertical [PaddingValues] of half the viewport so
+ * every item — first and last included — can sit dead centre; an item is centred by
+ * `scrollToItem(index, -padPx)` (its top placed `padPx` below the viewport top == its centre on the
+ * viewport centre). Per-item scale/alpha/colour are driven by each visible item's distance from the
+ * viewport centre read straight off [androidx.compose.foundation.lazy.LazyListState.layoutInfo].
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DeckNavRailCarousel(
+    selected: DeckTab,
+    onSelect: (DeckTab) -> Unit,
+    onDuressLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tabs = DeckTab.entries
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val itemHpx = with(density) { RAIL_CAROUSEL_ITEM_H.toPx() }
+
+    Column(
+        modifier = modifier
+            .width(RAIL_CAROUSEL_W)
+            .fillMaxHeight()
+            .background(Deck.panel),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val vpHpx = with(density) { maxHeight.toPx() }
+            val padPx = ((vpHpx - itemHpx) / 2f).coerceAtLeast(0f)
+            val padDp = with(density) { padPx.toDp() }
+            val vpCenter = vpHpx / 2f
+
+            // Selection is the single source of truth; the wheel follows it. Whenever the selected
+            // tab changes (initial load, a tap on the wheel, or an external jump like the map's
+            // "plot a zone" → ZONES), bring that item to the exact vertical centre. Centring is done
+            // from measured layout positions (scroll it to the top, then nudge by its real distance
+            // to centre) rather than a computed scrollOffset, which behaved inconsistently near the
+            // list ends. Dragging the wheel freely re-highlights the centre item live (below); a tap
+            // commits the selection.
+            LaunchedEffect(selected, padPx) {
+                if (padPx > 0f) {
+                    val i = tabs.indexOf(selected).coerceAtLeast(0)
+                    listState.animateScrollToItem(i)
+                    val item = listState.layoutInfo.visibleItemsInfo.find { it.index == i }
+                    if (item != null) {
+                        val delta = (item.offset + item.size / 2f) - vpCenter
+                        if (abs(delta) > 1f) listState.animateScrollBy(delta)
+                    }
+                }
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = padDp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                itemsIndexed(tabs) { index, tab ->
+                    val info = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
+                    val posFrac = if (info == null) {
+                        0f
+                    } else {
+                        val itemCenter = info.offset + info.size / 2f
+                        1f - min(1f, abs(itemCenter - vpCenter) / (itemHpx * 1.25f))
+                    }
+                    // At rest the selected tab is the highlighted centre item (robust regardless of
+                    // exact scroll position); while the wheel is being dragged, the highlight follows
+                    // whichever item is physically nearest the centre.
+                    val frac = if (!listState.isScrollInProgress && tab == selected) 1f else posFrac
+                    val scale = lerp(0.68f, 1f, frac)
+                    val alpha = lerp(0.32f, 1f, frac)
+                    val isCentre = frac > 0.72f
+                    Column(
+                        modifier = Modifier
+                            .height(RAIL_CAROUSEL_ITEM_H)
+                            .width(88.dp)
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                this.alpha = alpha
+                            }
+                            .clip(RoundedCornerShape(Deck.R_MD.dp))
+                            .background(if (isCentre) Deck.raised else Color.Transparent)
+                            // Tapping selects; the centring effect above then snaps it to centre.
+                            .clickable { onSelect(tab) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(text = tab.emoji, fontSize = if (isCentre) 30.sp else 24.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = tab.label,
+                            style = DeckType.tinyLabel,
+                            color = if (isCentre) Deck.yellow else Deck.textMuted,
+                        )
+                    }
+                }
+            }
+        }
+        // Discreet duress control pinned below the wheel (long-press only, same as the old rail).
+        Box(
+            modifier = Modifier
+                .width(76.dp)
+                .height(56.dp)
+                .combinedClickable(onClick = {}, onLongClick = onDuressLongPress),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(Deck.duress.copy(alpha = 0.55f)),
+            )
+        }
+    }
+}
+
+/**
+ * Standard in-shift screen shell: status strip on top, the movable nav-rail carousel on the RIGHT
+ * (2026-08-28), [content] filling the rest on the canvas surface. Boot/login/full-takeover screens
+ * (splash, meter) intentionally do NOT use this — they own their whole 1280×800.
  */
 @Composable
 fun DeckScaffold(
@@ -224,7 +363,6 @@ fun DeckScaffold(
     Column(modifier = modifier.fillMaxSize().background(Deck.canvas)) {
         DeckStatusStrip(status = status)
         Row(modifier = Modifier.weight(1f)) {
-            DeckNavRail(selected = selectedTab, onSelect = onSelectTab, onDuressLongPress = onDuressLongPress)
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -232,6 +370,11 @@ fun DeckScaffold(
             ) {
                 content()
             }
+            DeckNavRailCarousel(
+                selected = selectedTab,
+                onSelect = onSelectTab,
+                onDuressLongPress = onDuressLongPress,
+            )
         }
     }
 }

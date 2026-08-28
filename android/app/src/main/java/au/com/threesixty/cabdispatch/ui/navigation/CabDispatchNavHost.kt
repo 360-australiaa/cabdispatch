@@ -2,9 +2,11 @@ package au.com.threesixty.cabdispatch.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import au.com.threesixty.cabdispatch.ui.screens.availabletrips.AvailableTripOfferScreen
 import au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen
 import au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen
@@ -228,8 +230,22 @@ fun CabDispatchNavHost(
                 },
             )
         }
-        composable(CabDispatchRoutes.PERMISSIONS_CHECKLIST) {
-            PermissionsChecklistScreen(navController = navController)
+        composable(
+            route = "${CabDispatchRoutes.PERMISSIONS_CHECKLIST}?next={next}",
+            arguments = listOf(
+                navArgument("next") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { backStackEntry ->
+            // `next` is set only when reached from the splash launch gate (proceed to login/home
+            // after granting); null when opened from Settings (just pop back).
+            PermissionsChecklistScreen(
+                navController = navController,
+                next = backStackEntry.arguments?.getString("next"),
+            )
         }
         composable(CabDispatchRoutes.OFFLINE_SYNC) {
             OfflineSyncScreen(navController = navController)
