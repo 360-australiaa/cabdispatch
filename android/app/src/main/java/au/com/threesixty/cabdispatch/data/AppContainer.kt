@@ -11,9 +11,11 @@ import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
+import au.com.threesixty.cabdispatch.domain.DevicePairingStore
 import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
@@ -114,8 +116,17 @@ object AppContainer {
     lateinit var appContext: Context
         private set
 
+    lateinit var devicePairingStore: DevicePairingStore
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
+
+        // Restore the paired device id across process death (2026-08-28 device-pairing pass) —
+        // SessionHolder.deviceId is in-memory only; without this, every cold start forgot pairing
+        // and heartbeat silently went back to a no-op even after a real pairing had succeeded.
+        devicePairingStore = DevicePairingStore(appContext)
+        SessionHolder.deviceId = devicePairingStore.getDeviceId()
 
         database = Room.databaseBuilder(
             appContext,
