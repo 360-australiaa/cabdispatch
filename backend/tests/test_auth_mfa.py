@@ -69,7 +69,13 @@ async def test_full_mfa_opt_in_flow(client, session):
     code = pyotp.TOTP(body["secret"]).now()
     verify = await client.post("/v1/auth/mfa/verify", json={"code": code}, headers=headers)
     assert verify.status_code == 200
-    assert verify.json() == {"mfa_enabled": True}
+    verify_body = verify.json()
+    assert verify_body["mfa_enabled"] is True
+    # WP-16 (I-5): recovery codes are generated and returned exactly once,
+    # right when mfa_enabled flips True -- see test_recovery_code below for
+    # full coverage of consuming one at login.
+    assert len(verify_body["recovery_codes"]) == 10
+    assert len(set(verify_body["recovery_codes"])) == 10
 
     me = await client.get("/v1/auth/me", headers=headers)
     assert me.json()["mfa_enabled"] is True

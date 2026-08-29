@@ -58,6 +58,14 @@ TOKEN_TYPE_REFRESH = "refresh"
 # only good for MFA_TOKEN_EXPIRE_MINUTES.
 TOKEN_TYPE_MFA = "mfa_pending"
 MFA_TOKEN_EXPIRE_MINUTES = 5
+# Same shape as TOKEN_TYPE_MFA, for the other case POST /v1/auth/login (and
+# /driver-login) issue something other than a real access token: an account
+# with User.must_change_password=True. Only POST /v1/auth/change-password
+# accepts this type (see get_token_payload_allow_password_change below) --
+# never get_current_user -- so a user who has not yet proven a new password
+# cannot use it as a bearer credential anywhere else in the API.
+TOKEN_TYPE_PASSWORD_CHANGE = "password_change_pending"
+PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES = 15
 
 
 def _create_token(
@@ -107,6 +115,20 @@ def create_mfa_pending_token(*, user_id: str, tenant_id: str | None, role: str) 
         role=role,
         token_type=TOKEN_TYPE_MFA,
         expires_delta=timedelta(minutes=MFA_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def create_password_change_token(*, user_id: str, tenant_id: str | None, role: str) -> str:
+    """Issued by POST /v1/auth/login (and /driver-login) in place of real
+    tokens when user.must_change_password is True. Only POST
+    /v1/auth/change-password accepts this token type -- see
+    get_token_payload_allow_password_change below."""
+    return _create_token(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+        token_type=TOKEN_TYPE_PASSWORD_CHANGE,
+        expires_delta=timedelta(minutes=PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES),
     )
 
 
@@ -209,6 +231,132 @@ class _RevocationStore:
 
 revocation_store = _RevocationStore()
 
+# --- Login attempt throttling (I-5) -----------------------------------------
+
+
+class _LoginThrottleStore:
+    """Tracks failed login attempts per credential identifier (email for
+    POST /v1/auth/login, driver_code for POST /v1/auth/driver-login -- see
+    call sites in app/api/v1/auth.py) and locks that identifier out for a
+    fixed period once too many failures happen in a rolling window.
+
+    Same Redis-first / in-memory-fallback shape as _RevocationStore above --
+    mirrored deliberately rather than inventing a third pattern in this
+    module. Redis storage: a counter key (login_fail_count:{key}) with a
+    sliding-ish window via TTL-on-first-increment, plus a separate
+    login_lockout:{key} key (existence == locked out) set with its own TTL
+    once the counter crosses the threshold. In-memory fallback: a per-key
+    timestamp list (pruned to the window on each check) and a per-key lockout
+    expiry, same semantics.
+
+    Numbers (docs/ARCHITECTURE_TENANCY_FLEET_COMPLIANCE.md I-5, plan Part 4
+    Phase 1 WP-16): configurable via app.core.config.settings --
+    LOGIN_MAX_FAILED_ATTEMPTS (default 5) failures within
+    LOGIN_ATTEMPT_WINDOW_MINUTES (default 15) locks the identifier out for
+    LOGIN_LOCKOUT_MINUTES (default 15). This is a security-engineering
+    judgment call, not a regulatory requirement -- a reasonable literal
+    default, made configurable per this project standard for that case.
+    """
+
+    def __init__(self) -> None:
+        self._redis = None
+        self._redis_broken = False
+        self._warned = False
+        self._attempts: dict[str, list[float]] = {}
+        self._lockouts: dict[str, float] = {}
+
+        if settings.REDIS_URL:
+            try:
+                import redis.asyncio as redis_asyncio
+
+                self._redis = redis_asyncio.from_url(
+                    settings.REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5
+                )
+            except Exception:
+                self._redis = None
+                self._redis_broken = True
+
+    def _warn_fallback_once(self) -> None:
+        if not self._warned:
+            logger.warning(
+                "Redis unreachable at %s -- falling back to in-memory login "
+                "throttle store (not shared across processes/restarts).",
+                settings.REDIS_URL,
+            )
+            self._warned = True
+
+    @staticmethod
+    def _key(identifier: str) -> str:
+        return identifier.strip().lower()
+
+    async def is_locked_out(self, identifier: str) -> bool:
+        key = self._key(identifier)
+        if self._redis is not None and not self._redis_broken:
+            try:
+                return bool(await self._redis.exists(f"login_lockout:{key}"))
+            except Exception:
+                self._redis_broken = True
+                self._warn_fallback_once()
+
+        now = time.time()
+        until = self._lockouts.get(key)
+        if until is None:
+            return False
+        if until <= now:
+            del self._lockouts[key]
+            return False
+        return True
+
+    async def record_failure(self, identifier: str) -> None:
+        """Call once per failed credential check. May flip the identifier
+        into a lockout state as a side effect once the threshold is crossed
+        -- the caller does not need to check the count itself, only
+        is_locked_out on the NEXT attempt."""
+        key = self._key(identifier)
+        window_seconds = settings.LOGIN_ATTEMPT_WINDOW_MINUTES * 60
+        lockout_seconds = settings.LOGIN_LOCKOUT_MINUTES * 60
+
+        if self._redis is not None and not self._redis_broken:
+            try:
+                count_key = f"login_fail_count:{key}"
+                count = await self._redis.incr(count_key)
+                if count == 1:
+                    await self._redis.expire(count_key, window_seconds)
+                if count >= settings.LOGIN_MAX_FAILED_ATTEMPTS:
+                    await self._redis.setex(f"login_lockout:{key}", lockout_seconds, "1")
+                return
+            except Exception:
+                self._redis_broken = True
+                self._warn_fallback_once()
+
+        now = time.time()
+        window_start = now - window_seconds
+        attempts = [t for t in self._attempts.get(key, []) if t > window_start]
+        attempts.append(now)
+        self._attempts[key] = attempts
+        if len(attempts) >= settings.LOGIN_MAX_FAILED_ATTEMPTS:
+            self._lockouts[key] = now + lockout_seconds
+            self._attempts[key] = []
+
+    async def reset(self, identifier: str) -> None:
+        """Call on a SUCCESSFUL credential check to clear any accumulated
+        failure count for this identifier (does not clear an active
+        lockout -- a lockout must expire on its own even if the correct
+        password is later supplied, otherwise lockout would be pointless
+        against an attacker who eventually guesses right)."""
+        key = self._key(identifier)
+        if self._redis is not None and not self._redis_broken:
+            try:
+                await self._redis.delete(f"login_fail_count:{key}")
+                return
+            except Exception:
+                self._redis_broken = True
+                self._warn_fallback_once()
+        self._attempts.pop(key, None)
+
+
+login_throttle_store = _LoginThrottleStore()
+
 # --- FastAPI auth dependencies ----------------------------------------------
 
 _bearer_scheme = HTTPBearer(auto_error=True)
@@ -267,17 +415,75 @@ async def get_current_user(
     return user
 
 
-async def get_current_tenant_id(
-    request: Request,
-    payload: dict[str, Any] = Depends(get_token_payload),
-) -> str:
-    """The row-level multi-tenancy mechanism every domain router MUST use to
-    filter every query.
+async def get_token_payload_allow_password_change(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+) -> dict[str, Any]:
+    """Same contract as get_token_payload, except it ALSO accepts
+    TOKEN_TYPE_PASSWORD_CHANGE -- the short-lived token POST /v1/auth/login
+    issues instead of real tokens when the account has
+    must_change_password=True. Used only by POST /v1/auth/change-password,
+    so that call can be reached either by a normal already-authenticated
+    user (self-service change) or by a user who has proven their OLD
+    password at login but not yet a new one (forced change) -- never by an
+    MFA-pending or refresh token, matching get_token_payload existing
+    exclusions.
+    """
+    try:
+        payload = decode_token(credentials.credentials)
+    except JWTError:
+        raise _CREDENTIALS_EXCEPTION
+
+    if payload.get("type") not in (TOKEN_TYPE_ACCESS, TOKEN_TYPE_PASSWORD_CHANGE):
+        raise _CREDENTIALS_EXCEPTION
+
+    jti = payload.get("jti")
+    if jti and await revocation_store.is_revoked(jti):
+        raise _CREDENTIALS_EXCEPTION
+
+    return payload
+
+
+async def get_current_user_for_password_change(
+    payload: dict[str, Any] = Depends(get_token_payload_allow_password_change),
+    session: AsyncSession = Depends(get_session),
+):
+    """Loads the User row for either an access token or a
+    password-change-pending token -- see
+    get_token_payload_allow_password_change above."""
+    from app.models.user import User  # local import: avoids import-order issues
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise _CREDENTIALS_EXCEPTION
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise _CREDENTIALS_EXCEPTION
+    return user
+
+
+async def resolve_tenant_id(request, payload, session):
+    """The core logic behind get_current_tenant_id, extracted so a route that
+    cannot use the mandatory-bearer FastAPI dependency chain (e.g. a device
+    presenting a device secret instead of a user bearer token, see
+    get_token_payload_optional / POST /v1/fleet/devices/{id}/heartbeat) can
+    still resolve a tenant_id from an already-decoded token payload when one
+    is present. Pure extraction, no behaviour change -- get_current_tenant_id
+    below is now a thin wrapper around this.
 
     - role == "owner" whose token tenant_id == PLATFORM_TENANT_ID (the "TCT"
-      platform tenant, tenant 0) may pass `?tenant_id=<id>` to act cross-tenant.
-    - Everyone else is hard-locked to their own token's tenant_id; a query-string
+      platform tenant, tenant 0) may pass ?tenant_id=<id> to act cross-tenant.
+    - Everyone else is hard-locked to their own token tenant_id; a query-string
       tenant_id is silently ignored for them.
+
+    I-3 fix (docs/ARCHITECTURE_TENANCY_FLEET_COMPLIANCE.md, plan Part 4 Phase 1
+    WP-14): the ?tenant_id= override used to be returned verbatim with zero
+    validation. It is now checked against a real Tenant row -- 404 if no such
+    tenant exists -- and every time the override is actually USED to view a
+    DIFFERENT tenant than the token own, that access is written to the
+    tamper-evident audit log (action="cross_tenant_access") via
+    app.services.audit_log.record_audit.
     """
     token_tenant_id = payload.get("tenant_id")
     role = payload.get("role")
@@ -285,6 +491,34 @@ async def get_current_tenant_id(
     if role == "owner" and token_tenant_id == PLATFORM_TENANT_ID:
         override = request.query_params.get("tenant_id")
         if override:
+            from app.models.tenant import Tenant  # local import: avoids import-order issues
+
+            result = await session.execute(select(Tenant.id).where(Tenant.id == override))
+            if result.scalar_one_or_none() is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Tenant not found",
+                )
+
+            if override != token_tenant_id:
+                from app.services.audit_log import record_audit  # local import: avoids circular import
+
+                await record_audit(
+                    session,
+                    tenant_id=override,
+                    actor_user_id=payload.get("sub"),
+                    action="cross_tenant_access",
+                    entity_type="tenant",
+                    entity_id=override,
+                    after={
+                        "role": role,
+                        "token_tenant_id": token_tenant_id,
+                        "accessed_tenant_id": override,
+                        "path": request.url.path,
+                    },
+                )
+                await session.commit()
+
             return override
         return token_tenant_id
 
@@ -296,8 +530,49 @@ async def get_current_tenant_id(
     return token_tenant_id
 
 
-# Alias — some call sites read more naturally as "require_tenant_scope".
+async def get_current_tenant_id(
+    request: Request,
+    payload: dict[str, Any] = Depends(get_token_payload),
+    session: AsyncSession = Depends(get_session),
+) -> str:
+    """The row-level multi-tenancy mechanism every domain router MUST use to
+    filter every query. See resolve_tenant_id above for the actual logic --
+    this is the standard FastAPI-dependency-chain wrapper around it (a
+    mandatory bearer token via get_token_payload)."""
+    return await resolve_tenant_id(request, payload, session)
+
+
+# Alias -- some call sites read more naturally as "require_tenant_scope".
 require_tenant_scope = get_current_tenant_id
+
+
+_optional_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def get_token_payload_optional(credentials=Depends(_optional_bearer_scheme)):
+    """Same decode/type/revocation checks as get_token_payload, but never
+    raises -- returns None if no Authorization header was sent at all, or if
+    the token is missing/invalid/wrong-type/revoked. For routes that accept
+    EITHER a user bearer token OR a different credential entirely (device
+    secret -- see POST /v1/fleet/devices/{id}/heartbeat), where a mandatory
+    bearer scheme would incorrectly 401 a legitimately-device-authenticated
+    request before that route ever gets a chance to check the other
+    credential. Every OTHER route in this system keeps using the strict
+    get_token_payload / get_current_tenant_id / get_current_user chain
+    unchanged -- this is a new, additive, narrowly-used alternative, not a
+    replacement."""
+    if credentials is None:
+        return None
+    try:
+        payload = decode_token(credentials.credentials)
+    except JWTError:
+        return None
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
+        return None
+    jti = payload.get("jti")
+    if jti and await revocation_store.is_revoked(jti):
+        return None
+    return payload
 
 
 def require_role(*roles: str):

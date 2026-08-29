@@ -17,6 +17,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -31,6 +32,10 @@ from app.schemas.shift import (
     ShiftStart,
     ShiftUpdate,
 )
+from app.schemas.shift_handover import ShiftHandoverRead, ShiftHandoverRequest
+from app.services import shift as shift_service
+from app.services import shift_handover as shift_handover_service
+from app.services.audit_log import record_audit
 from app.services.shift import (
     build_report,
     end_break as end_break_service,
@@ -40,8 +45,66 @@ from app.services.shift import (
     start_break as start_break_service,
     start_shift,
 )
+from app.services.shift_handover import perform_handover
 
 router = APIRouter(prefix="/v1/shifts", tags=["shifts"])
+
+
+def _shift_error_to_http(exc: shift_service.ShiftError) -> HTTPException:
+    """Translates a ShiftError subclass (raised by start_shift) to an HTTP
+    status -- mirrors app.api.v1.fleet's _fleet_error_to_http dispatch-by-
+    exception-type pattern exactly, per the work package brief."""
+    if isinstance(exc, shift_service.ShiftDriverNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Driver not found")
+    if isinstance(exc, shift_service.ShiftVehicleNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+    if isinstance(exc, shift_service.ShiftDriverNotEligibleError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftDriverLicenceExpiredError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftDriverAuthorityExpiredError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftDriverNotSuitableError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftVehicleNotOperationalError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": str(exc), "reasons": exc.reasons},
+        )
+    if isinstance(exc, shift_service.ShiftDriverNotAuthorisedForVehicleError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftDriverAlreadyOnShiftError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftVehicleAlreadyInUseError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftConflictError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, shift_service.EndShiftOpenTripsError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, shift_service.ShiftCallerNotAuthorisedError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+def _handover_error_to_http(exc: shift_service.ShiftError) -> HTTPException:
+    """Translates a handover-specific error subclass (raised by
+    app.services.shift_handover.perform_handover), OR any of the shared
+    gate-(a)-(f) ShiftError subclasses the incoming driver is run through
+    (see that function's step (e)), to an HTTP status. Handover-specific
+    errors are checked first; anything else falls through to
+    _shift_error_to_http so start_shift and this route stay in sync for
+    free on the shared gates."""
+    if isinstance(exc, shift_handover_service.HandoverShiftNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, shift_handover_service.HandoverCallerNotAuthorisedError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, shift_handover_service.HandoverOpenTripError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, shift_handover_service.HandoverInvalidCredentialsError):
+        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+    if isinstance(exc, shift_handover_service.HandoverConflictError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return _shift_error_to_http(exc)
 
 
 async def _get_owned_shift(session: AsyncSession, *, tenant_id: str, shift_id: str) -> Shift:
@@ -54,6 +117,26 @@ async def _get_owned_shift(session: AsyncSession, *, tenant_id: str, shift_id: s
     return shift
 
 
+def _shift_audit_snapshot(shift: Shift) -> dict:
+    """JSON-safe (record_audit's underlying JSON column + hash-chain
+    canonicalization both round-trip through json.dumps, which chokes on
+    Decimal/datetime) snapshot of the fields a PATCH/DELETE can touch, for
+    the WP-34 audit-log entries on update_shift/delete_shift below."""
+    return {
+        "driver_id": shift.driver_id,
+        "vehicle_id": shift.vehicle_id,
+        "start_at": shift.start_at.isoformat() if shift.start_at else None,
+        "end_at": shift.end_at.isoformat() if shift.end_at else None,
+        "inspection_json": shift.inspection_json,
+        "trips_count": shift.trips_count,
+        "km_total": str(shift.km_total),
+        "cash_total": str(shift.cash_total),
+        "card_total": str(shift.card_total),
+        "psl_owed": str(shift.psl_owed),
+        "reconciled": shift.reconciled,
+    }
+
+
 # --- lifecycle actions -------------------------------------------------------
 
 
@@ -61,18 +144,30 @@ async def _get_owned_shift(session: AsyncSession, *, tenant_id: str, shift_id: s
 async def start(
     body: ShiftStart,
     tenant_id: str = Depends(get_current_tenant_id),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
-    """Opens a new shift, capturing the pre-shift inspection checklist."""
-    return await start_shift(
-        session,
-        tenant_id=tenant_id,
-        driver_id=body.driver_id,
-        vehicle_id=body.vehicle_id,
-        start_at=body.start_at,
-        inspection_json=body.inspection_json,
-    )
+    """Opens a new shift, capturing the pre-shift inspection checklist.
+
+    Full validation (plan D-1/WP-30/WP-31) -- see app.services.shift.start_shift
+    for the 8 gates this runs. The caller is now passed through instead of
+    discarded (see this route's previous `_user=Depends(...)` never being
+    referenced -- the actual bug this fixes, architecture plan Part 1.3): a
+    driver may only open a shift for themselves; a dispatcher/admin/owner may
+    open one for any driver in the tenant."""
+    try:
+        return await start_shift(
+            session,
+            tenant_id=tenant_id,
+            driver_id=body.driver_id,
+            vehicle_id=body.vehicle_id,
+            start_at=body.start_at,
+            inspection_json=body.inspection_json,
+            caller_user_id=user.id,
+            odometer_start=body.odometer_start,
+        )
+    except shift_service.ShiftError as exc:
+        raise _shift_error_to_http(exc) from exc
 
 
 @router.post("/{shift_id}/end", response_model=ShiftRead)
@@ -80,24 +175,80 @@ async def end(
     shift_id: str,
     body: ShiftEnd,
     tenant_id: str = Depends(get_current_tenant_id),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
     """Closes a shift: recomputes trips_count/km_total/cash_total/card_total by
     aggregating the shift's own trips, and records the supplied reconciliation
-    figures (psl_owed, reconciled)."""
+    figures (psl_owed, reconciled). Audit-logged as action="shift_ended"
+    (WP-34) -- end_shift itself commits and audit-logs in the same
+    transaction, see app.services.shift.end_shift.
+
+    WP-33: also accepts an optional odometer_end reading and end-of-shift
+    inspection checklist, and now 409s (via the ShiftError dispatch below)
+    if the shift still has an open trip -- see
+    app.services.shift.EndShiftOpenTripsError."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
     if shift.end_at is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Shift is already closed"
         )
-    return await end_shift(
-        session,
-        shift,
-        end_at=body.end_at,
-        psl_owed=body.psl_owed,
-        reconciled=body.reconciled,
-    )
+    try:
+        return await end_shift(
+            session,
+            shift,
+            end_at=body.end_at,
+            psl_owed=body.psl_owed,
+            reconciled=body.reconciled,
+            actor_user_id=user.id,
+            odometer_end=body.odometer_end,
+            end_inspection_json=body.end_inspection_json,
+        )
+    except shift_service.ShiftError as exc:
+        raise _shift_error_to_http(exc) from exc
+
+
+@router.post(
+    "/{outgoing_shift_id}/handover",
+    response_model=ShiftHandoverRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def handover(
+    outgoing_shift_id: str,
+    body: ShiftHandoverRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Hands the vehicle from the outgoing shift's driver to a new incoming
+    driver, closing the outgoing shift and opening the incoming one in ONE
+    transaction (plan D-2, WP-32) -- see app.services.shift_handover.
+    perform_handover for the full (a)-(j) sequence. This is the direct
+    mechanism for the "two drivers, 12 hours each, same vehicle, in one
+    24-hour period" scenario (plan Part 5, Q3) without ever leaving a gap
+    where the D-1 partial unique indexes on app.models.shift.Shift could be
+    violated or momentarily bypassed.
+
+    The incoming driver re-authenticates with their own PIN in the request
+    body (same credential as POST /v1/auth/driver-login) as proof they are
+    actually present at the handover, then is run through the exact same
+    eligibility gates POST /v1/shifts/start would apply to them."""
+    try:
+        return await perform_handover(
+            session,
+            tenant_id=tenant_id,
+            outgoing_shift_id=outgoing_shift_id,
+            incoming_driver_id=body.incoming_driver_id,
+            incoming_driver_pin=body.incoming_driver_pin,
+            caller_user_id=user.id,
+            odometer_end=body.odometer_end,
+            fuel_level=body.fuel_level,
+            cleanliness_notes=body.cleanliness_notes,
+            damage_notes=body.damage_notes,
+            handed_over_at=body.handed_over_at,
+        )
+    except shift_service.ShiftError as exc:
+        raise _handover_error_to_http(exc) from exc
 
 
 @router.post("/{shift_id}/break/start", response_model=ShiftRead)
@@ -251,10 +402,29 @@ async def create_shift(
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
     """Generic create for CRUD completeness/admin backfill. The normal path for
-    opening a shift is `POST /v1/shifts/start`."""
+    opening a shift is `POST /v1/shifts/start`, which runs the full WP-30
+    validation chain -- this route deliberately does NOT (see its own
+    docstring above), but it MUST still respect the D-1 partial unique
+    indexes (uq_shifts_one_open_per_vehicle / uq_shifts_one_open_per_driver).
+    A collision surfaces as a raw sqlalchemy.exc.IntegrityError from the
+    commit below; caught here and translated to a clean 409 rather than
+    letting it bubble up as an unhandled 500 -- same spirit as
+    app.services.fleet's VehicleAlreadyHasActiveDeviceError precedent
+    (a pre-check there; a catch-and-translate here since this path has no
+    natural single pre-check -- either index could be the one that fires)."""
     shift = Shift(tenant_id=tenant_id, **body.model_dump())
     session.add(shift)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Driver or vehicle already has an open shift "
+                "(uq_shifts_one_open_per_vehicle / uq_shifts_one_open_per_driver)"
+            ),
+        ) from exc
     await session.refresh(shift)
     return shift
 
@@ -274,12 +444,26 @@ async def update_shift(
     shift_id: str,
     body: ShiftUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
-    _user=Depends(require_role("owner", "admin", "dispatcher")),
+    user=Depends(require_role("owner", "admin", "dispatcher")),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
+    """Admin correction of arbitrary shift fields. Audit-logged as
+    action="shift_updated" (WP-34) -- before/after snapshot of the whole
+    row (cheap, and simpler than tracking exactly which fields changed)."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    before = _shift_audit_snapshot(shift)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(shift, field, value)
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=user.id,
+        action="shift_updated",
+        entity_type="shift",
+        entity_id=shift.id,
+        before=before,
+        after=_shift_audit_snapshot(shift),
+    )
     await session.commit()
     await session.refresh(shift)
     return shift
@@ -289,9 +473,23 @@ async def update_shift(
 async def delete_shift(
     shift_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
-    _user=Depends(require_role("owner", "admin", "dispatcher")),
+    user=Depends(require_role("owner", "admin", "dispatcher")),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    """Audit-logged as action="shift_deleted" (WP-34) before the row is
+    actually removed -- record_audit writes in the same transaction as the
+    delete (see its own docstring: it flushes, not commits, so a rollback
+    would take the audit row with it too)."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=user.id,
+        action="shift_deleted",
+        entity_type="shift",
+        entity_id=shift.id,
+        before=_shift_audit_snapshot(shift),
+        after=None,
+    )
     await session.delete(shift)
     await session.commit()

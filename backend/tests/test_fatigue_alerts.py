@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.models.fatigue_alert import FatigueAlert  # noqa: F401 - see test_fleet.py's module docstring pattern
 from app.models.tariffs import Tariff as TariffRow
 from tests.conftest import auth_headers
+from tests.test_shifts import _make_ready_fixture  # WP-30: real driver+vehicle fixture
 
 pytestmark = pytest.mark.asyncio
 
@@ -102,12 +103,13 @@ def _point(*, speed_kmh: float) -> dict:
 async def test_tick_past_shift_duration_threshold_creates_exactly_one_alert(
     client: AsyncClient, session: AsyncSession
 ):
-    headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
+    fx = await _make_ready_fixture(session, tenant_name="Fatigue Duration Alert Co")
+    headers = fx.driver_headers
+    tenant_id = fx.tenant.id
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
-    vehicle_id = str(uuid.uuid4())
+    driver_id = fx.driver.id
+    vehicle_id = fx.vehicle.id
     over_limit_start = datetime.now(UTC) - timedelta(hours=settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS + 1)
     shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_limit_start)
 
@@ -139,12 +141,13 @@ async def test_tick_past_shift_duration_threshold_creates_exactly_one_alert(
 
 
 async def test_tick_under_shift_duration_threshold_creates_no_alert(client: AsyncClient, session: AsyncSession):
-    headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
+    fx = await _make_ready_fixture(session, tenant_name="Fatigue Duration No Alert Co")
+    headers = fx.driver_headers
+    tenant_id = fx.tenant.id
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
-    vehicle_id = str(uuid.uuid4())
+    driver_id = fx.driver.id
+    vehicle_id = fx.vehicle.id
     shift = await _start_shift(
         client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=datetime.now(UTC)
     )
@@ -169,12 +172,13 @@ async def test_tick_under_shift_duration_threshold_creates_no_alert(client: Asyn
 async def test_tick_past_no_break_threshold_with_no_break_creates_alert(
     client: AsyncClient, session: AsyncSession
 ):
-    headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
+    fx = await _make_ready_fixture(session, tenant_name="Fatigue No Break Alert Co")
+    headers = fx.driver_headers
+    tenant_id = fx.tenant.id
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
-    vehicle_id = str(uuid.uuid4())
+    driver_id = fx.driver.id
+    vehicle_id = fx.vehicle.id
     half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
     over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
     shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_half_start)
@@ -206,12 +210,13 @@ async def test_tick_past_no_break_threshold_with_no_break_creates_alert(
 async def test_tick_past_no_break_threshold_with_break_taken_creates_no_alert(
     client: AsyncClient, session: AsyncSession
 ):
-    headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
+    fx = await _make_ready_fixture(session, tenant_name="Fatigue Break Taken Co")
+    headers = fx.driver_headers
+    tenant_id = fx.tenant.id
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
-    vehicle_id = str(uuid.uuid4())
+    driver_id = fx.driver.id
+    vehicle_id = fx.vehicle.id
     half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
     over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
     shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_half_start)
@@ -242,12 +247,13 @@ async def test_tick_past_no_break_threshold_with_break_taken_creates_no_alert(
 
 
 async def test_tick_under_no_break_threshold_creates_no_alert(client: AsyncClient, session: AsyncSession):
-    headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
+    fx = await _make_ready_fixture(session, tenant_name="Fatigue No Break Under Threshold Co")
+    headers = fx.driver_headers
+    tenant_id = fx.tenant.id
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
-    vehicle_id = str(uuid.uuid4())
+    driver_id = fx.driver.id
+    vehicle_id = fx.vehicle.id
     shift = await _start_shift(
         client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=datetime.now(UTC)
     )

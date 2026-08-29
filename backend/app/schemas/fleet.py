@@ -8,7 +8,8 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 VehicleClass = Literal["standard", "premium", "maxi", "wat"]
-VehicleStatus = Literal["active", "maintenance", "suspended", "retired"]
+VehicleStatus = Literal["draft", "pending_compliance", "active", "maintenance", "suspended", "retired"]
+OperatingArea = Literal["sydney", "newcastle", "wollongong", "central_coast", "country"]
 
 
 # --- Pagination (local to this domain, same shape as app.schemas.tariffs.Page,
@@ -33,15 +34,28 @@ class VehicleBase(BaseModel):
     vehicle_class: VehicleClass = "standard"
     camera_serial: str | None = Field(default=None, max_length=100)
     tracking_device_id: str | None = Field(default=None, max_length=100)
-    meter_device_id: str | None = Field(default=None, max_length=100)
-    status: VehicleStatus = "active"
+    # meter_device_id removed (plan D-3, WP-21/22 rewrite) -- see app.models.fleet.Vehicle
+    # doc comment. Lifecycle status (plan D-4): draft -> pending_compliance -> active ->
+    # (suspended | retired). New vehicles start in "draft".
+    status: VehicleStatus = "draft"
     # Compliance-expiry tracking (blueprint 7.2.4/10.1). Null means "unknown,
-    # not expired" — see app.models.fleet.Vehicle's doc comment for the
+    # not expired" -- see app.models.fleet.Vehicle doc comment for the
     # fail-open convention and app.services.compliance_expiry for the
     # alerting logic and GET /v1/fleet/compliance-expiry for the dashboard
     # listing.
     registration_expiry: date | None = Field(default=None)
     insurance_expiry: date | None = Field(default=None)
+
+    # Onboarding fields (plan D-4 / Part 4 Phase 0).
+    taxi_licence_no: str | None = Field(default=None, max_length=50)
+    licence_expiry: date | None = Field(default=None)
+    inspection_expiry: date | None = Field(default=None)
+    operating_area: OperatingArea = "country"
+    make: str | None = Field(default=None, max_length=50)
+    model: str | None = Field(default=None, max_length=50)
+    year: int | None = Field(default=None)
+    wav_capacity: int | None = Field(default=None)
+    odometer_km: int | None = Field(default=None)
 
     @field_validator("rego")
     @classmethod
@@ -64,10 +78,18 @@ class VehicleUpdate(BaseModel):
     vehicle_class: VehicleClass | None = None
     camera_serial: str | None = None
     tracking_device_id: str | None = None
-    meter_device_id: str | None = None
     status: VehicleStatus | None = None
     registration_expiry: date | None = None
     insurance_expiry: date | None = None
+    taxi_licence_no: str | None = None
+    licence_expiry: date | None = None
+    inspection_expiry: date | None = None
+    operating_area: OperatingArea | None = None
+    make: str | None = None
+    model: str | None = None
+    year: int | None = None
+    wav_capacity: int | None = None
+    odometer_km: int | None = None
 
     @field_validator("rego")
     @classmethod
@@ -89,6 +111,16 @@ class VehicleRead(VehicleBase):
     updated_at: datetime
 
 
+class VehicleReadiness(BaseModel):
+    """Response for GET /vehicles/{id}/readiness -- plan D-4, WP-23. `reasons`
+    is empty exactly when `operational` is True; otherwise it lists every
+    failing gate (not just the first), same contract as
+    `app.services.vehicle_readiness.assert_vehicle_operational`."""
+
+    operational: bool
+    reasons: list[str]
+
+
 # --- Device -----------------------------------------------------------------------
 
 
@@ -96,6 +128,14 @@ class DeviceBase(BaseModel):
     android_id: str = Field(min_length=1, max_length=100)
     model: str | None = Field(default=None, max_length=100)
     app_version: str | None = Field(default=None, max_length=30)
+    # Still settable at CREATE time (manual admin pre-provisioning, see
+    # POST /devices' docstring) -- deliberately NOT on DeviceUpdate below
+    # (plan D-3, WP-21/22 rewrite): once a device row exists, its vehicle
+    # binding is only ever changed through the QR-pairing flow (POST
+    # /devices/register -> fleet_service.register_device), which writes a
+    # DeviceAssignment row (history + a shift-in-progress guard) alongside
+    # Device.vehicle_id -- never through a bare PATCH field, which would
+    # silently bypass both.
     vehicle_id: str | None = None
     kiosk_locked: bool = False
     # Meter re-verification due-date (operations-cycle tracking pass). Null
@@ -116,7 +156,6 @@ class DeviceUpdate(BaseModel):
 
     model: str | None = None
     app_version: str | None = None
-    vehicle_id: str | None = None
     kiosk_locked: bool | None = None
     calibration_due: date | None = None
 
@@ -164,6 +203,17 @@ class DeviceRegisterRequest(BaseModel):
     pairing_code: str = Field(min_length=4, max_length=12)
     model: str | None = Field(default=None, max_length=100)
     app_version: str | None = Field(default=None, max_length=30)
+
+
+class DeviceRegisterResponse(DeviceRead):
+    """Response for POST /devices/register. Same fields as DeviceRead, plus
+    device_secret -- the raw, one-time credential for POST /devices/{id}/heartbeat's
+    device-scoped auth path (see app.services.fleet.verify_device_secret). Returned
+    ONLY here, ONCE, on a fresh pair or a re-pair (each register_device call rotates
+    it). Never included in DeviceRead, so a plain GET/PATCH/heartbeat response never
+    echoes it back."""
+
+    device_secret: str
 
 
 class DeviceHeartbeatRequest(BaseModel):

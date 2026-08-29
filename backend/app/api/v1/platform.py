@@ -31,7 +31,9 @@ from app.schemas.platform import (
     Page,
     PlatformHealth,
     PlatformTenantCreate,
+    PlatformTenantOnboarded,
     PlatformTenantRead,
+    PlatformTenantStatusUpdate,
     TenantSummary,
 )
 from app.services import platform as platform_service
@@ -68,26 +70,49 @@ async def list_platform_tenants(
     return Page[PlatformTenantRead](items=tenants, total=total, skip=skip, limit=limit)
 
 
-@router.post("/tenants", response_model=PlatformTenantRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants", response_model=PlatformTenantOnboarded, status_code=status.HTTP_201_CREATED
+)
 async def create_platform_tenant(
     payload: PlatformTenantCreate,
     session: AsyncSession = Depends(get_session),
     _owner=Depends(require_platform_owner),
 ):
-    """Onboarding-flow entry point: creates a brand-new tenant on the
-    platform."""
+    """Onboarding-flow entry point (plan Part 5, Q1 answer -- WP-17):
+    creates the Tenant, its TenantSettings row, the first owner User
+    (pin_hash=None -- cannot log in yet), and an invite token for that
+    owner, then returns the invite link -- see
+    app.services.platform.create_tenant for the exact commit-ordering
+    contract this reuses from its WP-01/WP-10 sibling services."""
     try:
-        tenant = await platform_service.create_tenant(
+        result = await platform_service.create_tenant(
             session,
             name=payload.name,
             abn=payload.abn,
             tsp_number=payload.tsp_number,
             bsp_number=payload.bsp_number,
             plan=payload.plan,
+            owner_name=payload.owner_name,
+            owner_email=payload.owner_email,
         )
     except platform_service.TenantNameRequiredError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return tenant
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except platform_service.OwnerEmailInUseError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    tenant = result["tenant"]
+    return PlatformTenantOnboarded(
+        id=tenant.id,
+        name=tenant.name,
+        plan=tenant.plan,
+        status=tenant.status,
+        created_at=tenant.created_at,
+        owner_user_id=result["owner_user_id"],
+        owner_email=result["owner_email"],
+        invite_link=result["invite_link"],
+    )
 
 
 @router.get("/tenants/{tenant_id}/summary", response_model=TenantSummary)
@@ -119,6 +144,27 @@ async def get_platform_health(
     started today (UTC calendar day) - across every tenant."""
     health = await platform_service.get_platform_health(session)
     return PlatformHealth(**health)
+
+
+@router.patch("/tenants/{tenant_id}", response_model=PlatformTenantRead)
+async def update_platform_tenant(
+    tenant_id: str,
+    payload: PlatformTenantStatusUpdate,
+    session: AsyncSession = Depends(get_session),
+    _owner=Depends(require_platform_owner),
+):
+    """Tenant lifecycle (plan Part 4 Phase 1, WP-18): sets status
+    (active/suspended) and/or plan on an existing tenant. A suspended
+    tenant own users cannot log in -- enforced at POST /v1/auth/login
+    and /v1/auth/driver-login (see app.api.v1.auth._login_result)."""
+    try:
+        tenant = await tenant_service.get_tenant_or_404(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+    changes = payload.model_dump(exclude_unset=True)
+    tenant = await platform_service.update_tenant_lifecycle(session, tenant, changes=changes)
+    return tenant
 
 
 __all__ = ["router"]

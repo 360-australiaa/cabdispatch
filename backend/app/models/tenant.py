@@ -19,6 +19,18 @@ class Tenant(Base, TimestampMixin):
     bsp_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     theme_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     plan: Mapped[str] = mapped_column(String(50), nullable=False, default="standard")
+    # Tenant lifecycle (plan Part 4 Phase 1, WP-18). New column on an
+    # existing table -- server_default="active" so every already-seeded
+    # tenant keeps working unaffected (the two migration rules this project
+    # has been bitten by before: booleans need sa.false(), and any new
+    # NOT NULL column here needs a server_default or the ALTER TABLE fails
+    # against already-seeded rows on Postgres). "suspended" blocks login
+    # for every user of the tenant -- see app.api.v1.auth._login_result.
+    # A closed two-value set (not a DB enum, matching this file own
+    # plain-string-constant convention elsewhere in this codebase).
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
     stripe_acct_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Hashed (bcrypt via app.core.security.hash_password, same scheme as
     # User.pin_hash) admin PIN gating destructive on-device actions (e.g. the

@@ -44,7 +44,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -65,6 +65,16 @@ JOB_STATUSES = {
 }
 # Terminal -- no further state transitions permitted once here.
 JOB_TERMINAL_STATUSES = {JOB_STATUS_ACCEPTED, JOB_STATUS_EXPIRED, JOB_STATUS_CANCELLED}
+
+# --- Job type (added for the Home-screen dispatch cards, 2026-08-29) --------
+# Distinguishes a job that came through a booking/dispatch channel (BOOKED on
+# the driver app) from one representing a passenger flagged down at a taxi
+# rank (RANK JOB) -- same distinction Trip.type already makes
+# (TRIP_TYPE_RANK_HAIL / TRIP_TYPE_BOOKED in app.models.trips) for the trip
+# record itself; this brings the pre-acceptance Job in line with it.
+JOB_TYPE_BOOKED = "booked"
+JOB_TYPE_RANK_HAIL = "rank_hail"
+JOB_TYPES = {JOB_TYPE_BOOKED, JOB_TYPE_RANK_HAIL}
 
 # --- JobOffer status enum -----------------------------------------------------
 
@@ -94,9 +104,28 @@ class Job(Base, TenantScopedMixin, TimestampMixin):
     dest_address: Mapped[str] = mapped_column(String(500), nullable=False)
 
     status: Mapped[str] = mapped_column(String(12), nullable=False, default=JOB_STATUS_QUEUED, index=True)
+    # Defaults to booked -- today's only real creation path is
+    # POST /v1/jobs, a dispatcher-initiated booking. A rank_hail job (a driver
+    # self-reporting a rank flag-down as a trackable job, not just opening a
+    # trip directly) is not created anywhere yet -- the column exists so the
+    # dispatch-card UI has a real, honest field to read rather than one
+    # value baked into every card.
+    job_type: Mapped[str] = mapped_column(String(12), nullable=False, default=JOB_TYPE_BOOKED)
 
     fare_estimate_low: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     fare_estimate_high: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+    # Straight-line (haversine) distance and a rough time estimate, computed
+    # server-side at creation from origin/dest -- see
+    # app.services.jobs.create_job_and_broadcast. NOT a routed/road-network
+    # distance or a live-traffic ETA; both are nullable so a future real
+    # routing-API integration can leave older rows as they are rather than
+    # needing a backfill. Exists so the driver app can show "2.1 km * 6 min"
+    # on a dispatch offer card without doing its own geometry, and so that
+    # number is server-authoritative and consistent across every driver who
+    # sees the same job.
+    distance_km: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    eta_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

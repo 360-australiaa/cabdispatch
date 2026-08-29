@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for the trips domain."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -372,3 +372,21 @@ class ReceiptSmsResponse(BaseModel):
     receipt_ref: str | None = None
     pdf_relative_path: str
     pdf_generated_now: bool
+
+
+class DriverEarningsTodayRead(BaseModel):
+    """Response for GET /v1/trips/earnings/today -- the Home-screen EARNINGS
+    widget (today's total, trips completed today, day-over-day comparison).
+    Sydney-local calendar day (see app.services.trips.driver_earnings_today
+    for why this deliberately differs from the tenant-wide revenue report's
+    UTC-day convention)."""
+
+    driver_id: str
+    date: date
+    today_total: Decimal
+    yesterday_total: Decimal
+    pct_change: float | None = Field(
+        default=None,
+        description="Percent change vs yesterday. None when yesterday_total was zero (no baseline to compare against).",
+    )
+    trips_completed_today: int

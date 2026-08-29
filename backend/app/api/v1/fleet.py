@@ -9,12 +9,18 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.core.security import (
+    get_current_tenant_id,
+    get_current_user,
+    get_token_payload_optional,
+    require_role,
+    resolve_tenant_id,
+)
 from app.models.fleet import Device, Vehicle
 from app.models.user import User
 from app.schemas.fleet import (
@@ -23,6 +29,7 @@ from app.schemas.fleet import (
     DeviceHeartbeatRequest,
     DeviceRead,
     DeviceRegisterRequest,
+    DeviceRegisterResponse,
     DeviceUpdate,
     ForceUpdateRequest,
     KioskLockRequest,
@@ -34,21 +41,35 @@ from app.schemas.fleet import (
     VehicleLifetimeTotals,
     VehiclePilotReport,
     VehicleRead,
+    VehicleReadiness,
     VehicleUpdate,
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
+)
+from app.schemas.vehicle_assignment import (
+    RosterAuthoriseRequest,
+    RosterRevokeRequest,
+    VehicleAssignmentRead,
 )
 from app.services import compliance_expiry as compliance_expiry_service
 from app.services import evidence_pack as evidence_pack_service
 from app.services import fleet as fleet_service
 from app.services import fleet_reports as fleet_reports_service
 from app.services import tenant as tenant_service
+from app.services import vehicle_readiness as vehicle_readiness_service
 from app.services.reports import InvalidDateRangeError
 
 router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
 
 # Admin-only dependency reused across the write/admin endpoints in this file.
 _require_admin = require_role("owner", "admin")
+
+# Roster mutation routes (WP-24 endpoint half) are gated to
+# owner/admin/dispatcher -- same as the other dispatch-capable staff gate
+# used elsewhere in this codebase (see app.api.v1.shifts, app.api.v1.users
+# _require_staff). Plain _require_admin above stays owner/admin-only and is
+# unchanged for every existing route in this file.
+_require_dispatch = require_role("owner", "admin", "dispatcher")
 
 
 def _fleet_error_to_http(exc: fleet_service.FleetError) -> HTTPException:
@@ -62,6 +83,18 @@ def _fleet_error_to_http(exc: fleet_service.FleetError) -> HTTPException:
         )
     if isinstance(exc, fleet_service.InvalidPairingCodeError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, fleet_service.VehicleShiftInProgressError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, fleet_service.VehicleAlreadyHasActiveDeviceError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, fleet_service.DriverNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Driver not found")
+    if isinstance(exc, fleet_service.InvalidDriverRoleError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if isinstance(exc, fleet_service.DuplicateAuthorisationError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, fleet_service.VehicleAssignmentNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
@@ -162,13 +195,15 @@ async def delete_vehicle(
     vehicle_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    admin: User = Depends(_require_admin),
 ):
     try:
         vehicle = await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
         # Devices survive vehicle deletion, just unbound — a device isn't
         # deleted just because its car was retired/sold.
-        await fleet_service.unlink_devices_from_vehicle(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+        await fleet_service.unlink_devices_from_vehicle(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, actor_user_id=admin.id
+        )
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
@@ -279,6 +314,55 @@ async def get_vehicle_pilot_report(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
+@router.get("/vehicles/{vehicle_id}/readiness", response_model=VehicleReadiness)
+async def get_vehicle_readiness(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Operational-readiness check (plan D-4, WP-23): runs every gate in
+    `vehicle_readiness_service.assert_vehicle_operational` against this
+    vehicle's current state and returns `{"operational": bool, "reasons":
+    [...]}` -- `reasons` lists every failing gate, not just the first.
+
+    Any authenticated tenant user may fetch this -- same convention as
+    GET /vehicles/{vehicle_id}/evidence-pack above."""
+    try:
+        readiness = await vehicle_readiness_service.get_vehicle_readiness(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return VehicleReadiness(operational=readiness.operational, reasons=readiness.reasons)
+
+
+@router.post("/vehicles/{vehicle_id}/activate", response_model=VehicleRead)
+async def activate_vehicle(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
+):
+    """Moves a vehicle from `pending_compliance` to `active` (plan D-4,
+    WP-23) -- but ONLY if `vehicle_readiness_service.get_vehicle_readiness`
+    would report the vehicle operational once active. Otherwise 409, body
+    `{"detail": [<reasons>]}`. This is the ONE gated lifecycle transition;
+    a plain `PATCH /vehicles/{id}` with `status=` still works unconstrained
+    for every other transition (draft -> pending_compliance, admin
+    overrides like suspending an active vehicle, etc.) -- see
+    `vehicle_readiness_service.activate_vehicle`'s docstring."""
+    try:
+        return await vehicle_readiness_service.activate_vehicle(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id
+        )
+    except vehicle_readiness_service.VehicleNotOperationalError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.reasons) from exc
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+
 # ==================================================================================
 # Compliance expiry (blueprint 7.2.3/7.2.4/10.1)
 # ==================================================================================
@@ -369,21 +453,33 @@ async def create_device(
     payload: DeviceCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    admin: User = Depends(_require_admin),
 ):
     """Manual admin provisioning of a device row ahead of physical pairing.
-    Most devices arrive via `POST /devices/register` instead."""
+    Most devices arrive via POST /devices/register instead. When vehicle_id
+    is set, this now opens a real DeviceAssignment row in the same
+    transaction (plan D-3) -- see fleet_service.create_device docstring for
+    why this was a real, previously-open gap."""
     if payload.vehicle_id is not None:
         try:
             await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id)
         except fleet_service.FleetError as exc:
             raise _fleet_error_to_http(exc) from exc
 
-    device = Device(tenant_id=tenant_id, **payload.model_dump())
-    session.add(device)
-    await session.commit()
-    await session.refresh(device)
-    return device
+    try:
+        return await fleet_service.create_device(
+            session,
+            tenant_id=tenant_id,
+            android_id=payload.android_id,
+            model=payload.model,
+            app_version=payload.app_version,
+            vehicle_id=payload.vehicle_id,
+            kiosk_locked=payload.kiosk_locked,
+            calibration_due=payload.calibration_due,
+            actor_user_id=admin.id,
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
 
 
 @router.get("/devices/{device_id}", response_model=DeviceRead)
@@ -406,14 +502,23 @@ async def update_device(
     session: AsyncSession = Depends(get_session),
     _admin=Depends(_require_admin),
 ):
+    """Partial update of a device's own admin-managed fields (model,
+    app_version, kiosk_locked, calibration_due).
+
+    `vehicle_id` is deliberately NOT settable here (plan D-3): a device's
+    vehicle binding is now tracked as a `DeviceAssignment` row with its
+    own audit trail and shift-in-progress guard, and `POST
+    /devices/register` (the QR-pairing flow) is the one place that logic
+    lives -- see `fleet_service.register_device`. A bare column write here
+    would bypass both the assignment history and that guard, so
+    `DeviceUpdate` no longer has a `vehicle_id` field at all.
+    """
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
-        updates = payload.model_dump(exclude_unset=True)
-        if updates.get("vehicle_id") is not None:
-            await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=updates["vehicle_id"])
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(device, field, value)
 
@@ -438,45 +543,85 @@ async def delete_device(
     await session.commit()
 
 
-@router.post("/devices/register", response_model=DeviceRead)
+@router.post("/devices/register", response_model=DeviceRegisterResponse)
 async def register_device(
     payload: DeviceRegisterRequest,
     tenant_id: str = Depends(get_current_tenant_id),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     """QR-pairing: the device presents its `android_id` plus the pairing code
     shown/scanned from `POST /vehicles/{id}/pairing-code`, and is bound to that
     code's vehicle. Requires auth like every endpoint here (the person setting
     up the kiosk is logged into the app) — see the domain summary for why this
-    doesn't use a separate device-credential scheme."""
+    doesn't use a separate device-credential scheme.
+
+    `user` (the authenticated caller performing the pairing) becomes
+    `DeviceAssignment.bound_by_user_id` on the new assignment row — see
+    `fleet_service.register_device`'s docstring for why that's the right
+    choice over the pairing code's creator.
+
+    Response also carries `device_secret` — a raw, one-time credential the
+    device should store and present (as `X-Device-Secret`) on every future
+    `POST /devices/{id}/heartbeat` call, so kiosk-lock/force-update/locate
+    commands still reach a parked or freshly-rebooted tablet with no driver
+    signed in. See `fleet_service.verify_device_secret`."""
     try:
-        return await fleet_service.register_device(
+        device, device_secret = await fleet_service.register_device(
             session,
             tenant_id=tenant_id,
             android_id=payload.android_id,
             pairing_code=payload.pairing_code,
             model=payload.model,
             app_version=payload.app_version,
+            actor_user_id=user.id,
         )
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
+
+    return DeviceRegisterResponse.model_validate(
+        {**DeviceRead.model_validate(device).model_dump(), "device_secret": device_secret}
+    )
 
 
 @router.post("/devices/{device_id}/heartbeat", response_model=DeviceRead)
 async def device_heartbeat(
     device_id: str,
     payload: DeviceHeartbeatRequest,
-    tenant_id: str = Depends(get_current_tenant_id),
+    request: Request,
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    token_payload: dict | None = Depends(get_token_payload_optional),
     session: AsyncSession = Depends(get_session),
 ):
     """Updates last_seen_at/battery/network and returns the current device row —
     including `kiosk_locked` / `force_update_pending` / `locate_requested` /
     `reboot_requested`, which is how the device learns an admin has flagged it
-    for kiosk-lock, a forced app update, a locate request, or a reboot request."""
-    try:
-        device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
-    except fleet_service.FleetError as exc:
-        raise _fleet_error_to_http(exc) from exc
+    for kiosk-lock, a forced app update, a locate request, or a reboot request.
+
+    DEVICE-SCOPED AUTH (added 2026-08-29, real production gap found by the
+    Android session): a normal user bearer token is one valid way to call
+    this, but a parked/logged-off/freshly-rebooted tablet has no driver
+    session to present. So this route ALSO accepts `X-Device-Secret` — the
+    raw credential issued once by `POST /devices/register` — as a
+    self-sufficient alternative that needs no user token at all. If BOTH are
+    absent, or the one that IS present fails to authenticate, this is a
+    clean 401 — never a 422/500, and never a hint about which credential
+    type was tried (same anti-enumeration spirit used elsewhere in this
+    codebase)."""
+    if x_device_secret is not None:
+        device = await fleet_service.verify_device_secret(
+            session, device_id=device_id, raw_secret=x_device_secret
+        )
+        if device is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device credentials")
+    elif token_payload is not None:
+        tenant_id = await resolve_tenant_id(request, token_payload, session)
+        try:
+            device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device credentials")
 
     return await fleet_service.record_heartbeat(
         session,
@@ -602,3 +747,88 @@ async def verify_device_admin_pin(
 
     configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
     return VerifyAdminPinResponse(valid=valid, configured=configured)
+
+
+
+# ==================================================================================
+# Vehicle roster (WP-24 endpoint half -- driver allow-list per vehicle)
+# ==================================================================================
+
+
+@router.post(
+    "/vehicles/{vehicle_id}/roster",
+    response_model=VehicleAssignmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def authorise_vehicle_driver(
+    vehicle_id: str,
+    payload: RosterAuthoriseRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(_require_dispatch),
+):
+    """Adds a driver to a vehicle's roster (allow-list of who is authorised
+    to drive it) -- see app.models.vehicle_assignment for the full design.
+    Gated to owner/admin/dispatcher, same as this codebase's other
+    dispatch-capable-staff-gated mutation routes (app.api.v1.shifts,
+    app.api.v1.users). 409s if the driver already has an active
+    authorisation on this vehicle; 422s if the target user's role isn't
+    "driver"."""
+    try:
+        return await fleet_service.authorise_driver(
+            session,
+            tenant_id=tenant_id,
+            vehicle_id=vehicle_id,
+            driver_id=payload.driver_id,
+            actor_user_id=user.id,
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+
+@router.get("/vehicles/{vehicle_id}/roster", response_model=list[VehicleAssignmentRead])
+async def get_vehicle_roster(
+    vehicle_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+):
+    """Currently-active authorisations for this vehicle (revoked entries are
+    excluded -- see fleet_service.list_active_roster). Any authenticated
+    tenant user may read this, same convention as GET /vehicles/{id}/evidence-pack
+    above."""
+    try:
+        await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return await fleet_service.list_active_roster(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+
+
+@router.delete("/vehicles/{vehicle_id}/roster/{driver_id}", response_model=VehicleAssignmentRead)
+async def revoke_vehicle_driver(
+    vehicle_id: str,
+    driver_id: str,
+    payload: RosterRevokeRequest | None = None,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(_require_dispatch),
+):
+    """Revokes the currently-active authorisation for this (vehicle_id,
+    driver_id) pair -- 404 if none is active. Gated to owner/admin/dispatcher,
+    same as the authorise route above. Returns the closed (now-revoked)
+    VehicleAssignment row rather than 204, since callers may want to confirm
+    revoked_at/revoked_reason without a follow-up GET (the roster list
+    endpoint won't show it any more once revoked)."""
+    reason = payload.reason if payload is not None else None
+    try:
+        return await fleet_service.revoke_authorisation(
+            session,
+            tenant_id=tenant_id,
+            vehicle_id=vehicle_id,
+            driver_id=driver_id,
+            reason=reason,
+            actor_user_id=user.id,
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc

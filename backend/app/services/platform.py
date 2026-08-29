@@ -29,7 +29,11 @@ from app.models.duress import DURESS_TERMINAL_STATUSES, DuressEvent
 from app.models.fleet import Vehicle
 from app.models.tenant import Tenant
 from app.models.trips import Trip
-from app.models.user import ROLE_DRIVER, User
+from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
+from app.models.user_invite import INVITE_PURPOSE_INVITE
+from app.services import user as user_service
+from app.services import user_invites as user_invites_service
+from app.services.tenant_settings import get_or_create_settings
 
 
 class PlatformError(Exception):
@@ -41,6 +45,12 @@ class TenantNameRequiredError(PlatformError):
     """Raised when a tenant-onboarding request has a blank name after
     stripping whitespace (Pydantic min_length=1 already rejects an empty
     string, but not one that is whitespace-only)."""
+
+
+class OwnerEmailInUseError(PlatformError):
+    """Raised when owner_email already belongs to an existing user --
+    User.email is globally unique across the whole platform, see
+    app.services.user.assert_email_available."""
 
 
 async def list_tenants(session: AsyncSession, *, skip: int, limit: int) -> tuple[list[Tenant], int]:
@@ -66,20 +76,66 @@ async def create_tenant(
     tsp_number: str | None,
     bsp_number: str | None,
     plan: str,
-) -> Tenant:
+    owner_name: str,
+    owner_email: str,
+) -> dict:
     """The onboarding-flow entry point for a brand-new tenant on the
-    platform. No uniqueness constraint on name exists at the DB layer
-    (see app.models.tenant.Tenant), matching that model own convention -
-    two tenants may share a display name."""
+    platform (plan Part 5, Q1 answer -- WP-17). No uniqueness constraint
+    on name exists at the DB layer (see app.models.tenant.Tenant),
+    matching that model own convention - two tenants may share a
+    display name.
+
+    Not one single DB transaction end-to-end -- get_or_create_settings
+    and create_invite (the WP-01 / WP-10 sibling services this function
+    deliberately reuses rather than forking) each commit internally.
+    What IS guaranteed: the tenant row is flushed (not yet committed)
+    before get_or_create_settings runs, so tenant+settings commit
+    together in the same call; the owner user row is flushed (not yet
+    committed) before create_invite runs, so user+invite commit
+    together in the same call. Known gap, documented rather than
+    silently claimed away: if the process dies between those two commit
+    points, a tenant+settings row can exist with no owner/invite yet.
+    """
     clean_name = name.strip()
     if not clean_name:
         raise TenantNameRequiredError("Tenant name must not be blank")
 
-    tenant = Tenant(name=clean_name, abn=abn, tsp_number=tsp_number, bsp_number=bsp_number, plan=plan)
+    try:
+        await user_service.assert_email_available(session, email=owner_email)
+    except user_service.DuplicateEmailError as exc:
+        raise OwnerEmailInUseError(str(exc)) from exc
+
+    tenant = Tenant(
+        name=clean_name, abn=abn, tsp_number=tsp_number, bsp_number=bsp_number, plan=plan
+    )
     session.add(tenant)
-    await session.commit()
+    await session.flush()
+
+    await get_or_create_settings(session, tenant_id=tenant.id)
+
+    owner = User(
+        tenant_id=tenant.id,
+        role=ROLE_OWNER,
+        name=owner_name,
+        email=owner_email,
+        pin_hash=None,
+        status="active",
+    )
+    session.add(owner)
+    await session.flush()
+
+    _invite, _raw_token, invite_link = await user_invites_service.create_invite(
+        session, user=owner, purpose=INVITE_PURPOSE_INVITE
+    )
+    user_invites_service.send_invite_email(to_email=owner.email, name=owner.name, link=invite_link)
+
     await session.refresh(tenant)
-    return tenant
+    return {
+        "tenant": tenant,
+        "owner_user_id": owner.id,
+        "owner_email": owner.email,
+        "invite_link": invite_link,
+    }
 
 
 async def get_tenant_counts(session: AsyncSession, *, tenant_id: str) -> dict[str, int]:
@@ -152,11 +208,30 @@ async def get_platform_health(session: AsyncSession) -> dict[str, int]:
     }
 
 
+async def update_tenant_lifecycle(
+    session: AsyncSession, tenant: Tenant, *, changes: dict
+) -> Tenant:
+    """Applies status and/or plan changes for PATCH
+    /v1/platform/tenants/{id} (plan Part 4 Phase 1, WP-18). Only the
+    explicitly-supplied fields in changes (router passes
+    payload.model_dump(exclude_unset=True)) are touched -- same
+    partial-update convention as
+    app.services.tenant_settings.update_settings."""
+    for field, value in changes.items():
+        setattr(tenant, field, value)
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    return tenant
+
+
 __all__ = [
+    "OwnerEmailInUseError",
     "PlatformError",
     "TenantNameRequiredError",
     "create_tenant",
     "get_platform_health",
     "get_tenant_counts",
     "list_tenants",
+    "update_tenant_lifecycle",
 ]

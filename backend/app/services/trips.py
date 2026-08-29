@@ -9,11 +9,12 @@ endpoints and the offline sync recompute path.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.geofence import GEOFENCE_KIND_TOLL
@@ -389,3 +390,80 @@ def flag_trip_for_review(*, trip: Trip, flagged: bool, reason: str | None) -> Tr
     else:
         trip.flagged_for_review = False
     return trip
+
+
+# --- driver-facing earnings-today summary (Home-screen EARNINGS widget) --------
+# Sydney-LOCAL calendar-day boundaries, deliberately NOT the UTC-day convention
+# app.services.reports.date_range_bounds uses for the tenant-wide/admin revenue
+# report -- that report is a back-office document where the exact UTC cutover
+# moment does not matter to anyone; this one answers a driver's own "what did I
+# make TODAY" question on their own device, where the boundary genuinely must
+# match the Sydney calendar day they are living in, not a UTC midnight that
+# falls at 10 or 11am Sydney time. Known, deliberate inconsistency between the
+# two -- flagged here rather than silently duplicating the wrong one.
+_EARNINGS_TZ = ZoneInfo("Australia/Sydney")
+
+
+def _sydney_day_bounds_utc(day) -> tuple[datetime, datetime]:
+    """Returns the [start, end) UTC datetime bounds for one Sydney-local
+    calendar day, for filtering Trip.start_at (stored in UTC)."""
+    start_local = datetime.combine(day, time.min, tzinfo=_EARNINGS_TZ)
+    end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
+@dataclass
+class DriverEarningsToday:
+    date: object
+    today_total: Decimal
+    yesterday_total: Decimal
+    pct_change: float | None
+    trips_completed_today: int
+
+
+async def driver_earnings_today(
+    session: AsyncSession, *, tenant_id: str, driver_id: str, now: datetime | None = None
+) -> DriverEarningsToday:
+    """Sums Trip.total for this driver's CLOSED trips within the current
+    Sydney-local calendar day, plus the same for yesterday for a same-driver
+    day-over-day comparison. All SUM/COUNT runs in SQL. Open trips are
+    excluded -- their total is not final yet (mirrors
+    app.services.reports.revenue_report's same exclusion)."""
+    moment = now if now is not None else datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    today = moment.astimezone(_EARNINGS_TZ).date()
+    yesterday = today - timedelta(days=1)
+
+    today_start, today_end = _sydney_day_bounds_utc(today)
+    yesterday_start, yesterday_end = _sydney_day_bounds_utc(yesterday)
+
+    async def _sum_and_count(start: datetime, end: datetime) -> tuple[Decimal, int]:
+        result = await session.execute(
+            select(func.coalesce(func.sum(Trip.total), 0), func.count(Trip.id)).where(
+                Trip.tenant_id == tenant_id,
+                Trip.driver_id == driver_id,
+                Trip.status == TRIP_STATUS_CLOSED,
+                Trip.start_at >= start,
+                Trip.start_at < end,
+            )
+        )
+        total, count = result.one()
+        return Decimal(str(total)), int(count)
+
+    today_total, today_count = await _sum_and_count(today_start, today_end)
+    yesterday_total, _ = await _sum_and_count(yesterday_start, yesterday_end)
+
+    pct_change: float | None
+    if yesterday_total > 0:
+        pct_change = float((today_total - yesterday_total) / yesterday_total * 100)
+    else:
+        pct_change = None
+
+    return DriverEarningsToday(
+        date=today,
+        today_total=today_total,
+        yesterday_total=yesterday_total,
+        pct_change=pct_change,
+        trips_completed_today=today_count,
+    )

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 JobStatus = Literal["queued", "offered", "accepted", "expired", "cancelled"]
 JobOfferStatus = Literal["pending", "accepted", "declined", "expired"]
+JobType = Literal["booked", "rank_hail"]
 
 
 # --- Pagination (local to this domain, same shape as the sibling `fleet`/
@@ -31,6 +32,7 @@ class JobCreate(BaseModel):
     """Body for `POST /v1/jobs` — a new ride request. `status`, `requested_at`,
     `created_by_user_id` are all server-assigned, never client-supplied."""
 
+    job_type: JobType = "booked"
     origin_lat: float = Field(ge=-90, le=90)
     origin_lng: float = Field(ge=-180, le=180)
     origin_address: str = Field(min_length=1, max_length=500)
@@ -59,8 +61,15 @@ class JobRead(BaseModel):
     dest_lng: float
     dest_address: str
     status: JobStatus
+    job_type: JobType
     fare_estimate_low: Decimal
     fare_estimate_high: Decimal
+    # Server-computed at creation (haversine + a flat average-speed heuristic,
+    # not a routed/live-traffic estimate) -- see
+    # app.services.jobs.create_job_and_broadcast. None only for jobs created
+    # before this field existed.
+    distance_km: Decimal | None = None
+    eta_min: int | None = None
     requested_at: datetime
     created_by_user_id: str | None
     accepted_by_driver_id: str | None

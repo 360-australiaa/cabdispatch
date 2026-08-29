@@ -232,3 +232,53 @@ async def test_upload_user_photo_404_for_unknown_user(client, session):
         headers=headers,
     )
     assert resp.status_code == 404
+
+
+# --- I-1: role-hierarchy privilege escalation -----------------------------------
+
+
+async def test_admin_cannot_create_an_owner(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await _create_driver(client, headers, role="owner")
+    assert resp.status_code == 403
+
+
+async def test_admin_cannot_create_another_admin(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await _create_driver(client, headers, role="admin")
+    assert resp.status_code == 403
+
+
+async def test_admin_can_create_a_dispatcher(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await _create_driver(client, headers, role="dispatcher")
+    assert resp.status_code == 201
+
+
+async def test_owner_can_create_another_owner(client, session):
+    headers = await auth_headers(client, session, role="owner")
+
+    resp = await _create_driver(client, headers, role="owner")
+    assert resp.status_code == 201
+
+
+async def test_admin_cannot_promote_a_user_to_owner_via_patch(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, role="dispatcher")
+    user_id = resp.json()["id"]
+
+    resp = await client.patch(f"/v1/users/{user_id}", json={"role": "owner"}, headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_owner_can_promote_a_user_to_owner_via_patch(client, session):
+    headers = await auth_headers(client, session, role="owner")
+    resp = await _create_driver(client, headers, role="dispatcher")
+    user_id = resp.json()["id"]
+
+    resp = await client.patch(f"/v1/users/{user_id}", json={"role": "owner"}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["role"] == "owner"

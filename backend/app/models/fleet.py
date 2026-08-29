@@ -31,15 +31,32 @@ VALID_VEHICLE_CLASSES = (
     VEHICLE_CLASS_WAT,
 )
 
+VEHICLE_STATUS_DRAFT = "draft"
+VEHICLE_STATUS_PENDING_COMPLIANCE = "pending_compliance"
 VEHICLE_STATUS_ACTIVE = "active"
 VEHICLE_STATUS_MAINTENANCE = "maintenance"
 VEHICLE_STATUS_SUSPENDED = "suspended"
 VEHICLE_STATUS_RETIRED = "retired"
 VALID_VEHICLE_STATUSES = (
+    VEHICLE_STATUS_DRAFT,
+    VEHICLE_STATUS_PENDING_COMPLIANCE,
     VEHICLE_STATUS_ACTIVE,
     VEHICLE_STATUS_MAINTENANCE,
     VEHICLE_STATUS_SUSPENDED,
     VEHICLE_STATUS_RETIRED,
+)
+
+OPERATING_AREA_SYDNEY = "sydney"
+OPERATING_AREA_NEWCASTLE = "newcastle"
+OPERATING_AREA_WOLLONGONG = "wollongong"
+OPERATING_AREA_CENTRAL_COAST = "central_coast"
+OPERATING_AREA_COUNTRY = "country"
+VALID_OPERATING_AREAS = (
+    OPERATING_AREA_SYDNEY,
+    OPERATING_AREA_NEWCASTLE,
+    OPERATING_AREA_WOLLONGONG,
+    OPERATING_AREA_CENTRAL_COAST,
+    OPERATING_AREA_COUNTRY,
 )
 
 
@@ -53,8 +70,11 @@ class Vehicle(Base, TimestampMixin, TenantScopedMixin):
     vehicle_class: Mapped[str] = mapped_column(String(20), nullable=False, default=VEHICLE_CLASS_STANDARD)
     camera_serial: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tracking_device_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    meter_device_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default=VEHICLE_STATUS_ACTIVE)
+    # meter_device_id removed (plan D-3, WP-21/22 rewrite): this column had zero
+    # real service-logic readers/writers anywhere in this codebase -- the actual
+    # meter (Device) <-> Vehicle relationship is DeviceAssignment history plus
+    # Device.vehicle_id (see app.models.device_assignment / app.services.fleet).
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=VEHICLE_STATUS_DRAFT)
 
     # Compliance-expiry tracking (blueprint 7.2.4/10.1) — same nullable,
     # fail-open-on-missing-data convention as User.driver_license_expiry /
@@ -64,6 +84,26 @@ class Vehicle(Base, TimestampMixin, TenantScopedMixin):
     # logic and GET /v1/fleet/compliance-expiry for the dashboard listing.
     registration_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
     insurance_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Onboarding columns (plan D-4 / Part 4 Phase 0). All nullable except
+    # operating_area, which carries a server_default (safest default,
+    # see VALID_OPERATING_AREAS above) so existing rows on upgrade land
+    # on "country" rather than NULL.
+    taxi_licence_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    licence_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Annual safety/pink-slip inspection due-date -- distinct from
+    # registration_expiry above (registration is the rego renewal; this is
+    # the roadworthiness inspection).
+    inspection_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    operating_area: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=OPERATING_AREA_COUNTRY, server_default=OPERATING_AREA_COUNTRY
+    )
+    make: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Wheelchair capacity -- only meaningful when vehicle_class == "wat".
+    wav_capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    odometer_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Device(Base, TimestampMixin, TenantScopedMixin):
@@ -101,6 +141,19 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-100
     network: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "wifi", "4g", "offline"
+
+    # Device-scoped credential (added after the Android session found a real
+    # production gap, 2026-08-29): POST /devices/{id}/heartbeat used to require
+    # a driver bearer token, so a parked/logged-off/rebooted tablet could never
+    # receive kiosk-lock/force-update/locate commands -- there was no way for
+    # the device itself to authenticate without a signed-in driver. A raw
+    # secret is generated and returned ONCE (in DeviceRegisterResponse) every
+    # time POST /devices/register succeeds (fresh pair or re-pair); only its
+    # sha256 hash is ever persisted here, same convention as UserInvite.token_hash
+    # (app/models/user_invite.py) -- see app.services.fleet.verify_device_secret.
+    # Nullable because devices paired before this column existed have none yet
+    # (they fall back to the bearer-token heartbeat path until re-paired).
+    device_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Meter re-verification due-date (operations-cycle tracking pass, on top of
     # the compliance-expiry pass above). Same nullable, fail-open-on-missing-

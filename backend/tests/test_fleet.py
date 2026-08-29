@@ -46,7 +46,7 @@ async def test_create_and_get_vehicle(client, session):
     assert resp.status_code == 201
     body = resp.json()
     assert body["rego"] == "TX-001"  # normalized upper-case
-    assert body["status"] == "active"
+    assert body["status"] == "draft"  # new vehicles start in draft (plan D-4 lifecycle)
     assert body["vehicle_class"] == "standard"
     vehicle_id = body["id"]
 
@@ -492,3 +492,273 @@ async def test_locate_and_reboot_flags_are_independent(client, session):
     assert body["reboot_requested"] is False
     assert body["kiosk_locked"] is False
     assert body["force_update_pending"] is False
+
+
+# --- POST /devices manual provisioning opens a real DeviceAssignment (D-3 gap fix) ---
+# Regression coverage for the gap flagged after WP-21/22: manually pre-provisioning
+# a device via POST /devices with vehicle_id set used to write Device.vehicle_id
+# directly with no DeviceAssignment row at all, so assert_vehicle_operational's
+# "a meter is currently assigned" gate (which reads DeviceAssignment, not
+# Device.vehicle_id) would never see it, and the one-active-meter-per-vehicle
+# guarantee did not hold for this creation path. Fixed in
+# app.services.fleet.create_device.
+
+
+async def test_create_device_with_vehicle_opens_real_assignment(client, session):
+    from sqlalchemy import select
+
+    from app.models.device_assignment import DeviceAssignment
+
+    headers = await auth_headers(client, session, role="admin", tenant_name="Manual Provision Tenant")
+    vehicle_resp = await _create_vehicle(client, headers, rego="TX-MANUAL-1")
+    vehicle_id = vehicle_resp.json()["id"]
+
+    resp = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-manual-1", "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    device_id = resp.json()["id"]
+    assert resp.json()["vehicle_id"] == vehicle_id
+
+    result = await session.execute(
+        select(DeviceAssignment).where(
+            DeviceAssignment.device_id == device_id,
+            DeviceAssignment.unbound_at.is_(None),
+        )
+    )
+    assignment = result.scalar_one()
+    assert assignment.vehicle_id == vehicle_id
+    assert assignment.pairing_code_id is None
+    assert assignment.bound_by_user_id is not None
+
+
+async def test_create_device_without_vehicle_opens_no_assignment(client, session):
+    from sqlalchemy import select
+
+    from app.models.device_assignment import DeviceAssignment
+
+    headers = await auth_headers(client, session, role="admin", tenant_name="Manual Provision No Vehicle Tenant")
+
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-manual-2"}, headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    device_id = resp.json()["id"]
+
+    result = await session.execute(
+        select(DeviceAssignment).where(DeviceAssignment.device_id == device_id)
+    )
+    assert result.scalar_one_or_none() is None
+
+
+async def test_create_device_rejects_vehicle_with_active_device(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Manual Provision Conflict Tenant")
+    vehicle_resp = await _create_vehicle(client, headers, rego="TX-MANUAL-3")
+    vehicle_id = vehicle_resp.json()["id"]
+
+    first = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-manual-3a", "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-manual-3b", "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert second.status_code == 409, second.text
+    assert "already has an actively assigned device" in second.json()["detail"]
+
+
+async def test_create_device_after_active_assignment_moves_away_frees_the_vehicle(client, session):
+    """Once the device that was actively assigned to a vehicle gets RE-PAIRED
+    to a DIFFERENT vehicle (via the real POST /devices/register flow, which
+    closes the old assignment), the original vehicle has no active assignment
+    any more -- manual provisioning against it is not permanently blocked by
+    history, only by a currently-ACTIVE assignment."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Manual Provision Repair Tenant")
+    vehicle_one = (await _create_vehicle(client, headers, rego="TX-MANUAL-4")).json()["id"]
+    vehicle_two = (await _create_vehicle(client, headers, rego="TX-MANUAL-5")).json()["id"]
+
+    first = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-manual-4a", "vehicle_id": vehicle_one},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    # Re-pair the SAME device to vehicle_two -- closes its active assignment
+    # on vehicle_one, opens a new one on vehicle_two. vehicle_one is now free.
+    pairing_resp = await client.post(
+        f"/v1/fleet/vehicles/{vehicle_two}/pairing-code", headers=headers
+    )
+    pairing_code = pairing_resp.json()["code"]
+    register_resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-manual-4a", "pairing_code": pairing_code},
+        headers=headers,
+    )
+    assert register_resp.status_code == 200, register_resp.text
+    assert register_resp.json()["vehicle_id"] == vehicle_two
+
+    second = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-manual-4b", "vehicle_id": vehicle_one},
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text
+
+# --- device-scoped heartbeat auth (real production gap found by the Android session) ---
+# Regression coverage for: POST /devices/{id}/heartbeat used to require a driver bearer
+# token unconditionally, so a parked/logged-off/rebooted tablet with no signed-in driver
+# could never receive kiosk-lock/force-update/locate commands at all. Fixed by accepting
+# EITHER a bearer token (unchanged, existing behaviour) OR a device secret issued once by
+# POST /devices/register, presented via the X-Device-Secret header.
+
+
+async def test_register_device_returns_a_one_time_device_secret(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-SECRET-1")).json()["id"]
+    pairing_code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-secret-1", "pairing_code": pairing_code},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "device_secret" in body
+    assert isinstance(body["device_secret"], str)
+    assert len(body["device_secret"]) >= 32
+
+
+async def test_heartbeat_with_device_secret_needs_no_bearer_token(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant 2")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-SECRET-2")).json()["id"]
+    pairing_code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    register_resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-secret-2", "pairing_code": pairing_code},
+        headers=headers,
+    )
+    device_id = register_resp.json()["id"]
+    device_secret = register_resp.json()["device_secret"]
+
+    # No Authorization header at all -- exactly the parked/logged-off/rebooted case.
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 42, "network": "wifi", "app_version": "1.2.3"},
+        headers={"X-Device-Secret": device_secret},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["battery"] == 42
+    assert body["id"] == device_id
+
+
+async def test_heartbeat_with_wrong_device_secret_is_rejected(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant 3")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-SECRET-3")).json()["id"]
+    pairing_code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    register_resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-secret-3", "pairing_code": pairing_code},
+        headers=headers,
+    )
+    device_id = register_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"app_version": "1.0.0"},
+        headers={"X-Device-Secret": "totally-wrong-secret"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_heartbeat_with_no_credentials_at_all_is_rejected(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant 4")
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-secret-4"}, headers=headers
+    )
+    device_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"app_version": "1.0.0"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_heartbeat_bearer_path_still_works_for_devices_with_no_secret(client, session):
+    """Devices created via POST /devices (manual pre-provisioning, no register_device
+    call, no secret issued) must keep working over the existing bearer-token path --
+    this is the pre-existing, unmodified heartbeat behaviour."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant 5")
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-secret-5"}, headers=headers
+    )
+    device_id = resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 55, "app_version": "1.0.0"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["battery"] == 55
+
+
+async def test_repairing_rotates_the_device_secret(client, session):
+    """Re-pairing a device (moving it to a different vehicle) issues a FRESH secret --
+    the old one must stop working, same "swapping invalidates the old credential"
+    property D-3 already gives DeviceAssignment history."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Device Secret Tenant 6")
+    vehicle_one = (await _create_vehicle(client, headers, rego="TX-SECRET-6A")).json()["id"]
+    vehicle_two = (await _create_vehicle(client, headers, rego="TX-SECRET-6B")).json()["id"]
+
+    code_one = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_one}/pairing-code", headers=headers)
+    ).json()["code"]
+    first_register = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-secret-6", "pairing_code": code_one},
+        headers=headers,
+    )
+    device_id = first_register.json()["id"]
+    old_secret = first_register.json()["device_secret"]
+
+    code_two = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_two}/pairing-code", headers=headers)
+    ).json()["code"]
+    second_register = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-secret-6", "pairing_code": code_two},
+        headers=headers,
+    )
+    new_secret = second_register.json()["device_secret"]
+    assert new_secret != old_secret
+
+    old_secret_resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"app_version": "1.0.0"},
+        headers={"X-Device-Secret": old_secret},
+    )
+    assert old_secret_resp.status_code == 401
+
+    new_secret_resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"app_version": "1.0.0"},
+        headers={"X-Device-Secret": new_secret},
+    )
+    assert new_secret_resp.status_code == 200

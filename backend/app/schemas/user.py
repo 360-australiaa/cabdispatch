@@ -68,6 +68,10 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=128)
     driver_license_expiry: date | None = None
     driver_authority_expiry: date | None = None
+    # Staff-settable (plan Part 3, D-5/D-6) -- not part of UserCreate, only
+    # settable on update, same as the other compliance-ish fields above.
+    driver_authority_no: str | None = Field(default=None, max_length=50)
+    suitability_status: str | None = None
 
 
 class UserRead(UserBase):
@@ -85,5 +89,14 @@ class UserRead(UserBase):
     # convention as app.schemas.compliance.ComplianceDocumentRead.file_path.
     # None until a photo is uploaded.
     photo_url: str | None = None
+    # Staff-settable (plan Part 3, D-5/D-6) -- see UserUpdate above.
+    driver_authority_no: str | None = None
+    suitability_status: str = "pending"
+    # System-managed (plan Part 4, Phase 0) -- never accepted on
+    # UserCreate/UserUpdate, only ever set internally.
+    must_change_password: bool = False
+    password_changed_at: datetime | None = None
+    criminal_history_last_checked_at: date | None = None
+    criminal_history_next_due_at: date | None = None
     created_at: datetime
     updated_at: datetime

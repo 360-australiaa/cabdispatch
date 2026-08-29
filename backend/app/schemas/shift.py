@@ -18,6 +18,16 @@ class ShiftStart(BaseModel):
     inspection_json: dict | None = Field(
         default=None, description="Pre-shift vehicle inspection checklist, freeform."
     )
+    odometer_start: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Odometer reading at shift open, if captured by the client. Not "
+            "required -- a shift opened via a handover instead gets this set "
+            "automatically from the outgoing shift's odometer_end (see "
+            "app.services.shift_handover.perform_handover)."
+        ),
+    )
 
 
 class ShiftEnd(BaseModel):
@@ -33,6 +43,12 @@ class ShiftEnd(BaseModel):
         default=True,
         description="Whether the driver's counted cash matches the recomputed cash_total.",
     )
+    odometer_end: int | None = Field(
+        default=None, ge=0, description="Odometer reading at shift close, if captured."
+    )
+    end_inspection_json: dict | None = Field(
+        default=None, description="End-of-shift vehicle inspection checklist, freeform."
+    )
 
 
 class ShiftCreate(BaseModel):
@@ -44,6 +60,9 @@ class ShiftCreate(BaseModel):
     start_at: datetime
     end_at: datetime | None = None
     inspection_json: dict | None = None
+    end_inspection_json: dict | None = None
+    odometer_start: int | None = None
+    odometer_end: int | None = None
     trips_count: int = 0
     km_total: Decimal = Decimal(0)
     cash_total: Decimal = Decimal(0)
@@ -61,6 +80,9 @@ class ShiftUpdate(BaseModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
     inspection_json: dict | None = None
+    end_inspection_json: dict | None = None
+    odometer_start: int | None = None
+    odometer_end: int | None = None
     trips_count: int | None = None
     km_total: Decimal | None = None
     cash_total: Decimal | None = None
@@ -79,6 +101,9 @@ class ShiftRead(BaseModel):
     start_at: datetime
     end_at: datetime | None
     inspection_json: dict | None
+    end_inspection_json: dict | None = None
+    odometer_start: int | None = None
+    odometer_end: int | None = None
     trips_count: int
     km_total: Decimal
     cash_total: Decimal

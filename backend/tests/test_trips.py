@@ -1239,3 +1239,99 @@ async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_
     body = resp.json()
     assert body["total"] == "45.00"
     assert body["subtotal"] == "45.00"
+
+
+# --- list filters: shift_id + start_at date range (2026-08-29) --------------------
+# Regression coverage for the new GET /v1/trips filters -- lets a driver app ask
+# "trips for MY current open shift" or "trips today" without paginating the
+# whole tenant's trip history client-side.
+
+
+async def test_list_trips_filters_by_shift_id(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    shift_a = str(uuid.uuid4())
+    shift_b = str(uuid.uuid4())
+
+    await _create_trip(client, headers, tariff.id, shift_id=shift_a)
+    await _create_trip(client, headers, tariff.id, shift_id=shift_a)
+    await _create_trip(client, headers, tariff.id, shift_id=shift_b)
+
+    resp = await client.get(f"/v1/trips?shift_id={shift_a}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 2
+    assert all(item["shift_id"] == shift_a for item in body["items"])
+
+
+async def test_list_trips_filters_by_start_at_range(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    old_trip = await _create_trip(
+        client, headers, tariff.id, start_at=(now - timedelta(days=5)).isoformat()
+    )
+    recent_trip = await _create_trip(
+        client, headers, tariff.id, start_at=now.isoformat()
+    )
+
+    window_start = (now - timedelta(hours=1)).isoformat()
+    resp = await client.get("/v1/trips", params={"start_at_from": window_start}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    ids = {item["id"] for item in resp.json()["items"]}
+    assert recent_trip["id"] in ids
+    assert old_trip["id"] not in ids
+
+
+# --- driver earnings-today (Home-screen EARNINGS widget, 2026-08-29) --------------
+
+
+async def test_driver_earnings_today_sums_closed_trips_for_that_driver(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = str(uuid.uuid4())
+    other_driver_id = str(uuid.uuid4())
+
+    mine = await _create_trip(client, headers, tariff.id, driver_id=driver_id, negotiated_total="30.00")
+    await client.post(f"/v1/trips/{mine['id']}/close", json={}, headers=headers)
+
+    mine_2 = await _create_trip(client, headers, tariff.id, driver_id=driver_id, negotiated_total="15.50")
+    await client.post(f"/v1/trips/{mine_2['id']}/close", json={}, headers=headers)
+
+    # A different driver's earnings must not leak into this driver's total.
+    theirs = await _create_trip(
+        client, headers, tariff.id, driver_id=other_driver_id, negotiated_total="99.00"
+    )
+    await client.post(f"/v1/trips/{theirs['id']}/close", json={}, headers=headers)
+
+    # An OPEN trip for the same driver must not count -- its total is not final.
+    await _create_trip(client, headers, tariff.id, driver_id=driver_id, negotiated_total="500.00")
+
+    resp = await client.get(f"/v1/trips/earnings/today?driver_id={driver_id}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["today_total"] == "45.50"
+    assert body["trips_completed_today"] == 2
+    assert body["yesterday_total"] == "0.00"
+    assert body["pct_change"] is None  # no baseline (yesterday_total was zero)
+
+
+async def test_driver_earnings_today_is_zero_for_a_driver_with_no_trips(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="admin")
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.get(f"/v1/trips/earnings/today?driver_id={driver_id}", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["today_total"] == "0.00"
+    assert body["trips_completed_today"] == 0
+    assert body["pct_change"] is None

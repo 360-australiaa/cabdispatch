@@ -111,7 +111,13 @@ async def test_platform_owner_can_onboard_a_new_tenant(client, session):
 
     resp = await client.post(
         "/v1/platform/tenants",
-        json={"name": "Brand New Cabs", "abn": "12345678901", "plan": "standard"},
+        json={
+            "name": "Brand New Cabs",
+            "abn": "12345678901",
+            "plan": "standard",
+            "owner_name": "Brand New Owner",
+            "owner_email": f"owner-{uuid.uuid4()}@example.com",
+        },
         headers=headers,
     )
     assert resp.status_code == 201
@@ -127,7 +133,15 @@ async def test_platform_owner_can_onboard_a_new_tenant(client, session):
 async def test_onboard_tenant_defaults_plan_to_standard(client, session):
     headers = await _platform_owner_headers(client, session)
 
-    resp = await client.post("/v1/platform/tenants", json={"name": "Default Plan Cabs"}, headers=headers)
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={
+            "name": "Default Plan Cabs",
+            "owner_name": "Default Plan Owner",
+            "owner_email": f"owner-{uuid.uuid4()}@example.com",
+        },
+        headers=headers,
+    )
     assert resp.status_code == 201
     assert resp.json()["plan"] == "standard"
 
@@ -276,3 +290,84 @@ async def test_platform_health_aggregates_across_tenants(client, session):
     assert body["total_tenants"] >= 2
     assert body["total_vehicles"] >= 2
     assert body["total_trips_today"] >= 1
+
+
+# --- WP-17: onboarding creates settings + invite-only owner --------------------
+
+
+async def test_onboard_tenant_returns_invite_link_and_owner_cannot_login_yet(client, session):
+    headers = await _platform_owner_headers(client, session)
+    owner_email = f"new-owner-{uuid.uuid4()}@example.com"
+
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={
+            "name": "Invite Flow Cabs",
+            "owner_name": "Invite Flow Owner",
+            "owner_email": owner_email,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["owner_email"] == owner_email
+    assert "invite_link" in body and "token=" in body["invite_link"]
+    assert body["status"] == "active"
+
+    # The owner cannot log in with anything yet -- pin_hash is None until the
+    # invite link is accepted.
+    login_resp = await client.post(
+        "/v1/auth/login", json={"email": owner_email, "password": "whatever"}
+    )
+    assert login_resp.status_code == 401
+
+    # Accepting the invite (token embedded in invite_link) logs them in.
+    token = body["invite_link"].rsplit("token=", 1)[1]
+    accept_resp = await client.post(
+        "/v1/auth/accept-invite",
+        json={"token": token, "new_password": "New-Owner-Pass1!"},
+    )
+    assert accept_resp.status_code == 200
+    assert "access_token" in accept_resp.json()
+
+
+# --- WP-18: tenant lifecycle (suspend) ------------------------------------------
+
+
+async def test_platform_owner_can_suspend_a_tenant(client, session):
+    headers = await _platform_owner_headers(client, session)
+    target = await _make_tenant(session, name="Suspend Target Tenant")
+
+    resp = await client.patch(
+        f"/v1/platform/tenants/{target.id}", json={"status": "suspended"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "suspended"
+
+
+async def test_suspended_tenant_user_cannot_login(client, session):
+    target = await _make_tenant(session, name="Login Blocked Tenant")
+    email = f"blocked-{uuid.uuid4()}@example.com"
+    user = User(
+        tenant_id=target.id,
+        role="admin",
+        name="Blocked Admin",
+        email=email,
+        pin_hash=security.hash_password("Blocked-Pass1!"),
+        status="active",
+    )
+    session.add(user)
+    await session.commit()
+
+    # Login works fine before suspension.
+    resp = await client.post("/v1/auth/login", json={"email": email, "password": "Blocked-Pass1!"})
+    assert resp.status_code == 200
+
+    owner_headers = await _platform_owner_headers(client, session)
+    resp = await client.patch(
+        f"/v1/platform/tenants/{target.id}", json={"status": "suspended"}, headers=owner_headers
+    )
+    assert resp.status_code == 200
+
+    resp = await client.post("/v1/auth/login", json={"email": email, "password": "Blocked-Pass1!"})
+    assert resp.status_code == 403

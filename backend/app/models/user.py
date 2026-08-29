@@ -9,9 +9,9 @@ this is enforced at the application layer, not the schema layer.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Date, ForeignKey, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -21,6 +21,12 @@ ROLE_OWNER = "owner"
 ROLE_ADMIN = "admin"
 ROLE_DISPATCHER = "dispatcher"
 ROLE_DRIVER = "driver"
+
+# Driver suitability/criminal-history check status (plan Part 3, D-5/D-6).
+SUITABILITY_CLEAR = "clear"
+SUITABILITY_PENDING = "pending"
+SUITABILITY_EXPIRED = "expired"
+SUITABILITY_REVOKED = "revoked"
 
 
 class User(Base, TimestampMixin):
@@ -83,3 +89,23 @@ class User(Base, TimestampMixin):
     # receiving a duress alarm needs to see the driver's photo to verify
     # identity.
     photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Driver authority number (plan Part 3, D-5/D-6) -- mirrors driver_licence_no
+    # above: nullable, staff-settable, no format validation at this layer.
+    driver_authority_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Password-change tracking (plan Part 4, Phase 0). System-managed -- never
+    # exposed on UserCreate/UserUpdate. must_change_password defaults False so
+    # every existing seeded/test account is unaffected; a real NOT NULL
+    # server_default=sa.false() is applied by the integrator migration.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Criminal-history / suitability check tracking (plan Part 3, D-5/D-6).
+    # System-managed dates, nullable -- no existing seeded/test user has these
+    # set yet. suitability_status is a plain string constant (see
+    # SUITABILITY_* above), not a DB enum, matching the existing role/status
+    # convention in this file.
+    criminal_history_last_checked_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    criminal_history_next_due_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    suitability_status: Mapped[str] = mapped_column(String(20), nullable=False, default=SUITABILITY_PENDING)

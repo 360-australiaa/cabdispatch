@@ -164,7 +164,7 @@ async def test_mfa_enabled_driver_gets_two_step_driver_login(client, session):
     secret = setup.json()["secret"]
     code = pyotp.TOTP(secret).now()
     verify = await client.post("/v1/auth/mfa/verify", json={"code": code}, headers=driver_headers)
-    assert verify.json() == {"mfa_enabled": True}
+    assert verify.json()["mfa_enabled"] is True
 
     # Step 1 of driver-login now returns mfa_required instead of real tokens
     # — the exact same MfaRequiredResponse contract as POST /v1/auth/login.

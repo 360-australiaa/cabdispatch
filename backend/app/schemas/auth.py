@@ -6,7 +6,7 @@ bearer token to call the rest of the API / log into the dashboard.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -47,6 +47,16 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class LogoutRequest(BaseModel):
+    """Body for POST /v1/auth/logout -- entirely optional (see that route's
+    docstring): every existing caller (dashboard, Android) already posts with
+    no body at all, so this stays an opt-in extra rather than a required
+    contract change. refresh_token, if supplied, is revoked in addition to
+    the caller own access-token jti (which is always revoked, body or not)."""
+
+    refresh_token: str | None = None
+
+
 class RefreshResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -82,6 +92,17 @@ class MfaStatusResponse(BaseModel):
     mfa_enabled: bool
 
 
+class MfaVerifyResponse(BaseModel):
+    """Returned by POST /v1/auth/mfa/verify only -- distinct from
+    MfaStatusResponse (still used by /mfa/disable, unchanged) because this is
+    the ONE moment recovery_codes are generated and returned in plaintext
+    (plan Part 4 Phase 1 WP-16, I-5). Never shown again after this response --
+    only their hashes persist (see app.services.mfa_recovery_codes)."""
+
+    mfa_enabled: bool
+    recovery_codes: list[str]
+
+
 class MfaDisableRequest(BaseModel):
     password: str
 
@@ -89,3 +110,47 @@ class MfaDisableRequest(BaseModel):
 class MfaLoginRequest(BaseModel):
     mfa_token: str
     code: str
+
+
+# --- Password lifecycle (plan Part 4, Phase 1, WP-10/11/12) -----------------
+
+
+class PasswordChangeRequiredResponse(BaseModel):
+    """Returned by POST /v1/auth/login (or /driver-login) instead of
+    TokenResponse when the account has must_change_password=True.
+    password_change_token is short-lived and only good for POST
+    /v1/auth/change-password."""
+
+    password_change_required: bool = True
+    password_change_token: str
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Always the exact same body regardless of whether `email` matches a
+    real account -- see POST /v1/auth/forgot-password's docstring for why
+    (account-enumeration prevention)."""
+
+    detail: str = "If an account exists for that email, a password reset link has been sent."
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    detail: str = "Password has been reset. Please log in with your new password."
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6, max_length=128)

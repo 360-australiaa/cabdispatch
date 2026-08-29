@@ -177,6 +177,31 @@ class Settings(BaseSettings):
     # TWILIO_FROM_NUMBER if unset.
     DURESS_CALL_FROM_NUMBER: str = ""
 
+    # --- Public base URL (invite/reset links, plan Part 4 Phase 1 WP-10/11) ---
+    # Base origin of the dashboard frontend, used by app.services.user_invites
+    # to build the link a real invite/reset email points at, e.g.
+    # https://app.cabdispatch.example . Empty (the default) in dev -- no such
+    # deployment-wide value existed anywhere in this codebase before this pass
+    # (grepped app/core/config.py and every .env.example entry, no hit), so this
+    # is a new setting, not a rename of an existing one. MUST be set to a real
+    # HTTPS origin in production or the generated link is frontend-relative and
+    # unusable from an email client.
+    PUBLIC_BASE_URL: str = ""
+
+    # --- Login attempt throttling (I-5, docs/ARCHITECTURE_TENANCY_FLEET_COMPLIANCE.md,
+    # plan Part 4 Phase 1 WP-16) ---
+    # Security-engineering judgment call, not a regulatory requirement -- this
+    # project's own standard for that case ("make it configurable and say so",
+    # per the WP-16 task brief) is followed here: a reasonable literal
+    # default, overridable via env/`.env` like every other setting on this
+    # class. Applies per credential identifier (email for POST /v1/auth/login,
+    # driver_code for POST /v1/auth/driver-login) -- see
+    # app.core.security._LoginThrottleStore and its call sites in
+    # app/api/v1/auth.py for the exact mechanics.
+    LOGIN_MAX_FAILED_ATTEMPTS: int = 5
+    LOGIN_ATTEMPT_WINDOW_MINUTES: int = 15
+    LOGIN_LOCKOUT_MINUTES: int = 15
+
     @property
     def is_production(self) -> bool:
         return self.ENV == "production"

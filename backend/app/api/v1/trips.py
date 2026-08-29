@@ -25,6 +25,7 @@ from app.models.fleet import Vehicle
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
 from app.models.user import User
 from app.schemas.trips import (
+    DriverEarningsTodayRead,
     ReceiptEmailRequest,
     ReceiptEmailResponse,
     ReceiptSmsRequest,
@@ -55,6 +56,7 @@ from app.services.trips import (
     apply_tick,
     close_trip,
     compute_variance_pct,
+    driver_earnings_today,
     flag_trip_for_review,
     recompute_from_trace,
 )
@@ -302,6 +304,13 @@ async def list_trips(
     type_filter: str | None = Query(None, alias="type"),
     vehicle_id: str | None = None,
     driver_id: str | None = None,
+    shift_id: str | None = Query(
+        None, description="Filter to trips belonging to one shift -- e.g. the driver's own current open shift."
+    ),
+    start_at_from: datetime | None = Query(
+        None, description="Inclusive lower bound on Trip.start_at, e.g. the start of today in the caller's local day."
+    ),
+    start_at_to: datetime | None = Query(None, description="Inclusive upper bound on Trip.start_at."),
     flagged_for_review: bool | None = Query(
         None, description="Filter to trips flagged (or not) for operator review — blueprint 5.2.5 dashboard 'flagged' view"
     ),
@@ -322,6 +331,12 @@ async def list_trips(
         filters.append(Trip.vehicle_id == vehicle_id)
     if driver_id is not None:
         filters.append(Trip.driver_id == driver_id)
+    if shift_id is not None:
+        filters.append(Trip.shift_id == shift_id)
+    if start_at_from is not None:
+        filters.append(Trip.start_at >= start_at_from)
+    if start_at_to is not None:
+        filters.append(Trip.start_at <= start_at_to)
     if flagged_for_review is not None:
         filters.append(Trip.flagged_for_review == flagged_for_review)
 
@@ -337,6 +352,31 @@ async def list_trips(
 
 
 # --- Get by id ----------------------------------------------------------
+
+
+@router.get("/earnings/today", response_model=DriverEarningsTodayRead)
+async def get_driver_earnings_today(
+    driver_id: str = Query(..., description="The driver to summarise -- a driver app passes its own user id."),
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DriverEarningsTodayRead:
+    """Home-screen EARNINGS widget: today's total (Sydney-local calendar
+    day), trips completed today, and a day-over-day percent change vs
+    yesterday. Any authenticated tenant user may query any driver_id in
+    their own tenant (same no-extra-role-restriction convention as GET
+    /v1/shifts and GET /v1/fleet/compliance-expiry) -- a driver app is
+    expected to pass its own user id, but this is not self-only-enforced,
+    matching this domain's existing pattern of tenant-scoped-only reads."""
+    result = await driver_earnings_today(session, tenant_id=tenant_id, driver_id=driver_id)
+    return DriverEarningsTodayRead(
+        driver_id=driver_id,
+        date=result.date,
+        today_total=result.today_total,
+        yesterday_total=result.yesterday_total,
+        pct_change=result.pct_change,
+        trips_completed_today=result.trips_completed_today,
+    )
 
 
 @router.get("/{trip_id}", response_model=TripRead)

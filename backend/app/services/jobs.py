@@ -286,6 +286,7 @@ async def create_job_and_broadcast(
     dest_address: str,
     fare_estimate_low: Decimal,
     fare_estimate_high: Decimal,
+    job_type: str = "booked",
 ) -> tuple[Job, list[JobOffer]]:
     """Creates the `Job` row, then fans out one pending `JobOffer` (20s
     window) to every currently-available driver in the tenant, broadcasting
@@ -318,8 +319,19 @@ async def create_job_and_broadcast(
         dest_lng=dest_lng,
         dest_address=dest_address,
         status=JOB_STATUS_QUEUED,
+        job_type=job_type,
         fare_estimate_low=fare_estimate_low,
         fare_estimate_high=fare_estimate_high,
+        # Straight-line distance + a flat 30km/h average-speed heuristic --
+        # NOT a routed/road-network distance or a live-traffic ETA (see the
+        # model column's own doc comment). 30km/h is a deliberately
+        # conservative inner-Sydney-traffic assumption so the displayed ETA
+        # skews toward "still plenty of time", not an optimistic clear-road
+        # figure -- flagged as an approximation, swap in a real routing API
+        # here if/when one is integrated, this function's contract does not
+        # need to change.
+        distance_km=Decimal(str(round(_haversine_km(origin_lat, origin_lng, dest_lat, dest_lng), 2))),
+        eta_min=max(1, round(_haversine_km(origin_lat, origin_lng, dest_lat, dest_lng) / 30.0 * 60)),
         requested_at=now,
         created_by_user_id=created_by_user_id,
         accepted_by_driver_id=None,

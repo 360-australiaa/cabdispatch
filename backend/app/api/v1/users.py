@@ -27,6 +27,42 @@ _require_admin = require_role("owner", "admin")
 _require_staff = require_role("owner", "admin", "dispatcher")
 
 
+# --- Role hierarchy (fixes I-1: unchecked-role privilege escalation) --------
+# No role hierarchy was declared anywhere in this codebase before this fix --
+# grepped app/models/user.py ROLE_* constants (a flat set of four string
+# constants, no ordering) and app/core/security.py require_role (checks only
+# set membership, e.g. role in (owner, admin), never rank). Declared here,
+# local to this router, since only POST/PATCH /v1/users create or mutate a
+# User.role field -- no other router does.
+#
+# Rule (documented per task instructions, a real judgment call): a caller may
+# create or set a target role only STRICTLY BELOW their own rank, EXCEPT an
+# owner caller, who may also create/set other owner rows. Concretely:
+#   - admin (rank 2) may create/set dispatcher/driver, but NOT admin or owner
+#     -- an admin minting a same-rank admin (or an owner) is still a privilege
+#     escalation: the caller ends up controlling credentials for an account
+#     with equal-or-greater power than their own.
+#   - owner (rank 3) may create/set ANY role, including another owner -- an
+#     owner is already the top of a tenant hierarchy and needs to be able to
+#     onboard co-owners or promote a trusted admin to owner.
+# dispatcher/driver callers never reach this check at all -- _require_admin
+# above already 403s them before create_user/update_user body runs.
+_ROLE_RANK = {"driver": 0, "dispatcher": 1, "admin": 2, "owner": 3}
+
+
+def _assert_role_change_permitted(*, caller_role: str, target_role: str) -> None:
+    if caller_role == "owner":
+        return
+    if _ROLE_RANK.get(target_role, 0) >= _ROLE_RANK.get(caller_role, 0):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Cannot create or set a user to role {target_role!r}: that role is "
+                f"at or above your own role {caller_role!r}. Only an owner may do this."
+            ),
+        )
+
+
 def _user_error_to_http(exc: user_service.UserError) -> HTTPException:
     if isinstance(exc, user_service.UserNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -78,8 +114,10 @@ async def create_user(
     payload: UserCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    caller: User = Depends(_require_admin),
 ):
+    _assert_role_change_permitted(caller_role=caller.role, target_role=payload.role)
+
     try:
         await user_service.assert_email_available(session, email=payload.email)
         if payload.driver_code is not None:
@@ -124,8 +162,11 @@ async def update_user(
     payload: UserUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    caller: User = Depends(_require_admin),
 ):
+    if payload.role is not None:
+        _assert_role_change_permitted(caller_role=caller.role, target_role=payload.role)
+
     try:
         user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
     except user_service.UserError as exc:

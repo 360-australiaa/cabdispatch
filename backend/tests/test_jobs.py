@@ -433,3 +433,56 @@ def test_websocket_rejects_missing_token(app):
         except FastAPIWebSocketDisconnect:
             raised = True
         assert raised
+
+
+# --- job_type / distance_km / eta_min (Home-screen dispatch card fields, 2026-08-29) ---
+
+
+async def test_create_job_defaults_to_booked_type(client: AsyncClient, session: AsyncSession):
+    tenant_id, admin_headers = await _tenant_and_headers(client, session)
+    resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["job_type"] == "booked"
+
+
+async def test_create_job_accepts_explicit_rank_hail_type(client: AsyncClient, session: AsyncSession):
+    tenant_id, admin_headers = await _tenant_and_headers(client, session)
+    resp = await client.post("/v1/jobs", json=_job_body(job_type="rank_hail"), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["job_type"] == "rank_hail"
+
+
+async def test_create_job_computes_distance_and_eta_server_side(client: AsyncClient, session: AsyncSession):
+    tenant_id, admin_headers = await _tenant_and_headers(client, session)
+    resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # origin (-33.8688, 151.2093) -> dest (-33.8568, 151.2153) is a real,
+    # short haversine distance -- assert it lands in a sane real-world range
+    # rather than pinning an exact float (floating point / rounding).
+    assert body["distance_km"] is not None
+    assert 0.5 < float(body["distance_km"]) < 5.0
+    assert body["eta_min"] is not None
+    assert body["eta_min"] >= 1
+
+
+async def test_job_offer_push_event_carries_distance_and_eta(client: AsyncClient, session: AsyncSession):
+    """The websocket job_offer push (JobOfferPushEvent.job) uses the same
+    JobRead shape as the REST response -- confirms distance_km/eta_min are
+    genuinely on the Job row the offer references, not just present at
+    create-response time."""
+    tenant_id, admin_headers = await _tenant_and_headers(client, session)
+    driver, driver_headers = await _available_driver(client, session, tenant_id=tenant_id)
+
+    create_resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    job_id = create_resp.json()["id"]
+
+    offers_resp = await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)
+    assert offers_resp.status_code == 200, offers_resp.text
+    assert len(offers_resp.json()) == 1
+
+    job_resp = await client.get(f"/v1/jobs/{job_id}", headers=driver_headers)
+    assert job_resp.status_code == 200, job_resp.text
+    assert job_resp.json()["distance_km"] is not None
+    assert job_resp.json()["eta_min"] is not None

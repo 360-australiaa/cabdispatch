@@ -24,7 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, require_role
 from app.schemas.tenant import AdminPinSetRequest, AdminPinSetResponse, TenantRead, TenantThemeUpdate
+from app.schemas.tenant_settings import TenantSettingsRead, TenantSettingsUpdate
 from app.services import tenant as tenant_service
+from app.services import tenant_settings as tenant_settings_service
 
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
 
@@ -95,6 +97,34 @@ async def set_admin_pin(
 
     tenant = await tenant_service.set_admin_pin(session, tenant, pin=payload.pin)
     return AdminPinSetResponse(tenant_id=tenant.id, admin_pin_configured=True)
+
+
+@router.get("/me/settings", response_model=TenantSettingsRead)
+async def get_my_tenant_settings(
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Any authenticated tenant user (view-only) -- same role-gating precedent as
+    `GET /v1/tenants/me` above. Returns the tenant's row if one exists (the normal
+    case -- see WP-04's migration backfill and WP-17's tenant-creation flow), or a
+    defensively-created one with documented defaults for a tenant that predates
+    both (see app.services.tenant_settings' module doc)."""
+    settings_row = await tenant_settings_service.get_or_create_settings(session, tenant_id=tenant_id)
+    return settings_row
+
+
+@router.patch("/me/settings", response_model=TenantSettingsRead)
+async def update_my_tenant_settings(
+    payload: TenantSettingsUpdate,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _owner_or_admin=Depends(_require_owner_or_admin),
+):
+    """Owner/admin-only -- same role-gating precedent as `PATCH /v1/tenants/me`
+    above. Partial update: only fields present in the request body are changed."""
+    settings_row = await tenant_settings_service.get_or_create_settings(session, tenant_id=tenant_id)
+    changes = payload.model_dump(exclude_unset=True)
+    return await tenant_settings_service.update_settings(session, settings_row, changes=changes)
 
 
 __all__ = ["router"]

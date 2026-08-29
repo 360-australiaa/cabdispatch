@@ -58,6 +58,24 @@ until this shift itself ends; a new `Shift` row starts fresh with
 `POST /v1/shifts/{id}/break/start` and `POST /v1/shifts/{id}/break/end`
 (see `app.services.shift.start_break` and `app.services.shift.end_break`);
 not exposed on `ShiftCreate`/`ShiftUpdate`.
+
+DEVIATION (WP-33, plan Part 4 Phase 3, on top of the Stage 1/Stage 2 work
+above): `odometer_start` / `odometer_end` and `end_inspection_json` are
+added here. `odometer_start` is captured at shift open -- either supplied
+directly by the client on `POST /v1/shifts/start` (`ShiftStart.odometer_start`)
+or, for a shift opened via a handover (`app.services.shift_handover.
+perform_handover`), copied automatically from the outgoing shift's
+`odometer_end` reading (this was the Stage 2 "STAGE 3 NOTE" pointer on
+`app.models.shift_handover.ShiftHandover`, now wired). `odometer_end` mirrors
+`inspection_json`'s existing pre-shift convention but for shift CLOSE: a
+plain client-supplied Integer accepted on `POST /v1/shifts/{id}/end`
+(`ShiftEnd.odometer_end`), not recomputed/derived server-side. Both are
+nullable Integer -- "not captured" is the default/common state, e.g. for
+tenants that don't track odometer readings at all, or where a client sends
+neither field. `end_inspection_json` is the end-of-shift counterpart to the
+existing pre-shift `inspection_json` column: same freeform-JSON,
+shape-owned-by-the-client convention, nullable, accepted optionally on
+`POST /v1/shifts/{id}/end` (`ShiftEnd.end_inspection_json`).
 """
 from __future__ import annotations
 
@@ -65,7 +83,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -73,6 +91,32 @@ from app.core.database import Base, TenantScopedMixin, TimestampMixin
 
 class Shift(Base, TenantScopedMixin, TimestampMixin):
     __tablename__ = "shifts"
+    __table_args__ = (
+        # D-1 (architecture plan): at most one currently-open (end_at IS NULL)
+        # shift per vehicle at a time -- this is the actual mechanism that
+        # makes double-booking a vehicle impossible by construction. Portable
+        # across SQLite and Postgres via the dual postgresql_where/sqlite_where
+        # kwargs, same pattern as app.models.device_assignment /
+        # app.models.vehicle_assignment.
+        Index(
+            "uq_shifts_one_open_per_vehicle",
+            "tenant_id",
+            "vehicle_id",
+            unique=True,
+            postgresql_where=text("end_at IS NULL"),
+            sqlite_where=text("end_at IS NULL"),
+        ),
+        # D-1: at most one currently-open shift per driver at a time -- a
+        # driver cannot be simultaneously "on shift" in two vehicles.
+        Index(
+            "uq_shifts_one_open_per_driver",
+            "tenant_id",
+            "driver_id",
+            unique=True,
+            postgresql_where=text("end_at IS NULL"),
+            sqlite_where=text("end_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
@@ -110,3 +154,11 @@ class Shift(Base, TenantScopedMixin, TimestampMixin):
     # --- break tracking (see class docstring DEVIATION note) ---
     break_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     break_taken: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # --- odometer + end-of-shift inspection (WP-33, see class docstring
+    # DEVIATION note) ---
+    odometer_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    odometer_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # End-of-shift vehicle inspection checklist, freeform -- mirrors
+    # `inspection_json` above but captured at shift CLOSE, not open.
+    end_inspection_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
