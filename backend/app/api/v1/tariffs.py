@@ -46,7 +46,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user
+from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.fleet import VALID_VEHICLE_CLASSES
 from app.models.tariffs import VALID_REGIONS, Extra, Tariff, TariffChangeLog
 from app.models.user import User
@@ -70,6 +70,14 @@ from app.services import tariff_signing
 from app.services import tariffs as tariff_service
 
 router = APIRouter(prefix="/v1/tariffs", tags=["tariffs"])
+
+# Fares-Order-regulated rate cards must not be writable by every authenticated
+# tenant user (a driver-role account should never be able to rewrite the rates
+# their own meter bills against) -- same owner/admin-only convention already
+# used by the sibling app.api.v1.zones / app.api.v1.geofences routers for
+# their own write endpoints. This router had no role gate at all until this
+# pass; every read endpoint stays open to any authenticated tenant user.
+_require_admin = require_role("owner", "admin")
 fares_order_router = APIRouter(prefix="/v1/fares-order", tags=["tariffs"])
 
 
@@ -241,6 +249,7 @@ async def create_tariff(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     await tariff_service.validate_tariff_or_422(session, payload)
 
@@ -259,6 +268,7 @@ async def create_tariff_from_preset(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     """Creates a new Tariff pre-filled from a named preset (see
     `GET /v1/tariffs/presets`), with any `overrides` layered on top, then
@@ -310,6 +320,7 @@ async def update_tariff(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     row = await _get_owned_tariff(session, tariff_id, tenant_id)
     before = tariff_service.row_to_log_dict(row)  # snapshot pre-mutation
@@ -329,6 +340,7 @@ async def delete_tariff(
     tariff_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     row = await _get_owned_tariff(session, tariff_id, tenant_id)
     await session.delete(row)
@@ -371,6 +383,7 @@ async def create_extra(
     payload: ExtraCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     await _get_owned_tariff(session, tariff_id, tenant_id)  # 404s if not owned
 
@@ -398,6 +411,7 @@ async def update_extra(
     payload: ExtraUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     row = await _get_owned_extra(session, tariff_id, extra_id, tenant_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -413,6 +427,7 @@ async def delete_extra(
     extra_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_admin),
 ):
     row = await _get_owned_extra(session, tariff_id, extra_id, tenant_id)
     await session.delete(row)

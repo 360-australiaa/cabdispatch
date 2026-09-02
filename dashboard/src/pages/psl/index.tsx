@@ -1,12 +1,19 @@
 import { useMemo, useState } from "react";
 import { Banknote, ListChecks, Pencil, Plus, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardContent, Input, Modal, PageHeader, Select, Table, type TableColumn } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import {
   useDeleteLedgerEntryMutation,
   usePSLLedgerQuery,
   type PSLLedgerEntry,
 } from "@/hooks/usePSLCentre";
 import { useDriversLookupQuery } from "@/hooks/useTrips";
+
+/** Mirrors `psl_ledger.py`'s write-endpoint restriction — create/update/
+ * delete ledger entries and top-ups are owner/admin/dispatcher only. Without
+ * this the page showed fully-enabled write controls to every role,
+ * including `driver`, which then just 403'd. */
+const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
 import { LedgerFormModal } from "./LedgerFormModal";
 import { TopUpFormModal } from "./TopUpFormModal";
 import { RemittanceReport } from "./RemittanceReport";
@@ -21,6 +28,9 @@ const PAGE_SIZE = 15;
 type Tab = "ledger" | "report";
 
 export default function PslPage() {
+  const { user } = useAuth();
+  const canManage = !!user && MANAGE_ROLES.has(user.role);
+
   const [tab, setTab] = useState<Tab>("ledger");
 
   const [driverFilter, setDriverFilter] = useState("");
@@ -118,37 +128,41 @@ export default function PslPage() {
       sortable: true,
       sortAccessor: (row) => (row.remitted_at ? 1 : 0),
     },
-    {
-      key: "actions",
-      header: "",
-      className: "text-right",
-      render: (row) => (
-        <div className="flex justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Edit entry"
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditingEntry(row);
-            }}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Delete entry"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDeletingEntry(row);
-            }}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-        </div>
-      ),
-    },
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: "",
+            className: "text-right",
+            render: (row: PSLLedgerEntry) => (
+              <div className="flex justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Edit entry"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingEntry(row);
+                  }}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Delete entry"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeletingEntry(row);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            ),
+          } satisfies TableColumn<PSLLedgerEntry>,
+        ]
+      : []),
   ];
 
   const tableKey = [driverFilter, periodFilter].join("|");
@@ -159,14 +173,16 @@ export default function PslPage() {
         title="PSL Centre"
         description="Passenger Service Levy accrual ledger, driver top-ups, and monthly remittance reporting."
         actions={
-          <>
-            <Button variant="outline" onClick={() => setTopUpOpen(true)}>
-              <Banknote className="h-4 w-4" /> Record top-up
-            </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" /> New ledger entry
-            </Button>
-          </>
+          canManage ? (
+            <>
+              <Button variant="outline" onClick={() => setTopUpOpen(true)}>
+                <Banknote className="h-4 w-4" /> Record top-up
+              </Button>
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4" /> New ledger entry
+              </Button>
+            </>
+          ) : undefined
         }
       />
 

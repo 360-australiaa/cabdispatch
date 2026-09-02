@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Flag, Plus, Search } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AlertTriangle, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
 import {
   Badge,
   Button,
@@ -221,9 +222,16 @@ export default function TripsPage() {
         title="Trips"
         description="Searchable ledger of meter runs across the fleet. Open a row for the full fare breakdown and max-fare-check result."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New trip
-          </Button>
+          <>
+            <Link to="/compliance?tab=reports">
+              <Button variant="outline">
+                <FileSpreadsheet className="h-4 w-4" /> NSW PtP export
+              </Button>
+            </Link>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> New trip
+            </Button>
+          </>
         }
       />
 

@@ -12,6 +12,7 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 import {
   useDeleteTariffMutation,
   useTariffsQuery,
@@ -41,6 +42,13 @@ const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
 ];
 
 export default function TariffsPage() {
+  // Create/edit/delete a Fares-Order-regulated rate card is now owner/admin
+  // gated server-side (backend/app/api/v1/tariffs.py) — mirrors the same
+  // `canWrite` pattern already used by the sibling Zones page. Change-log
+  // (read-only) stays visible to every role.
+  const { user } = useAuth();
+  const canWrite = user?.role === "owner" || user?.role === "admin";
+
   const [tab, setTab] = useState<TariffStudioTab>("tariffs");
   const [regionFilter, setRegionFilter] = useState<Region | "">("");
   const [bookedFilter, setBookedFilter] = useState<"" | "true" | "false">("");
@@ -104,20 +112,24 @@ export default function TariffsPage() {
           <Button variant="ghost" size="icon" title="Change log" onClick={() => setLogTariff(row)}>
             <History className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingTariff(row)}>
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Delete"
-            onClick={() => {
-              setDeleteError(null);
-              setDeletingTariff(row);
-            }}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          {canWrite && (
+            <>
+              <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingTariff(row)}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete"
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeletingTariff(row);
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </>
+          )}
         </div>
       ),
     },
@@ -129,7 +141,7 @@ export default function TariffsPage() {
         title="Tariff Studio"
         description="Effective-dated rate cards and toll zones. Rank/hail urban & country tariffs are validated against the NSW Fares Order reference on save."
         actions={
-          tab === "tariffs" ? (
+          tab === "tariffs" && canWrite ? (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" /> New tariff
             </Button>

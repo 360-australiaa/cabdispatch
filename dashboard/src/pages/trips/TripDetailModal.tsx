@@ -1,8 +1,14 @@
 import { useState } from "react";
 import axios from "axios";
-import { AlertTriangle, CheckCircle2, Flag } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Flag, Plus, Trash2 } from "lucide-react";
 import { Badge, Button, Input, Modal, Select } from "@/components/ui";
-import { useCloseTripMutation, useFlagTripMutation, type Trip } from "@/hooks/useTrips";
+import {
+  useCloseTripMutation,
+  useFlagTripMutation,
+  type PaymentMethod,
+  type SplitPaymentItem,
+  type Trip,
+} from "@/hooks/useTrips";
 import {
   formatDateTime,
   formatDistance,
@@ -61,6 +67,9 @@ export function TripDetailModal({
   const [cleaningFee, setCleaningFee] = useState("0");
   const [includePsl, setIncludePsl] = useState(false);
   const [closePaymentMethod, setClosePaymentMethod] = useState<string>("");
+  const [closeVoucherCode, setCloseVoucherCode] = useState("");
+  const [closeAccountReference, setCloseAccountReference] = useState("");
+  const [closeSplitPayments, setCloseSplitPayments] = useState<SplitPaymentItem[]>([]);
 
   const [flagging, setFlagging] = useState(false);
   const [flagReason, setFlagReason] = useState("");
@@ -76,6 +85,29 @@ export function TripDetailModal({
 
   async function handleClose() {
     setCloseError(null);
+
+    const method = closePaymentMethod ? (closePaymentMethod as PaymentMethod) : undefined;
+    if (method === "voucher" && !closeVoucherCode.trim()) {
+      setCloseError("Voucher code is required for the voucher payment method.");
+      return;
+    }
+    if (method === "account" && !closeAccountReference.trim()) {
+      setCloseError("Account reference is required for the account payment method.");
+      return;
+    }
+    if (method === "split_fare") {
+      if (closeSplitPayments.length < 2) {
+        setCloseError("Split fare needs at least two payment legs.");
+        return;
+      }
+      for (const leg of closeSplitPayments) {
+        if (!leg.method.trim() || !leg.amount.trim() || Number.isNaN(Number(leg.amount))) {
+          setCloseError("Every split-fare leg needs a method and a valid amount.");
+          return;
+        }
+      }
+    }
+
     try {
       await closeMutation.mutateAsync({
         id: trip!.id,
@@ -83,13 +115,26 @@ export function TripDetailModal({
           surcharge_pct: surchargePct || undefined,
           cleaning_fee: cleaningFee || "0",
           include_psl: includePsl,
-          payment_method: closePaymentMethod ? (closePaymentMethod as "cash" | "card") : undefined,
+          payment_method: method,
+          voucher_code: method === "voucher" ? closeVoucherCode.trim() : undefined,
+          account_reference: method === "account" ? closeAccountReference.trim() : undefined,
+          split_payments: method === "split_fare" ? closeSplitPayments : undefined,
         },
       });
       setClosing(false);
     } catch (err) {
       setCloseError(extractErrorMessage(err));
     }
+  }
+
+  function addCloseSplitLeg() {
+    setCloseSplitPayments((legs) => [...legs, { method: "cash", amount: "" }]);
+  }
+  function removeCloseSplitLeg(index: number) {
+    setCloseSplitPayments((legs) => legs.filter((_, i) => i !== index));
+  }
+  function updateCloseSplitLeg(index: number, patch: Partial<SplitPaymentItem>) {
+    setCloseSplitPayments((legs) => legs.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)));
   }
 
   async function handleFlag() {
@@ -291,6 +336,55 @@ export function TripDetailModal({
                     Include PSL
                   </label>
                 </div>
+                {closePaymentMethod === "voucher" && (
+                  <Input
+                    placeholder="Voucher code"
+                    value={closeVoucherCode}
+                    onChange={(e) => setCloseVoucherCode(e.target.value)}
+                  />
+                )}
+                {closePaymentMethod === "account" && (
+                  <Input
+                    placeholder="Account reference"
+                    value={closeAccountReference}
+                    onChange={(e) => setCloseAccountReference(e.target.value)}
+                  />
+                )}
+                {closePaymentMethod === "split_fare" && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Split-fare legs (must sum to the total)
+                      </span>
+                      <Button type="button" variant="outline" size="sm" onClick={addCloseSplitLeg}>
+                        <Plus className="h-3.5 w-3.5" /> Add leg
+                      </Button>
+                    </div>
+                    {closeSplitPayments.map((leg, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <Select
+                          className="w-28"
+                          options={[
+                            { value: "cash", label: "Cash" },
+                            { value: "card", label: "Card" },
+                          ]}
+                          value={leg.method}
+                          onChange={(e) => updateCloseSplitLeg(index, { method: e.target.value })}
+                        />
+                        <Input
+                          className="w-28"
+                          inputMode="decimal"
+                          placeholder="Amount"
+                          value={leg.amount}
+                          onChange={(e) => updateCloseSplitLeg(index, { amount: e.target.value })}
+                        />
+                        <Button type="button" variant="ghost" size="icon" onClick={() => removeCloseSplitLeg(index)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {closeError && <p className="text-sm text-destructive">{closeError}</p>}
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleClose} disabled={closeMutation.isPending}>

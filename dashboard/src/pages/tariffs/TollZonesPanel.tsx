@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, Card, CardContent, Modal, Table, type TableColumn } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import {
   useDeleteGeofenceMutation,
   useGeofencesQuery,
@@ -14,8 +15,14 @@ const PAGE_SIZE = 15;
 /** Toll Zones tab of Tariff Studio — CRUD over `/v1/geofences?kind=toll`
  * circular zones (name, center lat/lng, radius in meters, toll amount).
  * Region-kind geofences (platform reference zones) are out of scope here;
- * this panel only lists/creates `kind: "toll"`. */
+ * this panel only lists/creates `kind: "toll"`. Create/edit/delete are
+ * owner/admin gated server-side (`geofences.py`) — mirrors the same
+ * `canWrite` pattern already used by the sibling Zones page
+ * (`pages/zones/ZonesPanel.tsx`), which this tab previously didn't copy. */
 export function TollZonesPanel() {
+  const { user } = useAuth();
+  const canWrite = user?.role === "owner" || user?.role === "admin";
+
   const [page, setPage] = useState(0);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -43,7 +50,10 @@ export function TollZonesPanel() {
     },
     { key: "radius_m", header: "Radius", render: (row) => `${row.radius_m.toLocaleString()} m` },
     { key: "toll_amount", header: "Toll amount", render: (row) => formatMoney(row.toll_amount) },
-    {
+  ];
+
+  if (canWrite) {
+    columns.push({
       key: "actions",
       header: "",
       className: "text-right",
@@ -65,16 +75,18 @@ export function TollZonesPanel() {
           </Button>
         </div>
       ),
-    },
-  ];
+    });
+  }
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-end">
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" /> New toll zone
-        </Button>
-      </div>
+      {canWrite && (
+        <div className="mb-4 flex items-center justify-end">
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" /> New toll zone
+          </Button>
+        </div>
+      )}
 
       {zonesQuery.isError && (
         <p className="mb-3 text-sm text-destructive">

@@ -62,6 +62,7 @@ function emptyForm(): FormState {
     multi_hire_pct: "0.75",
     psl_amount: "1.32",
     surcharge_pct_cap: "5.0",
+    cleaning_fee_cap: "124.14",
   };
 }
 
@@ -87,6 +88,7 @@ function formFromTariff(tariff: Tariff): FormState {
     multi_hire_pct: tariff.multi_hire_pct,
     psl_amount: tariff.psl_amount,
     surcharge_pct_cap: tariff.surcharge_pct_cap,
+    cleaning_fee_cap: tariff.cleaning_fee_cap,
   };
 }
 

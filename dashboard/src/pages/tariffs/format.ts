@@ -82,6 +82,7 @@ export const RATE_FIELD_META: Record<
   multi_hire_pct: { label: "Multi-hire percentage", unit: "percent" },
   psl_amount: { label: "PSL amount", unit: "currency" },
   surcharge_pct_cap: { label: "Non-cash surcharge cap", unit: "percent" },
+  cleaning_fee_cap: { label: "Cleaning fee cap", unit: "currency" },
 };
 
 export function formatRateValue(value: string, unit: (typeof RATE_FIELD_META)[keyof typeof RATE_FIELD_META]["unit"]) {

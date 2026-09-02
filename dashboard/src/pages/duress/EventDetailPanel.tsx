@@ -60,6 +60,9 @@ export function EventDetailPanel({
   const eventQuery = useQuery({
     queryKey: ["duress-event", eventId],
     queryFn: () => getDuressEvent(eventId),
+    // A safety desk needs to see a Twilio call-status update or another
+    // dispatcher's action land without anyone touching this panel.
+    refetchInterval: 8_000,
   });
 
   function invalidate() {
@@ -106,6 +109,12 @@ export function EventDetailPanel({
 
   const event = eventQuery.data;
   const canWatchLiveGps = !!user && LIVE_GPS_ROLES.has(user.role);
+  // Same owner/admin/dispatcher restriction the backend enforces on
+  // cancel/escalate/close/call/edit/delete (app/api/v1/duress.py) — without
+  // this, a lower-privileged logged-in user (e.g. driver) would see fully
+  // enabled action buttons that always 403, surfaced only as a generic
+  // "action failed" message.
+  const canManageEvent = canWatchLiveGps;
   const isSelected = !!event;
   const { status: gpsStatus, points: gpsPoints, latestSnapshot } = useDuressLiveGps(
     isSelected ? eventId : null,
@@ -229,14 +238,20 @@ export function EventDetailPanel({
                 onChange={(e) => setNote(e.target.value)}
                 maxLength={500}
                 placeholder="e.g. confirmed false alarm by phone"
-                disabled={anyActionPending}
+                disabled={anyActionPending || !canManageEvent}
               />
+
+              {!canManageEvent && (
+                <p className="text-xs text-muted-foreground">
+                  Managing a duress event is restricted to owner/admin/dispatcher roles.
+                </p>
+              )}
 
               <div className="mt-1 flex flex-wrap gap-2">
                 <Button
                   variant="destructive"
                   size="sm"
-                  disabled={!canCancel || anyActionPending}
+                  disabled={!canManageEvent || !canCancel || anyActionPending}
                   onClick={() => cancelMutation.mutate()}
                 >
                   {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
@@ -244,7 +259,7 @@ export function EventDetailPanel({
                 <Button
                   variant="accent"
                   size="sm"
-                  disabled={!canEscalate || anyActionPending}
+                  disabled={!canManageEvent || !canEscalate || anyActionPending}
                   onClick={() => escalateMutation.mutate()}
                 >
                   {escalateMutation.isPending ? "Escalating…" : "Escalate"}
@@ -252,7 +267,7 @@ export function EventDetailPanel({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!canClose || anyActionPending}
+                  disabled={!canManageEvent || !canClose || anyActionPending}
                   onClick={() => closeMutation.mutate()}
                 >
                   {closeMutation.isPending ? "Closing…" : "Close / resolve"}
@@ -261,7 +276,7 @@ export function EventDetailPanel({
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={!hasDevice || anyActionPending}
+                    disabled={!canManageEvent || !hasDevice || anyActionPending}
                     onClick={() => callMutation.mutate()}
                   >
                     <Phone className="h-3.5 w-3.5" />
@@ -294,14 +309,16 @@ export function EventDetailPanel({
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border pt-4">
-              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
-                <Pencil className="h-3.5 w-3.5" /> Edit
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)}>
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </Button>
-            </div>
+            {canManageEvent && (
+              <div className="flex justify-end gap-2 border-t border-border pt-4">
+                <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)}>
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                </Button>
+              </div>
+            )}
           </>
         )}
       </CardContent>

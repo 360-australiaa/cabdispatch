@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Siren } from "lucide-react";
 import { Badge, Button, Card, CardContent, PageHeader, Select, Table } from "@/components/ui";
@@ -21,10 +22,16 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function DuressPage() {
+  // Live Map's "jump to this incident" links (and any other deep link) land
+  // here as /duress?event=<id> -- read it once on mount so the link actually
+  // opens the event instead of dumping the dispatcher on the plain list.
+  // This page's own row-click/close controls own selectedId from then on.
+  const [searchParams] = useSearchParams();
+
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [openOnly, setOpenOnly] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get("event"));
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
 
   const eventsQuery = useQuery({
@@ -37,6 +44,9 @@ export default function DuressPage() {
         open_only: openOnly || undefined,
       }),
     placeholderData: (prev) => prev,
+    // This is a safety desk: a new incident (or a status change from another
+    // dispatcher's action) must show up without anyone touching a filter.
+    refetchInterval: 10_000,
   });
 
   const total = eventsQuery.data?.total ?? 0;

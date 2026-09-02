@@ -31,6 +31,7 @@ export const FARES_ORDER_CAPPED_FIELDS = [
   "holiday_rate_1",
   "holiday_rate_2",
   "waiting_rate_per_min",
+  "cleaning_fee_cap",
 ] as const;
 
 export type CappedRateField = (typeof FARES_ORDER_CAPPED_FIELDS)[number];
@@ -70,6 +71,7 @@ export interface Tariff {
   multi_hire_pct: string;
   psl_amount: string;
   surcharge_pct_cap: string;
+  cleaning_fee_cap: string;
   created_at: string;
   updated_at: string;
 }
@@ -111,6 +113,7 @@ export interface TariffCreateInput {
   multi_hire_pct: string;
   psl_amount: string;
   surcharge_pct_cap: string;
+  cleaning_fee_cap: string;
 }
 
 /** Body shape for PATCH /v1/tariffs/{id}. `region` is immutable per the

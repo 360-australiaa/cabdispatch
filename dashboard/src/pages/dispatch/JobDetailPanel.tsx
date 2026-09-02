@@ -2,9 +2,15 @@ import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, X } from "lucide-react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import { cancelJob, getJob, listJobOffers } from "./api";
 import { formatDateTime, formatMoney, jobStatusBadgeVariant, offerStatusBadgeVariant } from "./format";
 import { isTerminalJobStatus } from "./types";
+
+/** Mirrors `DELETE /v1/jobs/{id}`'s `_DISPATCH_ROLES` restriction
+ * (`app/api/v1/jobs.py`) — without this, a driver-role user viewing this
+ * panel would see an enabled "Cancel job" button that always 403s. */
+const CANCEL_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 /**
  * No `WS /v1/jobs/live` equivalent exists for dispatchers — that socket is
@@ -19,6 +25,8 @@ const POLL_MS = 2000;
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canCancelRole = !!user && CANCEL_ROLES.has(user.role);
 
   const jobQuery = useQuery({
     queryKey: ["dispatch-job", jobId],
@@ -120,16 +128,18 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border pt-4">
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={!canCancel || cancelMutation.isPending}
-                onClick={() => cancelMutation.mutate()}
-              >
-                {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
-              </Button>
-            </div>
+            {canCancelRole && (
+              <div className="flex justify-end gap-2 border-t border-border pt-4">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={!canCancel || cancelMutation.isPending}
+                  onClick={() => cancelMutation.mutate()}
+                >
+                  {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
+                </Button>
+              </div>
+            )}
 
             {cancelMutation.isError && (
               <p className="text-xs text-destructive">

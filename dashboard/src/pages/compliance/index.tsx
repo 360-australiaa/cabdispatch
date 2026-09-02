@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { CheckCircle2, Download, FileSpreadsheet, Pencil, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import {
   Badge,
@@ -15,6 +16,7 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 import {
   downloadComplianceDocument,
   useComplianceDocumentsQuery,
@@ -35,8 +37,21 @@ const DOC_TYPE_FILTER_OPTIONS = [{ value: "", label: "All document types" }, ...
 
 type ViewTab = "vault" | "reports";
 
+/** Mirrors `compliance.py`'s write-endpoint restriction (upload/update/
+ * delete documents) — owner/admin/dispatcher only. Without this, every role
+ * including `driver` saw fully-enabled write controls that just 403'd. */
+const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
+
 export default function CompliancePage() {
-  const [tab, setTab] = useState<ViewTab>("vault");
+  const { user } = useAuth();
+  const canManage = !!user && MANAGE_ROLES.has(user.role);
+
+  // Lets deep links (e.g. the Trips page's "NSW PtP export" button) land on
+  // the right tab instead of always opening to the Vault.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<ViewTab>(() =>
+    searchParams.get("tab") === "reports" ? "reports" : "vault",
+  );
 
   return (
     <div>
@@ -189,20 +204,24 @@ function VaultView() {
           >
             <Download className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingDoc(row)}>
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Delete"
-            onClick={() => {
-              setDeleteError(null);
-              setDeletingDoc(row);
-            }}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          {canManage && (
+            <>
+              <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingDoc(row)}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete"
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeletingDoc(row);
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </>
+          )}
         </div>
       ),
     },
@@ -231,9 +250,11 @@ function VaultView() {
               onChange={(e) => resetPageAnd(setDocTypeFilter)(e.target.value as DocType | "")}
             />
           </div>
-          <Button className="ml-auto" onClick={() => setCreateOpen(true)} disabled={!vehicleId}>
-            <Plus className="h-4 w-4" /> Upload document
-          </Button>
+          {canManage && (
+            <Button className="ml-auto" onClick={() => setCreateOpen(true)} disabled={!vehicleId}>
+              <Plus className="h-4 w-4" /> Upload document
+            </Button>
+          )}
         </CardContent>
       </Card>
 
