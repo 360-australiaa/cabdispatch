@@ -343,8 +343,13 @@ class CloseAndPayViewModel : ViewModel() {
         recomputed(state.copy(surchargePct = pct.coerceIn(BigDecimal.ZERO, state.tariff.surchargePctCap)))
     }
 
+    /** Report vehicle soiling — clamped here (not just inside [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]'s
+     * own defensive clamp) so the *persisted* [CloseAndPayUiState.ReadyToClose.cleaningFee] value this screen later sends
+     * to the backend on close (`finalizeClose`'s `cleaningFee = state.cleaningFee...`) can never itself exceed
+     * [Tariff.cleaningFeeCap] — previously only the computed [FareBreakdown.cleaningFee] used in the on-screen total was
+     * capped, while the raw driver-entered figure would have round-tripped to the server uncapped. */
     fun setCleaningFee(fee: BigDecimal) = updateReady { state ->
-        recomputed(state.copy(cleaningFee = fee.coerceAtLeast(BigDecimal.ZERO)))
+        recomputed(state.copy(cleaningFee = fee.coerceIn(BigDecimal.ZERO, state.tariff.cleaningFeeCap)))
     }
 
     fun setIncludePsl(include: Boolean) = updateReady { state -> recomputed(state.copy(includePsl = include)) }

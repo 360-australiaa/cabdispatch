@@ -30,6 +30,8 @@ import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -54,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -64,6 +67,7 @@ import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
@@ -140,6 +144,7 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
                 when (sub) {
                 PaymentSubScreen.METHOD_PICKER -> MethodPickerScreen(
                     state = state,
+                    vm = vm,
                     onSelect = { method, next -> vm.selectPaymentMethod(method); subScreen = next },
                     onBackToMeter = { navController.popBackStack() },
                     onDispute = {
@@ -185,8 +190,44 @@ private fun ClosingStatusStrip() {
     }
 }
 
+/**
+ * Fully itemized NSW-compliant breakdown (2026-09-02 pass — see `CLOSE_AND_PAY_COMPLIANCE_2026.md`).
+ * Reads only real [FareBreakdown]/[CloseAndPayUiState.ReadyToClose] fields — nothing here is a
+ * UI-side guess:
+ * - Negotiated ("Set Price") trips show the agreed amount as the base line instead of a metered
+ *   flagfall/distance/waiting breakdown (the metered accrual genuinely wasn't what was billed —
+ *   see [FareBreakdown.negotiatedTotal]'s doc).
+ * - The maxi (×[au.com.threesixty.cabdispatch.domain.fare.Tariff.maxiMultiplier]) uplift is its own
+ *   line, derived from the real pre-multiplier component rows plus the tariff's own multiplier
+ *   field — never a hardcoded "×1.5". Only shown for a metered (non-negotiated) trip, since a
+ *   negotiated total is never itself maxi-multiplied (see [FareEngine.close]'s `effectiveFare`).
+ * - PSL is its own line + toggle (wired to [CloseAndPayViewModel.setIncludePsl], previously
+ *   reachable only by direct code — see [FARE_ENGINE_2026_CHANGES.md] Fix 6), suppressed entirely
+ *   for the Sydney Airport Fixed Fare path (verified: [reconstructFareState] sets `state.fixedFare`
+ *   for `trip.type == "airport_fixed"`, and [FareEngine.close]'s `fixedFare` branch hardcodes
+ *   `psl = BigDecimal.ZERO` regardless of `includePsl`, so the toggle would be a lie there).
+ * - Cleaning fee is its own line when non-zero, with an honest cap caption
+ *   ([au.com.threesixty.cabdispatch.domain.fare.Tariff.cleaningFeeCap], not a hardcoded "$124.14").
+ * - The non-cash surcharge line shows the *actual* live percentage
+ *   ([CloseAndPayUiState.ReadyToClose.surchargePct]), not a hardcoded "1.5%" — hidden automatically
+ *   for cash/voucher/account/split-fare because [FareBreakdown.surcharge] is genuinely zero for
+ *   those (see [CloseAndPayViewModel.recompute] — surcharge only ever computes when
+ *   `paymentMethod.persistedValue == "card"`).
+ */
 @Composable
-private fun TotalCol(breakdown: FareBreakdown, modifier: Modifier = Modifier) {
+private fun TotalCol(
+    state: CloseAndPayUiState.ReadyToClose,
+    vm: CloseAndPayViewModel,
+    onReportSoiling: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val breakdown = state.breakdown
+    val tariff = state.tariff
+    // Verified (not assumed) against FareEngine.close()/reconstructFareState — see this
+    // function's doc — that the Sydney Airport Fixed Fare path never reads includePsl and always
+    // zeroes psl regardless, so a PSL toggle here would be showing a control with no real effect.
+    val isAirportFixed = state.trip.type == "airport_fixed"
+
     Column(modifier = modifier.width(400.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Close & Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
         Column(
@@ -226,19 +267,49 @@ private fun TotalCol(breakdown: FareBreakdown, modifier: Modifier = Modifier) {
                 .padding(horizontal = 22.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            BreakdownRow("Flagfall", breakdown.flagFall.money())
-            BreakdownRow("Fare (distance + time)", (breakdown.distanceCharge + breakdown.waitingCharge + breakdown.peakCharge).money())
-            BreakdownRow("PSL levy", breakdown.psl.money())
+            if (breakdown.negotiatedTotal != null) {
+                BreakdownRow("Agreed price (Set Price)", breakdown.negotiatedTotal.money())
+            } else {
+                BreakdownRow("Flagfall", breakdown.flagFall.money())
+                BreakdownRow("Fare (distance + time)", (breakdown.distanceCharge + breakdown.waitingCharge + breakdown.peakCharge).money())
+                if (breakdown.maxiRateApplied) {
+                    // "The fare" per the Fares Order = flagfall + peak + distance + waiting — the
+                    // ONLY component the maxi multiplier applies to (see FareEngine.close()'s own
+                    // comment). These four breakdown fields are stored PRE-multiplier, so the
+                    // uplift is genuinely this sum times (multiplier - 1), using the tariff's own
+                    // real maxiMultiplier field, not a hardcoded 1.5.
+                    val meteredBase = breakdown.flagFall + breakdown.peakCharge + breakdown.distanceCharge + breakdown.waitingCharge
+                    val uplift = meteredBase * (tariff.maxiMultiplier - BigDecimal.ONE)
+                    val multiplierLabel = tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
+                    BreakdownRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", uplift.money())
+                }
+            }
             BreakdownRow("Tolls", breakdown.tolls.money())
-            BreakdownRow("Extras", (breakdown.extras + breakdown.cleaningFee).money())
+            if (breakdown.extras.signum() > 0) BreakdownRow("Extras", breakdown.extras.money())
+            if (breakdown.cleaningFee.signum() > 0) BreakdownRow("Cleaning fee", breakdown.cleaningFee.money())
+            if (!isAirportFixed) {
+                PslToggleRow(
+                    pslAmount = tariff.pslAmount,
+                    currentPsl = breakdown.psl,
+                    includePsl = state.includePsl,
+                    onToggle = vm::setIncludePsl,
+                )
+            }
+            if (breakdown.surcharge.signum() > 0) {
+                val pctLabel = state.surchargePct.stripTrailingZeros().toPlainString()
+                BreakdownRow("Non-cash payment surcharge ($pctLabel%)", breakdown.surcharge.money())
+            }
             BreakdownRow("GST included", breakdown.gstComponent.money())
         }
-        Text(
-            "Negotiated (Set Price) trips show the agreed amount here — levies & tolls added on top.",
-            fontFamily = InterFamily,
-            fontSize = 13.sp,
-            color = CaptainPalette.textMuted,
-        )
+        if (breakdown.negotiatedTotal != null) {
+            Text(
+                "Agreed (Set Price) trip — the levy, tolls, cleaning fee and any card surcharge above are still added on top of the agreed amount.",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                color = CaptainPalette.textMuted,
+            )
+        }
+        CleaningFeeEntryRow(currentFee = state.cleaningFee, cap = tariff.cleaningFeeCap, onClick = onReportSoiling)
     }
 }
 
@@ -250,16 +321,163 @@ private fun BreakdownRow(label: String, value: String) {
     }
 }
 
+/** PSL line + driver-facing toggle — the Fares Order makes pass-through *optional* (capped at
+ * [pslAmount]), not mandatory, so a driver can switch it off for a specific trip. Defaults to ON
+ * per [CloseAndPayViewModel.loadTariffAndInit]'s `defaultIncludePsl`; this is the first UI call
+ * site for [CloseAndPayViewModel.setIncludePsl]. */
+@Composable
+private fun PslToggleRow(pslAmount: BigDecimal, currentPsl: BigDecimal, includePsl: Boolean, onToggle: (Boolean) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column {
+            Text("Point to Point Transport Levy", fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
+            Text(
+                if (includePsl) "Optional pass-through, capped at ${pslAmount.money()}" else "Switched off for this trip",
+                fontFamily = InterFamily,
+                fontSize = 12.sp,
+                color = CaptainPalette.textMuted,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                currentPsl.money(),
+                fontFamily = RobotoMonoFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 16.sp,
+                color = CaptainPalette.textPrimary,
+                modifier = Modifier.padding(end = 10.dp),
+            )
+            Switch(
+                checked = includePsl,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = CaptainPalette.accent,
+                    checkedTrackColor = CaptainPalette.accent.copy(alpha = 0.4f),
+                ),
+            )
+        }
+    }
+}
+
+/** Entry point for [CloseAndPayViewModel.setCleaningFee] — previously unreachable from any UI (see
+ * `FARE_ENGINE_2026_CHANGES.md` Risk Notes). Honest about the real cap: shows [cap] (the tariff's
+ * actual [au.com.threesixty.cabdispatch.domain.fare.Tariff.cleaningFeeCap]), never implies a driver
+ * can charge more even though the engine would clamp it anyway. */
+@Composable
+private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.raised)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column {
+            Text(
+                if (currentFee.signum() > 0) "Cleaning fee reported" else "Report vehicle soiling",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = CaptainPalette.textPrimary,
+            )
+            Text(
+                "Up to ${cap.money()} — the legal maximum, enforced by the engine",
+                fontFamily = InterFamily,
+                fontSize = 12.sp,
+                color = CaptainPalette.textMuted,
+            )
+        }
+        Text(
+            if (currentFee.signum() > 0) currentFee.money() else "+",
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 20.sp,
+            color = CaptainPalette.accent,
+        )
+    }
+}
+
+/** Dialog for [CleaningFeeEntryRow] — mirrors `HiredScreen.kt`'s `CustomTollDialog` shape/keypad
+ * pattern for visual consistency across the app's few "type an amount on the shared keypad" flows.
+ * The amount typed here is never sent uncapped: [CloseAndPayViewModel.setCleaningFee] itself clamps
+ * to [cap], so the over-cap warning below is purely informational, not the only thing preventing
+ * an unlawful charge. */
+@Composable
+private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Unit) {
+    var cents by remember {
+        mutableStateOf(if (initial.signum() > 0) initial.movePointRight(2).toBigInteger().toString() else "")
+    }
+    val amount = if (cents.isEmpty()) BigDecimal.ZERO else BigDecimal(cents).movePointLeft(2)
+    val overCap = amount > cap
+
+    Column(
+        modifier = Modifier
+            .width(480.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+            .padding(30.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Report vehicle soiling", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+        Text(
+            "Up to ${cap.money()} — the Point to Point Transport (Fares) Order 2026 sets this as the legal maximum cleaning fee.",
+            fontFamily = InterFamily,
+            fontSize = 14.sp,
+            color = CaptainPalette.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+        Box(
+            modifier = Modifier
+                .width(320.dp)
+                .height(72.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(CaptainPalette.inset),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                amount.money(),
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 34.sp,
+                color = if (overCap) CaptainPalette.warning else CaptainPalette.success,
+            )
+        }
+        if (overCap) {
+            Text("Will be capped to ${cap.money()} — that's the legal maximum.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.warning)
+        }
+        CaptainKeypad(
+            onDigit = { d -> if (cents.length < 6) cents += d },
+            onBackspace = { cents = cents.dropLast(1) },
+            onClear = { cents = "" },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
+            CaptainButton(text = "Apply fee", modifier = Modifier.weight(1.4f)) { onConfirm(amount) }
+        }
+        if (initial.signum() > 0) {
+            CaptainButton(text = "Remove cleaning fee", outline = true, modifier = Modifier.fillMaxWidth()) { onConfirm(BigDecimal.ZERO) }
+        }
+    }
+}
+
 @Composable
 private fun MethodPickerScreen(
     state: CloseAndPayUiState.ReadyToClose,
+    vm: CloseAndPayViewModel,
     onSelect: (PaymentMethodOption, PaymentSubScreen) -> Unit,
     onBackToMeter: () -> Unit,
     onDispute: () -> Unit,
 ) {
+    var showCleaningDialog by remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {
-            TotalCol(state.breakdown)
+            TotalCol(state = state, vm = vm, onReportSoiling = { showCleaningDialog = true })
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -270,6 +488,12 @@ private fun MethodPickerScreen(
                     PayCard(Icons.Rounded.LocalTaxi, "CABCHARGE", CaptainPalette.warning) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
                     PayCard(Icons.Rounded.AccessibleForward, "TTSS", CaptainPalette.accent) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
                 }
+                Text(
+                    "TTSS/CabCharge trips remain fare-regulated and metered even when arranged as a booking.",
+                    fontFamily = InterFamily,
+                    fontSize = 12.sp,
+                    color = CaptainPalette.textMuted,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     PayCard(Icons.Rounded.ConfirmationNumber, "VOUCHER", CaptainPalette.warning) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
                     PayCard(Icons.Rounded.Business, "ACCOUNT", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
@@ -286,6 +510,18 @@ private fun MethodPickerScreen(
             widthDp = 240,
             modifier = Modifier.align(Alignment.BottomStart),
             onClick = onBackToMeter,
+        )
+    }
+
+    CaptainDialogScrim(visible = showCleaningDialog, onDismissRequest = { showCleaningDialog = false }) {
+        CleaningFeeDialog(
+            cap = state.tariff.cleaningFeeCap,
+            initial = state.cleaningFee,
+            onDismiss = { showCleaningDialog = false },
+            onConfirm = { amount ->
+                showCleaningDialog = false
+                vm.setCleaningFee(amount)
+            },
         )
     }
 }

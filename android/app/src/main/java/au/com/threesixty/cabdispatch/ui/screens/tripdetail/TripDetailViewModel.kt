@@ -9,6 +9,7 @@ import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.TripFlagRequestDto
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
+import au.com.threesixty.cabdispatch.domain.fare.Tariff
 import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.domain.format.toBigDecimalOrZero
@@ -30,6 +31,10 @@ sealed interface TripDetailUiState {
     data class Loaded(
         val trip: TripEntity,
         val breakdown: FareBreakdown,
+        /** The tariff this trip was actually closed against — needed for the fare-card's own
+         * maxi-multiplier display (see [au.com.threesixty.cabdispatch.ui.screens.tripdetail.FareCard]),
+         * which must read [Tariff.maxiMultiplier] rather than hardcode "×1.5". */
+        val tariff: Tariff,
         val disputeReason: String = "",
         val disputeState: DisputeSubmitState = DisputeSubmitState.IDLE,
         val disputeError: String? = null,
@@ -94,7 +99,7 @@ class TripDetailViewModel : ViewModel() {
             cleaningFee = trip.cleaningFee.toBigDecimalOrZero(),
             includePsl = trip.includePsl,
         )
-        _uiState.value = TripDetailUiState.Loaded(trip, breakdown)
+        _uiState.value = TripDetailUiState.Loaded(trip, breakdown, tariff)
     }
 
     fun setDisputeReason(value: String) {
