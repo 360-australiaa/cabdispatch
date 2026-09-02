@@ -16,7 +16,7 @@ apply_tick/resolve_tariff to succeed inside PATCH .../tick).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -126,8 +126,8 @@ async def _tick(client: AsyncClient, headers: dict, trip_id: str) -> dict:
 
 async def test_create_driver_with_expiry_fields_round_trips(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
-    license_expiry = (date.today() + timedelta(days=90)).isoformat()
-    authority_expiry = (date.today() + timedelta(days=180)).isoformat()
+    license_expiry = (datetime.now(UTC).date() + timedelta(days=90)).isoformat()
+    authority_expiry = (datetime.now(UTC).date() + timedelta(days=180)).isoformat()
 
     resp = await client.post(
         "/v1/users",
@@ -166,7 +166,7 @@ async def test_create_driver_without_expiry_fields_defaults_to_null(client: Asyn
 
 async def test_create_and_update_vehicle_with_expiry_fields(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
-    registration_expiry = (date.today() + timedelta(days=45)).isoformat()
+    registration_expiry = (datetime.now(UTC).date() + timedelta(days=45)).isoformat()
 
     resp = await client.post(
         "/v1/fleet/vehicles",
@@ -179,7 +179,7 @@ async def test_create_and_update_vehicle_with_expiry_fields(client: AsyncClient,
     assert body["insurance_expiry"] is None
     vehicle_id = body["id"]
 
-    new_insurance_expiry = (date.today() - timedelta(days=1)).isoformat()
+    new_insurance_expiry = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
     patch_resp = await client.patch(
         f"/v1/fleet/vehicles/{vehicle_id}",
         json={"insurance_expiry": new_insurance_expiry},
@@ -199,7 +199,7 @@ async def test_tick_creates_license_expiring_soon_alert(client: AsyncClient, ses
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     driver = await _create_driver_row(
-        session, tenant_id=tenant_id, driver_license_expiry=date.today() + timedelta(days=10)
+        session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() + timedelta(days=10)
     )
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
 
@@ -222,7 +222,7 @@ async def test_tick_creates_license_expired_alert(client: AsyncClient, session: 
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     driver = await _create_driver_row(
-        session, tenant_id=tenant_id, driver_license_expiry=date.today() - timedelta(days=3)
+        session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() - timedelta(days=3)
     )
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
 
@@ -271,8 +271,8 @@ async def test_tick_creates_vehicle_registration_and_insurance_alerts(client: As
     vehicle = await _create_vehicle_row(
         session,
         tenant_id=tenant_id,
-        registration_expiry=date.today() + timedelta(days=5),
-        insurance_expiry=date.today() - timedelta(days=1),
+        registration_expiry=datetime.now(UTC).date() + timedelta(days=5),
+        insurance_expiry=datetime.now(UTC).date() - timedelta(days=1),
     )
 
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver.id, vehicle_id=vehicle.id)
@@ -293,7 +293,7 @@ async def test_tick_dedup_does_not_duplicate_unacknowledged_alert(client: AsyncC
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     driver = await _create_driver_row(
-        session, tenant_id=tenant_id, driver_license_expiry=date.today() - timedelta(days=1)
+        session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() - timedelta(days=1)
     )
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver.id, vehicle_id=vehicle.id)
@@ -317,7 +317,7 @@ async def test_tick_raises_new_alert_after_previous_one_acknowledged(client: Asy
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     driver = await _create_driver_row(
-        session, tenant_id=tenant_id, driver_license_expiry=date.today() - timedelta(days=1)
+        session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() - timedelta(days=1)
     )
     vehicle = await _create_vehicle_row(session, tenant_id=tenant_id)
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver.id, vehicle_id=vehicle.id)
@@ -368,7 +368,7 @@ async def _create_driver_via_api(client: AsyncClient, headers: dict, **overrides
 async def test_driver_login_blocked_when_license_actually_expired(client: AsyncClient, session: AsyncSession):
     admin_headers = await auth_headers(client, session, role="admin")
     driver = await _create_driver_via_api(
-        client, admin_headers, driver_license_expiry=(date.today() - timedelta(days=1)).isoformat()
+        client, admin_headers, driver_license_expiry=(datetime.now(UTC).date() - timedelta(days=1)).isoformat()
     )
 
     login = await client.post(
@@ -381,7 +381,7 @@ async def test_driver_login_blocked_when_license_actually_expired(client: AsyncC
 async def test_driver_login_allowed_when_license_expiring_soon(client: AsyncClient, session: AsyncSession):
     admin_headers = await auth_headers(client, session, role="admin")
     driver = await _create_driver_via_api(
-        client, admin_headers, driver_license_expiry=(date.today() + timedelta(days=10)).isoformat()
+        client, admin_headers, driver_license_expiry=(datetime.now(UTC).date() + timedelta(days=10)).isoformat()
     )
 
     login = await client.post(
@@ -405,7 +405,7 @@ async def test_driver_login_not_blocked_by_expired_authority_alone(client: Async
     driver_authority_expiry must not block login on its own."""
     admin_headers = await auth_headers(client, session, role="admin")
     driver = await _create_driver_via_api(
-        client, admin_headers, driver_authority_expiry=(date.today() - timedelta(days=30)).isoformat()
+        client, admin_headers, driver_authority_expiry=(datetime.now(UTC).date() - timedelta(days=30)).isoformat()
     )
 
     login = await client.post(
@@ -422,7 +422,7 @@ async def test_driver_login_wrong_pin_still_401s_even_with_expired_license(
     invalid credentials rather than leaking expiry status."""
     admin_headers = await auth_headers(client, session, role="admin")
     driver = await _create_driver_via_api(
-        client, admin_headers, driver_license_expiry=(date.today() - timedelta(days=1)).isoformat()
+        client, admin_headers, driver_license_expiry=(datetime.now(UTC).date() - timedelta(days=1)).isoformat()
     )
 
     login = await client.post(
@@ -438,8 +438,8 @@ async def test_list_compliance_expiry_returns_drivers_and_vehicles(client: Async
     headers = await auth_headers(client, session, role="admin")
     tenant_id = await _tenant_of(headers)
 
-    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=date.today() + timedelta(days=5))
-    await _create_vehicle_row(session, tenant_id=tenant_id, insurance_expiry=date.today() - timedelta(days=2))
+    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() + timedelta(days=5))
+    await _create_vehicle_row(session, tenant_id=tenant_id, insurance_expiry=datetime.now(UTC).date() - timedelta(days=2))
     await _create_driver_row(session, tenant_id=tenant_id)  # no expiry set — must not appear
 
     resp = await client.get("/v1/fleet/compliance-expiry", headers=headers)
@@ -458,8 +458,8 @@ async def test_list_compliance_expiry_filters_by_entity_type_and_status(
     headers = await auth_headers(client, session, role="admin")
     tenant_id = await _tenant_of(headers)
 
-    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=date.today() + timedelta(days=5))
-    await _create_vehicle_row(session, tenant_id=tenant_id, insurance_expiry=date.today() - timedelta(days=2))
+    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() + timedelta(days=5))
+    await _create_vehicle_row(session, tenant_id=tenant_id, insurance_expiry=datetime.now(UTC).date() - timedelta(days=2))
 
     resp = await client.get(
         "/v1/fleet/compliance-expiry", params={"entity_type": "vehicle"}, headers=headers
@@ -482,7 +482,7 @@ async def test_list_compliance_expiry_respects_within_days_window(client: AsyncC
     headers = await auth_headers(client, session, role="admin")
     tenant_id = await _tenant_of(headers)
 
-    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=date.today() + timedelta(days=80))
+    await _create_driver_row(session, tenant_id=tenant_id, driver_license_expiry=datetime.now(UTC).date() + timedelta(days=80))
 
     resp = await client.get(
         "/v1/fleet/compliance-expiry", params={"within_days": 30}, headers=headers
@@ -502,7 +502,7 @@ async def test_list_compliance_expiry_is_tenant_isolated(client: AsyncClient, se
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Compliance Tenant B")
     tenant_a = await _tenant_of(headers_a)
 
-    await _create_driver_row(session, tenant_id=tenant_a, driver_license_expiry=date.today() - timedelta(days=1))
+    await _create_driver_row(session, tenant_id=tenant_a, driver_license_expiry=datetime.now(UTC).date() - timedelta(days=1))
 
     resp = await client.get("/v1/fleet/compliance-expiry", headers=headers_b)
     assert resp.status_code == 200
