@@ -43,9 +43,6 @@ type ViewTab = "vault" | "reports";
 const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 export default function CompliancePage() {
-  const { user } = useAuth();
-  const canManage = !!user && MANAGE_ROLES.has(user.role);
-
   // Lets deep links (e.g. the Trips page's "NSW PtP export" button) land on
   // the right tab instead of always opening to the Vault.
   const [searchParams] = useSearchParams();
@@ -114,6 +111,9 @@ function ReportsView() {
 }
 
 function VaultView() {
+  const { user } = useAuth();
+  const canManage = !!user && MANAGE_ROLES.has(user.role);
+
   const vehiclesQuery = useVehiclesQuery();
   const vehicles = vehiclesQuery.data?.items ?? [];
 
