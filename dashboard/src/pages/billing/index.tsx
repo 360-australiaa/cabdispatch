@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { isAxiosError } from "axios";
-import { FileText, Plus, Receipt } from "lucide-react";
+import { FileText, Link2, Plus, Receipt } from "lucide-react";
 import {
   Badge,
   Button,
@@ -20,6 +20,7 @@ import {
   formatAud,
   formatDate,
   useCancelSubscription,
+  useConnectOnboard,
   useCreateSubscription,
   useInvoices,
   useSubscriptions,
@@ -93,7 +94,14 @@ export default function BillingPage() {
       <PageHeader
         title="Billing"
         description="Per-vehicle subscriptions, plan changes, and invoice history."
-        actions={canManage && tab === "subscriptions" ? <CreateSubscriptionButton /> : undefined}
+        actions={
+          canManage ? (
+            <div className="flex items-center gap-2">
+              {tab === "subscriptions" && <CreateSubscriptionButton />}
+              <ConnectPaymentsButton />
+            </div>
+          ) : undefined
+        }
       />
 
       <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
@@ -154,6 +162,79 @@ function CreateSubscriptionButton() {
         New subscription
       </Button>
       <CreateSubscriptionModal open={open} onClose={() => setOpen(false)} />
+    </>
+  );
+}
+
+/** Stripe Connect onboarding trigger — creates an onboarding link on demand. */
+function ConnectPaymentsButton() {
+  const [open, setOpen] = useState(false);
+  const onboardMutation = useConnectOnboard();
+
+  function handleClick() {
+    setOpen(true);
+    onboardMutation.mutate();
+  }
+
+  function handleClose() {
+    onboardMutation.reset();
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <Button variant="outline" onClick={handleClick}>
+        <Link2 className="h-4 w-4" />
+        Connect payments
+      </Button>
+      <Modal
+        open={open}
+        onClose={handleClose}
+        title="Connect payments"
+        description="Create a Stripe Connect onboarding link for this tenant."
+        footer={
+          <Button variant="outline" onClick={handleClose}>
+            Close
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {onboardMutation.isPending && (
+            <p className="text-sm text-muted-foreground">Creating onboarding link…</p>
+          )}
+          {onboardMutation.isError && (
+            <ErrorBanner message={apiErrorMessage(onboardMutation.error, "Failed to create onboarding link.")} />
+          )}
+          {onboardMutation.isSuccess && (
+            <>
+              {onboardMutation.data.mock ? (
+                <>
+                  <Badge variant="outline" className="w-fit">
+                    Simulated
+                  </Badge>
+                  <p className="text-sm text-muted-foreground">
+                    This is a simulated onboarding link — no real Stripe Connect flow was started, and the URL
+                    below does not lead to a live Stripe page.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Open the link below to complete onboarding with Stripe. It will take you away from the
+                  dashboard.
+                </p>
+              )}
+              <a
+                href={onboardMutation.data.url}
+                target="_blank"
+                rel="noreferrer"
+                className="break-all text-sm font-medium text-primary underline"
+              >
+                {onboardMutation.data.url}
+              </a>
+            </>
+          )}
+        </div>
+      </Modal>
     </>
   );
 }
@@ -524,11 +605,17 @@ function ChangePlanModal({
 }) {
   const updateMutation = useUpdateSubscription();
   const [plan, setPlan] = useState<BillingPlan>(subscription?.plan ?? "basic");
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(
+    subscription?.status ?? "trialing",
+  );
 
-  // Reset local plan selection whenever a new subscription is targeted.
+  // Reset local plan/status selection whenever a new subscription is targeted.
   const subId = subscription?.id;
   useMemo(() => {
-    if (subscription) setPlan(subscription.plan);
+    if (subscription) {
+      setPlan(subscription.plan);
+      setSubscriptionStatus(subscription.status);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subId]);
 
@@ -540,7 +627,10 @@ function ChangePlanModal({
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!subscription) return;
-    updateMutation.mutate({ id: subscription.id, body: { plan } }, { onSuccess: () => handleClose() });
+    updateMutation.mutate(
+      { id: subscription.id, body: { plan, status: subscriptionStatus } },
+      { onSuccess: () => handleClose() },
+    );
   }
 
   return (
@@ -574,6 +664,22 @@ function ChangePlanModal({
             />
             <p className="text-xs text-muted-foreground">
               Current price {formatAud(subscription.price_aud)}/mo. Price is recalculated from the new plan.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-foreground" htmlFor="change-plan-status">
+              Status (manual correction)
+            </label>
+            <Select
+              id="change-plan-status"
+              options={STATUS_OPTIONS}
+              value={subscriptionStatus}
+              onChange={(e) => setSubscriptionStatus(e.target.value as SubscriptionStatus)}
+            />
+            <p className="text-xs text-muted-foreground">
+              This directly overrides the subscription status — use it to fix a stuck state (e.g. flipping a
+              stale "Past due" back to "Active") after resolving it outside the dashboard. It does not run any
+              billing action itself. To end billing normally, use the separate Cancel action instead.
             </p>
           </div>
           {updateMutation.isError && (
