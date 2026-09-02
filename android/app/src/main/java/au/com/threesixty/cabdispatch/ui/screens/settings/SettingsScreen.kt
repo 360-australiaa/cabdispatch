@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachMoney
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -54,11 +56,17 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI
+import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_STANDARD
+import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 
@@ -469,6 +477,20 @@ private fun PrinterPairingContent(state: SettingsUiState, viewModel: SettingsVie
     }
 }
 
+/**
+ * Fare Schedule — NSW Point to Point Transport Regulation 2017 cl.15 fare-display requirement.
+ * 2026-09-02 compliance pass ([FARE_SCHEDULE_COMPLIANCE_2026.md] at repo root): this screen used to
+ * show only the raw metered rate rows; it now also carries the cl.15(1A) Taxi Fare Hotline notice
+ * (no prior analog anywhere in the app) and explains, in plain driver-facing language, the three
+ * regulated charges the old screen displayed no context for at all — the maxi-cab 150% condition,
+ * the Passenger Service Levy, and the cleaning-fee cap — plus the Sydney Airport Fixed Fare. Every
+ * dollar figure and percentage below is read live off [SettingsUiState.fareSchedule] (the signed
+ * active [TariffDto]) or, for the two figures the wire tariff doesn't carry yet (the cleaning-fee
+ * cap and the Sydney Airport Fixed Fare amounts), off the same [au.com.threesixty.cabdispatch.domain.fare]
+ * constants the engine itself bills from — never a new hardcoded literal. Only the Hotline number
+ * and its explanatory copy are static text, because that's a fixed regulatory number, not a
+ * tenant/tariff value.
+ */
 @Composable
 private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
     Box(
@@ -478,13 +500,20 @@ private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
         PaneShell(title = "Fare schedule", onBack = onBack) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 Text(
                     "Rates displayed to passengers per the taxi fare regulations (cl.15 display requirement).",
                     fontFamily = InterFamily,
                     fontSize = 16.sp,
                     color = CaptainPalette.textMuted,
                 )
+                Spacer(Modifier.height(20.dp))
+
+                TaxiFareHotlineNotice()
                 Spacer(Modifier.height(20.dp))
 
                 val tariff = state.fareSchedule
@@ -496,31 +525,37 @@ private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
                         fontSize = 16.sp,
                         color = CaptainPalette.textSecondary,
                     )
-                    else -> Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(CaptainPalette.panel)
-                            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-                        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-                        FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
-                        if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
-                        FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
-                        FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
-                        FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
-                        FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
-                        if (tariff.holidayRate1 != "0") {
-                            FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(CaptainPalette.panel)
+                                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+                                .padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+                            FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
+                            if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
+                            FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
+                            FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
+                            FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
+                            FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
+                            if (tariff.holidayRate1 != "0") {
+                                FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                            }
+                            if (tariff.holidayRate2 != "0") {
+                                FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
+                            }
+                            FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
+                            FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
                         }
-                        if (tariff.holidayRate2 != "0") {
-                            FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
-                        }
-                        FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
-                        FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
+
+                        MaxiCabFaresSection(maxiMultiplier = tariff.maxiMultiplier)
+                        AdditionalChargesSection(pslAmount = tariff.pslAmount)
+                        SydneyAirportFixedFareSection()
                     }
                 }
             }
@@ -534,6 +569,145 @@ private fun FareScheduleRow(label: String, value: String) {
         Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
         Text("$$value", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
     }
+}
+
+@Composable
+private fun FareScheduleSectionTitle(text: String) {
+    Text(
+        text,
+        fontFamily = InterFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 14.sp,
+        color = CaptainPalette.accent,
+    )
+}
+
+@Composable
+private fun FareScheduleNote(text: String) {
+    Text(
+        text,
+        fontFamily = InterFamily,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
+        color = CaptainPalette.textSecondary,
+    )
+}
+
+/**
+ * Regulation cl.15(1A) requires every vehicle to display, in the Commissioner's approved form, the
+ * Taxi Fare Hotline number and a statement that the meter must always be on during a rank or hail
+ * trip — this app had no such notice anywhere before this pass. The number itself and this
+ * explanatory copy are fixed regulatory text, not tariff data, so they're static (not read off
+ * [TariffDto]) — a QR code linking to the hotline is the Commissioner's approved form's "ideally"
+ * addition, not a hard requirement, and is left as a future nice-to-have (no QR library in this
+ * project yet) rather than fabricated here.
+ */
+@Composable
+private fun TaxiFareHotlineNotice() {
+    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            FareScheduleSectionTitle("TAXI FARE HOTLINE")
+            Text(
+                "1800 500 410",
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 30.sp,
+                color = CaptainPalette.textPrimary,
+            )
+            FareScheduleNote("Ask your driver, or call this number, if you believe you've been charged incorrectly.")
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            FareScheduleNote("The meter must always be switched on during a rank or hail trip.")
+        }
+    }
+}
+
+/**
+ * Fares Order 2026 cl 2(d) — a maxi-cab (5+ seats excl. driver) may charge up to the configured
+ * multiplier only when carrying 5+ passengers, or when requested as a maxi at a Sydney Airport
+ * rank — never for a wheelchair-accessible hiring. The percentage shown is derived from
+ * [TariffDto.maxiMultiplier] (e.g. "1.5" -> "150%"), never a hardcoded "150%" literal, so this
+ * stays correct if the configured multiplier ever changes.
+ */
+@Composable
+private fun MaxiCabFaresSection(maxiMultiplier: String) {
+    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            FareScheduleSectionTitle("MAXI-CAB FARES")
+            CaptainChip(label = "MAXI RATE", value = "${formatMaxiPercent(maxiMultiplier)}%")
+            FareScheduleNote(
+                "A maxi-cab (5 or more seats, excluding the driver) may charge up to this rate on the fare " +
+                    "only when carrying 5 or more passengers, or when a passenger requests a maxi-cab at a " +
+                    "Sydney Airport rank. This never applies to a wheelchair-accessible hiring. " +
+                    "(Point to Point Transport (Fares) Order 2026, cl 2(d).)",
+            )
+        }
+    }
+}
+
+/**
+ * Passenger Service Levy (cl 3) and cleaning-fee cap (cl 2(f)) — the old screen showed neither.
+ * [pslAmount] comes live off [TariffDto.pslAmount]; the cleaning-fee cap has no wire field yet
+ * (see [TariffDto]'s own doc comment — the ingestion payload doesn't carry it), so this reads the
+ * same [au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF.cleaningFeeCap] constant
+ * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] itself clamps every cleaning fee to
+ * — a minimal read-only accessor onto the existing engine constant, not a new hardcoded literal and
+ * not a change to engine logic. Also carries the tolls pass-through rule (no numeric field — tolls
+ * vary per trip, so there's nothing to display but the rule itself).
+ */
+@Composable
+private fun AdditionalChargesSection(pslAmount: String) {
+    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            FareScheduleSectionTitle("ADDITIONAL CHARGES")
+            CaptainChip(label = "PASSENGER SERVICE LEVY", value = "$$pslAmount")
+            FareScheduleNote(
+                "Optional to pass on to the passenger. Charged once per trip, regardless of the number of " +
+                    "passengers. (Fares Order 2026, cl 3.)",
+            )
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            CaptainChip(label = "CLEANING FEE CAP", value = "$${URBAN_TARIFF.cleaningFeeCap.toPlainString()} + GST")
+            FareScheduleNote(
+                "Only chargeable when soiling means the vehicle can't reasonably be used before it's " +
+                    "cleaned. (Fares Order 2026, cl 2(f).)",
+            )
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            FareScheduleNote(
+                "Tolls are passed on at the actual cost incurred during this hiring only — never a " +
+                    "\"return\" toll.",
+            )
+        }
+    }
+}
+
+/**
+ * Sydney Airport Fixed Fare Trial (cl 5) — non-booked journey from a Sydney Airport rank to the
+ * CBD trial area. $60/$80 are all-inclusive regulated flat figures, unchanged by the 2026 Order
+ * (see [AIRPORT_FIXED_FARE_STANDARD]/[AIRPORT_FIXED_FARE_MAXI]'s own doc), so this reads those
+ * same engine constants rather than a new hardcoded literal here.
+ */
+@Composable
+private fun SydneyAirportFixedFareSection() {
+    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            FareScheduleSectionTitle("SYDNEY AIRPORT FIXED FARE")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CaptainChip(label = "STANDARD", value = "$${AIRPORT_FIXED_FARE_STANDARD.toPlainString()}")
+                CaptainChip(label = "MAXI", value = "$${AIRPORT_FIXED_FARE_MAXI.toPlainString()}")
+            }
+            FareScheduleNote(
+                "All-inclusive fare for a non-booked journey from a Sydney Airport rank to the defined CBD " +
+                    "trial area. (Fares Order 2026, cl 5.)",
+            )
+        }
+    }
+}
+
+/** Formats a tariff's [TariffDto.maxiMultiplier] wire string ("1.5") as a driver-facing whole or
+ * one-decimal percentage ("150"), so the maxi-cab section never hardcodes "150%" as a literal —
+ * falls back to the regulated 150% default only if the wire value is somehow unparseable. */
+private fun formatMaxiPercent(multiplier: String): String {
+    val pct = (multiplier.toDoubleOrNull() ?: 1.5) * 100
+    return if (pct == pct.toLong().toDouble()) pct.toLong().toString() else "%.1f".format(pct)
 }
 
 // --- Pair Meter (2026-08-28, real device pairing — backend spec) --------------------------------
