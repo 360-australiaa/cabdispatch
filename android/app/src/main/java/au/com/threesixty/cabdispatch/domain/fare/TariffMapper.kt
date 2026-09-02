@@ -29,6 +29,7 @@ fun TariffDto.toDomainTariff(): Tariff = Tariff(
     multiHirePct = multiHirePct.toBigDecimalOrDefault(BigDecimal("0.75")),
     pslAmount = pslAmount.toBigDecimalOrDefault(BigDecimal("1.32")),
     surchargePctCap = surchargePctCap.toBigDecimalOrDefault(BigDecimal("5.0")),
+    cleaningFeeCap = cleaningFeeCap.toBigDecimalOrDefault(BigDecimal("124.14")),
 )
 
 private fun String.toBigDecimalOrZero(): BigDecimal = toBigDecimalOrDefault(BigDecimal.ZERO)

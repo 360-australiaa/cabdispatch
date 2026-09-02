@@ -58,7 +58,6 @@ import au.com.threesixty.cabdispatch.domain.GpsQuality
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_STANDARD
-import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
@@ -554,7 +553,7 @@ private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
                         }
 
                         MaxiCabFaresSection(maxiMultiplier = tariff.maxiMultiplier)
-                        AdditionalChargesSection(pslAmount = tariff.pslAmount)
+                        AdditionalChargesSection(pslAmount = tariff.pslAmount, cleaningFeeCap = tariff.cleaningFeeCap)
                         SydneyAirportFixedFareSection()
                     }
                 }
@@ -646,16 +645,14 @@ private fun MaxiCabFaresSection(maxiMultiplier: String) {
 
 /**
  * Passenger Service Levy (cl 3) and cleaning-fee cap (cl 2(f)) — the old screen showed neither.
- * [pslAmount] comes live off [TariffDto.pslAmount]; the cleaning-fee cap has no wire field yet
- * (see [TariffDto]'s own doc comment — the ingestion payload doesn't carry it), so this reads the
- * same [au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF.cleaningFeeCap] constant
- * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] itself clamps every cleaning fee to
- * — a minimal read-only accessor onto the existing engine constant, not a new hardcoded literal and
- * not a change to engine logic. Also carries the tolls pass-through rule (no numeric field — tolls
- * vary per trip, so there's nothing to display but the rule itself).
+ * Both come live off [TariffDto] ([TariffDto.pslAmount] / [TariffDto.cleaningFeeCap], the latter
+ * added server-side alongside the 2026 rate-card pass) rather than a hardcoded literal, so this
+ * stays correct if a tenant's configured tariff ever sets a lower cap than the Order's own
+ * maximum. Also carries the tolls pass-through rule (no numeric field — tolls vary per trip, so
+ * there's nothing to display but the rule itself).
  */
 @Composable
-private fun AdditionalChargesSection(pslAmount: String) {
+private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String) {
     CaptainPanel(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             FareScheduleSectionTitle("ADDITIONAL CHARGES")
@@ -665,7 +662,7 @@ private fun AdditionalChargesSection(pslAmount: String) {
                     "passengers. (Fares Order 2026, cl 3.)",
             )
             Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-            CaptainChip(label = "CLEANING FEE CAP", value = "$${URBAN_TARIFF.cleaningFeeCap.toPlainString()} + GST")
+            CaptainChip(label = "CLEANING FEE CAP", value = "$$cleaningFeeCap + GST")
             FareScheduleNote(
                 "Only chargeable when soiling means the vehicle can't reasonably be used before it's " +
                     "cleaned. (Fares Order 2026, cl 2(f).)",

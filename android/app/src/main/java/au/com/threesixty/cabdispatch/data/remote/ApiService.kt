@@ -794,6 +794,11 @@ data class TariffDto(
     @SerialName("multi_hire_pct") val multiHirePct: String = "0.75",
     @SerialName("psl_amount") val pslAmount: String = "1.32",
     @SerialName("surcharge_pct_cap") val surchargePctCap: String = "5.0",
+    // Point to Point Transport (Fares) Order 2026 cl 2(f): up to $124.14 — added server-side
+    // alongside the 2026 rate-card pass. Defaults to that same figure so a tariff signed by an
+    // older backend build (pre-field) still deserializes to the correct current cap rather than
+    // "0".
+    @SerialName("cleaning_fee_cap") val cleaningFeeCap: String = "124.14",
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
     val signature: String? = null,
