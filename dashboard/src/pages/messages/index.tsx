@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { MessageSquare, Search } from "lucide-react";
 import { Badge, Card, CardContent, Input, PageHeader } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { listDriverOptions } from "./api";
+import { listDriverOptions, listLatestThread, THREAD_LIMIT } from "./api";
 import { initials } from "./format";
 import { ThreadPanel } from "./ThreadPanel";
 import type { DriverOption } from "./types";
@@ -35,6 +35,34 @@ export default function MessagesPage() {
       (d) => d.name.toLowerCase().includes(q) || (d.phone ?? "").toLowerCase().includes(q),
     );
   }, [driversQuery.data, search]);
+
+  // Per-driver unread badge: no backend endpoint exists for "unread count per
+  // driver", so this fans out a lightweight `listLatestThread` fetch per
+  // listed driver (same query key/fetcher `ThreadPanel` uses, so opening a
+  // thread reuses this cache instead of double-fetching) and counts
+  // `read_at == null` driver-sent messages in that recent window. Same
+  // "good enough for demo/dev fleet scale" tradeoff as this page's
+  // `DRIVER_LOOKUP_LIMIT` — a real aggregate endpoint would be needed to do
+  // this cheaply at larger fleet scale.
+  const unreadQueries = useQueries({
+    queries: filtered.map((driver) => ({
+      queryKey: ["messages-thread", driver.id] as const,
+      queryFn: () => listLatestThread(driver.id, THREAD_LIMIT),
+      staleTime: 20_000,
+      refetchInterval: 30_000,
+    })),
+  });
+
+  const unreadCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    filtered.forEach((driver, i) => {
+      const data = unreadQueries[i]?.data;
+      if (!data) return;
+      const count = data.items.filter((m) => m.sender_type === "driver" && m.read_at === null).length;
+      if (count > 0) map.set(driver.id, count);
+    });
+    return map;
+  }, [filtered, unreadQueries]);
 
   return (
     <div>
@@ -90,9 +118,19 @@ export default function MessagesPage() {
                             {driver.phone || "No phone on file"}
                           </p>
                         </div>
-                        <Badge variant={driver.on_shift ? "success" : "default"}>
-                          {driver.on_shift ? "On shift" : "Off shift"}
-                        </Badge>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <Badge variant={driver.on_shift ? "success" : "default"}>
+                            {driver.on_shift ? "On shift" : "Off shift"}
+                          </Badge>
+                          {(unreadCounts.get(driver.id) ?? 0) > 0 && (
+                            <Badge
+                              variant="destructive"
+                              aria-label={`${unreadCounts.get(driver.id)} unread message${unreadCounts.get(driver.id) === 1 ? "" : "s"}`}
+                            >
+                              {unreadCounts.get(driver.id)} unread
+                            </Badge>
+                          )}
+                        </div>
                       </button>
                     </li>
                   ))}
