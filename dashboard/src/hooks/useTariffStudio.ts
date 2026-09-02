@@ -336,3 +336,96 @@ export function useDeleteTariffMutation() {
     },
   });
 }
+
+// --- Extras (nested under a tariff; see backend/app/api/v1/tariffs.py's
+// "Extras" section and backend/app/schemas/tariffs.py's ExtraCreate /
+// ExtraUpdate / ExtraRead) -----------------------------------------------------
+
+/** A named fixed or passthrough fee scoped to one tariff (e.g. a cleaning
+ * fee or an equipment surcharge a tenant wants to name and reuse). `amount`
+ * is a decimal string off the wire, same convention as every rate field on
+ * `Tariff` above. */
+export type ExtraType = "fixed" | "passthrough";
+
+export interface Extra {
+  id: string;
+  tariff_id: string;
+  tenant_id: string | null;
+  name: string;
+  amount: string;
+  type: ExtraType;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Body shape for POST /v1/tariffs/{tariffId}/extras. */
+export interface ExtraCreateInput {
+  name: string;
+  amount: string;
+  type: ExtraType;
+}
+
+/** Body shape for PATCH /v1/tariffs/{tariffId}/extras/{extraId} — every
+ * field optional, mirroring TariffUpdateInput's partial-update convention. */
+export type ExtraUpdateInput = Partial<ExtraCreateInput>;
+
+const EXTRAS_KEY = "tariff-extras";
+
+export function useExtrasQuery(tariffId: string | null, opts?: { skip?: number; limit?: number }) {
+  return useQuery({
+    queryKey: [EXTRAS_KEY, tariffId, opts],
+    queryFn: async () => {
+      const res = await apiClient.get<Page<Extra>>(`/v1/tariffs/${tariffId}/extras`, {
+        params: { skip: opts?.skip ?? 0, limit: opts?.limit ?? 100 },
+      });
+      return res.data;
+    },
+    enabled: tariffId != null,
+  });
+}
+
+export function useCreateExtraMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tariffId, input }: { tariffId: string; input: ExtraCreateInput }) => {
+      const res = await apiClient.post<Extra>(`/v1/tariffs/${tariffId}/extras`, input);
+      return res.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [EXTRAS_KEY, variables.tariffId] });
+    },
+  });
+}
+
+export function useUpdateExtraMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      tariffId,
+      extraId,
+      input,
+    }: {
+      tariffId: string;
+      extraId: string;
+      input: ExtraUpdateInput;
+    }) => {
+      const res = await apiClient.patch<Extra>(`/v1/tariffs/${tariffId}/extras/${extraId}`, input);
+      return res.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [EXTRAS_KEY, variables.tariffId] });
+    },
+  });
+}
+
+export function useDeleteExtraMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tariffId, extraId }: { tariffId: string; extraId: string }) => {
+      await apiClient.delete(`/v1/tariffs/${tariffId}/extras/${extraId}`);
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: [EXTRAS_KEY, variables.tariffId] });
+    },
+  });
+}
