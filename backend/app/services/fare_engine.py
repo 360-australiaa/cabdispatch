@@ -46,6 +46,7 @@ wheelchair hiring).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from enum import Enum
 
@@ -225,6 +226,136 @@ def validate_against_fares_order(
                 f"Rank/hail tariff '{tariff.name}' field '{f}' = {candidate} exceeds "
                 f"Fares Order reference '{fares_order_reference.name}' cap {cap}"
             )
+
+
+# --- Server-side time_class/is_peak classification --------------------------
+
+# Gazetted NSW public holidays used to independently classify a trip's real
+# `occurred_at` timestamp below (resolve_time_class_and_peak) -- see that
+# function's own doc for the exact Fares Order rule each provision feeds.
+# Ported from the Android app's own `domain/NswPublicHolidays.kt` (the one
+# other place in this codebase that already needed this exact same calendar,
+# for the exact same Fares Order provisions) rather than re-derived
+# independently from scratch, so the two copies can't silently disagree about
+# which day is a public holiday. The backend copy is still the one that's
+# actually authoritative for billing -- see resolve_time_class_and_peak.
+#
+# Deliberately EXCLUDES the NSW Bank Holiday (1st Monday in August) -- that
+# one is a public-sector-only holiday, not a general public holiday, and does
+# not trigger either Fares Order provision below.
+#
+# 2026 dates are the actual gazetted NSW public holidays. 2027 dates are
+# calculated from the standard fixed rules this state has applied consistently
+# for years (Easter via the standard computus; King's Birthday = 2nd Monday of
+# June; Labour Day = 1st Monday of October; and the Christmas/Boxing Day
+# "falls on a weekend -> an extra public holiday is gazetted on the next
+# available weekday" convention) rather than transcribed from an official 2027
+# gazette, since one does not yet exist this far out.
+#
+# TODO(risk flag): verify every 2027 date against the real NSW public holidays
+# gazette once it is published -- these are a best-effort calculation from the
+# standard rules, not an official source, and the government has occasionally
+# varied from the mechanical rule for a specific year (e.g. shifting a
+# clashing holiday to a different weekday than the "next Monday" default).
+NSW_PUBLIC_HOLIDAYS: frozenset[date] = frozenset(
+    {
+        # --- 2026 (gazetted) ---
+        date(2026, 1, 1),  # New Year's Day (Thu)
+        date(2026, 1, 26),  # Australia Day (Mon)
+        date(2026, 4, 3),  # Good Friday
+        date(2026, 4, 4),  # Easter Saturday
+        date(2026, 4, 5),  # Easter Sunday
+        date(2026, 4, 6),  # Easter Monday
+        date(2026, 4, 25),  # Anzac Day (Sat)
+        date(2026, 6, 8),  # King's Birthday (2nd Mon June)
+        date(2026, 10, 5),  # Labour Day (1st Mon October)
+        date(2026, 12, 25),  # Christmas Day (Fri)
+        date(2026, 12, 26),  # Boxing Day (Sat)
+        date(2026, 12, 28),  # Boxing Day holiday (Boxing Day falls on a Saturday)
+        # --- 2027 (calculated from standard rules -- TODO: verify against the gazette) ---
+        date(2027, 1, 1),  # New Year's Day (Fri)
+        date(2027, 1, 26),  # Australia Day (Tue)
+        date(2027, 3, 26),  # Good Friday
+        date(2027, 3, 27),  # Easter Saturday
+        date(2027, 3, 28),  # Easter Sunday
+        date(2027, 3, 29),  # Easter Monday
+        date(2027, 4, 25),  # Anzac Day (Sun)
+        date(2027, 6, 14),  # King's Birthday (2nd Mon June)
+        date(2027, 10, 4),  # Labour Day (1st Mon October)
+        date(2027, 12, 25),  # Christmas Day (Sat)
+        date(2027, 12, 26),  # Boxing Day (Sun)
+        date(2027, 12, 27),  # Christmas Day holiday (Christmas Day falls on a Saturday)
+        date(2027, 12, 28),  # Boxing Day holiday (Boxing Day falls on a Sunday)
+    }
+)
+
+
+def is_nsw_public_holiday(d: date) -> bool:
+    return d in NSW_PUBLIC_HOLIDAYS
+
+
+def is_day_before_nsw_public_holiday(d: date) -> bool:
+    return (d + timedelta(days=1)) in NSW_PUBLIC_HOLIDAYS
+
+
+def resolve_time_class_and_peak(*, tariff: Tariff, occurred_at: datetime) -> tuple[TimeClass, bool]:
+    """The authoritative, deterministic time_class/is_peak classification for
+    a trip commencing at `occurred_at`, on `tariff` -- see this module's own
+    docstring ("time_class ... and the peak-hiring flag are fixed at journey
+    commencement") and app.services.trips.build_fare_state's doc for why this
+    is called exactly ONCE, at trip-creation time (app.api.v1.trips.create_trip
+    / sync_trips), never re-derived mid-trip or at display/reconstruction time.
+    Deliberately never derived from a client-supplied time_class/is_peak (see
+    app.schemas.trips.TripCreate.time_class/is_peak's doc comment): a device
+    claiming `is_peak=true` (or a bogus `time_class`) must not be able to
+    inflate -- or deflate -- its own fare on its own say-so, exactly the same
+    reasoning as `resolve_is_maxi_vehicle` in app.services.trips.
+
+    Pure/deterministic -- no DB, no clock reads, same "PURE module" contract
+    this whole file already keeps. Mirrors the Android app's own
+    `resolveTimeClassFor`/`resolveIsPeakFor` (domain/FareEngine.kt), rule for
+    rule, so the two copies can't independently drift apart on what counts as
+    night/peak/holiday, even though this server copy is the one that's
+    actually authoritative for billing.
+
+    Night: 10pm-6am, any night, both areas -> TimeClass.NIGHT (matches this
+    module's own URBAN_TARIFF/COUNTRY_TARIFF night_rate_1/2 columns).
+
+    Holiday: COUNTRY area only, 6am-10pm on a Sunday OR a gazetted NSW public
+    holiday (NSW_PUBLIC_HOLIDAYS) -> TimeClass.HOLIDAY. Urban carries no
+    holiday distance rate at all (holiday_rate_1/2 are always 0 on
+    URBAN_TARIFF) so urban never resolves to HOLIDAY.
+
+    Everything else -> TimeClass.DAY.
+
+    Peak Time Hiring Charge eligibility: hiring commences 10pm-6am on a
+    Friday, a Saturday, OR the night before a gazetted NSW public holiday.
+    Urban-only in practice (COUNTRY_TARIFF.peak_charge is 0), but -- like the
+    Android original -- this function itself is area-agnostic; the tariff's
+    own zero peak charge for country is what makes it a no-op there.
+
+    Deliberately uses `occurred_at`'s own hour/weekday/date exactly as given
+    -- no timezone conversion is applied here, matching the established
+    precedent this codebase's other time-of-day classifier already set
+    (app.services.tariffs.classify_time_of_day) rather than introducing a
+    second, inconsistent convention.
+    """
+    hour = occurred_at.hour
+    is_late_night = hour >= 22 or hour < 6
+    occurred_date = occurred_at.date()
+    weekday = occurred_at.weekday()  # Monday=0 ... Sunday=6
+
+    if is_late_night:
+        time_class = TimeClass.NIGHT
+    elif tariff.area == AreaClass.COUNTRY and (weekday == 6 or is_nsw_public_holiday(occurred_date)):
+        time_class = TimeClass.HOLIDAY
+    else:
+        time_class = TimeClass.DAY
+
+    is_fri_sat_or_pre_holiday = weekday in (4, 5) or is_day_before_nsw_public_holiday(occurred_date)
+    is_peak = is_late_night and is_fri_sat_or_pre_holiday
+
+    return time_class, is_peak
 
 
 # --- Journey state --------------------------------------------------------------

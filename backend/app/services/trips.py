@@ -29,6 +29,7 @@ from app.services.fare_engine import (
     Tariff,
     TimeClass,
     airport_fixed_fare,
+    resolve_time_class_and_peak,
     round_half_up,
 )
 from app.services.geofence import detect_geofences
@@ -113,6 +114,24 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=trip.tariff_id)
     state = FareState(
         tariff=tariff,
+        # trip.time_class/trip.is_peak: read back VERBATIM as persisted, never
+        # re-derived here via resolve_time_class_and_peak — for two
+        # independent reasons, either one alone would be sufficient:
+        #   1. Legal: fare_engine's own module docstring is explicit that
+        #      time_class/is_peak "are fixed at journey commencement and do
+        #      not change mid-trip even if the clock crosses a boundary".
+        #      build_fare_state is called on every apply_tick (an open,
+        #      in-progress trip) and every close_trip call — re-deriving from
+        #      "now" (or from trip.start_at, hours after the fact) on each of
+        #      those calls would silently reclassify an in-flight trip's
+        #      rate mid-journey, which the Fares Order itself forbids.
+        #   2. Trust: these columns were already resolved authoritatively,
+        #      server-side, at trip-creation time (see create_trip/sync_trips
+        #      in app.api.v1.trips, both of which call
+        #      resolve_time_class_and_peak against the trip's real start_at
+        #      before ever constructing the Trip row) — exactly the same
+        #      "safe to read back as-is, never taken from a raw
+        #      client-supplied flag" contract trip.maxi already has below.
         time_class=TimeClass(trip.time_class),
         is_peak=trip.is_peak,
         # trip.maxi was resolved authoritatively from the vehicle's real
@@ -300,8 +319,6 @@ async def recompute_from_trace(
     tenant_id: str,
     tariff_id: str,
     trip_type: str,
-    time_class: str,
-    is_peak: bool,
     is_maxi_vehicle: bool,
     passenger_count: int,
     wheelchair_hiring: bool,
@@ -317,15 +334,28 @@ async def recompute_from_trace(
     surcharge_pct: Decimal | None,
     include_psl: bool,
     negotiated_total: Decimal | None = None,
-) -> tuple[FareBreakdown, int, int, int]:
+) -> tuple[FareBreakdown, int, int, int, TimeClass, bool]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
-    Returns (breakdown, distance_m, moving_s, waiting_s)."""
+    Returns (breakdown, distance_m, moving_s, waiting_s, time_class, is_peak).
+
+    No `time_class`/`is_peak` parameters here (unlike the trip-type/passenger/
+    maxi ones) — deliberately: this is the offline-sync path's own version of
+    `resolve_is_maxi_vehicle` never trusting `payload.maxi`. A synced item's
+    `time_class`/`is_peak` are advisory-only (see
+    app.schemas.trips.TripSyncItem's doc comment) and are always resolved
+    HERE, deterministically, from the tariff just looked up above and the
+    trip's own real `start_at` — see `resolve_time_class_and_peak`. The
+    resolved values are returned so the caller (app.api.v1.trips.sync_trips)
+    persists the same authoritative values onto the Trip row that were
+    actually used to compute `breakdown` below, rather than the client's
+    claim."""
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=tariff_id)
+    time_class, is_peak = resolve_time_class_and_peak(tariff=tariff, occurred_at=start_at)
 
     state = FareState(
         tariff=tariff,
-        time_class=TimeClass(time_class),
+        time_class=time_class,
         is_peak=is_peak,
         is_maxi_vehicle=is_maxi_vehicle,
         passenger_count=passenger_count,
@@ -370,7 +400,7 @@ async def recompute_from_trace(
         include_psl=include_psl,
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))
-    return breakdown, distance_m, moving_s, waiting_s
+    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak
 
 
 # Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug

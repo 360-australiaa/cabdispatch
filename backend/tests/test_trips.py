@@ -40,6 +40,18 @@ from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
 
+# A fixed, deterministic ordinary-Wednesday-daytime timestamp (2026-07-15 is a
+# Wednesday, comfortably clear of the 22:00-06:00 night window, of Fri/Sat/
+# Sunday, and of every date in fare_engine.NSW_PUBLIC_HOLIDAYS or the day
+# before one) — used as the default `start_at` below instead of
+# `datetime.now(UTC)` so tests that assert an exact day-rate dollar figure
+# (e.g. "urban day dist_rate_1") can never flake depending on the real
+# wall-clock time a test happens to run at, now that time_class/is_peak are
+# resolved server-side from the trip's real start_at (see
+# app.services.fare_engine.resolve_time_class_and_peak) rather than trusted
+# verbatim from the request body.
+_FIXED_DAY_START_AT = datetime(2026, 7, 15, 14, 0, 0, tzinfo=UTC)
+
 
 # --- fixtures / helpers ---------------------------------------------------
 
@@ -90,7 +102,7 @@ def _trip_payload(*, tariff_id: str, **overrides) -> dict:
         "type": "rank_hail",
         "start_lat": -33.8688,
         "start_lng": 151.2093,
-        "start_at": datetime.now(UTC).isoformat(),
+        "start_at": _FIXED_DAY_START_AT.isoformat(),
     }
     payload.update(overrides)
     return payload
@@ -119,6 +131,63 @@ async def test_create_trip_opens_it(client: AsyncClient, session: AsyncSession):
     assert body["distance_m"] == 0
     assert body["total"] == "0.00"
     assert body["client_uuid"]
+
+
+async def test_create_trip_ignores_client_time_class_and_is_peak_claims(
+    client: AsyncClient, session: AsyncSession
+):
+    """The same class of bug as resolve_is_maxi_vehicle's: a device claiming
+    `time_class="night"`/`is_peak=true` for a start_at that is provably
+    ordinary Wednesday daytime must not get either -- the server
+    deterministically re-derives both from the tariff + the trip's real
+    start_at (app.services.fare_engine.resolve_time_class_and_peak), ignoring
+    whatever a device sends in the request body."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    body = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        start_at=_FIXED_DAY_START_AT.isoformat(),  # ordinary Wednesday 14:00 -- see this constant's doc
+        # Lies: this instant is neither night nor a peak window.
+        time_class="night",
+        is_peak=True,
+    )
+
+    assert body["time_class"] == "day"
+    assert body["is_peak"] is False
+
+
+async def test_sync_ignores_client_time_class_and_is_peak_claims(client: AsyncClient, session: AsyncSession):
+    """Same client-override behaviour as the create-trip test above, but for
+    the offline-replay sync path (app.services.trips.recompute_from_trace) --
+    a synced item claiming a bogus time_class/is_peak for its real start_at
+    must be persisted with the server-derived values, not the device's
+    claim."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = _FIXED_DAY_START_AT  # ordinary Wednesday 14:00 -- see this constant's doc
+    trace = [{"lat": -33.8688, "lng": 151.2093, "speed_kmh": 0, "ts": now.isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="5.17",
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+        # Lies: this instant is neither night nor a peak window.
+        time_class="night",
+        is_peak=True,
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["time_class"] == "day"
+    assert trip["is_peak"] is False
 
 
 async def _tenant_of(client: AsyncClient, headers: dict) -> str:
@@ -560,6 +629,16 @@ async def test_close_airport_fixed_trip_ignores_raw_maxi_claim_without_a_real_ma
 
 
 def _sync_item(*, tariff_id: str, gps_trace: list[dict], device_total: str, **overrides) -> dict:
+    # Deliberately real `datetime.now(UTC)`, NOT `_FIXED_DAY_START_AT` — every
+    # other sync test below anchors its own gps_trace timestamps off this same
+    # "now" (via its own local `now = datetime.now(UTC)`, matching this
+    # default almost exactly since both calls happen within the same test),
+    # so switching this default to a fixed past date would blow out
+    # elapsed-time-based waiting/distance charges for every test that doesn't
+    # explicitly override start_at/end_at. The one test that needs a
+    # deterministic day-rate dollar figure
+    # (test_sync_creates_trip_and_flags_variance_within_tolerance) passes
+    # explicit start_at/end_at overrides instead of relying on this default.
     now = datetime.now(UTC)
     item = {
         "client_uuid": str(uuid.uuid4()),
@@ -587,7 +666,7 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
 
     start_lat, start_lng = -33.8688, 151.2093
     end_lat, end_lng = -33.8600, 151.2093
-    now = datetime.now(UTC)
+    now = _FIXED_DAY_START_AT  # see this constant's own doc — keeps the day dist_rate_1 assertion below deterministic
     trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
 
     distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
@@ -600,6 +679,12 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
         device_total=str(expected_fare_total),
         start_lat=start_lat,
         start_lng=start_lng,
+        # Explicit, deterministic day-time start_at/end_at (overriding
+        # _sync_item's own real-`now` default) so the day dist_rate_1
+        # assertion above can never flake depending on the real wall-clock
+        # time this test happens to run at — see _FIXED_DAY_START_AT's doc.
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
     )
 
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
@@ -771,7 +856,13 @@ async def test_sync_split_fare_matching_sum_persists_split_payments(
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     start_lat, start_lng = -33.8688, 151.2093
-    now = datetime.now(UTC)
+    # Fixed day-time (not a real "now") -- unlike the other sync tests in this
+    # section, this one asserts an EXACT total (no distance/waiting accrued,
+    # so total == flag_fall alone) and must not pick up an extra peak_charge
+    # if the real wall clock this test runs at happens to land in the
+    # Friday/Saturday/pre-holiday 10pm-6am peak window. See
+    # _FIXED_DAY_START_AT's own doc.
+    now = _FIXED_DAY_START_AT
     trace = [{"lat": start_lat, "lng": start_lng, "speed_kmh": 0, "ts": now.isoformat()}]
     # No distance travelled -> total is just flag_fall ($5.17, 2026 Order) for this tariff,
     # matching test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no
@@ -782,6 +873,8 @@ async def test_sync_split_fare_matching_sum_persists_split_payments(
         device_total="5.17",
         start_lat=start_lat,
         start_lng=start_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
         payment_method="split_fare",
         split_payments=[{"method": "cash", "amount": "2.17"}, {"method": "card", "amount": "3.00"}],
     )

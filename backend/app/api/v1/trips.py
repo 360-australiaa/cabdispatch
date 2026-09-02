@@ -44,7 +44,7 @@ from app.services import compliance_expiry as compliance_expiry_service
 from app.services import fatigue as fatigue_service
 from app.services import receipts as receipts_service
 from app.services import payments as payments_service
-from app.services.fare_engine import round_half_up
+from app.services.fare_engine import URBAN_TARIFF, resolve_time_class_and_peak, round_half_up
 from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
 from app.services.trips import (
     CloseParams,
@@ -58,6 +58,7 @@ from app.services.trips import (
     flag_trip_for_review,
     recompute_from_trace,
     resolve_is_maxi_vehicle,
+    resolve_tariff,
 )
 
 router = APIRouter(prefix="/v1/trips", tags=["trips"])
@@ -95,6 +96,26 @@ async def create_trip(
     is_maxi_vehicle = await resolve_is_maxi_vehicle(
         session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id
     )
+    start_at = payload.start_at or datetime.now(UTC)
+    # Authoritative: resolved server-side from the tariff's own night/peak-
+    # window + public-holiday-calendar definitions and the trip's real
+    # start_at, never taken from payload.time_class/payload.is_peak (accepted
+    # but ignored for billing — see TripCreate.time_class/is_peak's doc
+    # comment, same pattern as payload.maxi above).
+    #
+    # An unknown/foreign tariff_id isn't this endpoint's concern to reject —
+    # exactly like resolve_is_maxi_vehicle's unknown-vehicle fallback above,
+    # trip creation itself never 422s on a bad tariff_id today (only the
+    # later tick/close calls do, via UnknownTariffError — see
+    # test_tick_unknown_tariff_is_422), so fall back to URBAN_TARIFF purely
+    # so classification never raises here. Whatever gets stored below in that
+    # edge case is moot: the trip's real bill fails regardless the moment a
+    # genuine fare recompute is attempted against that same bad tariff_id.
+    try:
+        tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=payload.tariff_id)
+    except UnknownTariffError:
+        tariff = URBAN_TARIFF
+    time_class, is_peak = resolve_time_class_and_peak(tariff=tariff, occurred_at=start_at)
     trip = Trip(
         tenant_id=tenant_id,
         client_uuid=payload.client_uuid,
@@ -104,13 +125,13 @@ async def create_trip(
         tariff_id=payload.tariff_id,
         type=payload.type,
         status=TRIP_STATUS_OPEN,
-        time_class=payload.time_class,
-        is_peak=payload.is_peak,
+        time_class=time_class.value,
+        is_peak=is_peak,
         maxi=is_maxi_vehicle,
         passenger_count=payload.passenger_count,
         wheelchair_hiring=payload.wheelchair_hiring,
         airport_rank_requested_maxi=payload.airport_rank_requested_maxi,
-        start_at=payload.start_at or datetime.now(UTC),
+        start_at=start_at,
         start_lat=payload.start_lat,
         start_lng=payload.start_lng,
         payment_method=payload.payment_method,
@@ -161,13 +182,16 @@ async def sync_trips(
             session, tenant_id=tenant_id, vehicle_id=item.vehicle_id
         )
         try:
-            breakdown, distance_m, moving_s, waiting_s = await recompute_from_trace(
+            # time_class/is_peak deliberately NOT passed through from
+            # item.time_class/item.is_peak here — see recompute_from_trace's
+            # own doc comment; it resolves both authoritatively itself, from
+            # the tariff it looks up and item.start_at, and hands the
+            # resolved values back below for the Trip row.
+            breakdown, distance_m, moving_s, waiting_s, time_class, is_peak = await recompute_from_trace(
                 session,
                 tenant_id=tenant_id,
                 tariff_id=item.tariff_id,
                 trip_type=item.type,
-                time_class=item.time_class,
-                is_peak=item.is_peak,
                 is_maxi_vehicle=is_maxi_vehicle,
                 passenger_count=item.passenger_count,
                 wheelchair_hiring=item.wheelchair_hiring,
@@ -246,8 +270,8 @@ async def sync_trips(
             tariff_id=item.tariff_id,
             type=item.type,
             status=TRIP_STATUS_CLOSED,
-            time_class=item.time_class,
-            is_peak=item.is_peak,
+            time_class=time_class.value,
+            is_peak=is_peak,
             maxi=is_maxi_vehicle,
             passenger_count=item.passenger_count,
             wheelchair_hiring=item.wheelchair_hiring,

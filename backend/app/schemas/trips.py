@@ -94,6 +94,12 @@ class TripCreate(BaseModel):
     payment_method: PaymentMethod = "cash"
     voucher_code: str | None = None
     account_reference: str | None = None
+    # DEVICE ADVISORY ONLY, both fields: accepted for backward compatibility
+    # but never trusted for billing — the router deterministically derives
+    # the real values server-side from the tariff's own night/peak-window +
+    # public-holiday-calendar definitions and the trip's actual start_at (see
+    # app.services.fare_engine.resolve_time_class_and_peak), ignoring
+    # whatever a device sends here. Same pattern as `maxi` below.
     time_class: TimeClass = "day"
     is_peak: bool = False
     # DEVICE ADVISORY ONLY: this raw flag is accepted for backward
@@ -242,6 +248,9 @@ class TripSyncItem(BaseModel):
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[SplitPaymentItem] | None = None
+    # DEVICE ADVISORY ONLY — see TripCreate.time_class/is_peak's doc comment
+    # above; app.services.trips.recompute_from_trace resolves the
+    # authoritative values from the tariff + this item's own start_at.
     time_class: TimeClass = "day"
     is_peak: bool = False
     # DEVICE ADVISORY ONLY — see TripCreate.maxi's doc comment above; the

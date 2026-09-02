@@ -6,6 +6,7 @@ module docstring — do not "fix" a failing assertion by copying the engine's
 output back in; if a test fails, the engine (or the hand calculation in the
 comment) is wrong and must be fixed.
 """
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -20,6 +21,7 @@ from app.services.fare_engine import (
     Tariff,
     TimeClass,
     airport_fixed_fare,
+    resolve_time_class_and_peak,
     validate_against_fares_order,
 )
 
@@ -415,3 +417,85 @@ def test_i2_validate_against_fares_order_also_catches_an_over_cap_cleaning_fee()
 
     with pytest.raises(FaresOrderViolation):
         validate_against_fares_order(over_cap_tariff, URBAN_TARIFF, booked=False)
+
+
+# --- resolve_time_class_and_peak: server-side time_class/is_peak classification ---
+#
+# 2026-07-17 is a Friday (2026-07-15 is a Wednesday, per this file's own
+# constant below) not adjacent to any date in NSW_PUBLIC_HOLIDAYS, chosen
+# specifically so these boundary vectors exercise ONLY the day-of-week /
+# hour rules, never accidentally also tripping the public-holiday branch.
+
+
+def test_j_resolve_time_class_and_peak_night_window_boundary_both_sides():
+    """10pm-6am is NIGHT on both areas; the peak window shares the same
+    10pm boundary. 21:59 is still DAY/not-peak; 22:00 flips both."""
+    just_before = datetime(2026, 7, 17, 21, 59, tzinfo=UTC)  # Friday
+    at_boundary = datetime(2026, 7, 17, 22, 0, tzinfo=UTC)  # Friday
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=just_before)
+    assert time_class == TimeClass.DAY
+    assert is_peak is False
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=at_boundary)
+    assert time_class == TimeClass.NIGHT
+    assert is_peak is True  # Friday + late-night
+
+
+def test_j2_resolve_time_class_and_peak_morning_night_window_boundary_both_sides():
+    """05:59 is still NIGHT; 06:00 flips back to DAY. A Saturday morning, so
+    is_peak is also exercised: true right up to 05:59, false at 06:00."""
+    just_before = datetime(2026, 7, 18, 5, 59, tzinfo=UTC)  # Saturday
+    at_boundary = datetime(2026, 7, 18, 6, 0, tzinfo=UTC)  # Saturday
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=just_before)
+    assert time_class == TimeClass.NIGHT
+    assert is_peak is True  # Saturday + late-night
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=at_boundary)
+    assert time_class == TimeClass.DAY
+    assert is_peak is False
+
+
+def test_j3_resolve_time_class_and_peak_23_59_to_00_00_rollover_stays_night():
+    """Crossing midnight (Wed 23:59 -> Thu 00:01) must not be mistaken for a
+    day/night rollover artifact -- both instants are within the 10pm-6am
+    window and must both resolve to NIGHT, and neither Wednesday nor Thursday
+    is Friday/Saturday/pre-holiday, so is_peak stays False on both sides."""
+    wed_late = datetime(2026, 7, 15, 23, 59, tzinfo=UTC)  # Wednesday
+    thu_early = datetime(2026, 7, 16, 0, 1, tzinfo=UTC)  # Thursday
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=wed_late)
+    assert time_class == TimeClass.NIGHT
+    assert is_peak is False
+
+    time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=thu_early)
+    assert time_class == TimeClass.NIGHT
+    assert is_peak is False
+
+
+def test_j4_resolve_time_class_and_peak_country_sunday_and_public_holiday():
+    """Country-only HOLIDAY band: a Sunday daytime trip, and a non-Sunday
+    gazetted public holiday (2026-01-01, a Thursday), both resolve to
+    HOLIDAY; the same instants on URBAN never do (urban has no holiday
+    band); an ordinary country weekday stays DAY."""
+    sunday_afternoon = datetime(2026, 1, 4, 14, 0, tzinfo=UTC)  # a Sunday
+    new_years_day = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)  # Thursday, gazetted holiday
+    wednesday_afternoon = datetime(2026, 1, 7, 14, 0, tzinfo=UTC)  # plain Wednesday
+
+    assert resolve_time_class_and_peak(tariff=COUNTRY_TARIFF, occurred_at=sunday_afternoon)[0] == TimeClass.HOLIDAY
+    assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=sunday_afternoon)[0] == TimeClass.DAY
+    assert resolve_time_class_and_peak(tariff=COUNTRY_TARIFF, occurred_at=new_years_day)[0] == TimeClass.HOLIDAY
+    assert resolve_time_class_and_peak(tariff=COUNTRY_TARIFF, occurred_at=wednesday_afternoon)[0] == TimeClass.DAY
+
+
+def test_j5_resolve_time_class_and_peak_night_before_public_holiday_is_peak():
+    """The peak window's third trigger (beyond Friday/Saturday): the night
+    before a gazetted public holiday. 2025-12-31 23:30 is a Wednesday night,
+    ordinarily not peak-eligible, but 2026-01-01 (New Year's Day) is gazetted
+    -> is_peak is True. The following (ordinary) Wednesday night is not."""
+    night_before_new_year = datetime(2025, 12, 31, 23, 30, tzinfo=UTC)  # Wednesday
+    ordinary_wednesday_night = datetime(2026, 1, 7, 23, 30, tzinfo=UTC)  # Wednesday, no holiday follows
+
+    assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=night_before_new_year)[1] is True
+    assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=ordinary_wednesday_night)[1] is False
