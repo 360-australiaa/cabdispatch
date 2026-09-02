@@ -244,14 +244,20 @@ class CloseAndPayViewModel : ViewModel() {
         }
         val tariff = tariffDto.toDomainTariff()
         val method = PaymentMethodOption.CASH
-        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = false)
+        // NSW-compliant fleets pass the PSL through by default (Point to Point Transport (Fares)
+        // Order 2026 compliance pass, Fix 6) — still overridable via setIncludePsl() once a UI
+        // toggle for this exists. Structurally a no-op on the Sydney Airport Fixed Fare path
+        // either way: FareEngine.close()'s fixedFare branch never reads includePsl at all, see
+        // that method's doc.
+        val defaultIncludePsl = true
+        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = defaultIncludePsl)
         _uiState.value = CloseAndPayUiState.ReadyToClose(
             trip = trip,
             tariff = tariff,
             paymentMethod = method,
             surchargePct = BigDecimal.ZERO,
             cleaningFee = BigDecimal.ZERO,
-            includePsl = false,
+            includePsl = defaultIncludePsl,
             cashTendered = "",
             docketNumber = "",
             docketNotes = "",

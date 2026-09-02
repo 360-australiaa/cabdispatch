@@ -64,19 +64,30 @@ fun reconstructFareState(trip: TripEntity, tariff: Tariff): FareState {
         tariff = tariff,
         timeClass = timeClass,
         isPeak = trip.isPeak,
-        maxi = trip.maxi,
+        // TripEntity.maxi means "vehicle has 5+ seats excl. driver" per Fix 2 — the actual
+        // maxi-RATE eligibility is derived from this plus passengerCount/wheelchairHiring/
+        // airportRankRequestedMaxi, see FareState.maxiRateApplied's doc. No UI call site sets
+        // passengerCount/wheelchairHiring to anything but their defaults yet (1 / false), so this
+        // reconstruction is behaviourally unchanged until a future UI pass wires them up.
+        isMaxiVehicle = trip.maxi,
+        passengerCount = trip.passengerCount,
+        wheelchairHiring = trip.wheelchairHiring,
         hired = true,
         cumulativeDistanceKm = cumulativeDistanceKm,
         accruedDistanceCharge = accruedDistanceCharge,
         accruedWaitingCharge = accruedWaitingCharge,
         tolls = trip.tolls.toBigDecimalOrZero(),
         extras = trip.extras.toBigDecimalOrZero(),
+        negotiatedTotal = trip.negotiatedTotal?.toBigDecimalOrZero(),
     )
 
     // Sydney Airport Fixed Fare Trial (spec B5 "Airport mode") — close()
     // ignores every other accrued field once fixedFare is set, per its doc.
+    // Uses the fully-derived maxiRateApplied (not the raw isMaxiVehicle flag)
+    // so a $80 maxi airport fare is only ever charged when the maxi rate is
+    // genuinely lawful for this hiring (Fix 2).
     if (trip.type == "airport_fixed") {
-        state.fixedFare = airportFixedFare(trip.maxi)
+        state.fixedFare = airportFixedFare(state.maxiRateApplied)
     }
 
     return state

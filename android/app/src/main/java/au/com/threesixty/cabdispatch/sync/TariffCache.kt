@@ -5,6 +5,11 @@ import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.COUNTRY_TARIFF
+import au.com.threesixty.cabdispatch.domain.fare.FaresOrderViolation
+import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
+import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
+import au.com.threesixty.cabdispatch.domain.fare.validateAgainstFaresOrder
 import au.com.threesixty.cabdispatch.security.Ed25519TariffSignatureVerifier
 import au.com.threesixty.cabdispatch.security.canonicalTariffPayload
 import kotlinx.coroutines.flow.Flow
@@ -25,8 +30,12 @@ import java.time.Instant
  * Ed25519 public key (see [canonicalTariffPayload]) BEFORE ever calling [TariffDao.upsert] —
  * a tariff that fails verification throws [TariffSignatureException] and is never written to
  * Room, so the previously-cached (already-verified) tariff simply stays in place until a
- * verifiable one shows up. [getActiveTariff]/[observeActiveTariff] deliberately do NOT
- * re-verify on every read: the ingestion boundary ([refresh]) is the one place a signature is
+ * verifiable one shows up. Immediately after that, [refresh] also runs the tariff through
+ * [validateFaresOrderOrThrow] (Point to Point Transport (Fares) Order 2026 compliance pass) — a
+ * genuinely, correctly signed tariff whose rates exceed the regulated maximum is rejected exactly
+ * the same way a bad signature is, since a signature only proves the payload came from the real
+ * server, not that the server-side rates are lawful. [getActiveTariff]/[observeActiveTariff]
+ * deliberately do NOT re-verify on every read: the ingestion boundary ([refresh]) is the one place a signature is
  * checked, matching the fare engine's requirement that local reads stay cheap/synchronous-ish
  * pure-Room reads on its hot path — trusting rows this class itself already verified before
  * writing them is not a gap, it's the same "verify at the boundary, trust the local store after"
@@ -62,6 +71,7 @@ class TariffCache(
     suspend fun refresh(region: String): TariffDto {
         val dto = apiService.activeTariff(region = region)
         verifySignatureOrThrow(dto)
+        validateFaresOrderOrThrow(dto)
         tariffDao.upsert(
             TariffEntity(
                 id = dto.id,
@@ -100,6 +110,30 @@ class TariffCache(
         if (!verified) {
             throw TariffSignatureException(
                 "Tariff ${dto.id} signature verification failed — possible tampering, refusing to cache",
+            )
+        }
+    }
+
+    /**
+     * Point to Point Transport (Fares) Order 2026 compliance check (spec: rank/hail tariffs must
+     * never exceed the regulated maximum). Runs immediately after signature verification, treated
+     * exactly like a bad signature: a violation throws [TariffSignatureException] (same type a
+     * failed [verifySignatureOrThrow] throws), so it is rejected before ever reaching
+     * [TariffDao.upsert] and the previously-cached (already-verified-and-validated) tariff simply
+     * stays in place — same "verify at the boundary, trust the local store after" shape this
+     * class's own doc already describes for the signature check. Booked tariffs are unregulated
+     * (per the Order) and skip this check entirely, matching
+     * [au.com.threesixty.cabdispatch.domain.fare.validateAgainstFaresOrder]'s own `booked` gate.
+     */
+    private fun validateFaresOrderOrThrow(dto: TariffDto) {
+        if (dto.booked) return
+        val reference = if (dto.region.equals("urban", ignoreCase = true)) URBAN_TARIFF else COUNTRY_TARIFF
+        try {
+            validateAgainstFaresOrder(dto.toDomainTariff(), reference, booked = false)
+        } catch (e: FaresOrderViolation) {
+            throw TariffSignatureException(
+                "Tariff ${dto.id} rejected — exceeds the Point to Point Transport (Fares) Order " +
+                    "2026 regulated maximum: ${e.message}",
             )
         }
     }

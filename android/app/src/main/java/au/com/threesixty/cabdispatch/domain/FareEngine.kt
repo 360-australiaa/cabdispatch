@@ -12,8 +12,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
+import au.com.threesixty.cabdispatch.domain.fare.AreaClass
 import java.time.DayOfWeek
-import java.time.LocalTime
 import java.time.ZonedDateTime
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
 import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
@@ -176,7 +176,8 @@ class FareEngineImpl(
     override fun startTrip(tariff: TariffDto, startLat: Double, startLng: Double) {
         this.tariff = tariff
         val domainTariff = tariff.toDomainTariff()
-        val timeClass = resolveTimeClass()
+        val area = if (tariff.region.equals("urban", ignoreCase = true)) AreaClass.URBAN else AreaClass.COUNTRY
+        val timeClass = resolveTimeClass(area)
         val isPeak = resolveIsPeak()
         calcState = CalcFareState(
             tariff = domainTariff,
@@ -291,38 +292,65 @@ class FareEngineImpl(
     }
 
     /**
-     * time_class fixed at journey commencement per the Fares Order wording —
-     * see spec B6. Holiday detection needs a public-holiday calendar, out of
-     * scope here — TODO(fare-engine sibling agent) to fold that in.
+     * time_class fixed at journey commencement per the Fares Order wording — see spec B6.
      *
      * Night boundary is 10pm-6am — real bug fixed 2026-08-29 (found and reported while building
      * the Captain Taxis dashboard's Night Fare tile, confirmed against the backend/architecture
      * agent's own contract doc: "the 10pm-6am boundary is presently hardcoded server-side in the
      * fare engine ... TimeClass.NIGHT"). This function previously used `hour in 6 until 20`
      * (6am-8pm day / 8pm-6am night) — two hours off the server's real boundary, and inconsistent
-     * with [resolveIsPeak] a few lines below, which already correctly uses `hour >= 22 || hour < 6`
+     * with [resolveIsPeak] a few lines below, which already correctly used `hour >= 22 || hour < 6`
      * for the same Fares Order night window. A trip started between 8pm and 10pm was silently
      * billed at the day rate on this client's live display while the backend's authoritative tick
      * ([ApiService.tickTrip]) billed it at night — this client-side estimate never actually
      * overrode the server's real total (the server ticks win on any discrepancy, per that
      * endpoint's own contract), so no driver was ever charged the wrong amount, but the live
      * on-screen fare during that 2-hour window would have under-read what the final invoice
-     * actually charged. Fixed to match the server exactly.
+     * actually charged.
+     *
+     * **Point to Point Transport (Fares) Order 2026 compliance pass:** the public-holiday
+     * calendar this doc used to flag as out of scope is now folded in — see
+     * [resolveTimeClassFor]'s doc for the actual (now holiday-calendar-aware) classification
+     * rule this delegates to.
      */
-    private fun resolveTimeClass(): TimeClass {
-        val hour = LocalTime.now().hour
-        return if (hour >= 22 || hour < 6) TimeClass.NIGHT else TimeClass.DAY
-    }
+    private fun resolveTimeClass(area: AreaClass): TimeClass = resolveTimeClassFor(ZonedDateTime.now(), area)
 
-    /**
-     * Peak Time Hiring Charge: urban, hiring commences 10pm-6am Fri/Sat/
-     * pre-holiday (spec B6). Pre-holiday detection out of scope — TODO as
-     * above.
-     */
-    private fun resolveIsPeak(): Boolean {
-        val now = ZonedDateTime.now()
-        val isLateNight = now.hour >= 22 || now.hour < 6
-        val isFriOrSat = now.dayOfWeek == DayOfWeek.FRIDAY || now.dayOfWeek == DayOfWeek.SATURDAY
-        return isLateNight && isFriOrSat
+    /** Peak Time Hiring Charge: urban, hiring commences 10pm-6am Fri/Sat/pre-holiday (spec B6) —
+     * see [resolveIsPeakFor]'s doc for the actual rule. */
+    private fun resolveIsPeak(): Boolean = resolveIsPeakFor(ZonedDateTime.now())
+}
+
+/**
+ * time_class classification per the Point to Point Transport (Fares) Order 2026: 10pm-6am any
+ * night is [TimeClass.NIGHT] (both areas); for [AreaClass.COUNTRY] only, 6am-10pm on a Sunday or a
+ * gazetted NSW public holiday ([NswPublicHolidays]) is [TimeClass.HOLIDAY] (urban has no holiday
+ * distance rate at all, so urban never returns [TimeClass.HOLIDAY]); everything else is
+ * [TimeClass.DAY]. A top-level function (not a private method) taking an explicit [now] so it is
+ * unit-testable without needing to fake the system clock — [FareEngineImpl.resolveTimeClass] is a
+ * thin `ZonedDateTime.now()`-supplying wrapper around this.
+ */
+fun resolveTimeClassFor(now: ZonedDateTime, area: AreaClass): TimeClass {
+    val hour = now.hour
+    if (hour >= 22 || hour < 6) return TimeClass.NIGHT
+    if (area == AreaClass.COUNTRY &&
+        (now.dayOfWeek == DayOfWeek.SUNDAY || NswPublicHolidays.isPublicHoliday(now.toLocalDate()))
+    ) {
+        return TimeClass.HOLIDAY
     }
+    return TimeClass.DAY
+}
+
+/**
+ * Peak Time Hiring Charge eligibility per the Point to Point Transport (Fares) Order 2026: hiring
+ * commences 10pm-6am on a Friday, a Saturday, OR the night before a gazetted NSW public holiday
+ * ([NswPublicHolidays.isDayBeforePublicHoliday]). Urban only in practice (country's
+ * [au.com.threesixty.cabdispatch.domain.fare.COUNTRY_TARIFF] carries no peak charge), but this
+ * function itself is area-agnostic — the caller applying a zero peak charge for country is what
+ * makes it a no-op there. Top-level per [resolveTimeClassFor]'s same testability rationale.
+ */
+fun resolveIsPeakFor(now: ZonedDateTime): Boolean {
+    val isLateNight = now.hour >= 22 || now.hour < 6
+    val isFriSatOrPreHoliday = now.dayOfWeek == DayOfWeek.FRIDAY || now.dayOfWeek == DayOfWeek.SATURDAY ||
+        NswPublicHolidays.isDayBeforePublicHoliday(now.toLocalDate())
+    return isLateNight && isFriSatOrPreHoliday
 }

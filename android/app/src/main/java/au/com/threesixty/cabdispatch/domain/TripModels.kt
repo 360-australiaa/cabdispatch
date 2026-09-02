@@ -19,7 +19,9 @@ data class TollPreset(val id: String, val label: String, val amount: BigDecimal)
 object TollPresets {
     val M5 = TollPreset("m5", "M5", BigDecimal("4.30"))
     val HARBOUR_SOUTHBOUND = TollPreset("harbour_sb", "Harbour (southbound)", BigDecimal("4.19"))
-    val AIRPORT = TollPreset("airport", "Airport", BigDecimal("6.30"))
+    // $6.43 Sydney Airport access fee (Point to Point Transport (Fares) Order 2026, effective 1
+    // June 2026 — was $6.30 under the superseded Fares Order 2025 (no.2)).
+    val AIRPORT = TollPreset("airport", "Airport", BigDecimal("6.43"))
     val ALL = listOf(M5, HARBOUR_SOUTHBOUND, AIRPORT)
 }
 

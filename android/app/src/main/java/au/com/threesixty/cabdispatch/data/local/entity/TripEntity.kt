@@ -57,7 +57,21 @@ data class TripEntity(
 
     val timeClass: String, // day | night | holiday
     val isPeak: Boolean,
+    /** Vehicle has 5+ seats excluding the driver — one of four inputs to the fare engine's
+     * `FareState.maxiRateApplied` (Point to Point Transport (Fares) Order 2026 compliance pass,
+     * see [au.com.threesixty.cabdispatch.domain.fare.FareState]); on its own this no longer
+     * decides whether the 150% maxi rate is charged, see [passengerCount]/[wheelchairHiring]. */
     val maxi: Boolean,
+
+    /** Passenger count for this hiring, including anyone in a wheelchair — second input to
+     * `FareState.maxiRateApplied`. Defaults to 1 (the ordinary single-passenger case) so every
+     * existing row/call site keeps decoding and behaving exactly as before. */
+    val passengerCount: Int = 1,
+
+    /** True when the hiring is for a passenger travelling in a wheelchair — per the Fares Order
+     * this always charges the ordinary (non-maxi) rate regardless of [maxi]/[passengerCount].
+     * Defaults false so every existing row/call site keeps decoding and behaving unchanged. */
+    val wheelchairHiring: Boolean = false,
 
     val startAt: String, // ISO-8601, set at openTrip()
     val endAt: String? = null, // ISO-8601, set at closeTrip()
