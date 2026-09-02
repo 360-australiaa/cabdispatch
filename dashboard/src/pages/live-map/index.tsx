@@ -21,6 +21,7 @@ import {
 import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 import { FleetMapCanvas } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
+import { VehicleDetailModal } from "./VehicleDetailModal";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
 import {
   batteryColor,
@@ -59,6 +60,7 @@ export default function LiveMapPage() {
   const { positions, connectionState } = useFleetLiveSocket();
 
   const [publishOpen, setPublishOpen] = useState(false);
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
   const [regoInput, setRegoInput] = useState("");
@@ -282,7 +284,8 @@ export default function LiveMapPage() {
           <CardTitle>Fleet map</CardTitle>
           <CardDescription>
             Vehicles plotted by last-known lat/lng, colored by status. Vehicles with an active duress
-            event are shown oversized in red — click one to open its event.
+            event are shown oversized in red — click one to open its event; click any other vehicle
+            to view its detail.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -295,7 +298,11 @@ export default function LiveMapPage() {
               Failed to load vehicle positions.
             </div>
           ) : (
-            <FleetMapCanvas vehicles={mapVehicles} duressEvents={duressEvents} />
+            <FleetMapCanvas
+              vehicles={mapVehicles}
+              duressEvents={duressEvents}
+              onSelectVehicle={setSelectedVehicleId}
+            />
           )}
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
@@ -360,6 +367,7 @@ export default function LiveMapPage() {
             rowKey={(v) => v.id}
             isLoading={vehiclesTableQuery.isLoading}
             emptyState={vehiclesTableQuery.isError ? "Failed to load vehicles." : "No vehicles match these filters."}
+            onRowClick={(v) => setSelectedVehicleId(v.id)}
           />
 
           {pageCount > 1 && (
@@ -386,6 +394,11 @@ export default function LiveMapPage() {
       </Card>
 
       <PublishPositionModal open={publishOpen} onClose={() => setPublishOpen(false)} vehicles={mapVehicles} />
+      <VehicleDetailModal
+        vehicleId={selectedVehicleId}
+        open={selectedVehicleId != null}
+        onClose={() => setSelectedVehicleId(null)}
+      />
     </div>
   );
 }
