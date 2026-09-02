@@ -113,6 +113,12 @@ class AvailableTripOfferViewModel : ViewModel() {
                     driverId = session.driverId,
                     vehicleId = session.vehicleId,
                     shiftId = session.shiftId,
+                    // Real address plumbing (Phase A.4, 2026-09-03): this job already carries both
+                    // — see TripContext.originAddress/.destAddress's own doc for why the dashboard's
+                    // Start Meter flow (and, separately, the Dispatch wheel-content pane's own
+                    // accept path) still can't set these.
+                    originAddress = pending.job.originAddress,
+                    destAddress = pending.job.destAddress,
                 ),
             )
             JobOfferHandoff.clear()

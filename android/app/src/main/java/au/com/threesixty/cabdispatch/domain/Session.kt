@@ -112,6 +112,21 @@ data class TripContext(
      * only in that specific circumstance, never a general "airport trip" flag. Defaults false.
      */
     val airportRankRequestedMaxi: Boolean = false,
+    /**
+     * Human-readable pickup/drop-off address strings for the Meter screen's Trip Details card
+     * (Phase A.4, 2026-09-03) — sourced from [au.com.threesixty.cabdispatch.data.remote.JobDto.originAddress]/
+     * `.destAddress` when this trip started from a dispatch offer accepted via
+     * [au.com.threesixty.cabdispatch.ui.screens.availabletrips.AvailableTripOfferViewModel.beginHiredHandoff].
+     * Still `null` for a trip started via the dashboard's own Start Meter/Set Price flow (a street
+     * hail or rank job has no dispatch-offer address to carry), and — a real, currently-unclosed
+     * gap flagged rather than silently worked around — for one accepted via
+     * [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel.beginHiredHandoff]
+     * (the Dispatch wheel-content pane's own accept path), which was out of this pass's edit scope
+     * and still builds [TripContext] without these fields. [HiredScreen]'s Trip Details card must
+     * show "—" for a `null` address in every case, never fabricate one.
+     */
+    val originAddress: String? = null,
+    val destAddress: String? = null,
 )
 
 /**

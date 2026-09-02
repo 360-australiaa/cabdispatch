@@ -10,7 +10,6 @@ import androidx.navigation.navArgument
 import au.com.threesixty.cabdispatch.ui.screens.availabletrips.AvailableTripOfferScreen
 import au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen
 import au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen
-import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
 import au.com.threesixty.cabdispatch.ui.screens.logoff.LogOffScreen
 import au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessageThreadScreen
@@ -176,7 +175,15 @@ fun CabDispatchNavHost(
             DeckHomeScreen(navController = navController)
         }
         composable(CabDispatchRoutes.HIRED) {
-            HiredScreen(navController = navController)
+            // Phase A shell-integration (2026-09-03): HIRED now renders the exact same shared-shell
+            // composable as IDLE, just starting on the Meter pane, rather than a standalone
+            // full-screen HiredScreen route with no header/footer/nav-rail — see DeckHomeScreen's
+            // own class doc ("Meter joins the shared shell") and its `startOnMeter` param doc. This
+            // keeps every existing `navController.navigate(CabDispatchRoutes.HIRED)` call site
+            // (the dispatch wheel-content pane's accept action, the job-offer detail screen's
+            // accept action, and DeckHomeScreen's own Start Meter/Set Price transition) working
+            // unchanged — the route string didn't move, only what it renders.
+            DeckHomeScreen(navController = navController, startOnMeter = true)
         }
         composable(CabDispatchRoutes.CLOSE_PAY) {
             CloseAndPayScreen(

@@ -124,6 +124,7 @@ import au.com.threesixty.cabdispatch.ui.deck.DeckKeypad
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent
+import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessagesWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
@@ -267,10 +268,31 @@ fun DeckHomeScreen(
     navController: NavHostController,
     viewModel: WheelDashboardViewModel = viewModel(),
     dispatchViewModel: AvailableTripsWheelViewModel = viewModel(),
+    // Phase A shell-integration (2026-09-03): [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED]'s
+    // composable passes `true` here so a driver landing on this backstack entry via any of this
+    // app's several "trip just started/accepted" hand-offs (Start Meter, Set Price, a dispatch
+    // offer accepted from either the Dispatch wheel-content pane or the separate job-offer detail
+    // screen) sees the Meter pane immediately — matching this file's own "one shell, swap embedded
+    // content per rail item" pattern instead of Hired staying a separate full-screen takeover (see
+    // this file's class doc, "Meter joins the shared shell"). Every existing
+    // `navController.navigate(CabDispatchRoutes.HIRED)` call site keeps compiling and working
+    // unchanged — none of them needed to change for this, since the route string itself didn't
+    // move, only what it renders.
+    startOnMeter: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
     val dispatchState by dispatchViewModel.uiState.collectAsState()
-    var pane by rememberSaveable { mutableStateOf(CaptainPane.DASHBOARD) }
+    var pane by rememberSaveable { mutableStateOf(if (startOnMeter) CaptainPane.METER else CaptainPane.DASHBOARD) }
+    // Real "is a fare actually open right now" signal (Phase A shell-integration) — TripEntity
+    // stays status=OPEN from the moment [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]
+    // opens it through to [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel.finalizeClose]
+    // (see that class's own doc), so this is a real Room read, not a guess from [SessionHolder.pendingTrip]
+    // (which — a separate, pre-existing gap this pass does not fix — never gets cleared once a trip
+    // starts, so it would stay "truthy" long after a trip actually closes). Screen-local loader,
+    // same convention as [HomeExtras] below. Drives the nav rail's METER alias (see RAIL_ITEMS'
+    // own comment) and gates the footer stats bar for the Meter pane.
+    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
+    val hasActiveTrip = activeTrip != null
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
     var showSetPrice by rememberSaveable { mutableStateOf(false) }
     // Point to Point Transport (Fares) Order 2026 UI-wiring pass: the plain (non-Set-Price)
@@ -452,9 +474,16 @@ fun DeckHomeScreen(
                         CaptainPane.MAP -> PaneShell("Live map", onBack = { pane = CaptainPane.DASHBOARD }) {
                             StatusMapPanel(onPlotZone = { pane = CaptainPane.ZONES })
                         }
+                        // No PaneShell wrapper here deliberately (unlike every pane above): PaneShell's
+                        // back-arrow reads as "leave this screen", which for an in-progress, revenue-
+                        // accruing fare is the wrong affordance to offer — a driver correcting course
+                        // mid-trip taps another rail item directly (all still reachable, per the
+                        // "header/footer/nav-rail visible while HIRED" decision), never a literal
+                        // "back" out of the meter. See HiredScreen's own doc for the rest of this pane.
+                        CaptainPane.METER -> HiredScreen(navController = navController)
                     }
                 }
-                if (pane == CaptainPane.DASHBOARD) {
+                if (pane == CaptainPane.DASHBOARD || pane == CaptainPane.METER) {
                     Spacer(Modifier.height(18.dp))
                     Row(modifier = Modifier.height(136.dp).fillMaxWidth()) {
                         ShiftStatsBar(
@@ -473,6 +502,7 @@ fun DeckHomeScreen(
             Spacer(Modifier.width(12.dp))
             CaptainNavRail(
                 pane = pane,
+                hasActiveTrip = hasActiveTrip,
                 onSelectPane = { pane = it },
                 menuExpanded = menuExpanded,
                 onToggleMenu = { menuExpanded = !menuExpanded },
@@ -562,6 +592,7 @@ fun DeckHomeScreen(
     CaptainNavFlyout(
         visible = menuExpanded,
         pane = pane,
+        hasActiveTrip = hasActiveTrip,
         onSelectPane = { pane = it; menuExpanded = false },
         onOpenPricing = { showSetPrice = true; menuExpanded = false },
         onOpenVouchers = { showVoucherInfo = true; menuExpanded = false },
@@ -587,7 +618,7 @@ private sealed interface MeterStartPhase {
 
 /** The rail's fixed destinations (`01 · HOME — Collapsed Rail` / `02 · HOME — Expanded Menu`) —
  * see this file's class doc for exactly which Figma items are aliased, dropped, or added and why. */
-private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, MESSAGES, MAP }
+private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, MESSAGES, MAP, METER }
 
 /** `rememberCoroutineScope()`, spelled out under a distinct name only so this file's own
  * [kotlinx.coroutines.launch] call above reads unambiguously next to the unrelated
@@ -1633,11 +1664,20 @@ private sealed interface RailAction {
     data object LogOff : RailAction
 }
 
-private val RAIL_ITEMS = listOf(
+/**
+ * [hasActiveTrip] decides what the METER row actually points at (Phase A shell-integration,
+ * 2026-09-03): the old hardcoded alias to [CaptainPane.DASHBOARD] ("meter lives on Dashboard") is
+ * now only the fallback for "no fare is open right now" — tapping METER while [DeckHomeScreen]'s
+ * own [DeckHomeScreen]'s active-trip read is true instead jumps straight to the real, live
+ * [CaptainPane.METER] pane, matching this file's class doc ("decide whether that alias should now
+ * point at the real active-fare pane when a trip is active"). A plain function (not a `val`) since
+ * this now genuinely varies per composition rather than being a fixed table.
+ */
+private fun railItems(hasActiveTrip: Boolean) = listOf(
     RailItem(Icons.Rounded.Home, null, "DASHBOARD", "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)),
     RailItem(Icons.Rounded.Receipt, 1, "TRIPS", "TRIP HISTORY", RailAction.ToPane(CaptainPane.TRIPS)),
     RailItem(Icons.Rounded.SwapHoriz, 2, "DISPATCH", "AVAILABLE TRIPS", RailAction.ToPane(CaptainPane.DISPATCH)),
-    RailItem(Icons.Rounded.AttachMoney, 3, "METER", "METER", RailAction.ToPane(CaptainPane.DASHBOARD)), // alias — meter lives on Dashboard
+    RailItem(Icons.Rounded.AttachMoney, 3, "METER", "METER", RailAction.ToPane(if (hasActiveTrip) CaptainPane.METER else CaptainPane.DASHBOARD)),
     RailItem(Icons.Rounded.SsidChart, 4, "EARNINGS", "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
     RailItem(Icons.Rounded.History, 5, "HISTORY", "SHIFT SUMMARY", RailAction.ToPane(CaptainPane.SHIFT)),
     RailItem(Icons.Rounded.LocationOn, 6, "ZONES", "PLOT ZONES", RailAction.ToPane(CaptainPane.ZONES)),
@@ -1659,6 +1699,7 @@ private val FLYOUT_EXTRA_ITEMS = listOf(
 @Composable
 private fun CaptainNavRail(
     pane: CaptainPane,
+    hasActiveTrip: Boolean,
     onSelectPane: (CaptainPane) -> Unit,
     menuExpanded: Boolean,
     onToggleMenu: () -> Unit,
@@ -1711,14 +1752,18 @@ private fun CaptainNavRail(
             // run taller than the rail's real available height on some sessions (measured live on
             // the SM-T575: an un-scrollable Column here silently clipped everything from HISTORY
             // down). verticalScroll keeps every item reachable from the collapsed rail too.
-            // DASHBOARD and METER both alias CaptainPane.DASHBOARD (see RAIL_ITEMS' own comment) —
-            // matching on `pane` alone would light up BOTH simultaneously, which is not what the
-            // reference shows (exactly one item highlighted at a time). Picking only the FIRST
-            // item whose target matches resolves the alias in DASHBOARD's favour, matching the
-            // reference exactly without needing separate click-tracked selection state.
-            val activeIndex = RAIL_ITEMS.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
+            // DASHBOARD and METER both alias CaptainPane.DASHBOARD while no fare is open (see
+            // railItems' own comment) — matching on `pane` alone would light up BOTH
+            // simultaneously, which is not what the reference shows (exactly one item highlighted
+            // at a time). Picking only the FIRST item whose target matches resolves the alias in
+            // DASHBOARD's favour, matching the reference exactly without needing separate
+            // click-tracked selection state. Once a fare IS open, METER's own action target
+            // becomes CaptainPane.METER (distinct from DASHBOARD's), so both light up correctly on
+            // their own pane with no alias ambiguity left to resolve.
+            val items = railItems(hasActiveTrip)
+            val activeIndex = items.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
             Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                RAIL_ITEMS.forEachIndexed { index, item ->
+                items.forEachIndexed { index, item ->
                     RailRow(item = item, selected = index == activeIndex, onClick = { dispatch(item.action) })
                 }
             }
@@ -1759,6 +1804,7 @@ private fun CaptainNavRail(
 private fun CaptainNavFlyout(
     visible: Boolean,
     pane: CaptainPane,
+    hasActiveTrip: Boolean,
     onSelectPane: (CaptainPane) -> Unit,
     onOpenPricing: () -> Unit,
     onOpenVouchers: () -> Unit,
@@ -1796,7 +1842,7 @@ private fun CaptainNavFlyout(
         ) {
             Text("MENU", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = CaptainPalette.textSecondary)
             Spacer(Modifier.height(16.dp))
-            val flyoutItems = (RAIL_ITEMS + FLYOUT_EXTRA_ITEMS + listOf(RailItem(Icons.AutoMirrored.Rounded.Logout, null, "LOG OUT", "LOG OUT", RailAction.LogOff)))
+            val flyoutItems = (railItems(hasActiveTrip) + FLYOUT_EXTRA_ITEMS + listOf(RailItem(Icons.AutoMirrored.Rounded.Logout, null, "LOG OUT", "LOG OUT", RailAction.LogOff)))
                 .distinctBy { it.flyoutLabel }
             // Same DASHBOARD/METER-alias fix as the collapsed rail above — only the first
             // matching row highlights, not every alias of the current pane.
