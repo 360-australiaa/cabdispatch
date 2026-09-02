@@ -84,6 +84,14 @@ data class LoginVehicleBindUiState(
     val checklist: Map<String, Boolean> = PRE_SHIFT_CHECKLIST_ITEMS.associate { it.first to false },
     val isStartingShift: Boolean = false,
     val shiftError: String? = null,
+    /** Set from [au.com.threesixty.cabdispatch.data.remote.ShiftDto.deviceMismatchWarning] on a
+     * successful [LoginVehicleBindViewModel.startShift] — the shift has ALREADY started at this
+     * point (see that field's doc: server-side, advisory only), this is purely informational for
+     * the driver. Non-null holds the [LoginStep.INSPECTION] screen on-screen with a dismissible
+     * dialog (see [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen]) instead
+     * of continuing straight on to [CabDispatchRoutes.SHIFT_START][au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.SHIFT_START] —
+     * [LoginVehicleBindViewModel.dismissDeviceMismatchWarning] does that once acknowledged. */
+    val deviceMismatchWarning: String? = null,
 ) {
     val allChecklistItemsChecked: Boolean get() = checklist.values.all { it }
 }
@@ -217,6 +225,13 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(checklist = it.checklist + (key to !(it.checklist[key] ?: false))) }
     }
 
+    /** Non-null only for the brief window between a successful [startShift] that carried a
+     * [LoginVehicleBindUiState.deviceMismatchWarning] and the driver dismissing that dialog —
+     * see [dismissDeviceMismatchWarning]. The shift itself is already open by the time this is
+     * ever set; this only defers the SAME [onShiftStarted] navigation callback [startShift] was
+     * given, so the driver sees the warning before moving on to the shift-start screen. */
+    private var pendingOnShiftStarted: (() -> Unit)? = null
+
     fun startShift(onShiftStarted: () -> Unit) {
         val state = _uiState.value
         val driverId = state.loggedInDriverId ?: return
@@ -234,7 +249,20 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
             // canonicalizes rego->UUID server-side (services/shift.py), so the rego fallback here
             // stays safe for the offline/unresolved case.
             val vehicleIdForApi = _uiState.value.resolvedVehicleUuid ?: vehicleId
-            val result = AppContainer.shiftRepository.startShift(driverId, vehicleIdForApi, inspectionJson)
+            // Read fresh, never persisted — same call
+            // SettingsViewModel.submitPairingCode uses to register this tablet as a Device. Sent
+            // purely so the backend can run its non-blocking device/vehicle mismatch check (see
+            // ShiftStartDto.deviceAndroidId's doc); never used to gate starting the shift itself.
+            val deviceAndroidId = android.provider.Settings.Secure.getString(
+                getApplication<Application>().contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID,
+            )
+            val result = AppContainer.shiftRepository.startShift(
+                driverId,
+                vehicleIdForApi,
+                inspectionJson,
+                deviceAndroidId,
+            )
             result.onSuccess { shift ->
                 SessionHolder.set(
                     DriverSession(
@@ -248,13 +276,30 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                         shiftStartAt = shift.startAt,
                     ),
                 )
-                _uiState.update { it.copy(isStartingShift = false) }
-                onShiftStarted()
+                _uiState.update {
+                    it.copy(isStartingShift = false, deviceMismatchWarning = shift.deviceMismatchWarning)
+                }
+                // The shift is already open at this point regardless — a mismatch warning only
+                // holds the screen transition so the driver actually sees it (see
+                // dismissDeviceMismatchWarning), it never holds up the shift itself.
+                if (shift.deviceMismatchWarning == null) {
+                    onShiftStarted()
+                } else {
+                    pendingOnShiftStarted = onShiftStarted
+                }
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(isStartingShift = false, shiftError = error.message ?: "Could not start shift")
                 }
             }
         }
+    }
+
+    /** Acknowledges [LoginVehicleBindUiState.deviceMismatchWarning] and proceeds with the
+     * navigation [startShift] deferred while it was showing. */
+    fun dismissDeviceMismatchWarning() {
+        _uiState.update { it.copy(deviceMismatchWarning = null) }
+        pendingOnShiftStarted?.invoke()
+        pendingOnShiftStarted = null
     }
 }

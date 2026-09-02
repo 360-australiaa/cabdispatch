@@ -54,7 +54,7 @@ async def _get_owned_shift(session: AsyncSession, *, tenant_id: str, shift_id: s
 async def start(
     body: ShiftStart,
     tenant_id: str = Depends(get_current_tenant_id),
-    _user=Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
     """Opens a new shift, capturing the pre-shift inspection checklist.
@@ -65,6 +65,11 @@ async def start(
     driver's open shift on this vehicle blocks the request with 409 unless
     `force_handover: true` is set — a real shift changeover, not a silent
     takeover.
+
+    If `device_android_id` is supplied, also runs a non-blocking check
+    against that tablet's paired vehicle (`fleet.Device.vehicle_id`) — a
+    mismatch never blocks or alters the shift, it just sets
+    `device_mismatch_warning` on the response and writes an audit-log row.
     """
     try:
         return await start_shift(
@@ -75,6 +80,8 @@ async def start(
             start_at=body.start_at,
             inspection_json=body.inspection_json,
             force_handover=body.force_handover,
+            device_android_id=body.device_android_id,
+            device_check_actor_user_id=user.id,
         )
     except ShiftConflictError as exc:
         conflicting = exc.conflicting_shift

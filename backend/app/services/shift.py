@@ -17,7 +17,9 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import Device
 from app.models.shift import Shift
+from app.services.audit_log import record_audit
 from app.services.fare_engine import round_half_up
 
 logger = logging.getLogger("cab_dispatch.shift")
@@ -115,6 +117,69 @@ async def _recompute_trip_aggregates(
     )
 
 
+async def _check_device_vehicle_mismatch(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    actor_user_id: str | None,
+    vehicle_id: str,
+    device_android_id: str,
+    shift_id: str,
+) -> str | None:
+    """Non-blocking cross-check: does the calling tablet's paired vehicle
+    (`fleet.Device.vehicle_id`, set via QR pairing — see app.services.fleet
+    module docstring) agree with the vehicle the driver is starting THIS
+    shift on? These two records are entirely decoupled (a Device is bound
+    only to a Vehicle; a Shift is opened by driver_id/vehicle_id with no
+    reference to any Device row at all) and nothing else in the system ever
+    compares them, so they can silently drift apart forever — e.g. a tablet
+    physically moved to a different car without re-pairing. This is purely
+    advisory: it never blocks or alters the shift being started, it only
+    writes an audit-log breadcrumb and returns a human-readable warning
+    string for the API layer to surface, or None if there's nothing to warn
+    about (no device row found, or its vehicle matches).
+
+    `actor_user_id` is the AUTHENTICATED caller (the user hitting the API,
+    per `get_current_user`), not `driver_id` from the request body — the
+    latter is only a loosely-typed, cross-domain-unconstrained field on
+    `Shift` (see app/models/shift.py's own DEVIATION note) that need not
+    correspond to a real `users` row, whereas `AuditLog.actor_user_id` has a
+    real ForeignKey to `users.id`.
+
+    Queried directly here (not via a `fleet` service/module helper) per the
+    task brief, to keep this self-contained in the shift domain while a
+    parallel workstream is actively changing `app/models/fleet.py` /
+    `app/services/fleet.py` / their API and schema counterparts.
+    """
+    result = await session.execute(
+        select(Device).where(Device.tenant_id == tenant_id, Device.android_id == device_android_id)
+    )
+    device = result.scalar_one_or_none()
+    if device is None or device.vehicle_id is None or device.vehicle_id == vehicle_id:
+        return None
+
+    warning = (
+        f"This tablet (android_id={device_android_id}) is paired to vehicle "
+        f"{device.vehicle_id}, but this shift was started on vehicle {vehicle_id}. "
+        "Double-check the tablet is installed in the right car."
+    )
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        action="shift_device_vehicle_mismatch",
+        entity_type="shift",
+        entity_id=shift_id,
+        after={
+            "device_id": device.id,
+            "device_android_id": device_android_id,
+            "device_vehicle_id": device.vehicle_id,
+            "shift_vehicle_id": vehicle_id,
+        },
+    )
+    return warning
+
+
 async def start_shift(
     session: AsyncSession,
     *,
@@ -124,6 +189,8 @@ async def start_shift(
     start_at: datetime | None,
     inspection_json: dict | None,
     force_handover: bool = False,
+    device_android_id: str | None = None,
+    device_check_actor_user_id: str | None = None,
 ) -> Shift:
     """Opens a new shift, guarding against the two ways "who is currently
     driving this vehicle" can otherwise go ambiguous on a real fleet where
@@ -148,6 +215,15 @@ async def start_shift(
        stops two drivers from ever simultaneously "having" the same vehicle
        on paper, which would otherwise make trip attribution and incident
        liability ambiguous.
+
+    If `device_android_id` is given, also runs a non-blocking cross-check
+    against `fleet.Device.vehicle_id` (see `_check_device_vehicle_mismatch`)
+    — the tablet's paired vehicle and the shift's vehicle_id are entirely
+    independent facts recorded in different tables, so nothing else in the
+    system ever notices if they disagree. A mismatch never blocks or alters
+    this shift; it only writes an audit-log row and sets the returned
+    Shift's transient `device_mismatch_warning` attribute (also exposed on
+    `ShiftRead`) for the API layer to surface to the driver.
     """
     effective_start_at = start_at or datetime.now(UTC)
 
@@ -196,8 +272,33 @@ async def start_shift(
         inspection_json=inspection_json,
     )
     session.add(shift)
+    # Flush (not commit) so shift.id is populated before the device mismatch
+    # check needs it as the audit entry's entity_id, while keeping the audit
+    # row (if any) in the SAME transaction as the shift creation — see
+    # app.services.audit_log.record_audit's own docstring on why it flushes
+    # rather than commits.
+    await session.flush()
+
+    device_mismatch_warning: str | None = None
+    if device_android_id is not None:
+        device_mismatch_warning = await _check_device_vehicle_mismatch(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=device_check_actor_user_id,
+            vehicle_id=vehicle_id,
+            device_android_id=device_android_id,
+            shift_id=shift.id,
+        )
+
     await session.commit()
     await session.refresh(shift)
+    # Transient (non-mapped) attribute — never persisted, just a way to hand
+    # the API layer this advisory warning without changing start_shift's
+    # return type. ShiftRead declares a matching optional field so pydantic
+    # picks it up via getattr when present, and defaults to None (same as
+    # every other caller of start_shift/ShiftRead, which never sets this)
+    # when absent — see app.schemas.shift.ShiftRead.device_mismatch_warning.
+    shift.device_mismatch_warning = device_mismatch_warning
     return shift
 
 

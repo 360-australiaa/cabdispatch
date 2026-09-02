@@ -101,6 +101,16 @@ fun LoginVehicleBindScreen(
                 navController.navigate(CabDispatchRoutes.SHIFT_START)
             }
         }
+
+        // Advisory-only (the shift is already open by the time this can ever show — see
+        // LoginVehicleBindUiState.deviceMismatchWarning's doc): a dismissible dialog, not a
+        // blocking gate, mirroring ReportDefectDialog's CaptainDialogScrim/CaptainPanel styling
+        // below rather than the inline-Text `shiftError` convention (that one predates a
+        // successful start and gates the button; this one never does).
+        DeviceMismatchWarningDialog(
+            message = state.deviceMismatchWarning,
+            onDismiss = { viewModel.dismissDeviceMismatchWarning() },
+        )
     }
 }
 
@@ -664,6 +674,39 @@ private fun ReportDefectDialog(visible: Boolean, onDismiss: () -> Unit) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Device/shift mismatch heads-up (backend `ShiftDto.deviceMismatchWarning` — see
+ * [LoginVehicleBindUiState.deviceMismatchWarning]'s doc). By the time this can show, the shift
+ * has ALREADY started successfully; this is purely informational, never a retry/error state like
+ * [ReportDefectDialog], so it's a single acknowledgement, not a form.
+ */
+@Composable
+private fun DeviceMismatchWarningDialog(message: String?, onDismiss: () -> Unit) {
+    CaptainDialogScrim(visible = message != null, onDismissRequest = onDismiss) {
+        CaptainPanel(modifier = Modifier.width(480.dp), cornerRadiusDp = 20, raised = true) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
+                    Text("Check tablet placement", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+                }
+                Text(
+                    message ?: "",
+                    fontFamily = InterFamily,
+                    fontSize = 15.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+                Text(
+                    "Your shift has already started — this is just a heads-up, nothing to fix here right now.",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textMuted,
+                )
+                CaptainButton(text = "OK, continue", modifier = Modifier.fillMaxWidth(), onClick = onDismiss)
             }
         }
     }

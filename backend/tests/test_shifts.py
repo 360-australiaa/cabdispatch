@@ -12,10 +12,20 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
+from app.models.fleet import Device, Vehicle
 from app.models.trips import Trip
 from tests.conftest import auth_headers
+
+
+async def _tenant_of(headers: dict) -> str:
+    from app.core import security
+
+    token = headers["Authorization"].split(" ", 1)[1]
+    return security.decode_token(token)["tenant_id"]
 
 
 def _trip_kwargs(*, tenant_id: str, shift_id: str, driver_id: str, vehicle_id: str, **overrides):
@@ -465,3 +475,128 @@ async def test_same_driver_starting_a_new_shift_on_the_same_vehicle_is_not_a_con
         headers=headers,
     )
     assert second.status_code == 201, second.text
+
+
+# --- device/shift mismatch warning (advisory, non-blocking) -------------------
+# The tablet's paired vehicle (fleet.Device.vehicle_id) and a shift's
+# vehicle_id are two entirely independent facts, recorded in different
+# tables with no cross-reference — see app.services.shift.start_shift's
+# _check_device_vehicle_mismatch docstring. These tests confirm the
+# non-blocking cross-check surfaces a warning + audit-log row on a genuine
+# mismatch, and stays silent (and fully backward compatible) otherwise.
+
+
+async def test_device_vehicle_mismatch_warns_without_blocking_the_shift(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    paired_vehicle = Vehicle(tenant_id=tenant_id, rego="TX-001")
+    other_vehicle = Vehicle(tenant_id=tenant_id, rego="TX-002")
+    session.add_all([paired_vehicle, other_vehicle])
+    await session.commit()
+    await session.refresh(paired_vehicle)
+    await session.refresh(other_vehicle)
+
+    android_id = f"android-{uuid.uuid4()}"
+    device = Device(tenant_id=tenant_id, android_id=android_id, vehicle_id=paired_vehicle.id)
+    session.add(device)
+    await session.commit()
+
+    driver_id = str(uuid.uuid4())
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={
+            "driver_id": driver_id,
+            "vehicle_id": other_vehicle.id,
+            "device_android_id": android_id,
+        },
+        headers=headers,
+    )
+
+    # Never blocks: the shift opens normally despite the mismatch.
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["vehicle_id"] == other_vehicle.id
+    assert body["end_at"] is None
+    assert body["device_mismatch_warning"] is not None
+    assert paired_vehicle.id in body["device_mismatch_warning"]
+    assert other_vehicle.id in body["device_mismatch_warning"]
+
+    # An audit-log breadcrumb was written in the same transaction.
+    audit_result = await session.execute(
+        select(AuditLog).where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "shift_device_vehicle_mismatch",
+            AuditLog.entity_id == body["id"],
+        )
+    )
+    audit_row = audit_result.scalar_one_or_none()
+    assert audit_row is not None
+    assert audit_row.entity_type == "shift"
+    assert audit_row.after_json["device_vehicle_id"] == paired_vehicle.id
+    assert audit_row.after_json["shift_vehicle_id"] == other_vehicle.id
+
+
+async def test_device_vehicle_match_produces_no_warning_and_no_audit_row(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-003")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    android_id = f"android-{uuid.uuid4()}"
+    device = Device(tenant_id=tenant_id, android_id=android_id, vehicle_id=vehicle.id)
+    session.add(device)
+    await session.commit()
+
+    driver_id = str(uuid.uuid4())
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={
+            "driver_id": driver_id,
+            "vehicle_id": vehicle.id,
+            "device_android_id": android_id,
+        },
+        headers=headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["device_mismatch_warning"] is None
+
+    audit_result = await session.execute(
+        select(AuditLog).where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "shift_device_vehicle_mismatch",
+        )
+    )
+    assert audit_result.scalar_one_or_none() is None
+
+
+async def test_omitted_device_android_id_behaves_exactly_as_before(
+    client: AsyncClient, session: AsyncSession
+):
+    """Backward compatibility: a request with no device_android_id at all
+    (every caller before this change, and any client that never adopts the
+    new field) must behave identically — 201, shift opens, warning field is
+    simply absent/null."""
+    headers = await auth_headers(client, session, role="driver")
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["vehicle_id"] == vehicle_id
+    assert body["device_mismatch_warning"] is None

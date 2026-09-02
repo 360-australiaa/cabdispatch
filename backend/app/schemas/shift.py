@@ -26,6 +26,13 @@ class ShiftStart(BaseModel):
             "changeover) instead of the request being rejected with 409."
         ),
     )
+    device_android_id: str | None = Field(
+        default=None,
+        description=(
+            "The calling tablet's hardware id, if known — used only for a "
+            "non-blocking mismatch check, never to block or alter the shift."
+        ),
+    )
 
 
 class ShiftEnd(BaseModel):
@@ -101,6 +108,14 @@ class ShiftRead(BaseModel):
     plotted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Advisory-only cross-check result, set by app.services.shift.start_shift
+    # when the request included device_android_id (see ShiftStart above) AND
+    # that device's paired vehicle (fleet.Device.vehicle_id) disagreed with
+    # this shift's vehicle_id. Null/absent on every other shift (no device
+    # check requested, device not found, or vehicles matched) — including
+    # every shift read back later via GET, which never re-runs the check.
+    # Never blocks or alters the shift itself.
+    device_mismatch_warning: str | None = None
 
 
 class ShiftListResponse(BaseModel):

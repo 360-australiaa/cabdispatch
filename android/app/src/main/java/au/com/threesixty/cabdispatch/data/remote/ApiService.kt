@@ -1090,6 +1090,14 @@ data class ShiftStartDto(
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("start_at") val startAt: String? = null,
     @SerialName("inspection_json") val inspectionJson: Map<String, String>? = null,
+    /** The calling tablet's `Settings.Secure.ANDROID_ID`, if known — read fresh at shift-start
+     * (same call [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.submitPairingCode]
+     * uses to register a device), not persisted anywhere on-device. Used server-side only for a
+     * non-blocking cross-check against that device's paired vehicle (`fleet.Device.vehicle_id`) —
+     * see [ShiftDto.deviceMismatchWarning]. Never blocks or alters the shift. Defaulted null so
+     * this DTO still encodes fine for callers (offline-fallback path in
+     * [au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository]) that never read one. */
+    @SerialName("device_android_id") val deviceAndroidId: String? = null,
 )
 
 @Serializable
@@ -1123,6 +1131,13 @@ data class ShiftDto(
     @SerialName("plotted_at") val plottedAt: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /** Set by the backend (`app.services.shift.start_shift`) only when the request carried
+     * [ShiftStartDto.deviceAndroidId] AND that device's paired vehicle disagreed with this
+     * shift's [vehicleId] — a purely advisory, non-blocking heads-up (the shift above already
+     * opened regardless). Null on every other shift, including one re-read later via
+     * [ApiService.getShift], which never re-runs the check. Defaulted null for the same
+     * older-payload-compat reason as [plottedZoneId] above. */
+    @SerialName("device_mismatch_warning") val deviceMismatchWarning: String? = null,
 )
 
 @Serializable
