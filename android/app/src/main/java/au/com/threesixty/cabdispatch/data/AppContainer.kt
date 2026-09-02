@@ -23,7 +23,7 @@ import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
-import au.com.threesixty.cabdispatch.domain.StubTripStatsRepository
+import au.com.threesixty.cabdispatch.domain.RemoteTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
 import au.com.threesixty.cabdispatch.domain.ZonesRepository
@@ -274,7 +274,11 @@ object AppContainer {
     // Real ML Kit code-scanner impl (2026-08-28) — see RealQrScanner's own doc. StubQrScanner
     // stays defined for tests/no-camera environments, just no longer what this constructs.
     val qrScanner: QrScanner by lazy { RealQrScanner() }
-    val tripStatsRepository: TripStatsRepository by lazy { StubTripStatsRepository() }
+    // Real bug fixed (2026-09-02, Home-dashboard redesign pass): this was wired to
+    // StubTripStatsRepository, whose hardcoded-zero flow meant the dashboard's "TRIPS"/"EARNINGS"
+    // tiles always rendered 0/$0 for every driver, always — see RemoteTripStatsRepository's own
+    // doc and DASHBOARD_REDESIGN_2026.md. StubTripStatsRepository stays defined for tests/previews.
+    val tripStatsRepository: TripStatsRepository by lazy { RemoteTripStatsRepository() }
     val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
 
     /**

@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import au.com.threesixty.cabdispatch.domain.GpsQuality
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes

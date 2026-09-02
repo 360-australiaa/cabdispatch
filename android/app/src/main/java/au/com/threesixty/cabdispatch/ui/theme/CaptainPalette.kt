@@ -38,4 +38,39 @@ object CaptainPalette {
 
     /** Meter-dial idle ring/tick colour — Figma's neutral tick `#34384c`. */
     val dialNeutral = Color(0xFF34384C)
+
+    // --- Prominence-pass tokens (2026-09-02, Home-dashboard redesign) ------------------------
+    // Added for the "match the mockup — lots of shades/colours, prominent" visual pass on
+    // au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen: layered gradient washes
+    // and glow accents instead of flat fills, using the SAME hues already above (primary/accent/
+    // success/warning/danger) rather than inventing new ones — these are alpha/shade variants of
+    // existing tokens, precomputed as literal ARGB hex (matching this file's existing convention)
+    // rather than `.copy(alpha=...)` at every call site.
+
+    /** Card background top-of-gradient — a hair lighter than [panel] so cards read as gently lit
+     * from above rather than flat, without introducing a whole new neutral. */
+    val cardTop = Color(0xFF15182A)
+
+    /** Card background bottom-of-gradient — a hair darker than [panel]. Paired with [cardTop] via
+     * `Brush.verticalGradient` for subtle depth on every major Home panel. */
+    val cardBottom = Color(0xFF0D0E18)
+
+    /** Low-alpha purple wash for background glows (page backdrop, header, meter-dial backdrop) —
+     * [accent] at ~16% alpha, baked into the literal so call sites don't repeat `.copy(alpha=...)`. */
+    val glowPurpleSoft = Color(0x2AA855F7)
+
+    /** Stronger purple glow for a focal element's halo (meter dial ring backdrop, SOS armed state)
+     * — [accent] at ~33% alpha. */
+    val glowPurpleStrong = Color(0x55A855F7)
+
+    /** Low-alpha green wash for "healthy/available" card tints (e.g. a subtle tint behind the
+     * AVAILABLE pill) — [success] at ~14% alpha. */
+    val glowSuccessSoft = Color(0x2439E27A)
+
+    /** Low-alpha amber wash for "rank job/warning" tints (dispatch-card accents) — [warning] at
+     * ~14% alpha. */
+    val glowWarningSoft = Color(0x24FFB51B)
+
+    /** Low-alpha red wash for "danger/SOS" backgrounds — [danger] at ~14% alpha. */
+    val glowDangerSoft = Color(0x24EF4444)
 }

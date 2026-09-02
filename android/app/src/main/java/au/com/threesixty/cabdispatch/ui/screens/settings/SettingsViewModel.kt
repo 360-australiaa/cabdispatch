@@ -19,6 +19,8 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
+import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
@@ -33,7 +35,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
-enum class GpsQuality { NO_FIX, POOR, FAIR, GOOD, PERMISSION_DENIED }
+// GpsQuality moved to au.com.threesixty.cabdispatch.domain.GpsQuality (2026-09-02, Home-dashboard
+// redesign pass) so au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel can
+// share the exact same accuracy tiers instead of duplicating them — see that file's own doc.
 enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
 enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, REQUIRED }
 
@@ -145,16 +149,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             runCatching { locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull(),
         ).minByOrNull { it.accuracy }
 
-        if (fix == null) {
-            _uiState.update { it.copy(gpsQuality = GpsQuality.NO_FIX, gpsAccuracyM = null) }
-            return
+        // Same thresholds as before this pass, now shared with the Home dashboard's status strip
+        // via GpsQualityClassifier — see that object's own doc. Behavior-preserving: granted==true
+        // here always (the early-return above already handled the false case), fix?.accuracy null
+        // maps to NO_FIX exactly as the old inline `if (fix == null)` branch did.
+        _uiState.update {
+            it.copy(gpsQuality = GpsQualityClassifier.classify(granted, fix?.accuracy), gpsAccuracyM = fix?.accuracy)
         }
-        val quality = when {
-            fix.accuracy <= 10f -> GpsQuality.GOOD
-            fix.accuracy <= 30f -> GpsQuality.FAIR
-            else -> GpsQuality.POOR
-        }
-        _uiState.update { it.copy(gpsQuality = quality, gpsAccuracyM = fix.accuracy) }
     }
 
     // --- Network status ---

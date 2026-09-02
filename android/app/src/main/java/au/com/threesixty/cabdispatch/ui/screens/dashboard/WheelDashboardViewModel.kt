@@ -4,16 +4,16 @@ import android.Manifest
 import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.DeviceTelemetry
 import au.com.threesixty.cabdispatch.domain.DriverSession
+import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.TripContext
@@ -48,6 +48,21 @@ data class DashboardStatusStrip(
     val printerOk: Boolean = false,
     val batteryOk: Boolean = true,
     val batteryPercent: Int? = null,
+    /**
+     * Real fix-quality tier (2026-09-02, Home-dashboard redesign pass) — replaces [gpsOk]'s former
+     * "permission granted + provider enabled" proxy, which said nothing about whether the fix a
+     * driver would actually get is any good. [gpsOk] above is now derived from this
+     * ([GpsQualityClassifier.isOk]) rather than computed independently, so every existing reader of
+     * [gpsOk] keeps working unchanged while this field lets the header/system-status UI show the
+     * real tier when it wants to.
+     */
+    val gpsQuality: GpsQuality = GpsQuality.NO_FIX,
+    /** `"wifi"` / `"4g"` / `"offline"`, or `null` if [DeviceTelemetry.readNetworkType] itself
+     * couldn't check (see that function's doc) — [networkOk] above is derived from this. Real
+     * transport type, not a hardcoded "4G" label; deliberately carries no signal-strength adjective
+     * ("STRONG"/"WEAK") since this app has no [android.telephony.TelephonyManager]/SignalStrength
+     * reading anywhere to honestly back one. */
+    val networkType: String? = null,
 )
 
 data class WheelDashboardUiState(
@@ -201,34 +216,41 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
 
     // --- Status strip polling ---
 
+    /**
+     * Real bug fixed (2026-09-02, Home-dashboard redesign pass): [gpsOk][DashboardStatusStrip.gpsOk]
+     * used to mean only "location permission granted AND the GPS provider is switched on" — true
+     * the instant a driver grants the permission, even with zero actual fixes yet. Now derived from
+     * [AppContainer.speedSource]'s real last fix (already collected elsewhere on this same screen,
+     * e.g. [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent]'s distance
+     * calc) through the same [GpsQualityClassifier] tiers
+     * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]'s diagnostics card
+     * already used — one shared threshold, not two copies. Network: [DeviceTelemetry.readNetworkType]
+     * (already shipped for the live-position/device heartbeats) replaces the old
+     * `NET_CAPABILITY_INTERNET`-only boolean with the real wifi/4g/offline transport category, so the
+     * header can show what it actually is instead of a hardcoded "4G" label.
+     */
     private fun pollStatus(): DashboardStatusStrip {
         val context = getApplication<Application>()
         val batteryPercent = readBatteryPercent(context)
+        val gpsQuality = GpsQualityClassifier.classify(
+            permissionGranted = hasFineLocationPermission(context),
+            accuracyM = AppContainer.speedSource.locationFix.value?.accuracyM,
+        )
+        val networkType = DeviceTelemetry.readNetworkType(context)
         return DashboardStatusStrip(
-            gpsOk = hasFineLocationPermission(context) && isLocationEnabled(context),
-            networkOk = hasActiveInternet(context),
+            gpsOk = GpsQualityClassifier.isOk(gpsQuality),
+            networkOk = networkType != null && networkType != "offline",
             printerOk = AppContainer.receiptPrinterGateway.pairedDevice != null,
             batteryOk = batteryPercent == null || batteryPercent > 15,
             batteryPercent = batteryPercent,
+            gpsQuality = gpsQuality,
+            networkType = networkType,
         )
     }
 
     private fun hasFineLocationPermission(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
-
-    private fun isLocationEnabled(context: Context): Boolean {
-        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        return runCatching {
-            locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
-        }.getOrDefault(false)
-    }
-
-    private fun hasActiveInternet(context: Context): Boolean {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val caps = connectivityManager?.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        return caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-    }
 
     private fun readBatteryPercent(context: Context): Int? {
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
