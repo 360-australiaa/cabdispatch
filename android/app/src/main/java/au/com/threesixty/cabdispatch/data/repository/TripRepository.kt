@@ -68,6 +68,15 @@ class TripRepository(
         timeClass: String = "day",
         isPeak: Boolean = false,
         maxi: Boolean = false,
+        /** See [TripEntity.passengerCount]'s doc (Point to Point Transport (Fares) Order 2026
+         * compliance pass) — defaulted to 1 so every existing call site (a normal metered Start
+         * Meter tap) keeps compiling/behaving exactly as before. No UI call site passes a
+         * non-default value yet; wiring a passenger-count/wheelchair entry point is a future
+         * pass's job, not this one's. */
+        passengerCount: Int = 1,
+        /** See [TripEntity.wheelchairHiring]'s doc — same "no UI call site sets this yet" note as
+         * [passengerCount]. */
+        wheelchairHiring: Boolean = false,
         /** See [TripEntity.negotiatedTotal]'s doc — "Set Price" entry point (2026-08-10
          * meter-polish pass). Defaulted null so every existing call site (a normal metered Start
          * Meter tap) keeps compiling/behaving unchanged. */
@@ -85,6 +94,8 @@ class TripRepository(
             timeClass = timeClass,
             isPeak = isPeak,
             maxi = maxi,
+            passengerCount = passengerCount,
+            wheelchairHiring = wheelchairHiring,
             startAt = Instant.ofEpochMilli(now).toString(),
             startLat = startLat,
             startLng = startLng,
@@ -254,7 +265,13 @@ class TripRepository(
             timeClass = trip.timeClass,
             isPeak = trip.isPeak,
             maxi = trip.maxi,
+            passengerCount = trip.passengerCount,
+            wheelchairHiring = trip.wheelchairHiring,
             tolls = trip.tolls,
+            // (kept for clarity: passengerCount/wheelchairHiring above round-trip to the wire even
+            // though no UI call site sets them to a non-default value yet, same forward-compatible
+            // "send it anyway" convention this file already uses for voucherCode/accountReference/
+            // splitPayments above.)
             extras = trip.extras,
             cleaningFee = trip.cleaningFee,
             surchargePct = trip.surchargePct,

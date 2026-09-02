@@ -27,7 +27,11 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * (`voucherCode`, `accountReference`, `splitPaymentsJson`) — no new entity, just new columns on an
  * existing one, see that class's doc for each. Version bumped 4 -> 5 (2026-08-10 meter-polish
  * pass, "Set Price") adding one new nullable [TripEntity] column (`negotiatedTotal`) — same "no
- * new entity, no Migration" shortcut as the 3 -> 4 bump, for the same still-pre-release reason. No Migration
+ * new entity, no Migration" shortcut as the 3 -> 4 bump, for the same still-pre-release reason.
+ * Version bumped 5 -> 6 (Point to Point Transport (Fares) Order 2026 compliance pass) adding two
+ * new defaulted [TripEntity] columns (`passengerCount` Int = 1, `wheelchairHiring` Boolean =
+ * false) feeding the fare engine's maxi-rate eligibility check — same no-Migration shortcut again.
+ * No Migration
  * object is supplied for any bump so far because this project has never shipped v1 (no installed
  * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
  * MUST come with a real `Migration` — do NOT reach for
@@ -55,7 +59,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

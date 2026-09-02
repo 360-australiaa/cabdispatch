@@ -759,7 +759,16 @@ data class PositionPublishResponseDto(
  * share one DTO for. See `au.com.threesixty.cabdispatch.security.canonicalTariffPayload` (the
  * Kotlin port of `backend/app/services/tariff_signing.canonical_tariff_payload`, the exact
  * byte-format this signs) and [au.com.threesixty.cabdispatch.sync.TariffCache.refresh] (where the
- * signature is actually checked before this DTO is trusted/cached).
+ * signature is actually checked, then run through [au.com.threesixty.cabdispatch.domain.fare.validateAgainstFaresOrder]
+ * — Point to Point Transport (Fares) Order 2026, effective 1 June 2026 — before this DTO is
+ * trusted/cached).
+ *
+ * None of this DTO's own field defaults below hardcode a stale rate figure from the superseded
+ * Fares Order 2025 (no.2) — every actual rate field (`flag_fall`/`dist_rate_1`/`dist_rate_2`/
+ * `night_rate_1`/`night_rate_2`/`waiting_rate_per_min`) is mandatory on the wire, with no
+ * client-side default to go stale; only the non-rate structural defaults below (thresholds,
+ * multipliers, the PSL flat amount) have literal defaults, and none of those changed in the 2026
+ * Order.
  */
 @Serializable
 data class TariffDto(
@@ -844,6 +853,13 @@ data class TripCreateDto(
     @SerialName("time_class") val timeClass: String = "day", // day | night | holiday
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.passengerCount]'s
+     * doc (Point to Point Transport (Fares) Order 2026 compliance pass). Nullable-defaulted
+     * (rather than required) per this file's own convention for a field added after this DTO
+     * already had live callers. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("gps_trace_ref") val gpsTraceRef: String? = null,
@@ -863,6 +879,11 @@ data class TripDto(
     @SerialName("time_class") val timeClass: String,
     @SerialName("is_peak") val isPeak: Boolean,
     val maxi: Boolean,
+    /** See [TripCreateDto.passengerCount]'s doc. Nullable-defaulted per this file's convention for
+     * a field added after this DTO already had live callers. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripCreateDto.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
     @SerialName("start_at") val startAt: String,
     @SerialName("end_at") val endAt: String?,
     @SerialName("start_lat") val startLat: Double,
@@ -1021,6 +1042,10 @@ data class TripSyncItemDto(
     @SerialName("time_class") val timeClass: String = "day",
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
+    /** See [TripCreateDto.passengerCount]'s doc. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripCreateDto.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
