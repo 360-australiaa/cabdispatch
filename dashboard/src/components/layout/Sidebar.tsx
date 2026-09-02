@@ -16,6 +16,7 @@ import {
   LogOut,
   Building2,
   MapPinned,
+  ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -42,6 +43,11 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/fleet", label: "Fleet & Drivers", icon: Car },
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
+  // GET /v1/audit-log has no role gate server-side (any authenticated tenant
+  // user may read the trail) -- so this nav item stays visible to every
+  // role, same as every other item above. Only the in-page "Verify chain"
+  // action is owner/admin gated (see pages/audit-log/index.tsx's `canVerify`).
+  { to: "/audit-log", label: "Audit Log", icon: ScrollText },
   { to: "/settings/white-label", label: "White-label", icon: Palette },
   { to: "/settings/security", label: "Security", icon: ShieldCheck },
 ];

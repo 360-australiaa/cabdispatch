@@ -7,6 +7,7 @@ import LiveMapPage from "@/pages/live-map";
 import DispatchPage from "@/pages/dispatch";
 import MessagesPage from "@/pages/messages";
 import DuressPage from "@/pages/duress";
+import AuditLogPage from "@/pages/audit-log";
 import TripsPage from "@/pages/trips";
 import ShiftsPage from "@/pages/shifts";
 import TariffsPage from "@/pages/tariffs";
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
       { path: "fleet", element: <FleetPage /> },
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
+      { path: "audit-log", element: <AuditLogPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
       { path: "settings/security", element: <SecuritySettingsPage /> },
       {
