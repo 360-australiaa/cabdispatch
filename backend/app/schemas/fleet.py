@@ -30,6 +30,8 @@ class Page(BaseModel, Generic[T]):
 class VehicleBase(BaseModel):
     rego: str = Field(min_length=1, max_length=20)
     vin: str | None = Field(default=None, max_length=32)
+    make: str | None = Field(default=None, max_length=60)
+    model: str | None = Field(default=None, max_length=60)
     vehicle_class: VehicleClass = "standard"
     camera_serial: str | None = Field(default=None, max_length=100)
     tracking_device_id: str | None = Field(default=None, max_length=100)
@@ -61,6 +63,8 @@ class VehicleUpdate(BaseModel):
 
     rego: str | None = Field(default=None, min_length=1, max_length=20)
     vin: str | None = None
+    make: str | None = None
+    model: str | None = None
     vehicle_class: VehicleClass | None = None
     camera_serial: str | None = None
     tracking_device_id: str | None = None

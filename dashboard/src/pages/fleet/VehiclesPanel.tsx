@@ -131,6 +131,8 @@ export function VehiclesPanel() {
     setFormValues({
       rego: v.rego,
       vin: v.vin ?? "",
+      make: v.make ?? "",
+      model: v.model ?? "",
       vehicle_class: v.vehicle_class,
       camera_serial: v.camera_serial ?? "",
       tracking_device_id: v.tracking_device_id ?? "",
@@ -168,6 +170,11 @@ export function VehiclesPanel() {
 
   const columns: TableColumn<Vehicle>[] = [
     { key: "rego", header: "Rego", sortable: true, render: (v) => <span className="font-medium">{v.rego}</span> },
+    {
+      key: "make_model",
+      header: "Make/Model",
+      render: (v) => [v.make, v.model].filter(Boolean).join(" ") || "—",
+    },
     { key: "vin", header: "VIN", render: (v) => v.vin || "—" },
     {
       key: "vehicle_class",
@@ -401,6 +408,22 @@ export function VehiclesPanel() {
               value={formValues.vin}
               onChange={(e) => setFormValues((f) => ({ ...f, vin: e.target.value }))}
               maxLength={32}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Make</label>
+            <Input
+              value={formValues.make}
+              onChange={(e) => setFormValues((f) => ({ ...f, make: e.target.value }))}
+              maxLength={60}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Model</label>
+            <Input
+              value={formValues.model}
+              onChange={(e) => setFormValues((f) => ({ ...f, model: e.target.value }))}
+              maxLength={60}
             />
           </div>
           <div>

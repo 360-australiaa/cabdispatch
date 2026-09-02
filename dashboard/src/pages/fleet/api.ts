@@ -86,6 +86,8 @@ function toVehiclePayload(values: VehicleFormValues) {
   return {
     rego: values.rego.trim(),
     vin: values.vin.trim() || null,
+    make: values.make.trim() || null,
+    model: values.model.trim() || null,
     vehicle_class: values.vehicle_class,
     camera_serial: values.camera_serial.trim() || null,
     tracking_device_id: values.tracking_device_id.trim() || null,

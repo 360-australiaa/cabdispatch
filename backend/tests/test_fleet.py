@@ -59,6 +59,23 @@ async def test_create_and_get_vehicle(client, session):
     assert resp.json()["id"] == vehicle_id
 
 
+async def test_create_vehicle_make_model_round_trips(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await _create_vehicle(client, headers, rego="tx-002", make="Toyota", model="Camry")
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["make"] == "Toyota"
+    assert body["model"] == "Camry"
+    vehicle_id = body["id"]
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["make"] == "Toyota"
+    assert body["model"] == "Camry"
+
+
 async def test_create_vehicle_requires_admin_role(client, session):
     headers = await auth_headers(client, session, role="driver")
 

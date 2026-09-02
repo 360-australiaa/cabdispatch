@@ -50,6 +50,8 @@ class Vehicle(Base, TimestampMixin, TenantScopedMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     rego: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     vin: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    make: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(60), nullable=True)
     vehicle_class: Mapped[str] = mapped_column(String(20), nullable=False, default=VEHICLE_CLASS_STANDARD)
     camera_serial: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tracking_device_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

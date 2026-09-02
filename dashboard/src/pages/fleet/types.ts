@@ -26,6 +26,8 @@ export interface Vehicle {
   tenant_id: string;
   rego: string;
   vin: string | null;
+  make: string | null;
+  model: string | null;
   vehicle_class: VehicleClass;
   camera_serial: string | null;
   tracking_device_id: string | null;
@@ -39,6 +41,8 @@ export interface Vehicle {
 export interface VehicleFormValues {
   rego: string;
   vin: string;
+  make: string;
+  model: string;
   vehicle_class: VehicleClass;
   camera_serial: string;
   tracking_device_id: string;
@@ -49,6 +53,8 @@ export interface VehicleFormValues {
 export const EMPTY_VEHICLE_FORM: VehicleFormValues = {
   rego: "",
   vin: "",
+  make: "",
+  model: "",
   vehicle_class: "standard",
   camera_serial: "",
   tracking_device_id: "",
