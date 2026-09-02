@@ -133,6 +133,7 @@ fun SettingsScreen(
         SettingsSubScreen.FARE_SCHEDULE -> FareScheduleContent(
             state = state,
             onBack = { subScreen = SettingsSubScreen.MAIN },
+            onSetMaxiVehicle = viewModel::setMaxiVehicle,
         )
         SettingsSubScreen.FACTORY_RESET_PIN -> AdminPinGateScreen(
             subtitle = "Enter the admin PIN to wipe all local trip/shift data and sign out. This cannot be undone.",
@@ -491,7 +492,7 @@ private fun PrinterPairingContent(state: SettingsUiState, viewModel: SettingsVie
  * tenant/tariff value.
  */
 @Composable
-private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
+private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit, onSetMaxiVehicle: (Boolean) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -556,6 +557,50 @@ private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
                         AdditionalChargesSection(pslAmount = tariff.pslAmount, cleaningFeeCap = tariff.cleaningFeeCap)
                         SydneyAirportFixedFareSection()
                     }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // Point to Point Transport (Fares) Order 2026 UI-wiring pass — a local,
+                // honestly-labelled driver self-declaration (see MaxiVehicleStore's own doc for why
+                // this is not read from a real vehicle record: `VehicleDto` carries no such field
+                // anywhere server-side). Placed here, the app's existing vehicle/fare-schedule
+                // area, rather than inventing a new settings section.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(CaptainPalette.panel)
+                        .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "This vehicle has 5+ passenger seats",
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp,
+                            color = CaptainPalette.textPrimary,
+                        )
+                        Text(
+                            "Your own declaration for this vehicle, saved on this device — not read from a vehicle record. " +
+                                "Also shown on the Start Meter card. Turns on the maxi (×1.5) rate only together with 5+ " +
+                                "passengers, or a Sydney Airport rank maxi request, and never for a wheelchair hiring.",
+                            fontFamily = InterFamily,
+                            fontSize = 13.sp,
+                            color = CaptainPalette.textMuted,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = state.isMaxiVehicle,
+                        onCheckedChange = onSetMaxiVehicle,
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedTrackColor = CaptainPalette.primary,
+                            checkedThumbColor = CaptainPalette.accent,
+                        ),
+                    )
                 }
             }
         }

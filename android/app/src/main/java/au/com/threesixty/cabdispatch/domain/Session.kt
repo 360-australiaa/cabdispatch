@@ -80,6 +80,38 @@ data class TripContext(
      * silently assumed handled.
      */
     val negotiatedTotal: String? = null,
+    /**
+     * Driver's local self-declaration that the bound vehicle has 5+ seats excluding the driver —
+     * see [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s doc for why this is a
+     * per-device driver declaration, not real fleet-registry data (`VehicleDto` carries no such
+     * field). Captured at Start Meter time from [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]
+     * (as prefilled/edited on the start-meter card or in Settings) so the value is locked in for
+     * this specific trip rather than read again mid-trip. `false` (the default) for every existing
+     * call site — zero behavior change for a driver who never touches the new maxi-taxi controls.
+     */
+    val isMaxiVehicle: Boolean = false,
+    /**
+     * Declared passenger count for this hiring, 1-11 — the primary legal trigger (5+ passengers)
+     * for the maxi rate per the Point to Point Transport (Fares) Order 2026. Threaded through to
+     * [au.com.threesixty.cabdispatch.domain.FareEngine.startTrip] and
+     * [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]. Defaults to 1, the
+     * ordinary case, matching every pre-existing call site's implicit behavior.
+     */
+    val passengerCount: Int = 1,
+    /**
+     * True when the hiring is for a passenger travelling in a wheelchair — the Fares Order
+     * carve-out that means the maxi rate is never charged regardless of [isMaxiVehicle]/
+     * [passengerCount]/[airportRankRequestedMaxi]. Defaults false, unchanged for any call site
+     * that doesn't set it.
+     */
+    val wheelchairHiring: Boolean = false,
+    /**
+     * True only when the hirer specifically requested a maxi taxi at a Sydney Airport rank — the
+     * one scenario where the maxi rate applies independent of [passengerCount]. Honestly scoped:
+     * this app has no rank-location detection, so this is a driver-declared checkbox meaningful
+     * only in that specific circumstance, never a general "airport trip" flag. Defaults false.
+     */
+    val airportRankRequestedMaxi: Boolean = false,
 )
 
 /**

@@ -118,6 +118,9 @@ fun HiredScreen(
     var showStartedBanner by remember { mutableStateOf(false) }
     var showTollPad by remember { mutableStateOf(false) }
     var showExtrasNote by remember { mutableStateOf(false) }
+    // Point to Point Transport (Fares) Order 2026 UI-wiring pass: mid-trip passenger-count
+    // correction — see HiredViewModel.updatePassengerCount's doc.
+    var showPassengerEdit by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel.isNewTripStart) {
         if (viewModel.isNewTripStart) {
@@ -210,6 +213,51 @@ fun HiredScreen(
                 Box(Modifier.fillMaxWidth().height(2.dp).background(stateColor))
             }
 
+            // --- Maxi rate / wheelchair-hiring indicators (Point to Point Transport (Fares)
+            // Order 2026 UI-wiring pass). Read ONLY [fareState.maxiRateApplied] — the pure fare
+            // engine's own derived flag, copied through by FareEngineImpl — never recomputed here
+            // from isMaxiVehicle/passengerCount/wheelchairHiring directly, so this banner can never
+            // drift from what is actually being charged. Unmissable per the brief: a full-width,
+            // high-contrast banner, not a small chip easy to miss.
+            AnimatedVisibility(visible = fareState.maxiRateApplied, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CaptainPalette.warning)
+                        .padding(horizontal = 32.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "⚠  MAXI RATE ×1.5 ACTIVE",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.bg,
+                    )
+                }
+            }
+            // Informational only (NSW Reg cl 82) — never changes actual meter start/stop
+            // mechanics, which this pass does not touch.
+            AnimatedVisibility(visible = fareState.wheelchairHiring, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CaptainPalette.panel)
+                        .padding(horizontal = 32.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "♿  Wheelchair hiring — meter should start once the passenger is safely secured, per NSW Reg cl 82. Ordinary (non-maxi) rate applies.",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+            }
+
             // --- meterWell ---
             Box(
                 modifier = Modifier
@@ -252,6 +300,28 @@ fun HiredScreen(
                         fontWeight = FontWeight.Medium,
                         fontSize = 20.sp,
                         color = CaptainPalette.warning,
+                    )
+                }
+
+                // Small, deliberately unobtrusive tap-to-edit affordance (Point to Point Transport
+                // (Fares) Order 2026 UI-wiring pass) — miscounts happen; this is a correction path,
+                // not a prominent control, so it sits below the T1/T2 badge rather than competing
+                // with the fare numerals for attention.
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 66.dp, end = 34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { showPassengerEdit = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "PAX ${fareState.passengerCount}  ✎",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = CaptainPalette.textMuted,
                     )
                 }
 
@@ -424,6 +494,19 @@ fun HiredScreen(
             }
         }
 
+        // Mid-trip passenger-count correction (Point to Point Transport (Fares) Order 2026
+        // UI-wiring pass) — see HiredViewModel.updatePassengerCount's doc.
+        CaptainDialogScrim(visible = showPassengerEdit, onDismissRequest = { showPassengerEdit = false }) {
+            PassengerEditDialog(
+                initialCount = fareState.passengerCount,
+                onDismiss = { showPassengerEdit = false },
+                onConfirm = { count ->
+                    showPassengerEdit = false
+                    viewModel.updatePassengerCount(count)
+                },
+            )
+        }
+
         // Custom toll amount pad
         CaptainDialogScrim(visible = showTollPad, onDismissRequest = { showTollPad = false }) {
             CustomTollDialog(
@@ -581,6 +664,69 @@ private fun MeterDatum(label: String, value: String, highlight: Boolean = false)
             fontSize = 40.sp,
             color = if (highlight) CaptainPalette.success else CaptainPalette.warning,
         )
+    }
+}
+
+/**
+ * Mid-trip passenger-count correction dialog (Point to Point Transport (Fares) Order 2026
+ * UI-wiring pass) — reached only via [HiredScreen]'s small "PAX n ✎" tap-to-edit affordance, never
+ * a prominent control. Confirming calls [HiredViewModel.updatePassengerCount], which re-derives
+ * [au.com.threesixty.cabdispatch.domain.FareState.maxiRateApplied] immediately for the remainder
+ * of the trip without touching any already-accrued charge — see that method's own doc.
+ */
+@Composable
+private fun PassengerEditDialog(initialCount: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var count by remember { mutableStateOf(initialCount) }
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+            .padding(30.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Correct passenger count", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+        Text(
+            "5 or more passengers may trigger the maxi rate — only for a genuine maxi vehicle, and never for a wheelchair hiring.",
+            fontFamily = InterFamily,
+            fontSize = 14.sp,
+            color = CaptainPalette.textSecondary,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(if (count > 1) CaptainPalette.raised else CaptainPalette.inset)
+                    .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+                    .then(if (count > 1) Modifier.clickable { count -= 1 } else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("−", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
+            }
+            Box(
+                modifier = Modifier.width(96.dp).height(72.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.inset),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(count.toString(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
+            }
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(if (count < 11) CaptainPalette.raised else CaptainPalette.inset)
+                    .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+                    .then(if (count < 11) Modifier.clickable { count += 1 } else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
+            CaptainButton(text = "Update", modifier = Modifier.weight(1.4f)) { onConfirm(count) }
+        }
     }
 }
 

@@ -218,6 +218,29 @@ class TripRepository(
         return updated
     }
 
+    /**
+     * Corrects a trip's declared passenger count mid-trip (miscounts happen — see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.updatePassengerCount]'s doc).
+     * Point to Point Transport (Fares) Order 2026 UI-wiring pass: without this, a mid-trip
+     * correction would only ever update the live in-memory meter display
+     * ([au.com.threesixty.cabdispatch.domain.FareEngineImpl]) and never reach this persisted
+     * [TripEntity] row — meaning [au.com.threesixty.cabdispatch.domain.fare.TripFareReconstruction]
+     * (what Close & Pay actually bills from) would silently keep billing off the ORIGINAL
+     * passenger count the driver already corrected on-screen. New method, not a change to [tick]'s
+     * existing signature/behavior, per this pass's constraint not to touch other call sites.
+     */
+    suspend fun updatePassengerCount(clientUuid: String, passengerCount: Int): TripEntity {
+        val existing = tripDao.getByClientUuid(clientUuid)
+            ?: error("updatePassengerCount() called for unknown trip clientUuid=$clientUuid")
+        check(existing.status == TripStatus.OPEN) {
+            "updatePassengerCount() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
+        }
+        val updated = existing.copy(passengerCount = passengerCount, updatedAt = System.currentTimeMillis())
+        tripDao.update(updated)
+        upsertOutboxRow(updated, ready = false)
+        return updated
+    }
+
     private suspend fun upsertOutboxRow(trip: TripEntity, ready: Boolean) {
         val entityJson = if (ready) {
             cabDispatchJson.encodeToString(TripSyncItemDto.serializer(), toSyncItemDto(trip))

@@ -60,6 +60,31 @@ data class FareState(
     val movingSeconds: Int = 0,
     val waitingSeconds: Int = 0,
     val tollsApplied: List<TollPreset> = emptyList(),
+    /**
+     * Passenger count declared for this hiring — mirrors
+     * [au.com.threesixty.cabdispatch.domain.fare.FareState.passengerCount]. Editable mid-trip
+     * (miscounts happen) via [FareEngineImpl.updatePassengerCount]; changing it re-derives
+     * [maxiRateApplied] for the remainder of the trip only, never retroactively. Defaults to 1 so
+     * every pre-existing reader of this struct that never looked at this field keeps working.
+     */
+    val passengerCount: Int = 1,
+    /**
+     * Mirrors [au.com.threesixty.cabdispatch.domain.fare.FareState.wheelchairHiring] — set once at
+     * [FareEngineImpl.startTrip], not editable mid-trip. Purely informational on this screen (a
+     * reminder of the NSW Reg cl 82 safe-securement rule) — never itself gates the maxi rate here;
+     * [maxiRateApplied] already bakes this carve-out in via the pure engine's own derivation.
+     */
+    val wheelchairHiring: Boolean = false,
+    /**
+     * The pure NSW-fares engine's own derived
+     * [au.com.threesixty.cabdispatch.domain.fare.FareState.maxiRateApplied] — copied over verbatim
+     * on every [FareEngineImpl] state update (start + every tick + passenger-count edit), never
+     * recomputed independently here. This is the ONLY thing the UI should ever read to decide
+     * whether to show a "maxi rate active" indicator — never re-derive it from
+     * [passengerCount]/[wheelchairHiring] locally, or a UI-layer bug could show (or hide) the
+     * indicator out of step with what is actually being charged.
+     */
+    val maxiRateApplied: Boolean = false,
 ) {
     val total: BigDecimal get() = breakdown.total
 }

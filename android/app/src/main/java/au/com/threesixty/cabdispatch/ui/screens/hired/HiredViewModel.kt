@@ -86,7 +86,15 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
         val tripContext = SessionHolder.pendingTrip.value
         if (tripContext != null) {
-            fareEngine.startTrip(tripContext.tariff, tripContext.startLat, tripContext.startLng)
+            fareEngine.startTrip(
+                tripContext.tariff,
+                tripContext.startLat,
+                tripContext.startLng,
+                isMaxiVehicle = tripContext.isMaxiVehicle,
+                passengerCount = tripContext.passengerCount,
+                wheelchairHiring = tripContext.wheelchairHiring,
+                airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
+            )
             openTripInRoom(tripContext)
 
             fareState
@@ -132,6 +140,15 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 // TripContext.negotiatedTotal's doc. Null for every ordinary metered trip
                 // (the pre-existing, unchanged default).
                 negotiatedTotal = tripContext.negotiatedTotal,
+                // Point to Point Transport (Fares) Order 2026 UI-wiring pass — see
+                // TripContext.isMaxiVehicle/.passengerCount/.wheelchairHiring's docs. `maxi` here
+                // means "vehicle has 5+ seats" (TripEntity.maxi's doc), fed from the driver's local
+                // self-declaration ([au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]), not
+                // real fleet-registry data. Every default (false/1/false) matches this method's
+                // pre-existing behavior for a call site that never sets them.
+                maxi = tripContext.isMaxiVehicle,
+                passengerCount = tripContext.passengerCount,
+                wheelchairHiring = tripContext.wheelchairHiring,
             )
             persistedTripClientUuid = trip.clientUuid
         }
@@ -188,6 +205,23 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addToll(preset: TollPreset) {
         fareEngine.addToll(preset)
+    }
+
+    /**
+     * Mid-trip passenger-count correction (miscounts happen) — see [HiredScreen]'s small
+     * tap-to-edit affordance near the fare display. New method, not a change to any existing call
+     * signature on this ViewModel. Updates the live engine immediately (re-deriving
+     * [FareState.maxiRateApplied] for [fareState] consumers, e.g. [HiredScreen]'s MAXI RATE chip)
+     * and best-effort persists the correction to the open [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
+     * row so the eventual Close & Pay reconstruction bills off the corrected count, not the
+     * original one — see [TripRepository.updatePassengerCount]'s doc.
+     */
+    fun updatePassengerCount(count: Int) {
+        fareEngine.updatePassengerCount(count)
+        val clientUuid = persistedTripClientUuid ?: return
+        viewModelScope.launch {
+            runCatching { tripRepository.updatePassengerCount(clientUuid, count) }
+        }
     }
 
     /**
