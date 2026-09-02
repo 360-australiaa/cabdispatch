@@ -16,6 +16,7 @@ import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
 import au.com.threesixty.cabdispatch.domain.DevicePairingStore
+import au.com.threesixty.cabdispatch.domain.MaxiVehicleStore
 import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
@@ -119,6 +120,13 @@ object AppContainer {
     lateinit var devicePairingStore: DevicePairingStore
         private set
 
+    /** See [MaxiVehicleStore]'s own doc — a local, honestly-labelled driver self-declaration
+     * ("this vehicle has 5+ seats"), not real fleet-registry data. Read by the Home dashboard's
+     * Start Meter card (to prefill/edit the declaration) and Settings → Fare schedule (to view/
+     * edit it directly), Point to Point Transport (Fares) Order 2026 UI-wiring pass. */
+    lateinit var maxiVehicleStore: MaxiVehicleStore
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
 
@@ -127,6 +135,8 @@ object AppContainer {
         // and heartbeat silently went back to a no-op even after a real pairing had succeeded.
         devicePairingStore = DevicePairingStore(appContext)
         SessionHolder.deviceId = devicePairingStore.getDeviceId()
+
+        maxiVehicleStore = MaxiVehicleStore(appContext)
 
         database = Room.databaseBuilder(
             appContext,

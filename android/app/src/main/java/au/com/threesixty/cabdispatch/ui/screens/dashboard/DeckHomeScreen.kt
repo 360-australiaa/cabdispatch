@@ -73,6 +73,8 @@ import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SsidChart
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -271,6 +273,10 @@ fun DeckHomeScreen(
     var pane by rememberSaveable { mutableStateOf(CaptainPane.DASHBOARD) }
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
     var showSetPrice by rememberSaveable { mutableStateOf(false) }
+    // Point to Point Transport (Fares) Order 2026 UI-wiring pass: the plain (non-Set-Price)
+    // Start Meter tap now opens this small declaration step first — see TripDetailsDialog's own
+    // doc for why (passenger count / maxi-taxi / wheelchair / airport-rank-maxi inputs).
+    var showTripDetails by rememberSaveable { mutableStateOf(false) }
     var showVoucherInfo by rememberSaveable { mutableStateOf(false) }
     // Passenger-facing driver identity (2026-08-29 premium pass): tapping the header avatar now
     // opens a large ID card (photo big enough to match a face against) instead of silently
@@ -296,9 +302,22 @@ fun DeckHomeScreen(
         }
     }
 
-    fun onStartMeter(negotiatedTotal: String? = null) {
+    fun onStartMeter(
+        negotiatedTotal: String? = null,
+        passengerCount: Int = 1,
+        isMaxiVehicle: Boolean = false,
+        wheelchairHiring: Boolean = false,
+        airportRankRequestedMaxi: Boolean = false,
+    ) {
         if (meterPhase != MeterStartPhase.Idle) return // guards a double-tap mid-transition
-        if (!viewModel.startMeter(negotiatedTotal = negotiatedTotal)) {
+        if (!viewModel.startMeter(
+                negotiatedTotal = negotiatedTotal,
+                passengerCount = passengerCount,
+                isMaxiVehicle = isMaxiVehicle,
+                wheelchairHiring = wheelchairHiring,
+                airportRankRequestedMaxi = airportRankRequestedMaxi,
+            )
+        ) {
             meterPhase = MeterStartPhase.Failed(
                 if (state.tariff == null) "No signed tariff yet — try again shortly" else "No active session",
             )
@@ -382,7 +401,7 @@ fun DeckHomeScreen(
                                 state = state,
                                 meterPhase = meterPhase,
                                 negotiatedTotal = pendingTrip?.negotiatedTotal,
-                                onStartMeter = { onStartMeter() },
+                                onStartMeter = { showTripDetails = true },
                                 onCancelStart = ::onCancelStart,
                                 onSetPrice = { showSetPrice = true },
                                 onVouchers = { showVoucherInfo = true },
@@ -473,6 +492,25 @@ fun DeckHomeScreen(
             onConfirm = { total ->
                 showSetPrice = false
                 onStartMeter(negotiatedTotal = total)
+            },
+        )
+    }
+    if (showTripDetails) {
+        TripDetailsDialog(
+            initialMaxiVehicle = AppContainer.maxiVehicleStore.isMaxiVehicle(),
+            onDismiss = { showTripDetails = false },
+            onConfirm = { passengerCount, isMaxiVehicle, wheelchairHiring, airportRankRequestedMaxi ->
+                // Persist the maxi-vehicle declaration back to the shared per-device store so it's
+                // remembered for next time (and shown consistently in Settings → Fare schedule) —
+                // see MaxiVehicleStore's own doc.
+                AppContainer.maxiVehicleStore.setMaxiVehicle(isMaxiVehicle)
+                showTripDetails = false
+                onStartMeter(
+                    passengerCount = passengerCount,
+                    isMaxiVehicle = isMaxiVehicle,
+                    wheelchairHiring = wheelchairHiring,
+                    airportRankRequestedMaxi = airportRankRequestedMaxi,
+                )
             },
         )
     }
@@ -2152,5 +2190,154 @@ private fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit)
                 )
             }
         }
+    }
+}
+
+// ============================================================================================
+// Trip details — Point to Point Transport (Fares) Order 2026 UI-wiring pass. Shown on a plain
+// (non-Set-Price) Start Meter tap so the driver can honestly declare the inputs the maxi (150%)
+// rate actually turns on. Every default below (1 passenger, every toggle off) reproduces this
+// app's pre-existing Start Meter behavior exactly — a driver who taps straight through without
+// touching anything starts an ordinary, non-maxi, 1-passenger trip, same as before this pass.
+// ============================================================================================
+
+/**
+ * Elderly-friendly passenger-count stepper (1-11) + three honestly-labelled maxi-rate
+ * declaration toggles, shown before a plain metered Start Meter tap actually opens the trip. Not
+ * shown for the Set Price ("fixed fare") flow — see [SetPriceDialogV2]'s own comment: that flow
+ * is a separate, already-engine-correct feature this pass does not touch.
+ *
+ * [initialMaxiVehicle] prefills from [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore] (the
+ * driver's own prior declaration, or `false` if never set) so this doesn't ask the driver to
+ * re-declare a fact about the vehicle on every single trip — but it is still just a local,
+ * per-device self-declaration, never fleet-registry data (see that store's own doc), which is why
+ * this dialog labels it "This vehicle has 5+ passenger seats", never implying it came from a
+ * vehicle record.
+ */
+@Composable
+private fun TripDetailsDialog(
+    initialMaxiVehicle: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (passengerCount: Int, isMaxiVehicle: Boolean, wheelchairHiring: Boolean, airportRankRequestedMaxi: Boolean) -> Unit,
+) {
+    var passengerCount by rememberSaveable { mutableStateOf(1) }
+    var isMaxiVehicle by rememberSaveable { mutableStateOf(initialMaxiVehicle) }
+    var wheelchairHiring by rememberSaveable { mutableStateOf(false) }
+    var airportRankRequestedMaxi by rememberSaveable { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(560.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(CaptainPalette.panel)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+                .clickable(enabled = false) {}
+                .verticalScroll(rememberScrollState())
+                .padding(32.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            Text("Before you start the meter", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            Text(
+                "Passenger count is the main thing that turns on the maxi (×1.5) rate — a quick, honest check before you drive off.",
+                fontFamily = InterFamily,
+                fontSize = 15.sp,
+                color = CaptainPalette.textSecondary,
+            )
+
+            // --- Passenger count stepper (big, elderly-friendly touch targets) ---
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("PASSENGERS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    StepperButton(label = "−", enabled = passengerCount > 1, onClick = { passengerCount = (passengerCount - 1).coerceIn(1, 11) })
+                    Box(
+                        modifier = Modifier.width(96.dp).height(72.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.inset),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            passengerCount.toString(),
+                            fontFamily = au.com.threesixty.cabdispatch.ui.theme.ChakraPetch,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 40.sp,
+                            color = CaptainPalette.textPrimary,
+                        )
+                    }
+                    StepperButton(label = "+", enabled = passengerCount < 11, onClick = { passengerCount = (passengerCount + 1).coerceIn(1, 11) })
+                }
+            }
+
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+
+            TripDetailToggleRow(
+                title = "This vehicle has 5+ passenger seats",
+                subtitle = "Your own declaration for this vehicle — not read from a vehicle record. Saved for next time.",
+                checked = isMaxiVehicle,
+                onCheckedChange = { isMaxiVehicle = it },
+            )
+            TripDetailToggleRow(
+                title = "Carrying a wheelchair passenger",
+                subtitle = "Per NSW Reg cl 82: start the meter only once the passenger is safely secured. The maxi rate never applies to a wheelchair hiring, regardless of passenger count.",
+                checked = wheelchairHiring,
+                onCheckedChange = { wheelchairHiring = it },
+            )
+            TripDetailToggleRow(
+                title = "Requested as a maxi at a Sydney Airport rank",
+                subtitle = "Only tick this if the hirer specifically asked for a maxi taxi at a Sydney Airport rank — not for an ordinary trip that happens to go to the airport.",
+                checked = airportRankRequestedMaxi,
+                onCheckedChange = { airportRankRequestedMaxi = it },
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
+                CaptainButton(
+                    text = "▶  Start meter",
+                    heightDp = 72,
+                    modifier = Modifier.weight(1.6f),
+                    onClick = { onConfirm(passengerCount, isMaxiVehicle, wheelchairHiring, airportRankRequestedMaxi) },
+                )
+            }
+        }
+    }
+}
+
+/** One big (64dp) circular +/- button for [TripDetailsDialog]'s passenger stepper. */
+@Composable
+private fun StepperButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(if (enabled) CaptainPalette.raised else CaptainPalette.inset)
+            .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 28.sp,
+            color = if (enabled) CaptainPalette.textPrimary else CaptainPalette.textMuted,
+        )
+    }
+}
+
+/** One labelled toggle row for [TripDetailsDialog] — title + honest explanatory subtitle + a
+ * standard Material [Switch], tinted to [CaptainPalette]. */
+@Composable
+private fun TripDetailToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+            Text(subtitle, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = CaptainPalette.primary, checkedThumbColor = CaptainPalette.accent),
+        )
     }
 }

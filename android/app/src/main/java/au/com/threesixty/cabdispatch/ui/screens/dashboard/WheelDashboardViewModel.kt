@@ -191,7 +191,20 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
      * without one) and a real [DriverSession]. Returns `false` (no-op) if either is missing so
      * the caller (the Start Meter button's tap animation) can skip navigating.
      */
-    fun startMeter(negotiatedTotal: String? = null): Boolean {
+    fun startMeter(
+        negotiatedTotal: String? = null,
+        /** See [TripContext.passengerCount]'s doc. Defaulted `1` so every existing caller (Set
+         * Price, or a Start Meter tap made before this pass's UI existed) keeps behaving exactly
+         * as before. */
+        passengerCount: Int = 1,
+        /** See [TripContext.isMaxiVehicle]'s doc — driver self-declaration, not fleet data.
+         * Defaulted `false`. */
+        isMaxiVehicle: Boolean = false,
+        /** See [TripContext.wheelchairHiring]'s doc. Defaulted `false`. */
+        wheelchairHiring: Boolean = false,
+        /** See [TripContext.airportRankRequestedMaxi]'s doc. Defaulted `false`. */
+        airportRankRequestedMaxi: Boolean = false,
+    ): Boolean {
         val session = SessionHolder.session.value ?: return false
         val tariff = uiState.value.tariff ?: return false
         SessionHolder.setPendingTrip(
@@ -209,6 +222,13 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
                 // TripContext.negotiatedTotal's doc. Null (the default) for every ordinary
                 // metered Start Meter tap, exactly as before this pass.
                 negotiatedTotal = negotiatedTotal,
+                // Point to Point Transport (Fares) Order 2026 UI-wiring pass — see this method's
+                // own param docs and TripContext's matching field docs. Every default here matches
+                // this method's pre-existing behavior for a caller that never sets them.
+                passengerCount = passengerCount,
+                isMaxiVehicle = isMaxiVehicle,
+                wheelchairHiring = wheelchairHiring,
+                airportRankRequestedMaxi = airportRankRequestedMaxi,
             ),
         )
         return true

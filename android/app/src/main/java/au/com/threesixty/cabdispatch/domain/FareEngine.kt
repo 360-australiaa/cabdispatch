@@ -99,10 +99,53 @@ class StubSpeedSource : SpeedSource {
  */
 interface FareEngine {
     val state: StateFlow<FareState>
-    fun startTrip(tariff: TariffDto, startLat: Double, startLng: Double)
+
+    /**
+     * @param isMaxiVehicle Driver's local self-declaration that this vehicle has 5+ seats
+     *   excluding the driver — see [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s doc
+     *   for why this is a local declaration, not fleet-registry data. Defaulted `false` so every
+     *   call site that never touches the Point to Point Transport (Fares) Order 2026 maxi
+     *   controls keeps behaving exactly as before (never maxi-eligible).
+     * @param passengerCount Declared passenger count, 1-11. Defaulted `1`, the ordinary case.
+     * @param wheelchairHiring True when the hiring is for a wheelchair passenger — per the Fares
+     *   Order this carve-out means the maxi rate is never charged regardless of [isMaxiVehicle]/
+     *   [passengerCount]/[airportRankRequestedMaxi]. Enforced entirely by the pure engine's own
+     *   [au.com.threesixty.cabdispatch.domain.fare.FareState.maxiRateApplied] derivation, not
+     *   re-checked here.
+     * @param airportRankRequestedMaxi True only when the hirer specifically requested a maxi taxi
+     *   at a Sydney Airport rank — the one scenario the maxi rate applies independent of
+     *   [passengerCount].
+     */
+    fun startTrip(
+        tariff: TariffDto,
+        startLat: Double,
+        startLng: Double,
+        isMaxiVehicle: Boolean = false,
+        passengerCount: Int = 1,
+        wheelchairHiring: Boolean = false,
+        airportRankRequestedMaxi: Boolean = false,
+    )
     fun pause()
     fun resume()
     fun addToll(preset: TollPreset)
+
+    /**
+     * Corrects the declared passenger count mid-trip (miscounts happen). Mutates only the shadow
+     * [au.com.threesixty.cabdispatch.domain.fare.FareState.passengerCount] input and re-reads that
+     * engine's own derived `maxiRateApplied` immediately, so [FareState.maxiRateApplied] (and
+     * [FareState.passengerCount]) update on this call — never touching any already-accrued
+     * [FareState.breakdown] figure (flagFall/distanceAmount/waitingAmount/peakAmount are raw
+     * cumulative sums this class has never multiplied; see this file's class-level doc, point 4,
+     * and [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]'s own doc) — those are
+     * exactly the same numbers immediately before and after this call. The eventual maxi
+     * multiplier (if [FareState.maxiRateApplied] ends up true) is, per the pure engine's own
+     * design, applied ONCE to the whole metered fare at real close/reconstruction time — this
+     * class does not invent per-segment multiplier tracking the pure engine itself doesn't have
+     * (isMaxiVehicle/wheelchairHiring already work this same "fixed input, applied wholesale at
+     * close" way; this just makes passengerCount correctable instead of frozen at [startTrip]).
+     * No-op if no trip is open yet (no [startTrip] call preceded this one).
+     */
+    fun updatePassengerCount(count: Int)
     fun close(): FareState
 }
 
@@ -173,17 +216,30 @@ class FareEngineImpl(
      * never computed independently. */
     private var calcState: CalcFareState? = null
 
-    override fun startTrip(tariff: TariffDto, startLat: Double, startLng: Double) {
+    override fun startTrip(
+        tariff: TariffDto,
+        startLat: Double,
+        startLng: Double,
+        isMaxiVehicle: Boolean,
+        passengerCount: Int,
+        wheelchairHiring: Boolean,
+        airportRankRequestedMaxi: Boolean,
+    ) {
         this.tariff = tariff
         val domainTariff = tariff.toDomainTariff()
         val area = if (tariff.region.equals("urban", ignoreCase = true)) AreaClass.URBAN else AreaClass.COUNTRY
         val timeClass = resolveTimeClass(area)
         val isPeak = resolveIsPeak()
-        calcState = CalcFareState(
+        val newCalcState = CalcFareState(
             tariff = domainTariff,
             timeClass = timeClass.toCalcTimeClass(),
             isPeak = isPeak,
+            isMaxiVehicle = isMaxiVehicle,
+            passengerCount = passengerCount,
+            wheelchairHiring = wheelchairHiring,
+            airportRankRequestedMaxi = airportRankRequestedMaxi,
         )
+        calcState = newCalcState
 
         val peak = if (isPeak) domainTariff.peakCharge else BigDecimal.ZERO
 
@@ -195,8 +251,25 @@ class FareEngineImpl(
             // PSL deliberately NOT included here — see this class's own doc, point 4. It is a
             // driver decision made later, at Close & Pay, never baked into the live display.
             breakdown = FareBreakdown(flagFall = domainTariff.flagFall, peakAmount = peak),
+            // Point to Point Transport (Fares) Order 2026 UI-wiring pass: passengerCount/
+            // maxiRateApplied copied verbatim off the pure engine's own shadow state — see
+            // FareState (domain/TripModels.kt)'s doc on why the UI must never re-derive this
+            // itself. wheelchairHiring is fixed at commencement (no updatePassengerCount-style
+            // mid-trip correction exists for it — informational display only, see HiredScreen).
+            passengerCount = newCalcState.passengerCount,
+            wheelchairHiring = newCalcState.wheelchairHiring,
+            maxiRateApplied = newCalcState.maxiRateApplied,
         )
         startTicking()
+    }
+
+    override fun updatePassengerCount(count: Int) {
+        val cs = calcState ?: return
+        cs.passengerCount = count
+        _state.value = _state.value.copy(
+            passengerCount = cs.passengerCount,
+            maxiRateApplied = cs.maxiRateApplied,
+        )
     }
 
     override fun pause() {

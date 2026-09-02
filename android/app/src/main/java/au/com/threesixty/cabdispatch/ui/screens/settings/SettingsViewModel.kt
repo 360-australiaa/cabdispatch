@@ -85,6 +85,10 @@ data class SettingsUiState(
     val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,
     val locateResponse: LocateResponseState = LocateResponseState.Idle,
     val pairMeter: PairMeterState = PairMeterState.Idle,
+    /** Driver's local self-declaration that the bound vehicle has 5+ seats — see
+     * [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s doc. Loaded from that store in
+     * [SettingsViewModel.init], updated via [SettingsViewModel.setMaxiVehicle]. */
+    val isMaxiVehicle: Boolean = false,
 )
 
 /** Real meter/device pairing (2026-08-28 — backend spec: `POST /v1/fleet/devices/register`,
@@ -125,7 +129,23 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         loadDeviceStatus()
         loadFareSchedule()
-        _uiState.update { it.copy(pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice) }
+        _uiState.update {
+            it.copy(
+                pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice,
+                isMaxiVehicle = AppContainer.maxiVehicleStore.isMaxiVehicle(),
+            )
+        }
+    }
+
+    /**
+     * Updates the driver's local maxi-vehicle declaration — see [SettingsUiState.isMaxiVehicle]'s
+     * doc and [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s own doc for why this is a
+     * per-device self-declaration, not fleet-registry data. New method, no existing call site
+     * touched.
+     */
+    fun setMaxiVehicle(value: Boolean) {
+        AppContainer.maxiVehicleStore.setMaxiVehicle(value)
+        _uiState.update { it.copy(isMaxiVehicle = value) }
     }
 
     // --- GPS quality ---
