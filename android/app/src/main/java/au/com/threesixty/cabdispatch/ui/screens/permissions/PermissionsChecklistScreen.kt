@@ -25,6 +25,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BatteryFull
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.PriorityHigh
+import androidx.compose.material.icons.rounded.SatelliteAlt
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,22 +47,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * 03 · Permissions — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `8:39`): left
+ * 03 · Permissions — reskinned onto [CaptainPalette] (2026-08-29 purple migration pass): left
  * header column (H1 + subtitle + grant-count pill) and a 2×4 grid of 96dp permission cards.
  *
- * ### 2026-08-28: made this screen actually *request*, not just *display*
+ * ### Made this screen actually *request*, not just *display* (carried over unchanged)
  * Original behaviour was status-display only — it read every permission's grant state via
  * [ContextCompat.checkSelfPermission] but had no way to grant anything, so the app never showed
  * the OS permission dialogs on its own (found live on a field-test tablet: location/camera/
@@ -162,40 +174,40 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
+            .background(CaptainPalette.bg)
             .padding(start = 72.dp, end = 40.dp, top = 96.dp, bottom = 44.dp),
     ) {
         // Left header column
         Column(modifier = Modifier.width(376.dp)) {
-            Text("Permissions", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = Deck.textPrimary)
+            Text("Permissions", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.height(16.dp))
             Text(
                 "The meter needs these to run legally and safely. Tap any item to grant it.",
                 fontFamily = InterFamily,
                 fontSize = 17.sp,
-                color = Deck.textSecondary,
+                color = CaptainPalette.textSecondary,
                 modifier = Modifier.width(340.dp),
             )
             Spacer(Modifier.height(16.dp))
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .background((if (allOk) Deck.forHire else Deck.stopped).copy(alpha = 0.14f))
+                    .background((if (allOk) CaptainPalette.success else CaptainPalette.warning).copy(alpha = 0.14f))
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 Text(
-                    text = if (allOk) "✓ ${cards.size} of ${cards.size} granted" else "$grantedCount of ${cards.size} granted",
+                    text = if (allOk) "${cards.size} of ${cards.size} granted" else "$grantedCount of ${cards.size} granted",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
-                    color = if (allOk) Deck.forHire else Deck.stopped,
+                    color = if (allOk) CaptainPalette.success else CaptainPalette.warning,
                 )
             }
             Spacer(Modifier.height(20.dp))
             // Primary driver of the whole flow — walks foreground perms, then background, then
             // battery optimisation, using the same handlers the individual cards do.
             if (!allOk) {
-                DeckButton(text = "Grant all permissions", kind = DeckButtonKind.Primary, modifier = Modifier.width(340.dp)) {
+                CaptainButton(text = "Grant all permissions", modifier = Modifier.width(340.dp)) {
                     when {
                         foregroundRuntimePermissions().any { !runtimeGranted(context, it) } -> requestForeground()
                         !runtimeGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) -> requestBackgroundLocation()
@@ -204,7 +216,7 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
                 }
             }
             Spacer(Modifier.weight(1f))
-            DeckButton(text = if (next != null) "Skip for now" else "Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp)) {
+            CaptainButton(text = if (next != null) "Skip for now" else "Back", outline = true, modifier = Modifier.width(180.dp)) {
                 proceed()
             }
         }
@@ -214,7 +226,7 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
             cards.chunked(2).forEach { rowCards ->
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     rowCards.forEach { card ->
-                        PermCard(card, modifier = Modifier.weight(1f), onClick = { onCardTapped(card.kind) })
+                        PermCardView(card, modifier = Modifier.weight(1f), onClick = { onCardTapped(card.kind) })
                     }
                     if (rowCards.size == 1) Spacer(Modifier.weight(1f))
                 }
@@ -223,9 +235,8 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
             Spacer(Modifier.weight(1f))
             Row {
                 Spacer(Modifier.weight(1f))
-                DeckButton(
+                CaptainButton(
                     text = if (allOk) "Continue" else "Continue anyway",
-                    kind = DeckButtonKind.Primary,
                     heightDp = 72,
                     modifier = Modifier.width(360.dp),
                 ) { proceed() }
@@ -238,7 +249,7 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
 private enum class PermKind { FOREGROUND_RUNTIME, BACKGROUND_LOCATION, BATTERY, INFO }
 
 private data class PermCard(
-    val emoji: String,
+    val icon: ImageVector,
     val title: String,
     val granted: Boolean,
     val statusText: String,
@@ -265,30 +276,30 @@ private fun foregroundRuntimePermissions(): Array<String> = buildList {
 }.toTypedArray()
 
 private fun buildPermissionCards(context: Context): List<PermCard> {
-    fun of(emoji: String, title: String, permission: String, kind: PermKind): PermCard {
+    fun of(icon: ImageVector, title: String, permission: String, kind: PermKind): PermCard {
         val granted = runtimeGranted(context, permission)
-        return PermCard(emoji, title, granted, if (granted) "Granted" else "Not granted — tap to allow", kind)
+        return PermCard(icon, title, granted, if (granted) "Granted" else "Not granted — tap to allow", kind)
     }
 
     val battery = isIgnoringBatteryOptimizations(context)
 
     return listOf(
-        of("📍", "Location (while in use)", Manifest.permission.ACCESS_FINE_LOCATION, PermKind.FOREGROUND_RUNTIME),
-        of("🛰", "Background location", Manifest.permission.ACCESS_BACKGROUND_LOCATION, PermKind.BACKGROUND_LOCATION),
+        of(Icons.Rounded.LocationOn, "Location (while in use)", Manifest.permission.ACCESS_FINE_LOCATION, PermKind.FOREGROUND_RUNTIME),
+        of(Icons.Rounded.SatelliteAlt, "Background location", Manifest.permission.ACCESS_BACKGROUND_LOCATION, PermKind.BACKGROUND_LOCATION),
         // Broadened from "QR pairing" only — this permission now also gates the cabin-facing
         // still-frame capture that runs while a duress event is open (2026-08-27 snapshot-gallery
         // pass), so the row can't stay QR-scanning-specific without misleading the driver about
         // why the app wants it.
-        of("📷", "Camera (QR pairing, duress cabin capture)", Manifest.permission.CAMERA, PermKind.FOREGROUND_RUNTIME),
-        of("🎙", "Microphone (duress audio)", Manifest.permission.RECORD_AUDIO, PermKind.FOREGROUND_RUNTIME),
+        of(Icons.Rounded.CameraAlt, "Camera (QR pairing, duress cabin capture)", Manifest.permission.CAMERA, PermKind.FOREGROUND_RUNTIME),
+        of(Icons.Rounded.Mic, "Microphone (duress audio)", Manifest.permission.RECORD_AUDIO, PermKind.FOREGROUND_RUNTIME),
         // POST_NOTIFICATIONS only exists as a runtime permission on API 33+.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            of("🔔", "Notifications", Manifest.permission.POST_NOTIFICATIONS, PermKind.FOREGROUND_RUNTIME)
+            of(Icons.Rounded.Notifications, "Notifications", Manifest.permission.POST_NOTIFICATIONS, PermKind.FOREGROUND_RUNTIME)
         } else {
-            PermCard("🔔", "Notifications", granted = true, statusText = "Granted at install on this Android version", kind = PermKind.INFO)
+            PermCard(Icons.Rounded.Notifications, "Notifications", granted = true, statusText = "Granted at install on this Android version", kind = PermKind.INFO)
         },
         PermCard(
-            emoji = "🔋",
+            icon = Icons.Rounded.BatteryFull,
             title = "Disable battery optimisation",
             granted = battery,
             statusText = if (battery) "Exempt — meter won't be dozed mid-fare" else "Not exempt — tap to allow",
@@ -296,49 +307,48 @@ private fun buildPermissionCards(context: Context): List<PermCard> {
         ),
         // The manifest declares no Bluetooth runtime permission (printer gateway is mocked) and
         // API 29+ scoped storage needs no storage permission — stated plainly, not faked.
-        PermCard("🅱", "Bluetooth — nearby devices", granted = true, statusText = "Not required on this build", kind = PermKind.INFO),
-        PermCard("📁", "File storage", granted = true, statusText = "Not required — scoped storage", kind = PermKind.INFO),
+        PermCard(Icons.Rounded.Bluetooth, "Bluetooth — nearby devices", granted = true, statusText = "Not required on this build", kind = PermKind.INFO),
+        PermCard(Icons.Rounded.Folder, "File storage", granted = true, statusText = "Not required — scoped storage", kind = PermKind.INFO),
     )
 }
 
 @Composable
-private fun PermCard(card: PermCard, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+private fun PermCardView(card: PermCard, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
     val actionable = card.kind != PermKind.INFO && !card.granted
     Row(
         modifier = modifier
             .height(96.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Deck.panel)
-            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(16.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
             .then(if (actionable) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(card.emoji, fontSize = 26.sp)
+        Icon(card.icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(28.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(card.title, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Deck.textPrimary)
+            Text(card.title, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.height(2.dp))
             Text(
                 card.statusText,
                 fontFamily = InterFamily,
                 fontSize = 13.sp,
-                color = if (card.granted) Deck.textMuted else Deck.stopped,
+                color = if (card.granted) CaptainPalette.textMuted else CaptainPalette.warning,
             )
         }
         Box(
             modifier = Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background((if (card.granted) Deck.forHire else Deck.stopped).copy(alpha = 0.16f)),
+                .background((if (card.granted) CaptainPalette.success else CaptainPalette.warning).copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = if (card.granted) "✓" else "!",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp,
-                color = if (card.granted) Deck.forHire else Deck.stopped,
+            Icon(
+                if (card.granted) Icons.Rounded.Check else Icons.Rounded.PriorityHigh,
+                contentDescription = null,
+                tint = if (card.granted) CaptainPalette.success else CaptainPalette.warning,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

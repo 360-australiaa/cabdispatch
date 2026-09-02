@@ -104,6 +104,10 @@ dependencies {
     // detectTapGestures directly — see ui/screens/hired/HiredScreen.kt.
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    // Extended icon set (Icons.Rounded.*, Icons.AutoMirrored.Rounded.*, etc.) — most icons used
+    // across the app's screens (DeckHomeScreen and this pass's CaptainPalette reskins alike) live
+    // here, not in the small "core" set material3 ships by default.
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 

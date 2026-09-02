@@ -1,9 +1,14 @@
 package au.com.threesixty.cabdispatch.ui.wheel.content
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,16 +20,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,7 +46,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.JobOfferHandoff
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
-import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
  * Wheel slot 1 — "Available Trips" content pane (spec §4: "list of job cards — route, distance,
@@ -42,11 +57,13 @@ import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
  * every other list-shaped wheel slot, since §4 explicitly describes Available Trips using that
  * shape even though the HTML prototype itself never rendered this specific slot's data).
  *
- * Phase B v2 reskin (2026-08-26 dock-menu pass, Figma fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
- * `34:328`): row visuals restyled to the v2 glass-row + green ACCEPT pill look (matching Statistics/
- * Plot/My Trips' shared row language, [WheelColorsV2]); every state field/action below
- * ([AvailableTripsWheelViewModel], accept/decline, offer countdown, live-offer WS feed) is
- * unchanged.
+ * **2026-08-29 Captain Taxis reskin:** this pane is embedded inside
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s purple `PaneShell` chrome
+ * (see [au.com.threesixty.cabdispatch.ui.theme.CaptainWidgets]) — row visuals moved off the
+ * previous v2 glass-row + green ACCEPT pill look (the legacy glass/gold palette used elsewhere in
+ * `ui/theme`) onto [CaptainPalette] so this pane's own content doesn't clash with the purple panel
+ * wrapped around it. Visual-only: every state field/action below ([AvailableTripsWheelViewModel],
+ * accept/decline, offer countdown, live-offer WS feed) is unchanged.
  *
  * "Distance" (spec §4's third column) is deliberately omitted from each card: it would need the
  * driver's own live position, and GPS is still stubbed project-wide (see `HANDOFF.md` "GPS is
@@ -84,26 +101,40 @@ fun AvailableTripsWheelContent(
     Column(modifier = Modifier.fillMaxWidth()) {
         val actionError = state.actionError
         if (actionError != null) {
-            Text(
-                actionError,
-                color = WheelColorsV2.dangerText,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+                Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = CaptainPalette.danger, modifier = Modifier.size(16.dp))
+                Text(
+                    actionError,
+                    color = CaptainPalette.danger,
+                    fontFamily = InterFamily,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
         }
 
         val error = state.error
         when {
-            state.loading && state.cards.isEmpty() -> CircularProgressIndicator(color = WheelColorsV2.amberFigure)
-            error != null -> Text(error, color = WheelColorsV2.dangerText, fontSize = 14.sp)
-            state.cards.isEmpty() -> Text(
-                "No job offers right now. New offers appear here automatically.",
-                color = Color.White.copy(alpha = 0.55f),
-                fontSize = 14.sp,
-            )
+            state.loading && state.cards.isEmpty() -> Box(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = CaptainPalette.accent)
+            }
+            error != null -> Text(error, color = CaptainPalette.danger, fontFamily = InterFamily, fontSize = 15.sp)
+            state.cards.isEmpty() -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
+                Icon(Icons.Rounded.Inbox, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))
+                Text(
+                    "No job offers right now. New offers appear here automatically.",
+                    color = CaptainPalette.textSecondary,
+                    fontFamily = InterFamily,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(start = 10.dp),
+                )
+            }
             else -> LazyColumn(
                 modifier = Modifier.heightIn(max = 420.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(state.cards, key = { it.offer.id }) { card ->
                     JobOfferRow(
@@ -136,10 +167,11 @@ private fun JobOfferRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(WheelColorsV2.rowGlassStrong, RoundedCornerShape(16.dp))
-            .border(1.dp, WheelColorsV2.rowBorder, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(CaptainPalette.raised)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
             .clickable(enabled = !expired, onClick = onOpenDetail)
-            .padding(horizontal = 22.dp, vertical = 16.dp),
+            .padding(horizontal = 20.dp, vertical = 18.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -148,32 +180,35 @@ private fun JobOfferRow(
         ) {
             Text(
                 "#${card.job.id.takeLast(4)}",
-                color = WheelColorsV2.mutedFigure,
+                color = CaptainPalette.textMuted,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
             )
             Text(
                 "${card.job.originAddress} → ${card.job.destAddress}",
-                color = Color.White.copy(alpha = 0.95f),
-                fontSize = 16.sp,
+                color = CaptainPalette.textPrimary,
+                fontFamily = InterFamily,
+                fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 "Est. $${card.job.fareEstimateLow}–${card.job.fareEstimateHigh}",
-                color = WheelColorsV2.amberFigure,
-                fontFamily = FontFamily.Monospace,
+                color = CaptainPalette.warning,
+                fontFamily = ChakraPetch,
                 fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
+                fontSize = 16.sp,
             )
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Icon(Icons.Rounded.Schedule, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(15.dp))
             Text(
                 formatOfferRelativeTime(card.offer.offeredAt),
-                color = Color.White.copy(alpha = 0.5f),
-                fontSize = 12.sp,
+                color = CaptainPalette.textMuted,
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
             )
             CountdownLabel(secondsLeft, modifier = Modifier.weight(1f))
             SmallOutlineButton(label = "Decline", enabled = !busy && !expired, onClick = onDecline)
@@ -184,36 +219,63 @@ private fun JobOfferRow(
 
 @Composable
 private fun SmallOutlineButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed && enabled) 0.95f else 1f, animationSpec = tween(120), label = "decline-press")
     val alpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, WheelColorsV2.glassBorder, RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 10.dp),
+            .scale(scale)
+            .height(56.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.5.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+            .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Color.White.copy(alpha = 0.75f * alpha), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Icon(Icons.Rounded.Close, contentDescription = null, tint = CaptainPalette.textSecondary.copy(alpha = alpha), modifier = Modifier.size(18.dp))
+        Text(
+            label,
+            color = CaptainPalette.textSecondary.copy(alpha = alpha),
+            fontFamily = InterFamily,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 6.dp),
+        )
     }
 }
 
 @Composable
 private fun AcceptButton(busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed && enabled) 0.95f else 1f, animationSpec = tween(120), label = "accept-press")
     Row(
         modifier = Modifier
+            .scale(scale)
+            .height(56.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(if (enabled) WheelColorsV2.greenCtaBrush else WheelColorsV2.steelTileBrush)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 12.dp),
+            .background(if (enabled) CaptainPalette.success else CaptainPalette.dialNeutral)
+            .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick)
+            .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (busy) {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = WheelColorsV2.onGreenCta)
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = CaptainPalette.bg)
         } else {
+            Icon(
+                Icons.Rounded.Check,
+                contentDescription = null,
+                tint = if (enabled) CaptainPalette.bg else CaptainPalette.textMuted,
+                modifier = Modifier.size(18.dp),
+            )
             Text(
                 "ACCEPT",
-                color = if (enabled) WheelColorsV2.onGreenCta else WheelColorsV2.steelTileText,
-                fontSize = 14.sp,
+                color = if (enabled) CaptainPalette.bg else CaptainPalette.textMuted,
+                fontFamily = InterFamily,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 6.dp),
             )
         }
     }
@@ -228,9 +290,9 @@ private fun CountdownLabel(secondsLeft: Long?, modifier: Modifier = Modifier) {
     val expired = secondsLeft <= 0
     val text = if (expired) "Expired" else "expires ${secondsLeft}s"
     val color = when {
-        expired -> WheelColorsV2.dangerText
-        secondsLeft <= 8 -> WheelColorsV2.dangerText
-        else -> Color.White.copy(alpha = 0.5f)
+        expired -> CaptainPalette.danger
+        secondsLeft <= 8 -> CaptainPalette.danger
+        else -> CaptainPalette.textMuted
     }
-    Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = modifier)
+    Text(text, color = color, fontFamily = InterFamily, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = modifier)
 }

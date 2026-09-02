@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -14,6 +15,9 @@ import java.math.RoundingMode
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.ZonedDateTime
+import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
+import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
+import au.com.threesixty.cabdispatch.domain.fare.TimeClass as CalcTimeClass
 
 /**
  * One fused-location fix, as emitted by [SpeedSource.locationFix].
@@ -102,6 +106,54 @@ interface FareEngine {
     fun close(): FareState
 }
 
+/**
+ * Consolidation pass (2026-08-29, user-directed): this class used to reimplement the exact same
+ * distance/waiting accrual math a second time, by hand, instead of calling
+ * [au.com.threesixty.cabdispatch.domain.fare.FareEngine] — the *actual* NSW-Fares-Order engine,
+ * ported line-for-line from the backend's Python implementation and golden-vector-tested against
+ * it (see that class's own doc). The two had already drifted apart in four real, found ways
+ * before this pass:
+ *
+ * 1. **Night boundary** — this class used 6am-8pm/8pm-6am; the tested engine (and the backend)
+ *    use 10pm-6am. Fixed as its own smaller pass just before this one — see [resolveTimeClass]'s
+ *    doc, kept here for the historical record.
+ * 2. **Distance-band splitting** — the tested engine's `tick()` splits ONE delta across the 12km
+ *    band boundary (charging the pre-threshold portion at rate 1 and the rest at rate 2 within
+ *    the SAME tick); this class picked a single rate for the whole tick's delta based on where
+ *    cumulative distance landed AFTER adding it. Only matters for the one tick that straddles
+ *    12km exactly — a few cents at most — but a real, provable discrepancy.
+ * 3. **Waiting-mode distance tracking** — the tested engine folds *any* distance covered while
+ *    below the speed threshold into cumulative distance (crawling in traffic still counts toward
+ *    the 12km band); this class only advanced `distanceKm` in the distance branch. On a trip with
+ *    a lot of slow traffic, this class's on-screen band-switch to the cheaper/dearer long-distance
+ *    rate would fire later than the real engine's — a materially bigger drift than #2 on a long
+ *    trip.
+ * 4. **PSL always-on** — [startTrip] used to unconditionally add `tariff.pslAmount` to the live
+ *    breakdown from the moment a trip started. The Point-to-Point levy is actually a driver
+ *    decision made at Close & Pay time
+ *    ([au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel.setIncludePsl],
+ *    persisted as [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.includePsl],
+ *    default `false`) — matching the tested engine's own `close(includePsl: Boolean = false)`
+ *    default. So the live meter overstated the running total by the PSL amount (~$1.32) for
+ *    every single trip, for the entire trip, in the common case (driver leaves it unchecked).
+ *    **This never affected the actual bill** — verified: [endTrip]'s [doPersistTick] only ever
+ *    persisted `distanceKm`/`movingSeconds`/`waitingSeconds`/tolls off this class's [FareState],
+ *    never its money fields; the real, final total is computed entirely separately, offline, by
+ *    [au.com.threesixty.cabdispatch.domain.fare.TripFareReconstruction] — which already calls the
+ *    tested engine directly. So this was a driver-facing live-display accuracy bug, not a billing
+ *    one, but a real one: a driver watching the meter mid-trip saw a total the passenger was very
+ *    unlikely to actually be charged.
+ *
+ * Rather than patch each symptom by hand, this class now delegates every accrual computation to a
+ * private [CalcFareEngine] instance driving a shadow [CalcFareState] — the exact same tested code
+ * path [TripFareReconstruction] already trusts — and maps its output onto this class's own
+ * UI-facing [FareState]/[FareBreakdown] (`domain.FareState`, a different, display-oriented shape
+ * from the calc engine's `domain.fare.FareState` — kept as-is here deliberately: [HiredScreen]/
+ * [HiredViewModel]'s existing rendering and persistence code reads specific fields
+ * (`movingSeconds`, `waitingSeconds`, `currentSpeedKmh`, `band`, `mode`) that have no equivalent
+ * on the calc engine's types, so this is a delegation of MATH, not a type-level replacement — zero
+ * changes needed to [HiredScreen]/[HiredViewModel]/[TripRepository] call sites).
+ */
 class FareEngineImpl(
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
@@ -113,20 +165,35 @@ class FareEngineImpl(
     private var tariff: TariffDto? = null
     private var tickJob: Job? = null
 
+    /** Stateless (per its own doc) — safe to share one instance across the whole trip. */
+    private val calcEngine = CalcFareEngine()
+
+    /** The real per-trip accumulator [calcEngine] mutates — `null` before [startTrip]. Every
+     * money/distance figure this class shows the driver is read back off this after each tick,
+     * never computed independently. */
+    private var calcState: CalcFareState? = null
+
     override fun startTrip(tariff: TariffDto, startLat: Double, startLng: Double) {
         this.tariff = tariff
+        val domainTariff = tariff.toDomainTariff()
         val timeClass = resolveTimeClass()
         val isPeak = resolveIsPeak()
-        val flagFall = tariff.flagFall.toBigDecimalOrZero()
-        val peak = if (isPeak) tariff.peakCharge.toBigDecimalOrZero() else BigDecimal.ZERO
-        val psl = tariff.pslAmount.toBigDecimalOrZero()
+        calcState = CalcFareState(
+            tariff = domainTariff,
+            timeClass = timeClass.toCalcTimeClass(),
+            isPeak = isPeak,
+        )
+
+        val peak = if (isPeak) domainTariff.peakCharge else BigDecimal.ZERO
 
         _state.value = FareState(
             status = TripStatus.HIRED,
             mode = AccrualMode.WAITING,
             band = TariffBand.BAND_1,
             timeClass = timeClass,
-            breakdown = FareBreakdown(flagFall = flagFall, peakAmount = peak, psl = psl),
+            // PSL deliberately NOT included here — see this class's own doc, point 4. It is a
+            // driver decision made later, at Close & Pay, never baked into the live display.
+            breakdown = FareBreakdown(flagFall = domainTariff.flagFall, peakAmount = peak),
         )
         startTicking()
     }
@@ -145,6 +212,11 @@ class FareEngineImpl(
 
     override fun addToll(preset: TollPreset) {
         val current = _state.value
+        // Mirrored into the shadow calc state too — harmless today (close() below still returns
+        // the UI snapshot directly, matching pre-existing behaviour, not calcEngine.close()'s
+        // result), but keeps the two totals from silently disagreeing if a future change ever
+        // does read calcState back out.
+        calcState?.let { it.tolls = it.tolls.add(preset.amount) }
         _state.value = current.copy(
             breakdown = current.breakdown.copy(tolls = current.breakdown.tolls.add(preset.amount)),
             tollsApplied = current.tollsApplied + preset,
@@ -167,65 +239,79 @@ class FareEngineImpl(
         }
     }
 
-    /** One second of the spec B6 tick loop. */
+    /**
+     * One second of the spec B6 tick loop — now a thin adapter: read the real-time speed, hand it
+     * to [calcEngine] (which owns mode/band/rate selection and distance-band splitting), then copy
+     * its updated totals onto the UI-facing [FareState]. `distanceDeltaKm` is still speed×1s (this
+     * class has never had an independent GPS-distance integration — a pre-existing simplification,
+     * not something this consolidation pass changes), but it is now fed into the SAME generic
+     * `(speed, distanceDelta, elapsedSeconds)` tick signature the tested engine's own golden
+     * vectors exercise, rather than duplicated inline.
+     *
+     * Accrued amounts are copied RAW (no per-tick rounding) — the tested engine only rounds at
+     * [CalcFareEngine.close] time; this class's own [FareBreakdown.total] used to round every
+     * single tick to 6 decimal places, a small compounding drift over a long trip. Display
+     * formatting ([toMoneyString]) already rounds to cents at render time, so nothing is lost.
+     */
     private fun tick() {
-        val t = tariff ?: return
+        val cs = calcState ?: return
         val speed = speedSource.speedKmh.value
-        val threshold = t.speedThresholdKmh.toBigDecimalOrZero().toDouble().takeIf { it > 0 } ?: 26.0
+        val threshold = cs.tariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: 26.0
         val current = _state.value
 
-        if (speed >= threshold) {
-            val dKm = BigDecimal.valueOf(speed / 3600.0) // one tick = one second
-            val newDistanceKm = current.distanceKm.add(dKm)
-            val distThreshold = t.distKmThreshold.toBigDecimalOrZero().takeIf { it.signum() > 0 } ?: BigDecimal("12")
-            val band = if (newDistanceKm <= distThreshold) TariffBand.BAND_1 else TariffBand.BAND_2
-            val rate = selectDistanceRate(t, band, current.timeClass)
-            val addAmount = dKm.multiply(rate)
+        val dKm = BigDecimal.valueOf(speed / 3600.0) // one tick = one second, per startTicking's delay(1000)
+        calcEngine.tick(cs, speedKmh = speed, distanceDeltaKm = dKm, elapsedSeconds = 1)
 
-            _state.value = current.copy(
-                mode = AccrualMode.DISTANCE,
-                band = band,
-                distanceKm = newDistanceKm,
-                currentSpeedKmh = speed,
-                movingSeconds = current.movingSeconds + 1,
-                breakdown = current.breakdown.copy(
-                    distanceAmount = current.breakdown.distanceAmount.add(addAmount),
-                ),
-            )
-        } else {
-            val waitingRate = t.waitingRatePerMin.toBigDecimalOrZero()
-            val addAmount = waitingRate.divide(BigDecimal(60), 6, RoundingMode.HALF_UP)
+        val mode = if (speed >= threshold) AccrualMode.DISTANCE else AccrualMode.WAITING
+        // Computed off TRUE cumulative distance every tick (fix #3 above), not only while in the
+        // distance branch — a trip that crawls past 12km in traffic now switches band correctly.
+        val band = if (cs.cumulativeDistanceKm <= cs.tariff.distKmThreshold) TariffBand.BAND_1 else TariffBand.BAND_2
 
-            _state.value = current.copy(
-                mode = AccrualMode.WAITING,
-                currentSpeedKmh = speed,
-                waitingSeconds = current.waitingSeconds + 1,
-                breakdown = current.breakdown.copy(
-                    waitingAmount = current.breakdown.waitingAmount.add(addAmount),
-                ),
-            )
-        }
+        _state.value = current.copy(
+            mode = mode,
+            band = band,
+            distanceKm = cs.cumulativeDistanceKm,
+            currentSpeedKmh = speed,
+            movingSeconds = current.movingSeconds + if (mode == AccrualMode.DISTANCE) 1 else 0,
+            waitingSeconds = current.waitingSeconds + if (mode == AccrualMode.WAITING) 1 else 0,
+            breakdown = current.breakdown.copy(
+                distanceAmount = cs.accruedDistanceCharge,
+                waitingAmount = cs.accruedWaitingCharge,
+            ),
+        )
     }
 
-    private fun selectDistanceRate(t: TariffDto, band: TariffBand, timeClass: TimeClass): BigDecimal {
-        val field = when {
-            timeClass == TimeClass.NIGHT && band == TariffBand.BAND_1 -> t.nightRate1
-            timeClass == TimeClass.NIGHT && band == TariffBand.BAND_2 -> t.nightRate2
-            band == TariffBand.BAND_1 -> t.distRate1
-            else -> t.distRate2
-        }
-        return field.toBigDecimalOrZero()
+    /** [TimeClass] (this file's display-oriented enum, `domain.TimeClass`) -> [CalcTimeClass]
+     * (`domain.fare.TimeClass`, the tested engine's own) — same three cases, different enum types
+     * because [TimeClass] carries a display [TimeClass.label] the calc engine has no use for. */
+    private fun TimeClass.toCalcTimeClass(): CalcTimeClass = when (this) {
+        TimeClass.DAY -> CalcTimeClass.DAY
+        TimeClass.NIGHT -> CalcTimeClass.NIGHT
+        TimeClass.HOLIDAY -> CalcTimeClass.HOLIDAY
     }
 
     /**
      * time_class fixed at journey commencement per the Fares Order wording —
      * see spec B6. Holiday detection needs a public-holiday calendar, out of
      * scope here — TODO(fare-engine sibling agent) to fold that in.
-     * Simplified day/night boundary: 6am-8pm day, else night.
+     *
+     * Night boundary is 10pm-6am — real bug fixed 2026-08-29 (found and reported while building
+     * the Captain Taxis dashboard's Night Fare tile, confirmed against the backend/architecture
+     * agent's own contract doc: "the 10pm-6am boundary is presently hardcoded server-side in the
+     * fare engine ... TimeClass.NIGHT"). This function previously used `hour in 6 until 20`
+     * (6am-8pm day / 8pm-6am night) — two hours off the server's real boundary, and inconsistent
+     * with [resolveIsPeak] a few lines below, which already correctly uses `hour >= 22 || hour < 6`
+     * for the same Fares Order night window. A trip started between 8pm and 10pm was silently
+     * billed at the day rate on this client's live display while the backend's authoritative tick
+     * ([ApiService.tickTrip]) billed it at night — this client-side estimate never actually
+     * overrode the server's real total (the server ticks win on any discrepancy, per that
+     * endpoint's own contract), so no driver was ever charged the wrong amount, but the live
+     * on-screen fare during that 2-hour window would have under-read what the final invoice
+     * actually charged. Fixed to match the server exactly.
      */
     private fun resolveTimeClass(): TimeClass {
         val hour = LocalTime.now().hour
-        return if (hour in 6 until 20) TimeClass.DAY else TimeClass.NIGHT
+        return if (hour >= 22 || hour < 6) TimeClass.NIGHT else TimeClass.DAY
     }
 
     /**
@@ -240,5 +326,3 @@ class FareEngineImpl(
         return isLateNight && isFriOrSat
     }
 }
-
-private fun String.toBigDecimalOrZero(): BigDecimal = runCatching { BigDecimal(this) }.getOrDefault(BigDecimal.ZERO)

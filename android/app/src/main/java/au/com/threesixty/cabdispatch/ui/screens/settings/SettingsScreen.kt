@@ -13,12 +13,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AttachMoney
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.GpsFixed
+import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.MonitorHeart
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SignalCellularAlt
+import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,42 +45,46 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 
 private enum class SettingsSubScreen { MAIN, PRINTER_PAIRING, FARE_SCHEDULE, FACTORY_RESET_PIN, PAIR_METER }
 
 /**
- * 31 · Settings & Diagnostics — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node
- * `28:107`). Presentation-only rewrite: every [SettingsViewModel] read/call below (GPS/network
- * polling, printer discovery/pairing, offline-map download states, fare schedule, force-update +
- * heartbeat, MDM locate response, admin-PIN-gated factory reset) is the exact same [SettingsUiState]
- * surface as before, and [onFactoryReset] still fires via `LaunchedEffect(factoryResetComplete)`.
+ * 31 · Settings & Diagnostics — Captain Taxis purple redesign (2026-08-29 pass), migrated off the
+ * old yellow/black `Deck` palette onto [CaptainPalette] to match the redesigned Home dashboard
+ * ([au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]). Presentation-only rewrite:
+ * every [SettingsViewModel] read/call below (GPS/network polling, printer discovery/pairing,
+ * offline-map download states, fare schedule, force-update + heartbeat, MDM locate response,
+ * admin-PIN-gated factory reset) is the exact same [SettingsUiState] surface as before, and
+ * [onFactoryReset] still fires via `LaunchedEffect(factoryResetComplete)`.
  *
- * The old scrolling two-pane layout is replaced by the frame's no-scroll 2×4 diagnostics grid
- * (100dp tiles: emoji · name · live sub-line · status dot, amber border on warn) plus a row of
- * outline action buttons and a ghost "← Dashboard". Grid tiles double as tap targets where a real
- * action exists (Printer → pairing, Offline maps → download, Tariff signature → fare schedule).
+ * Each sub-screen is now wrapped in the shared [PaneShell] (title + back-arrow rail + bordered
+ * panel) that Home's own reused panes use, so Settings reads as part of the same design system
+ * rather than a bespoke one-off. The diagnostics grid keeps its no-scroll 2×4 shape (100dp tiles:
+ * icon · name · live sub-line · status dot, warning/danger border on non-nominal) plus a row of
+ * action tiles. Grid tiles double as tap targets where a real action exists (Printer → pairing,
+ * Offline maps → download, Tariff signature → fare schedule).
  *
  * Frame deviations, flagged: the "Live heartbeat" tile binds to the real one-shot device
  * heartbeat this ViewModel already sends on open ([SettingsUiState.forceUpdateStatus] — there is
- * no periodic 30s publisher on this screen, see [SettingsViewModel.loadDeviceStatus]'s doc), not
- * the frame's "every 30 s · last 4:05:12 PM" sample. "Meter calibration" has no backing state
- * anywhere ([SettingsUiState] has none) so that slot instead shows the real MDM locate-request
- * diagnostic when one is active. "🔔 TEST ALARM" has no backing action and is replaced by the
- * real FARE SCHEDULE / PERMISSIONS / OFFLINE & SYNC entries this screen has always offered. The
- * status strip is dashboard-owned state — omitted (ShiftStart/Permissions port precedent).
+ * no periodic background publisher on this screen, see [SettingsViewModel.loadDeviceStatus]'s
+ * doc), not a recurring-poll sample. "Meter calibration" has no backing state anywhere
+ * ([SettingsUiState] has none) so that slot instead shows the real MDM locate-request diagnostic
+ * when one is active.
  */
 @Composable
 fun SettingsScreen(
@@ -138,87 +156,87 @@ private fun MainSettingsContent(
     onOpenOfflineSync: () -> Unit,
     onOpenPairMeter: () -> Unit,
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
-            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
+            .background(CaptainPalette.bg)
+            .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        Text("Settings & diagnostics", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
-        Spacer(Modifier.height(20.dp))
+        PaneShell(title = "Settings & diagnostics", onBack = onBack) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // --- 2×4 diagnostics grid — all live ViewModel state ---
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        GpsTile(state, Modifier.weight(1f))
+                        NetworkTile(state, Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        DiagTile(
+                            icon = Icons.Rounded.Print,
+                            name = "Printer",
+                            sub = state.pairedPrinter?.let { "Paired · ${it.name}" } ?: "Not paired — tap to pair",
+                            tone = if (state.pairedPrinter != null) DiagTone.OK else DiagTone.WARN,
+                            onClick = onOpenPrinterPairing,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OfflineMapsTile(state, onDownloadOfflineMaps, Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        DiagTile(
+                            icon = Icons.Rounded.VerifiedUser,
+                            name = "Tariff signature",
+                            sub = state.fareSchedule?.let { "${it.name} · cached" } ?: "No cached tariff",
+                            tone = if (state.fareSchedule != null) DiagTone.OK else DiagTone.WARN,
+                            onClick = onOpenFareSchedule,
+                            modifier = Modifier.weight(1f),
+                        )
+                        AppVersionTile(state, Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        HeartbeatTile(state, onOpenPairMeter, Modifier.weight(1f))
+                        LocateTile(state, Modifier.weight(1f))
+                    }
+                }
 
-        // --- 2×4 diagnostics grid (frame `diagGrid`, 100dp tiles) — all live ViewModel state ---
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                GpsTile(state, Modifier.weight(1f))
-                NetworkTile(state, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DiagTile(
-                    emoji = "🖨",
-                    name = "Printer",
-                    sub = state.pairedPrinter?.let { "Paired · ${it.name}" } ?: "Not paired — tap to pair",
-                    tone = if (state.pairedPrinter != null) DiagTone.OK else DiagTone.WARN,
-                    onClick = onOpenPrinterPairing,
-                    modifier = Modifier.weight(1f),
-                )
-                OfflineMapsTile(state, onDownloadOfflineMaps, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DiagTile(
-                    emoji = "🔏",
-                    name = "Tariff signature",
-                    sub = state.fareSchedule?.let { "${it.name} · cached" } ?: "No cached tariff",
-                    tone = if (state.fareSchedule != null) DiagTone.OK else DiagTone.WARN,
-                    onClick = onOpenFareSchedule,
-                    modifier = Modifier.weight(1f),
-                )
-                AppVersionTile(state, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                HeartbeatTile(state, onOpenPairMeter, Modifier.weight(1f))
-                LocateTile(state, Modifier.weight(1f))
+                Spacer(Modifier.weight(1f))
+
+                // --- Action row (96dp tiles, icon + label) ---
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ActionTile(Icons.Rounded.AttachMoney, "FARE SCHEDULE", onClick = onOpenFareSchedule, modifier = Modifier.weight(1f))
+                    val mapsLabel = when (state.offlineMapDownload) {
+                        is OfflineMapDownloadState.Downloading -> "DOWNLOADING…"
+                        is OfflineMapDownloadState.Failed -> "RETRY MAPS"
+                        is OfflineMapDownloadState.Completed -> "MAPS READY"
+                        is OfflineMapDownloadState.NotStarted -> "UPDATE MAPS"
+                    }
+                    ActionTile(
+                        Icons.Rounded.Map,
+                        mapsLabel,
+                        onClick = onDownloadOfflineMaps,
+                        enabled = state.offlineMapDownload !is OfflineMapDownloadState.Downloading,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ActionTile(Icons.Rounded.Shield, "PERMISSIONS", onClick = onOpenPermissions, modifier = Modifier.weight(1f))
+                    ActionTile(Icons.Rounded.SwapVert, "OFFLINE & SYNC", onClick = onOpenOfflineSync, modifier = Modifier.weight(1f))
+                    ActionTile(
+                        Icons.Rounded.RestartAlt,
+                        "FACTORY RESET · ADMIN PIN",
+                        onClick = onFactoryResetClick,
+                        danger = true,
+                        modifier = Modifier.weight(1.4f),
+                    )
+                }
             }
         }
-
-        Spacer(Modifier.weight(1f))
-
-        // --- Action row (frame `settingsActions`, 68dp outline buttons) ---
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            ActionTile("💲 FARE SCHEDULE", onClick = onOpenFareSchedule, modifier = Modifier.weight(1f))
-            val mapsLabel = when (state.offlineMapDownload) {
-                is OfflineMapDownloadState.Downloading -> "🗺 DOWNLOADING…"
-                is OfflineMapDownloadState.Failed -> "🗺 RETRY MAPS"
-                is OfflineMapDownloadState.Completed -> "🗺 MAPS READY"
-                is OfflineMapDownloadState.NotStarted -> "🗺 UPDATE MAPS"
-            }
-            ActionTile(
-                mapsLabel,
-                onClick = onDownloadOfflineMaps,
-                enabled = state.offlineMapDownload !is OfflineMapDownloadState.Downloading,
-                modifier = Modifier.weight(1f),
-            )
-            ActionTile("🔐 PERMISSIONS", onClick = onOpenPermissions, modifier = Modifier.weight(1f))
-            ActionTile("⇅ OFFLINE & SYNC", onClick = onOpenOfflineSync, modifier = Modifier.weight(1f))
-            ActionTile(
-                "⚠ FACTORY RESET · ADMIN PIN",
-                onClick = onFactoryResetClick,
-                danger = true,
-                modifier = Modifier.weight(1.4f),
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-        DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp), onClick = onBack)
     }
 }
 
 // --- Diagnostics tiles ---
 
 private enum class DiagTone(val dot: Color) {
-    OK(Deck.forHire),
-    WARN(Deck.stopped),
-    BAD(Deck.hired),
+    OK(CaptainPalette.success),
+    WARN(CaptainPalette.warning),
+    BAD(CaptainPalette.danger),
 }
 
 @Composable
@@ -230,7 +248,7 @@ private fun GpsTile(state: SettingsUiState, modifier: Modifier) {
         GpsQuality.NO_FIX -> "No fix" to DiagTone.BAD
         GpsQuality.PERMISSION_DENIED -> "Location permission not granted" to DiagTone.BAD
     }
-    DiagTile(emoji = "🛰", name = "GPS", sub = sub, tone = tone, modifier = modifier)
+    DiagTile(icon = Icons.Rounded.GpsFixed, name = "GPS", sub = sub, tone = tone, modifier = modifier)
 }
 
 @Composable
@@ -241,7 +259,7 @@ private fun NetworkTile(state: SettingsUiState, modifier: Modifier) {
         NetworkStatus.OTHER -> "Connected to fleet server" to DiagTone.OK
         NetworkStatus.OFFLINE -> "Offline" to DiagTone.BAD
     }
-    DiagTile(emoji = "📶", name = "Network", sub = sub, tone = tone, modifier = modifier)
+    DiagTile(icon = Icons.Rounded.SignalCellularAlt, name = "Network", sub = sub, tone = tone, modifier = modifier)
 }
 
 @Composable
@@ -253,7 +271,7 @@ private fun OfflineMapsTile(state: SettingsUiState, onDownload: () -> Unit, modi
         is OfflineMapDownloadState.NotStarted -> "Not downloaded — tap to fetch" to DiagTone.WARN
     }
     DiagTile(
-        emoji = "🗺",
+        icon = Icons.Rounded.Map,
         name = "Offline maps",
         sub = sub,
         tone = tone,
@@ -270,7 +288,7 @@ private fun AppVersionTile(state: SettingsUiState, modifier: Modifier) {
         ForceUpdateStatus.UP_TO_DATE -> "up to date" to DiagTone.OK
         ForceUpdateStatus.REQUIRED -> "update required" to DiagTone.BAD
     }
-    DiagTile(emoji = "📦", name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)
+    DiagTile(icon = Icons.Rounded.Inventory2, name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)
 }
 
 /** Binds the frame's "Live heartbeat" tile to the real one-shot heartbeat result — see class doc. */
@@ -287,7 +305,7 @@ private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -> Unit, m
     // already use. Once paired (UP_TO_DATE/REQUIRED), the tile shows real status only, per DiagTile
     // convention elsewhere (Tariff signature tile stays non-clickable once cached).
     val onClick = if (state.forceUpdateStatus == ForceUpdateStatus.UNKNOWN_NO_DEVICE) onOpenPairMeter else null
-    DiagTile(emoji = "💓", name = "Device heartbeat", sub = sub, tone = tone, onClick = onClick, modifier = modifier)
+    DiagTile(icon = Icons.Rounded.MonitorHeart, name = "Device heartbeat", sub = sub, tone = tone, onClick = onClick, modifier = modifier)
 }
 
 /** MDM locate-response diagnostic — only meaningful once an admin has requested a locate;
@@ -304,15 +322,15 @@ private fun LocateTile(state: SettingsUiState, modifier: Modifier) {
     if (row == null) {
         Spacer(modifier)
     } else {
-        DiagTile(emoji = "📡", name = "Locate request", sub = row.first, tone = row.second, modifier = modifier)
+        DiagTile(icon = Icons.Rounded.LocationOn, name = "Locate request", sub = row.first, tone = row.second, modifier = modifier)
     }
 }
 
-/** One 100dp diagnostics tile (frame node 28:136 etc): emoji 26 · name 17 semibold · sub 14 ·
- * 12dp status dot; amber/red 1.5dp border when non-nominal. */
+/** One 100dp diagnostics tile: icon · name 18sp semibold · sub 16sp · 12dp status dot; amber/red
+ * 1.5dp border when non-nominal. */
 @Composable
 private fun DiagTile(
-    emoji: String,
+    icon: ImageVector,
     name: String,
     sub: String,
     tone: DiagTone,
@@ -321,187 +339,199 @@ private fun DiagTile(
 ) {
     val shape = RoundedCornerShape(16.dp)
     val borderMod = when (tone) {
-        DiagTone.OK -> Modifier.border(1.dp, Deck.strokeSubtle, shape)
-        DiagTone.WARN -> Modifier.border(1.5.dp, Deck.stopped.copy(alpha = 0.7f), shape)
-        DiagTone.BAD -> Modifier.border(1.5.dp, Deck.hired.copy(alpha = 0.7f), shape)
+        DiagTone.OK -> Modifier.border(1.dp, CaptainPalette.panelBorder, shape)
+        DiagTone.WARN -> Modifier.border(1.5.dp, CaptainPalette.warning.copy(alpha = 0.7f), shape)
+        DiagTone.BAD -> Modifier.border(1.5.dp, CaptainPalette.danger.copy(alpha = 0.7f), shape)
     }
     Row(
         modifier = modifier
             .height(100.dp)
             .clip(shape)
-            .background(Deck.panel)
+            .background(CaptainPalette.raised)
             .then(borderMod)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(emoji, fontSize = 26.sp)
+        Box(
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
+                .background(CaptainPalette.panel).border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
+        }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(name, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Deck.textPrimary)
+            Text(name, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
             Text(
                 sub,
                 fontFamily = InterFamily,
-                fontSize = 14.sp,
-                color = if (tone == DiagTone.OK) Deck.textMuted else tone.dot,
+                fontSize = 16.sp,
+                color = if (tone == DiagTone.OK) CaptainPalette.textMuted else tone.dot,
             )
         }
         Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(tone.dot))
     }
 }
 
-/** 68dp outline action button (frame `settingsActions`); red-tinted for the factory reset. */
+/** 96dp action tile: icon above a bold label, elderly-friendly button sizing; danger-tinted for
+ * the factory reset. */
 @Composable
 private fun ActionTile(
+    icon: ImageVector,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     danger: Boolean = false,
     enabled: Boolean = true,
 ) {
-    val shape = RoundedCornerShape(14.dp)
-    val borderColor = if (danger) Deck.hired.copy(alpha = 0.6f) else Deck.strokeStrong
-    Box(
+    val shape = RoundedCornerShape(16.dp)
+    val borderColor = if (danger) CaptainPalette.danger.copy(alpha = 0.7f) else CaptainPalette.panelBorder
+    val tint = if (danger) CaptainPalette.danger else CaptainPalette.accent
+    Column(
         modifier = modifier
-            .height(68.dp)
+            .height(96.dp)
             .clip(shape)
-            .background(Deck.card)
+            .background(CaptainPalette.raised)
             .border(1.5.dp, borderColor, shape)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             label,
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 15.sp,
-            color = if (danger) Deck.hired else Deck.textSecondary,
+            color = if (danger) CaptainPalette.danger else CaptainPalette.textPrimary,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
         )
     }
 }
 
-// --- Sub-screens (same SettingsViewModel wiring as before, reskinned to Deck tokens) ---
+// --- Sub-screens (same SettingsViewModel wiring as before, reskinned to CaptainPalette tokens) ---
 
 @Composable
 private fun PrinterPairingContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -> Unit) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
-            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
+            .background(CaptainPalette.bg)
+            .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        Text("Printer pairing", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            state.pairedPrinter?.let { "Paired: ${it.name}" } ?: "No printer paired",
-            fontFamily = InterFamily,
-            fontSize = 15.sp,
-            color = Deck.textSecondary,
-        )
-        Spacer(Modifier.height(20.dp))
+        PaneShell(title = "Printer pairing", onBack = onBack) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    state.pairedPrinter?.let { "Paired: ${it.name}" } ?: "No printer paired",
+                    fontFamily = InterFamily,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+                Spacer(Modifier.height(20.dp))
 
-        DeckButton(
-            text = if (state.printerDiscovering) "SCANNING…" else "SCAN FOR PRINTERS",
-            kind = DeckButtonKind.Primary,
-            enabled = !state.printerDiscovering,
-            modifier = Modifier.width(320.dp),
-            onClick = viewModel::discoverPrinters,
-        )
-        Spacer(Modifier.height(20.dp))
+                CaptainButton(
+                    text = if (state.printerDiscovering) "SCANNING…" else "SCAN FOR PRINTERS",
+                    enabled = !state.printerDiscovering,
+                    widthDp = 340,
+                    onClick = viewModel::discoverPrinters,
+                )
+                Spacer(Modifier.height(20.dp))
 
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(state.discoveredPrinters) { device: PrinterDevice ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Deck.panel)
-                        .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(device.name, fontFamily = InterFamily, fontSize = 15.sp, color = Deck.textPrimary)
-                    DeckButton(
-                        text = "PAIR",
-                        kind = DeckButtonKind.Primary,
-                        heightDp = 44,
-                        fontSize = 13,
-                        modifier = Modifier.width(110.dp),
-                    ) { viewModel.pairPrinter(device.id) }
+                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(state.discoveredPrinters) { device: PrinterDevice ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(CaptainPalette.panel)
+                                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                            CaptainButton(
+                                text = "PAIR",
+                                heightDp = 56,
+                                fontSize = 18.sp,
+                                widthDp = 130,
+                            ) { viewModel.pairPrinter(device.id) }
+                        }
+                    }
                 }
             }
         }
-
-        Spacer(Modifier.height(16.dp))
-        DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
     }
 }
 
 @Composable
 private fun FareScheduleContent(state: SettingsUiState, onBack: () -> Unit) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
-            .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
+            .background(CaptainPalette.bg)
+            .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        Text("Fare schedule", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
-        Text(
-            "Rates displayed to passengers per the taxi fare regulations (cl.15 display requirement).",
-            fontFamily = InterFamily,
-            fontSize = 13.sp,
-            color = Deck.textMuted,
-        )
-        Spacer(Modifier.height(20.dp))
+        PaneShell(title = "Fare schedule", onBack = onBack) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    "Rates displayed to passengers per the taxi fare regulations (cl.15 display requirement).",
+                    fontFamily = InterFamily,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textMuted,
+                )
+                Spacer(Modifier.height(20.dp))
 
-        val tariff = state.fareSchedule
-        when {
-            state.fareScheduleLoading -> CircularProgressIndicator(color = Deck.yellow)
-            tariff == null -> Text(
-                "No cached fare schedule available.",
-                fontFamily = InterFamily,
-                fontSize = 15.sp,
-                color = Deck.textSecondary,
-            )
-            else -> Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Deck.panel)
-                    .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(18.dp))
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Deck.textPrimary)
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Deck.strokeSubtle))
-                FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
-                if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
-                FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
-                FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
-                FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
-                FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
-                if (tariff.holidayRate1 != "0") {
-                    FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                val tariff = state.fareSchedule
+                when {
+                    state.fareScheduleLoading -> CircularProgressIndicator(color = CaptainPalette.accent)
+                    tariff == null -> Text(
+                        "No cached fare schedule available.",
+                        fontFamily = InterFamily,
+                        fontSize = 16.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                    else -> Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(CaptainPalette.panel)
+                            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+                        FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
+                        if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
+                        FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
+                        FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
+                        FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
+                        FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
+                        if (tariff.holidayRate1 != "0") {
+                            FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                        }
+                        if (tariff.holidayRate2 != "0") {
+                            FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
+                        }
+                        FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
+                        FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
+                    }
                 }
-                if (tariff.holidayRate2 != "0") {
-                    FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
-                }
-                FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
-                FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
             }
         }
-
-        Spacer(Modifier.weight(1f))
-        DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
     }
 }
 
 @Composable
 private fun FareScheduleRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.textSecondary)
-        Text("$$value", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Deck.textPrimary)
+        Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
+        Text("$$value", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
     }
 }
 
@@ -521,89 +551,90 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
     var code by remember { mutableStateOf("") }
     val pairState = state.pairMeter
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
-            .padding(start = 72.dp, end = 72.dp, top = 48.dp, bottom = 32.dp),
+            .background(CaptainPalette.bg)
+            .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        Text("Pair meter", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Enter the 8-character code shown on the dashboard, or scan its QR.",
-            fontFamily = InterFamily,
-            fontSize = 15.sp,
-            color = Deck.textSecondary,
-        )
-        Spacer(Modifier.height(28.dp))
-
-        when (pairState) {
-            is PairMeterState.Success -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Deck.forHire.copy(alpha = 0.12f))
-                        .border(1.5.dp, Deck.forHire, RoundedCornerShape(16.dp))
-                        .padding(20.dp),
-                ) {
-                    Text(
-                        "✓ Paired" + (pairState.vehicleId?.let { " — vehicle $it" } ?: ""),
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp,
-                        color = Deck.forHire,
-                    )
-                }
-            }
-            else -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(72.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Deck.card)
-                        .border(2.dp, Deck.yellow, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        code.ifEmpty { "········" },
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 28.sp,
-                        letterSpacing = 6.sp,
-                        color = if (code.isEmpty()) Deck.textMuted else Deck.textPrimary,
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                PairCodeKeyRows(
-                    onKey = { c -> if (code.length < 8) code += c },
-                    onBackspace = { code = code.dropLast(1) },
+        PaneShell(title = "Pair meter", onBack = onBack) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    "Enter the 8-character code shown on the dashboard, or scan its QR.",
+                    fontFamily = InterFamily,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textSecondary,
                 )
-                Spacer(Modifier.height(16.dp))
-                if (pairState is PairMeterState.Error) {
-                    Text(pairState.message, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.stopped)
-                    Spacer(Modifier.height(12.dp))
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    DeckButton(
-                        text = "📷 Scan QR",
-                        kind = DeckButtonKind.Outline,
-                        modifier = Modifier.weight(1f),
-                        enabled = pairState !is PairMeterState.Submitting,
-                    ) { viewModel.scanPairingQr(activity) }
-                    DeckButton(
-                        text = if (pairState is PairMeterState.Submitting) "Pairing…" else "Pair",
-                        kind = DeckButtonKind.Primary,
-                        modifier = Modifier.weight(1f),
-                        enabled = code.length == 8 && pairState !is PairMeterState.Submitting,
-                    ) { viewModel.submitPairingCode(code) }
+                Spacer(Modifier.height(24.dp))
+
+                when (pairState) {
+                    is PairMeterState.Success -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(CaptainPalette.success.copy(alpha = 0.12f))
+                                .border(1.5.dp, CaptainPalette.success, RoundedCornerShape(16.dp))
+                                .padding(20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(24.dp))
+                            Text(
+                                "Paired" + (pairState.vehicleId?.let { " — vehicle $it" } ?: ""),
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 17.sp,
+                                color = CaptainPalette.success,
+                                modifier = Modifier.padding(start = 12.dp),
+                            )
+                        }
+                    }
+                    else -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(72.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(CaptainPalette.panel)
+                                .border(2.dp, CaptainPalette.accent, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                code.ifEmpty { "········" },
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 28.sp,
+                                letterSpacing = 6.sp,
+                                color = if (code.isEmpty()) CaptainPalette.textMuted else CaptainPalette.textPrimary,
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        PairCodeKeyRows(
+                            onKey = { c -> if (code.length < 8) code += c },
+                            onBackspace = { code = code.dropLast(1) },
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        if (pairState is PairMeterState.Error) {
+                            Text(pairState.message, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.warning)
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            CaptainButton(
+                                text = "SCAN QR",
+                                outline = true,
+                                modifier = Modifier.weight(1f),
+                                enabled = pairState !is PairMeterState.Submitting,
+                            ) { viewModel.scanPairingQr(activity) }
+                            CaptainButton(
+                                text = if (pairState is PairMeterState.Submitting) "PAIRING…" else "PAIR",
+                                modifier = Modifier.weight(1f),
+                                enabled = code.length == 8 && pairState !is PairMeterState.Submitting,
+                            ) { viewModel.submitPairingCode(code) }
+                        }
+                    }
                 }
             }
         }
-
-        Spacer(Modifier.weight(1f))
-        DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
     }
 }
 
@@ -611,7 +642,9 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
  * extracted to a shared composable) since that one is `private` in a different screen and this is
  * a small, one-off widget — not worth a cross-screen refactor for. Pairing codes exclude
  * `0/1/O/I` server-side (transcription-ambiguity avoidance, per spec) — filtered out of the
- * keyboard entirely so a driver physically cannot type a character the server would reject. */
+ * keyboard entirely so a driver physically cannot type a character the server would reject. Not
+ * [au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad]: that shared widget is a numeric-only 0-9
+ * pad, and this one needs the full A-Z/2-9 alphabet. */
 @Composable
 private fun PairCodeKeyRows(onKey: (Char) -> Unit, onBackspace: () -> Unit) {
     val rows = listOf("ABCDEFGH", "JKLMNPQR", "STUVWXYZ", "23456789⌫")
@@ -622,14 +655,14 @@ private fun PairCodeKeyRows(onKey: (Char) -> Unit, onBackspace: () -> Unit) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(44.dp)
+                            .height(48.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Deck.card)
-                            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(8.dp))
+                            .background(CaptainPalette.raised)
+                            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(8.dp))
                             .clickable { if (c == '⌫') onBackspace() else onKey(c) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(c.toString(), fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = Deck.textPrimary)
+                        Text(c.toString(), fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
                     }
                 }
             }

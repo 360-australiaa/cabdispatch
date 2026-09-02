@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -24,26 +27,25 @@ import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.format.asMoney
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import java.math.RoundingMode
 
 /**
- * 29 · Shift Submitted — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `27:81`).
- * Same data source/navigation as every previous version: totals come from
+ * 29 · Shift Submitted — reskinned onto the [CaptainPalette] purple design system (2026-08-29
+ * pass). Same data source/navigation as every previous version: totals come from
  * [ShiftSubmissionHandoff.pending] (captured at submit time), and the primary CTA clears the
  * handoffs + [SessionHolder] and pops to S1 with an empty back stack.
  *
- * Centered full-takeover layout per the frame: 140dp green ✓ ring, 40sp "Shift submitted", the
- * frame's summary line rendered from REAL handoff values (trips · reconciled total · PSL levies),
- * static "Report available on the fleet dashboard" line, and a 360×72 yellow "Done — Log Off"
- * primary. One addition beyond the frame: a small Roboto Mono detail line with the cash/card
- * split, km, and hours the handoff also carries — real data this screen showed before the port,
- * kept rather than silently dropped.
+ * Centered full-takeover layout, unchanged from the previous port: 140dp success-tinted check
+ * ring, 40sp "Shift submitted", a summary line rendered from REAL handoff values (trips ·
+ * reconciled total · PSL levies), static "Report available on the fleet dashboard" line, and a
+ * 360×72 primary "Done — Log Off" CTA. One addition kept from before the port: a small Roboto
+ * Mono detail line with the cash/card split, km, and hours the handoff also carries — real data
+ * this screen showed before, kept rather than silently dropped.
  */
 @Composable
 fun ShiftSubmittedScreen(navController: NavHostController) {
@@ -52,21 +54,21 @@ fun ShiftSubmittedScreen(navController: NavHostController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas),
+            .background(CaptainPalette.bg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
     ) {
         Box(
             modifier = Modifier
                 .size(140.dp)
-                .background(Deck.forHire.copy(alpha = 0.14f), CircleShape)
-                .border(4.dp, Deck.forHire, CircleShape),
+                .background(CaptainPalette.success.copy(alpha = 0.14f), CircleShape)
+                .border(4.dp, CaptainPalette.success, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text("✓", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 64.sp, color = Deck.forHire)
+            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(72.dp))
         }
 
-        Text("Shift submitted", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = Deck.textPrimary)
+        Text("Shift submitted", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
 
         val s = summary
         if (s == null) {
@@ -74,7 +76,7 @@ fun ShiftSubmittedScreen(navController: NavHostController) {
                 "No shift summary available.",
                 fontFamily = InterFamily,
                 fontSize = 18.sp,
-                color = Deck.textSecondary,
+                color = CaptainPalette.textSecondary,
             )
         } else {
             Text(
@@ -84,7 +86,7 @@ fun ShiftSubmittedScreen(navController: NavHostController) {
                 fontFamily = InterFamily,
                 fontSize = 18.sp,
                 lineHeight = 26.sp,
-                color = Deck.textSecondary,
+                color = CaptainPalette.textSecondary,
                 textAlign = TextAlign.Center,
             )
             Text(
@@ -94,13 +96,12 @@ fun ShiftSubmittedScreen(navController: NavHostController) {
                 fontFamily = RobotoMonoFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 13.sp,
-                color = Deck.textMuted,
+                color = CaptainPalette.textMuted,
             )
         }
 
-        DeckButton(
+        CaptainButton(
             text = "Done — Log Off",
-            kind = DeckButtonKind.Primary,
             heightDp = 72,
             modifier = Modifier.width(360.dp),
         ) {

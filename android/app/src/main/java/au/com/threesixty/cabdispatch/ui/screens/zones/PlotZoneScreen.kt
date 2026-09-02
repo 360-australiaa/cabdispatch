@@ -18,7 +18,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -29,7 +34,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
@@ -39,30 +43,27 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.ZoneDto
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
-import au.com.threesixty.cabdispatch.ui.theme.Deck
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * 25 · Plot — Zones — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` nodes `24:78`
- * populated / `24:194` empty). [PlotZoneViewModel]/[PlotZoneUiState] and every plot/unplot/refresh
- * action are unchanged — layout/tokens only.
+ * 25 · Plot — Zones — reskinned onto [CaptainPalette] (2026-08-29 purple migration pass).
+ * [PlotZoneViewModel]/[PlotZoneUiState] and every plot/unplot/refresh action are unchanged —
+ * layout/tokens only.
  *
- * Chrome note: the frames show the persistent status strip + nav rail; this standalone route has
- * no live source for the strip's real fields (they belong to the home shell's
- * WheelDashboardViewModel), so per the detail-screen convention (see ShiftStartScreen /
- * MessageThreadScreen) the screen owns the whole canvas without chrome, and the empty frame's
- * ghost "← Dashboard" back affordance is kept on both states instead.
+ * Chrome note: this standalone route has no live source for a persistent status strip (it belongs
+ * to the home shell's WheelDashboardViewModel), so per the detail-screen convention the screen owns
+ * the whole canvas without chrome, with an outline "Dashboard" back affordance kept on both states.
  *
  * Honesty notes:
- * - The frame's per-zone "Queue 4 · 12 bookings/hr" captions and the plotted card's "You are #3
- *   of 3" have no backing fields here ([ZoneDto] carries name/number/geometry only, and the plot
- *   response carries no queue position) — cards show the real zone number badge + name, and the
- *   plotted card says "Currently plotted" plainly. Live demand lives on the Statistics screen.
- * - The header pill likewise drops the frame's "Queue #3 · updates live" suffix.
+ * - The per-zone "Queue 4 · 12 bookings/hr" captions and a "You are #3 of 3" position have no
+ *   backing fields here ([ZoneDto] carries name/number/geometry only, and the plot response
+ *   carries no queue position) — cards show the real zone number badge + name, and the plotted
+ *   card says "Currently plotted" plainly. Live demand lives on the Statistics screen.
  * - More than 6 zones scroll INSIDE the fixed-height grid container (the page itself never
  *   scrolls vertically).
  */
@@ -76,14 +77,14 @@ fun PlotZoneScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
+            .background(CaptainPalette.bg)
             .padding(start = 72.dp, end = 72.dp, top = 44.dp, bottom = 36.dp),
     ) {
         when (val s = state) {
             is PlotZoneUiState.Loading -> {
                 PlotHeader(plottedZone = null, showPill = false)
                 Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Deck.yellow)
+                    CircularProgressIndicator(color = CaptainPalette.accent)
                 }
                 BackRow(navController)
             }
@@ -92,10 +93,9 @@ fun PlotZoneScreen(
                 Spacer(Modifier.height(20.dp))
                 EmptyStateCard(
                     modifier = Modifier.weight(1f),
-                    emoji = "📍",
                     title = "Couldn't load zones",
                     body = s.message,
-                    buttonText = "⟳ RETRY",
+                    buttonText = "RETRY",
                     onButtonClick = viewModel::refresh,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -107,27 +107,26 @@ fun PlotZoneScreen(
                 Spacer(Modifier.height(20.dp))
 
                 if (s.error != null) {
-                    Text(s.error, fontFamily = InterFamily, fontSize = 13.sp, color = Deck.hired)
+                    Text(s.error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
                     Spacer(Modifier.height(10.dp))
                 }
 
                 if (s.zones.isEmpty()) {
-                    // 25b — empty state (Figma 24:194).
+                    // 25b — empty state.
                     EmptyStateCard(
                         modifier = Modifier.weight(1f),
-                        emoji = "📍",
                         title = "No zones published for this region yet",
                         body = "Your operator has not defined dispatch zones for the area you are in, or the " +
                             "zone list is still syncing. You can still receive direct job offers and street " +
                             "hails while unplotted.",
-                        buttonText = "⟳ REFRESH ZONES",
+                        buttonText = "REFRESH ZONES",
                         onButtonClick = viewModel::refresh,
                     )
                     Spacer(Modifier.height(16.dp))
                     BackRow(navController)
                 } else {
-                    // Populated — 3-column grid of 220dp zone cards (Figma 24:133). Scrolls
-                    // internally only when the list outgrows the fixed region (>6 zones).
+                    // Populated — 3-column grid of 220dp zone cards. Scrolls internally only when
+                    // the list outgrows the fixed region (>6 zones).
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
                         modifier = Modifier.weight(1f),
@@ -147,34 +146,34 @@ fun PlotZoneScreen(
 
                     Spacer(Modifier.height(16.dp))
 
-                    // Bottom row (Figma 24:190) + the kept ghost back affordance.
+                    // Bottom row + the kept outline back affordance.
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(200.dp)) {
+                        CaptainButton(text = "Dashboard", outline = true, modifier = Modifier.width(200.dp)) {
                             navController.popBackStack()
                         }
                         Box(
                             modifier = Modifier
                                 .width(300.dp)
                                 .height(64.dp)
-                                .clip(RoundedCornerShape(Deck.R_MD.dp))
-                                .background(Deck.card)
-                                .border(1.dp, Deck.strokeStrong, RoundedCornerShape(Deck.R_MD.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(CaptainPalette.raised)
+                                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
                                 .clickable { navController.navigate(CabDispatchRoutes.ZONE_STATISTICS) },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "VIEW ZONE STATISTICS →",
+                                "VIEW ZONE STATISTICS",
                                 fontFamily = InterFamily,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp,
-                                color = Deck.info,
+                                color = CaptainPalette.accent,
                             )
                         }
                         Text(
                             "Plotting joins the zone queue — jobs offer to queue position #1 first.",
                             fontFamily = InterFamily,
                             fontSize = 14.sp,
-                            color = Deck.textMuted,
+                            color = CaptainPalette.textMuted,
                         )
                     }
                 }
@@ -194,22 +193,25 @@ private fun PlotHeader(plottedZone: ZoneDto?, showPill: Boolean) {
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 30.sp,
-            color = Deck.textPrimary,
+            color = CaptainPalette.textPrimary,
         )
         Spacer(Modifier.weight(1f))
         if (showPill && plottedZone != null) {
-            Box(
+            Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Deck.forHire.copy(alpha = 0.12f))
+                    .background(CaptainPalette.success.copy(alpha = 0.12f))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(16.dp))
                 Text(
-                    "✓ Plotted: ${plottedZone.number} — ${plottedZone.name}",
+                    "Plotted: ${plottedZone.number} — ${plottedZone.name}",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
-                    color = Deck.forHire,
+                    color = CaptainPalette.success,
                 )
             }
         }
@@ -218,17 +220,14 @@ private fun PlotHeader(plottedZone: ZoneDto?, showPill: Boolean) {
 
 @Composable
 private fun BackRow(navController: NavHostController) {
-    DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp)) {
+    CaptainButton(text = "Dashboard", outline = true, modifier = Modifier.width(220.dp)) {
         navController.popBackStack()
     }
 }
 
-/** Frame `24:172`'s plotted-card dark-green fill — introduced by the populated frame. */
-private val PlottedCardBg = Color(0xFF0E2117)
-
 /**
- * Figma `24:135` / `24:172` — 220dp zone card: 52dp Chakra number badge + name, pinned bottom CTA.
- * Plotted card flips to the green-bordered variant with the red-outline "PLOTTED ✓ · UNPLOT".
+ * 220dp zone card: 52dp Chakra number badge + name, pinned bottom CTA. Plotted card flips to the
+ * success-bordered variant with the danger-outline "PLOTTED · UNPLOT".
  */
 @Composable
 private fun ZoneCard(
@@ -243,10 +242,10 @@ private fun ZoneCard(
         modifier = Modifier
             .height(220.dp)
             .clip(shape)
-            .background(if (plotted) PlottedCardBg else Deck.panel)
+            .background(if (plotted) CaptainPalette.success.copy(alpha = 0.10f) else CaptainPalette.panel)
             .border(
                 width = if (plotted) 2.dp else 1.dp,
-                color = if (plotted) Deck.forHire else Deck.strokeSubtle,
+                color = if (plotted) CaptainPalette.success else CaptainPalette.panelBorder,
                 shape = shape,
             )
             .padding(horizontal = 22.dp, vertical = 20.dp),
@@ -256,8 +255,8 @@ private fun ZoneCard(
             Box(
                 modifier = Modifier
                     .size(52.dp)
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(if (plotted) Deck.forHire else Deck.card),
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (plotted) CaptainPalette.success else CaptainPalette.raised),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -265,7 +264,7 @@ private fun ZoneCard(
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Medium,
                     fontSize = 24.sp,
-                    color = if (plotted) Deck.onForHire else Deck.yellow,
+                    color = if (plotted) CaptainPalette.bg else CaptainPalette.accent,
                 )
             }
             Text(
@@ -273,47 +272,51 @@ private fun ZoneCard(
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 22.sp,
-                color = Deck.textPrimary,
+                color = CaptainPalette.textPrimary,
             )
         }
-        Text(
-            // No per-zone queue/demand fields exist on ZoneDto — see file doc.
-            text = if (plotted) "Currently plotted" else "Tap to join this zone's queue",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 15.sp,
-            color = if (plotted) Deck.forHire else Deck.textSecondary,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (!plotted) {
+                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(15.dp))
+            }
+            Text(
+                // No per-zone queue/demand fields exist on ZoneDto — see file doc.
+                text = if (plotted) "Currently plotted" else "Tap to join this zone's queue",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                color = if (plotted) CaptainPalette.success else CaptainPalette.textSecondary,
+            )
+        }
         Spacer(Modifier.weight(1f))
         if (plotted) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(58.dp)
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .border(1.5.dp, Deck.hired.copy(alpha = 0.7f), RoundedCornerShape(Deck.R_MD.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.5.dp, CaptainPalette.danger.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                     .alpha(if (busy) 0.4f else 1f)
                     .clickable(enabled = !busy, onClick = onUnplot),
                 contentAlignment = Alignment.Center,
             ) {
                 if (busy) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Deck.hired)
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = CaptainPalette.danger)
                 } else {
                     Text(
-                        "PLOTTED ✓ · UNPLOT",
+                        "PLOTTED · UNPLOT",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
-                        color = Deck.hired,
+                        color = CaptainPalette.danger,
                     )
                 }
             }
         } else {
-            DeckButton(
+            CaptainButton(
                 text = "PLOT HERE",
-                kind = DeckButtonKind.Primary,
                 heightDp = 58,
-                fontSize = 16,
+                fontSize = 16.sp,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onPlot,
@@ -323,14 +326,13 @@ private fun ZoneCard(
 }
 
 /**
- * Figma `24:246` — the dashed-border empty/error card (also reused for the load-error state,
- * which has no dedicated frame). Compose has no dashed border modifier, so the dash is drawn
- * with a [PathEffect.dashPathEffect] rounded-rect stroke.
+ * The dashed-border empty/error card (also reused for the load-error state). Compose has no
+ * dashed border modifier, so the dash is drawn with a [PathEffect.dashPathEffect] rounded-rect
+ * stroke.
  */
 @Composable
 private fun EmptyStateCard(
     modifier: Modifier = Modifier,
-    emoji: String,
     title: String,
     body: String,
     buttonText: String,
@@ -340,10 +342,10 @@ private fun EmptyStateCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
-            .background(Deck.panel)
+            .background(CaptainPalette.panel)
             .drawBehind {
                 drawRoundRect(
-                    color = Deck.strokeSubtle,
+                    color = CaptainPalette.panelBorder,
                     cornerRadius = CornerRadius(24.dp.toPx()),
                     style = Stroke(
                         width = 1.dp.toPx(),
@@ -356,13 +358,13 @@ private fun EmptyStateCard(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Spacer(Modifier.weight(1f))
-        Text(emoji, fontSize = 56.sp)
-        Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = Deck.textPrimary)
+        Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(56.dp))
+        Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
         Text(
             body,
             fontFamily = InterFamily,
             fontSize = 16.sp,
-            color = Deck.textSecondary,
+            color = CaptainPalette.textSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.width(560.dp),
         )
@@ -370,13 +372,16 @@ private fun EmptyStateCard(
             modifier = Modifier
                 .width(240.dp)
                 .height(64.dp)
-                .clip(RoundedCornerShape(Deck.R_MD.dp))
-                .background(Deck.card)
-                .border(1.dp, Deck.strokeStrong, RoundedCornerShape(Deck.R_MD.dp))
+                .clip(RoundedCornerShape(14.dp))
+                .background(CaptainPalette.raised)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
                 .clickable(onClick = onButtonClick),
             contentAlignment = Alignment.Center,
         ) {
-            Text(buttonText, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Deck.info)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
+                Text(buttonText, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.accent)
+            }
         }
         Spacer(Modifier.weight(1f))
     }

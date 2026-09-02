@@ -35,21 +35,21 @@ import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.navigation.postAuthDestination
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import kotlinx.coroutines.delay
 
 /**
- * 01 · Splash — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `7:73`). Visual layer
- * only: the dwell timer, terms/session gate, and navigation are unchanged from the previous
+ * 01 · Splash — reskinned onto the [CaptainPalette] purple design system (2026-08-29 pass). Visual
+ * layer only: the dwell timer, terms/session gate, and navigation are unchanged from the previous
  * versions of this file (see [postAuthDestination] and [TermsAcceptance] for the branch logic —
  * [au.com.threesixty.cabdispatch.domain.SessionHolder] is still in-memory-only, so a cold start
  * always lands on sign-in; that pre-existing TODO is unrelated to this reskin).
  *
- * v2 frame contents (all real): 120dp yellow CD tile (radius 30) · Inter Bold 40 wordmark ·
- * 18sp subtitle · 360×6 progress track with an animated yellow bar (the frame draws the bar at
- * 220/360 — here it sweeps, since a static 61% bar on a live screen would read as "stuck") ·
+ * Layout unchanged from the previous Command Deck port: 120dp brand tile (radius 30) · Inter
+ * Bold 40 wordmark · 18sp subtitle · 360×6 progress track with an animated bar (it sweeps rather
+ * than sitting at a fixed fraction, since a static bar on a live screen would read as "stuck") ·
  * loading line · Roboto Mono footer "v0.1.0 · TSP-448041 · Ed25519 tariff verification".
  */
 @Composable
@@ -79,7 +79,7 @@ fun SplashScreen(navController: NavHostController) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Deck.canvas)) {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
         Column(
             modifier = Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -89,19 +89,19 @@ fun SplashScreen(navController: NavHostController) {
                 modifier = Modifier
                     .size(120.dp)
                     .clip(RoundedCornerShape(30.dp))
-                    .background(Deck.yellow),
+                    .background(CaptainPalette.primary),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("CD", color = Deck.onYellow, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 48.sp)
+                Text("CD", color = CaptainPalette.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 48.sp)
             }
-            Text("CAB DISPATCH", color = Deck.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp)
-            Text("The Captain Taxis · NSW Taxi Meter", color = Deck.textSecondary, fontFamily = InterFamily, fontSize = 18.sp)
+            Text("CAB DISPATCH", color = CaptainPalette.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp)
+            Text("The Captain Taxis · NSW Taxi Meter", color = CaptainPalette.textSecondary, fontFamily = InterFamily, fontSize = 18.sp)
             LoadingBar()
-            Text("Loading tariffs & signing keys…", color = Deck.textMuted, fontFamily = InterFamily, fontSize = 15.sp)
+            Text("Loading tariffs & signing keys…", color = CaptainPalette.textMuted, fontFamily = InterFamily, fontSize = 15.sp)
         }
         Text(
             "v${BuildConfig.VERSION_NAME} · TSP-448041 · Ed25519 tariff verification",
-            color = Deck.textMuted,
+            color = CaptainPalette.textMuted,
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
@@ -112,7 +112,7 @@ fun SplashScreen(navController: NavHostController) {
     }
 }
 
-/** Figma 7:79/7:80 — 360×6 track (card tone, radius 3) with a 220dp yellow bar, animated. */
+/** 360×6 track (panel tone, radius 3) with a 220dp accent bar, animated. */
 @Composable
 private fun LoadingBar() {
     val sweep by rememberInfiniteTransition(label = "splash-bar").animateFloat(
@@ -126,7 +126,7 @@ private fun LoadingBar() {
             .width(360.dp)
             .height(6.dp)
             .clip(RoundedCornerShape(3.dp))
-            .background(Deck.card),
+            .background(CaptainPalette.panel),
     ) {
         Box(
             modifier = Modifier
@@ -134,7 +134,7 @@ private fun LoadingBar() {
                 .width(140.dp)
                 .height(6.dp)
                 .clip(RoundedCornerShape(3.dp))
-                .background(Deck.yellow),
+                .background(CaptainPalette.accent),
         )
     }
 }

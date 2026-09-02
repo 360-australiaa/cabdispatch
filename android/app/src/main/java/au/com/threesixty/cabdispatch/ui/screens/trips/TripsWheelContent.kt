@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,21 +25,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
-import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.domain.format.asPaymentMethodLabel
 import au.com.threesixty.cabdispatch.domain.format.asTripTypeLabel
 import au.com.threesixty.cabdispatch.domain.format.toBigDecimalOrZero
-import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
  * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.TRIPS] wheel-slot content, per design spec
@@ -61,6 +59,13 @@ import au.com.threesixty.cabdispatch.ui.theme.WheelColorsV2
  * "Route" falls back to the trip's type label rather than a real origin->destination address —
  * see [au.com.threesixty.cabdispatch.domain.format.asTripTypeLabel]'s doc for why.
  *
+ * Captain Taxis purple-theme pass (2026-08-29): re-themed off the legacy glass/gold wheel-content
+ * palette onto [CaptainPalette] to match the purple `PaneShell` chrome this content is embedded in from
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen] — colors/typography/shapes
+ * only, no behavior change. ACTIVE/DONE status semantics keep their original warning/success
+ * meaning (amber "in progress" -> [CaptainPalette.warning], green "completed" ->
+ * [CaptainPalette.success]) rather than being flattened to one accent colour.
+ *
  * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
  * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.TRIPS], wiring
  * [onTripClick] exactly as suggested below — see that screen's `TripsSlotContent`.
@@ -79,9 +84,9 @@ fun TripsWheelContent(
     val state by viewModel.uiState.collectAsState()
 
     when {
-        state.loading -> Text("Loading trips…", color = WheelColorsV2.mutedFigure, fontSize = 14.sp)
+        state.loading -> Text("Loading trips…", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
         state.trips.isEmpty() && state.activeTrip == null ->
-            Text("No trips yet.", color = WheelColorsV2.mutedFigure, fontSize = 14.sp)
+            Text("No trips yet.", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
         variant == TripsPaneVariant.MY_TRIPS -> MyTripsBody(
             modifier = modifier,
             activeTrip = state.activeTrip,
@@ -126,18 +131,12 @@ private fun MyTripsBody(
         }
         if (activeTrip != null) {
             Spacer(Modifier.height(14.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(WheelColorsV2.goldCtaBrush)
-                    .clickable(onClick = onOpenActiveTrip),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(modifier = Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(14.dp)).background(WheelColorsV2.bevelHighlightBrush))
-                Text("OPEN ACTIVE TRIP", color = WheelColorsV2.onGoldCta, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            }
+            CaptainButton(
+                text = "OPEN ACTIVE TRIP",
+                modifier = Modifier.fillMaxWidth(),
+                fontSize = 16.sp,
+                onClick = onOpenActiveTrip,
+            )
         }
     }
 }
@@ -149,25 +148,27 @@ private fun MyTripRow(trip: TripEntity, status: TripPillStatus, onClick: () -> U
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(WheelColorsV2.rowGlass, RoundedCornerShape(14.dp))
-            .border(1.dp, WheelColorsV2.rowBorder, RoundedCornerShape(14.dp))
+            .height(64.dp)
+            .background(CaptainPalette.raised, RoundedCornerShape(14.dp))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text(
             trip.startAt.asLocalTime(),
-            color = Color(0xFFF4FAFF),
+            color = CaptainPalette.textPrimary,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 15.sp,
+            fontFamily = ChakraPetch,
+            fontSize = 16.sp,
         )
         Text(
             trip.type.asTripTypeLabel(),
-            color = Color.White.copy(alpha = 0.94f),
+            color = CaptainPalette.textPrimary,
+            fontFamily = InterFamily,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp,
+            fontSize = 16.sp,
             modifier = Modifier.weight(1f),
         )
         TripStatusPill(status)
@@ -177,26 +178,26 @@ private fun MyTripRow(trip: TripEntity, status: TripPillStatus, onClick: () -> U
             } else {
                 trip.deviceTotal.toBigDecimalOrZero().asMoney()
             },
-            color = WheelColorsV2.amberFigure,
+            color = CaptainPalette.textPrimary,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
+            fontFamily = ChakraPetch,
+            fontSize = 16.sp,
         )
     }
 }
 
 @Composable
 private fun TripStatusPill(status: TripPillStatus) {
-    val brush = if (status == TripPillStatus.ACTIVE) WheelColorsV2.goldCtaBrush else WheelColorsV2.greenCtaBrush
-    val textColor = if (status == TripPillStatus.ACTIVE) WheelColorsV2.onGoldCta else WheelColorsV2.onGreenCta
+    val bg = if (status == TripPillStatus.ACTIVE) CaptainPalette.warning else CaptainPalette.success
     Box(
-        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(brush).padding(horizontal = 12.dp, vertical = 5.dp),
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg).padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(
             if (status == TripPillStatus.ACTIVE) "ACTIVE" else "DONE",
-            color = textColor,
+            color = CaptainPalette.bg,
+            fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
+            fontSize = 13.sp,
         )
     }
 }
@@ -240,19 +241,28 @@ private fun TripHistoryBody(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 "Showing last ${trips.size} · shift total ${total.asMoney()} · ${trips.size} trips",
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 13.sp,
+                fontFamily = InterFamily,
+                color = CaptainPalette.textSecondary,
+                fontSize = 14.sp,
                 modifier = Modifier.weight(1f),
             )
             Box(
                 modifier = Modifier
+                    .height(56.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(WheelColorsV2.steelTileBrush)
-                    .border(1.dp, WheelColorsV2.glassBorder, RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.raised)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
                     .clickable(onClick = onShiftReportClick)
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                    .padding(horizontal = 18.dp),
             ) {
-                Text("SHIFT REPORT", color = WheelColorsV2.steelTileText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    "SHIFT REPORT",
+                    color = CaptainPalette.accent,
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
         }
     }
@@ -260,17 +270,19 @@ private fun TripHistoryBody(
 
 @Composable
 private fun HistoryFilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val brush: Brush = if (selected) WheelColorsV2.goldCtaBrush else WheelColorsV2.steelTileBrush
-    val textColor = if (selected) WheelColorsV2.onGoldCta else WheelColorsV2.steelTileText
+    val bg = if (selected) CaptainPalette.primary else CaptainPalette.raised
+    val textColor = if (selected) CaptainPalette.textPrimary else CaptainPalette.textSecondary
     Box(
         modifier = Modifier
+            .height(48.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(brush)
-            .border(1.dp, if (selected) WheelColorsV2.activeTileBorder else WheelColorsV2.glassBorder, RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, if (selected) CaptainPalette.primary else CaptainPalette.panelBorder, RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = textColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(label, color = textColor, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
@@ -279,46 +291,49 @@ private fun TripHistoryRow(trip: TripEntity, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(WheelColorsV2.rowGlass, RoundedCornerShape(14.dp))
-            .border(1.dp, WheelColorsV2.rowBorder, RoundedCornerShape(14.dp))
+            .height(64.dp)
+            .background(CaptainPalette.raised, RoundedCornerShape(14.dp))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             trip.startAt.asLocalTime(),
-            color = Color(0xFFF4FAFF),
+            color = CaptainPalette.textPrimary,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
+            fontFamily = ChakraPetch,
+            fontSize = 15.sp,
         )
         Text(
             trip.type.asTripTypeLabel(),
-            color = Color.White.copy(alpha = 0.92f),
+            color = CaptainPalette.textPrimary,
+            fontFamily = InterFamily,
             fontWeight = FontWeight.Medium,
-            fontSize = 14.sp,
+            fontSize = 15.sp,
             modifier = Modifier.weight(1f),
         )
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xE6221B3E))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
+                .background(CaptainPalette.inset)
+                .padding(horizontal = 10.dp, vertical = 5.dp),
         ) {
             Text(
                 trip.paymentMethod.asPaymentMethodLabel().uppercase(),
-                color = Color.White.copy(alpha = 0.7f),
+                color = CaptainPalette.textSecondary,
+                fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
             )
         }
         Text(
             trip.deviceTotal.toBigDecimalOrZero().asMoney(),
-            color = WheelColorsV2.amberFigure,
+            color = CaptainPalette.textPrimary,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
+            fontFamily = ChakraPetch,
+            fontSize = 15.sp,
         )
     }
 }

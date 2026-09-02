@@ -12,10 +12,34 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccessibleForward
+import androidx.compose.material.icons.rounded.Backspace
+import androidx.compose.material.icons.rounded.Business
+import androidx.compose.material.icons.rounded.CallSplit
+import androidx.compose.material.icons.rounded.ConfirmationNumber
+import androidx.compose.material.icons.rounded.CreditCard
+import androidx.compose.material.icons.rounded.Email
+import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.LocalTaxi
+import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,27 +61,25 @@ import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
-import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
-import au.com.threesixty.cabdispatch.ui.deck.DeckKeypad
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
-import au.com.threesixty.cabdispatch.ui.theme.Deck
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import java.math.BigDecimal
 import kotlinx.coroutines.launch
 
 /**
- * S4 — Close & Pay, Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` frames `21:208` 19·Close
- * & Pay, `21:290` 20·Voucher, `22:287` 21·Split Fare, `22:364` 22·Receipt). All state/logic lives
- * unchanged in [CloseAndPayViewModel] — this file is the visual layer over the same
- * [CloseAndPayUiState]/[PaymentSubScreen] machine. Cash/CabCharge entry keep their existing
- * numeric-pad-driven sub-screens (reskinned to Deck tokens); Voucher/Account/Split gained the v2
- * frame layouts. Receipt now also fires the real `POST /trips/{id}/receipt/email`/`/sms` calls
- * (new API surface, this pass) instead of the local-only mock gateways alone.
+ * S4 — Close & Pay, re-skinned onto the [CaptainPalette] purple design system (2026-08-29 pass).
+ * All state/logic lives unchanged in [CloseAndPayViewModel] — this file is purely the visual layer
+ * over the same [CloseAndPayUiState]/[PaymentSubScreen] machine; every `onClick` still calls the
+ * exact same ViewModel method with the same arguments it always did. Cash/CabCharge entry keep
+ * their numeric-pad-driven sub-screens (now on [CaptainKeypad]); Voucher/Account/Split/Receipt are
+ * restyled in place. Previously ported off the old yellow/black `Deck` tokens this pass replaces.
  */
 @Composable
 fun CloseAndPayScreen(
@@ -70,13 +93,13 @@ fun CloseAndPayScreen(
         if (state is CloseAndPayUiState.Done) onDone()
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Deck.canvas)) {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
         when (val s = state) {
             CloseAndPayUiState.Loading -> CenterMessage("Loading trip…")
             CloseAndPayUiState.NoActiveTrip -> CenterMessage("No active trip to close.")
             is CloseAndPayUiState.LoadError -> CenterMessage(s.message, isError = true)
             is CloseAndPayUiState.ReadyToClose -> ReadyToCloseFlow(s, viewModel, navController)
-            is CloseAndPayUiState.ReceiptStep -> ReceiptScreen(s, viewModel, state = s)
+            is CloseAndPayUiState.ReceiptStep -> ReceiptScreen(s, viewModel)
             CloseAndPayUiState.Done -> Unit
         }
     }
@@ -85,7 +108,7 @@ fun CloseAndPayScreen(
 @Composable
 private fun CenterMessage(text: String, isError: Boolean = false) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text, fontFamily = InterFamily, fontSize = 18.sp, color = if (isError) Deck.hired else Deck.textSecondary)
+        Text(text, fontFamily = InterFamily, fontSize = 18.sp, color = if (isError) CaptainPalette.danger else CaptainPalette.textSecondary)
     }
 }
 
@@ -100,7 +123,21 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
     Column(modifier = Modifier.fillMaxSize()) {
         ClosingStatusStrip()
         Box(modifier = Modifier.weight(1f)) {
-            when (subScreen) {
+            // Premium pass (2026-08-29): sub-screens previously hard-cut. Entering a method's
+            // entry flow slides in from the right; returning to the picker slides back from the
+            // left — spatial continuity for the "drill in / back out" mental model. Purely
+            // presentational: the PaymentSubScreen state machine and every callback are unchanged.
+            AnimatedContent(
+                targetState = subScreen,
+                transitionSpec = {
+                    val forward = initialState == PaymentSubScreen.METHOD_PICKER
+                    val dir = if (forward) 1 else -1
+                    (fadeIn(tween(260)) + slideInHorizontally(tween(260)) { dir * it / 16 })
+                        .togetherWith(fadeOut(tween(180)))
+                },
+                label = "pay-subscreen",
+            ) { sub ->
+                when (sub) {
                 PaymentSubScreen.METHOD_PICKER -> MethodPickerScreen(
                     state = state,
                     onSelect = { method, next -> vm.selectPaymentMethod(method); subScreen = next },
@@ -115,33 +152,32 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
                 PaymentSubScreen.VOUCHER_ENTRY -> VoucherEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }
                 PaymentSubScreen.ACCOUNT_ENTRY -> AccountEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }
                 PaymentSubScreen.SPLIT_FARE_ENTRY -> SplitFareEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }
+                }
             }
         }
     }
 }
 
-/** The `c/status-strip` with a "HIRED — CLOSING" pill — this route has no drive-panel/live GPS
- * source of its own, so only the fields this screen genuinely knows (clock, tariff-signed,
- * network) render; the rest of [au.com.threesixty.cabdispatch.ui.deck.StripStatus]'s fields would
- * have to be faked otherwise. */
+/** The status strip with a "HIRED — CLOSING" pill — this route has no drive-panel/live GPS source
+ * of its own, so only the fields this screen genuinely knows (clock) render. */
 @Composable
 private fun ClosingStatusStrip() {
     Box(
-        modifier = Modifier.fillMaxWidth().height(44.dp).background(Deck.panel).padding(horizontal = 16.dp),
+        modifier = Modifier.fillMaxWidth().height(44.dp).background(CaptainPalette.panel).padding(horizontal = 16.dp),
     ) {
         Text(
             rememberDeckClock(),
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
-            color = Deck.textSecondary,
+            color = CaptainPalette.textSecondary,
             modifier = Modifier.align(Alignment.CenterStart),
         )
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
                 .clip(RoundedCornerShape(99.dp))
-                .background(Deck.hired)
+                .background(CaptainPalette.danger)
                 .padding(horizontal = 18.dp, vertical = 6.dp),
         ) {
             Text("HIRED — CLOSING", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = Color.White)
@@ -152,24 +188,41 @@ private fun ClosingStatusStrip() {
 @Composable
 private fun TotalCol(breakdown: FareBreakdown, modifier: Modifier = Modifier) {
     Column(modifier = modifier.width(400.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Close & Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
+        Text("Close & Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(18.dp))
-                .background(Deck.inset)
-                .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(18.dp))
+                .background(CaptainPalette.inset)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
                 .padding(horizontal = 26.dp, vertical = 20.dp),
         ) {
-            Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Deck.textMuted)
-            Text(breakdown.grandTotal.money(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 84.sp, color = Deck.ledGreen)
+            Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+            // Count-up entrance (premium pass): rolls 0 -> total over ~650ms once on entry, then
+            // renders the EXACT BigDecimal `.money()` string from that point on — the animated
+            // frames are presentation only; the settled figure is always the engine's own total.
+            val target = remember(breakdown.grandTotal) { breakdown.grandTotal.toFloat() }
+            var countStarted by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { countStarted = true }
+            val counted by animateFloatAsState(
+                targetValue = if (countStarted) target else 0f,
+                animationSpec = tween(650, easing = FastOutSlowInEasing),
+                label = "total-countup",
+            )
+            Text(
+                if (counted >= target) breakdown.grandTotal.money() else "$%.2f".format(counted),
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 84.sp,
+                color = CaptainPalette.success,
+            )
         }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(Deck.panel)
-                .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(16.dp))
+                .background(CaptainPalette.panel)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
                 .padding(horizontal = 22.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -184,7 +237,7 @@ private fun TotalCol(breakdown: FareBreakdown, modifier: Modifier = Modifier) {
             "Negotiated (Set Price) trips show the agreed amount here — levies & tolls added on top.",
             fontFamily = InterFamily,
             fontSize = 13.sp,
-            color = Deck.textMuted,
+            color = CaptainPalette.textMuted,
         )
     }
 }
@@ -192,12 +245,10 @@ private fun TotalCol(breakdown: FareBreakdown, modifier: Modifier = Modifier) {
 @Composable
 private fun BreakdownRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontFamily = InterFamily, fontSize = 15.sp, color = Deck.textSecondary)
-        Text(value, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 15.sp, color = Deck.textPrimary)
+        Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
+        Text(value, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, color = CaptainPalette.textPrimary)
     }
 }
-
-private data class PayMethodCard(val emoji: String, val label: String, val accent: Color, val next: PaymentSubScreen?, val onDispute: Boolean = false)
 
 @Composable
 private fun MethodPickerScreen(
@@ -212,56 +263,64 @@ private fun MethodPickerScreen(
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard("💵", "CASH", Deck.forHire) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
-                    PayCard("💳", "CARD · TAP", Deck.info) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
+                    PayCard(Icons.Rounded.Payments, "CASH", CaptainPalette.success) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
+                    PayCard(Icons.Rounded.CreditCard, "CARD · TAP", CaptainPalette.accent) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard("🟠", "CABCHARGE", Deck.stopped) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
-                    PayCard("♿", "TTSS", Deck.info) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
+                    PayCard(Icons.Rounded.LocalTaxi, "CABCHARGE", CaptainPalette.warning) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
+                    PayCard(Icons.Rounded.AccessibleForward, "TTSS", CaptainPalette.accent) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard("🎟", "VOUCHER", Deck.yellow) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
-                    PayCard("🏢", "ACCOUNT", Deck.textSecondary) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
+                    PayCard(Icons.Rounded.ConfirmationNumber, "VOUCHER", CaptainPalette.warning) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
+                    PayCard(Icons.Rounded.Business, "ACCOUNT", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard("⇄", "SPLIT FARE", Deck.textSecondary) { onSelect(PaymentMethodOption.SPLIT_FARE, PaymentSubScreen.SPLIT_FARE_ENTRY) }
-                    PayCard("⚑", "DISPUTE / FLAG", Deck.hired, onClick = onDispute)
+                    PayCard(Icons.Rounded.CallSplit, "SPLIT FARE", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.SPLIT_FARE, PaymentSubScreen.SPLIT_FARE_ENTRY) }
+                    PayCard(Icons.Rounded.Flag, "DISPUTE / FLAG", CaptainPalette.danger, onClick = onDispute)
                 }
             }
         }
-        DeckButton(
+        CaptainButton(
             text = "← Back to meter",
-            kind = DeckButtonKind.Ghost,
-            modifier = Modifier.align(Alignment.BottomStart).width(240.dp),
+            outline = true,
+            widthDp = 240,
+            modifier = Modifier.align(Alignment.BottomStart),
             onClick = onBackToMeter,
         )
     }
 }
 
 @Composable
-private fun PayCard(emoji: String, label: String, accent: Color, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .width(357.dp)
-            .height(118.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Deck.panel)
-            .border(1.5.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick)
-            .padding(start = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+private fun PayCard(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+    CaptainPanel(
+        modifier = Modifier.width(357.dp).height(118.dp).clickable(onClick = onClick),
+        raised = true,
+        cornerRadiusDp = 18,
     ) {
-        Text(emoji, fontSize = 30.sp)
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = Deck.textPrimary)
+        Row(
+            modifier = Modifier.fillMaxSize().padding(start = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(30.dp))
+            }
+            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)
+        }
     }
 }
 
 // --- Cash / Card sub-screen (numeric tender + change) ----------------------------------------
 
-/** Digits typed on [DeckKeypad] are interpreted as cents (same convention as the Hired screen's
- * custom-toll pad) — the shared keypad has no decimal-point key, so "1284" reads as $12.84. Kept
- * as a local cents string; only the resulting decimal is ever handed to
+/** Digits typed on [CaptainKeypad] are interpreted as cents (same convention as the Hired
+ * screen's custom-toll pad) — the shared keypad has no decimal-point key, so "1284" reads as
+ * $12.84. Kept as a local cents string; only the resulting decimal is ever handed to
  * [CloseAndPayViewModel.setCashTendered], which still just stores/parses a plain decimal string. */
 @Composable
 private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
@@ -270,15 +329,15 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
 
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Amount tendered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
-            Text("Total due ${state.breakdown.grandTotal.money()}", fontFamily = InterFamily, fontSize = 17.sp, color = Deck.textSecondary)
+            Text("Amount tendered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
+            Text("Total due ${state.breakdown.grandTotal.money()}", fontFamily = InterFamily, fontSize = 17.sp, color = CaptainPalette.textSecondary)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(80.dp)
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(Deck.inset)
-                    .border(2.dp, Deck.yellow, RoundedCornerShape(Deck.R_MD.dp)),
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.inset)
+                    .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 Text(
@@ -286,18 +345,18 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 34.sp,
-                    color = Deck.ledGreen,
+                    color = CaptainPalette.success,
                     modifier = Modifier.padding(start = 24.dp),
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 listOf("Exact", "$20", "$50", "$100").forEach { preset ->
-                    DeckButton(
+                    CaptainButton(
                         text = preset,
-                        kind = DeckButtonKind.Outline,
-                        heightDp = 48,
-                        fontSize = 14,
-                        modifier = Modifier.width(104.dp),
+                        outline = true,
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        widthDp = 110,
                     ) {
                         cents = when (preset) {
                             "Exact" -> state.breakdown.grandTotal.movePointRight(2).toBigInteger().toString()
@@ -308,26 +367,25 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 }
             }
             state.changeDue?.let {
-                Text("Change due ${it.money()}", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = Deck.forHire)
+                Text("Change due ${it.money()}", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = CaptainPalette.success)
             }
-            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.hired) }
+            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
         }
         Spacer(Modifier.weight(1f))
         Column {
-            DeckKeypad(
+            CaptainKeypad(
                 onDigit = { d -> if (cents.length < 7) { cents += d; vm.setCashTendered(BigDecimal(cents).movePointLeft(2).toPlainString()) } },
                 onBackspace = { cents = cents.dropLast(1); vm.setCashTendered(if (cents.isEmpty()) "" else BigDecimal(cents).movePointLeft(2).toPlainString()) },
                 onClear = { cents = ""; vm.setCashTendered("") },
             )
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DeckButton(text = "Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
-                DeckButton(
+                CaptainButton(text = "Back", outline = true, widthDp = 180, onClick = onBack)
+                CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else "Confirm & Close Trip",
-                    kind = DeckButtonKind.Primary,
                     heightDp = 72,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    modifier = Modifier.width(268.dp),
+                    widthDp = 268,
                     onClick = vm::confirmPayment,
                 )
             }
@@ -361,16 +419,16 @@ private fun DocketEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseA
 private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 32.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Text("Voucher payment", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
+            Text("Voucher payment", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("VOUCHER CODE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Deck.textMuted)
+                Text("VOUCHER CODE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(80.dp)
-                        .clip(RoundedCornerShape(Deck.R_MD.dp))
-                        .background(Deck.card)
-                        .border(2.dp, Deck.yellow, RoundedCornerShape(Deck.R_MD.dp)),
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(CaptainPalette.raised)
+                        .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
                     contentAlignment = Alignment.CenterStart,
                 ) {
                     Text(
@@ -378,7 +436,7 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
                         fontFamily = RobotoMonoFamily,
                         fontWeight = FontWeight.Medium,
                         fontSize = 32.sp,
-                        color = Deck.textPrimary,
+                        color = CaptainPalette.textPrimary,
                         modifier = Modifier.padding(start = 24.dp),
                     )
                 }
@@ -386,9 +444,9 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(Deck.panel)
-                    .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(Deck.R_MD.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -397,16 +455,16 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
-                    color = Deck.textPrimary,
+                    color = CaptainPalette.textPrimary,
                 )
                 Text(
                     "The fleet backend validates the code at close; invalid codes fall back to cash/card.",
                     fontFamily = InterFamily,
                     fontSize = 14.sp,
-                    color = Deck.textMuted,
+                    color = CaptainPalette.textMuted,
                 )
             }
-            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.hired) }
+            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
         }
         Spacer(Modifier.weight(1f))
         Column {
@@ -416,13 +474,12 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
             )
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
-                DeckButton(
+                CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
+                CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else "Redeem & Close Trip",
-                    kind = DeckButtonKind.Primary,
                     heightDp = 72,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    modifier = Modifier.width(268.dp),
+                    widthDp = 268,
                     onClick = vm::confirmPayment,
                 )
             }
@@ -471,14 +528,14 @@ private fun LabeledEntryScreen(
 ) {
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 32.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
+            Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(80.dp)
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(Deck.card)
-                    .border(2.dp, Deck.yellow, RoundedCornerShape(Deck.R_MD.dp)),
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.raised)
+                    .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 Text(
@@ -486,29 +543,28 @@ private fun LabeledEntryScreen(
                     fontFamily = RobotoMonoFamily,
                     fontWeight = FontWeight.Medium,
                     fontSize = 30.sp,
-                    color = Deck.textPrimary,
+                    color = CaptainPalette.textPrimary,
                     modifier = Modifier.padding(start = 24.dp),
                 )
             }
-            Text(totalLine, fontFamily = InterFamily, fontSize = 15.sp, color = Deck.textSecondary)
-            error?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.hired) }
+            Text(totalLine, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
+            error?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
         }
         Spacer(Modifier.weight(1f))
         Column {
             if (useAlphaGrid) {
                 RegoStyleKeyGrid(onKey = onValueChar, onBackspace = onBackspace)
             } else {
-                DeckKeypad(onDigit = { d -> onValueChar(d.toString()) }, onBackspace = onBackspace, onClear = onClear)
+                CaptainKeypad(onDigit = { d -> onValueChar(d.toString()) }, onBackspace = onBackspace, onClear = onClear)
             }
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
-                DeckButton(
+                CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
+                CaptainButton(
                     text = if (inFlight) "Processing…" else confirmLabel,
-                    kind = DeckButtonKind.Primary,
                     heightDp = 72,
                     enabled = canConfirm,
-                    modifier = Modifier.width(268.dp),
+                    widthDp = 268,
                     onClick = onConfirm,
                 )
             }
@@ -516,7 +572,8 @@ private fun LabeledEntryScreen(
     }
 }
 
-/** Compact A–Z+digit grid, reused from the Vehicle Bind rego pad's visual language. */
+/** Compact A–Z+digit grid, reused from the Vehicle Bind rego pad's visual language, restyled onto
+ * [CaptainPalette] tokens. */
 @Composable
 private fun RegoStyleKeyGrid(onKey: (String) -> Unit, onBackspace: () -> Unit) {
     val rows = listOf("ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ⌫", "0123456789")
@@ -526,21 +583,25 @@ private fun RegoStyleKeyGrid(onKey: (String) -> Unit, onBackspace: () -> Unit) {
                 row.forEach { c ->
                     Box(
                         modifier = Modifier
-                            .width(48.dp)
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Deck.card)
-                            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(8.dp))
+                            .width(52.dp)
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(CaptainPalette.raised)
+                            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(10.dp))
                             .clickable { if (c == '⌫') onBackspace() else onKey(c.toString()) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            c.toString(),
-                            fontFamily = ChakraPetch,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 16.sp,
-                            color = if (c == '⌫') Deck.stopped else Deck.textPrimary,
-                        )
+                        if (c == '⌫') {
+                            Icon(Icons.Rounded.Backspace, contentDescription = "Backspace", tint = CaptainPalette.danger, modifier = Modifier.size(20.dp))
+                        } else {
+                            Text(
+                                c.toString(),
+                                fontFamily = ChakraPetch,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 17.sp,
+                                color = CaptainPalette.textPrimary,
+                            )
+                        }
                     }
                 }
             }
@@ -558,29 +619,29 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
 
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 24.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = Deck.textPrimary)
+            Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(Deck.inset)
-                    .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(Deck.R_MD.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.inset)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 22.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Deck.textMuted)
-                Text(state.breakdown.grandTotal.money(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, color = Deck.ledGreen)
+                Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                Text(state.breakdown.grandTotal.money(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, color = CaptainPalette.success)
             }
             SplitLegRow(
-                emoji = "💵",
+                icon = Icons.Rounded.Payments,
                 label = state.splitLegAMethod.label.uppercase(),
                 amountText = state.splitLegAAmount,
                 selected = editing == 'A',
                 onClick = { editing = 'A' },
             )
             SplitLegRow(
-                emoji = "💳",
+                icon = Icons.Rounded.CreditCard,
                 label = state.splitLegBMethod.label.uppercase(),
                 amountText = state.splitLegBAmount,
                 selected = editing == 'B',
@@ -593,7 +654,7 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background((if (allocated) Deck.forHire else Deck.stopped).copy(alpha = 0.10f))
+                    .background((if (allocated) CaptainPalette.success else CaptainPalette.warning).copy(alpha = 0.12f))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Text(
@@ -602,7 +663,7 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Medium,
                     fontSize = 15.sp,
-                    color = if (allocated) Deck.forHire else Deck.stopped,
+                    color = if (allocated) CaptainPalette.success else CaptainPalette.warning,
                 )
             }
             Text(
@@ -610,14 +671,14 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
-                color = Deck.info,
+                color = CaptainPalette.accent,
             )
-            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = Deck.hired) }
+            state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
         }
         Spacer(Modifier.weight(1f))
         Column {
             // Digits read as cents (no decimal key on the shared pad) — same convention as Cash.
-            DeckKeypad(
+            CaptainKeypad(
                 onDigit = { d ->
                     if (editing == 'A') {
                         legACents = (legACents + d).take(7)
@@ -642,13 +703,12 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
             )
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                DeckButton(text = "← Back", kind = DeckButtonKind.Ghost, modifier = Modifier.width(180.dp), onClick = onBack)
-                DeckButton(
+                CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
+                CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else "Take Payments & Close",
-                    kind = DeckButtonKind.Success,
                     heightDp = 72,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    modifier = Modifier.width(268.dp),
+                    widthDp = 268,
                     onClick = vm::confirmPayment,
                 )
             }
@@ -657,28 +717,28 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
 }
 
 @Composable
-private fun SplitLegRow(emoji: String, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -> Unit) {
+private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(86.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Deck.panel)
-            .border(if (selected) 2.dp else 1.dp, if (selected) Deck.yellow else Deck.strokeSubtle, RoundedCornerShape(16.dp))
+            .background(CaptainPalette.panel)
+            .border(if (selected) 2.dp else 1.dp, if (selected) CaptainPalette.accent else CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(emoji, fontSize = 26.sp)
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = Deck.textPrimary)
+        Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(26.dp))
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
         Spacer(Modifier.weight(1f))
         Text(
             "$" + amountText.ifEmpty { "0.00" },
             fontFamily = ChakraPetch,
             fontWeight = FontWeight.Medium,
             fontSize = 30.sp,
-            color = if (highlight) Deck.yellow else Deck.textPrimary,
+            color = if (highlight) CaptainPalette.accent else CaptainPalette.textPrimary,
         )
     }
 }
@@ -686,26 +746,27 @@ private fun SplitLegRow(emoji: String, label: String, amountText: String, select
 // --- 22 · Receipt ----------------------------------------------------------------------------
 
 @Composable
-private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel, state: CloseAndPayUiState.ReceiptStep) {
+private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel) {
     val scope = rememberCoroutineScope2()
     var apiNote by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(44.dp).background(Deck.panel).padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().height(44.dp).background(CaptainPalette.panel).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(rememberDeckClock(), fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = Deck.textSecondary)
+            Text(rememberDeckClock(), fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary)
             Spacer(Modifier.weight(1f))
             Box(
-                modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(Deck.forHire).padding(horizontal = 18.dp, vertical = 6.dp),
+                modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(CaptainPalette.success).padding(horizontal = 18.dp, vertical = 6.dp),
             ) {
-                Text("TRIP CLOSED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = Deck.onForHire)
+                Text("TRIP CLOSED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = CaptainPalette.bg)
             }
             Spacer(Modifier.weight(1f))
         }
         Row(modifier = Modifier.weight(1f).padding(horizontal = 96.dp, vertical = 24.dp)) {
-            // Receipt paper — cream, monospace, exactly the frame's ASCII-receipt look.
+            // Receipt paper — deliberately kept cream/monospace regardless of app theme; it mimics
+            // a real thermal-printer slip, not a themed UI surface.
             Column(
                 modifier = Modifier
                     .width(430.dp)
@@ -738,14 +799,14 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
             }
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("Passenger copy", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = Deck.textPrimary)
+                Text("Passenger copy", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
                 Text(
                     "Printer not paired — offer email or SMS. Reprint any time from Trip Detail.",
                     fontFamily = InterFamily,
-                    fontSize = 15.sp,
-                    color = Deck.textSecondary,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textSecondary,
                 )
-                ReceiptActionButton("✉ Email receipt", busy = s.emailState == ActionState.IN_PROGRESS) {
+                ReceiptActionButton(Icons.Rounded.Email, "Email receipt", busy = s.emailState == ActionState.IN_PROGRESS) {
                     scope.launch {
                         vm.sendEmailReceipt()
                         apiNote = runCatching {
@@ -756,7 +817,7 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                         }.fold({ if (it.mock) "Email queued (mock — no provider configured)" else "Email sent" }, { "Email failed to send" })
                     }
                 }
-                ReceiptActionButton("💬 SMS receipt", busy = s.smsState == ActionState.IN_PROGRESS) {
+                ReceiptActionButton(Icons.Rounded.Sms, "SMS receipt", busy = s.smsState == ActionState.IN_PROGRESS) {
                     scope.launch {
                         vm.sendSmsReceipt()
                         apiNote = runCatching {
@@ -767,9 +828,9 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                         }.fold({ if (it.mock) "SMS queued (mock — no provider configured)" else "SMS sent" }, { "SMS failed to send" })
                     }
                 }
-                ReceiptActionButton("🖨 Print (printer offline)", busy = s.printState == ActionState.IN_PROGRESS, onClick = vm::printReceipt)
-                apiNote?.let { Text(it, fontFamily = InterFamily, fontSize = 13.sp, color = Deck.textMuted) }
-                DeckButton(text = "Done — back to For Hire", kind = DeckButtonKind.Primary, heightDp = 72, modifier = Modifier.width(480.dp)) {
+                ReceiptActionButton(Icons.Rounded.Print, "Print (printer offline)", busy = s.printState == ActionState.IN_PROGRESS, onClick = vm::printReceipt)
+                apiNote?.let { Text(it, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted) }
+                CaptainButton(text = "Done — back to For Hire", heightDp = 72, widthDp = 480) {
                     vm.finishReceiptStep()
                 }
             }
@@ -779,7 +840,7 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
-            color = Deck.textMuted,
+            color = CaptainPalette.textMuted,
             modifier = Modifier.padding(start = 96.dp, bottom = 20.dp),
         )
     }
@@ -791,20 +852,24 @@ private fun ReceiptMono(text: String, bold: Boolean = false, size: Int = 13, col
 }
 
 @Composable
-private fun ReceiptActionButton(label: String, busy: Boolean, onClick: () -> Unit) {
-    Box(
+private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean, onClick: () -> Unit) {
+    Row(
         modifier = Modifier
             .width(480.dp)
             .height(72.dp)
-            .clip(RoundedCornerShape(Deck.R_MD.dp))
-            .background(Deck.card)
-            .clickable(enabled = !busy, onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.raised)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+            .clickable(enabled = !busy, onClick = onClick)
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
         if (busy) {
-            CircularProgressIndicator(modifier = Modifier.height(22.dp), color = Deck.textSecondary)
+            CircularProgressIndicator(modifier = Modifier.height(22.dp), color = CaptainPalette.textSecondary)
         } else {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Deck.textSecondary)
+            Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(22.dp))
+            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 12.dp))
         }
     }
 }

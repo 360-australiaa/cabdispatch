@@ -12,11 +12,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SatelliteAlt
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -25,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -33,26 +38,24 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
-import au.com.threesixty.cabdispatch.ui.theme.Deck
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * 26 · Zone Statistics — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` nodes `25:175`
- * populated / `25:340` unavailable). [ZoneStatisticsViewModel]/[ZoneStatisticsUiState] and the
- * 20s polling loop are unchanged — layout/tokens only. The frame's "⟳ auto-refresh 20 s" chip
- * states the ViewModel's REAL refresh interval.
+ * 26 · Zone Statistics — reskinned onto [CaptainPalette] (2026-08-29 purple migration pass).
+ * [ZoneStatisticsViewModel]/[ZoneStatisticsUiState] and the 20s polling loop are unchanged —
+ * layout/tokens only. The "auto-refresh 20 s" chip states the ViewModel's REAL refresh interval.
  *
- * Chrome note: same as [PlotZoneScreen] — the frames' status strip/nav rail belong to the home
- * shell; this standalone route owns the whole canvas without chrome.
+ * Chrome note: same as [PlotZoneScreen] — a persistent status strip belongs to the home shell;
+ * this standalone route owns the whole canvas without chrome.
  *
  * Honesty notes:
- * - The unavailable frame's "⟳ RETRY NOW" button is NOT reproduced: the ViewModel exposes no
- *   manual-refresh method (refreshOnce is private to its polling loop), so the card states the
- *   truth instead — retries happen automatically every 20 s. Its "Last snapshot: 4:01 PM" line
- *   is likewise dropped (no snapshot timestamp exists on the state).
- * - The frame's hot-zone highlight/tip is computed from the REAL rows (highest bookings+hails
- *   demand, shown only when any demand exists) — never hardcoded to "Airport".
+ * - A manual "RETRY NOW" button is NOT reproduced: the ViewModel exposes no manual-refresh method
+ *   (refreshOnce is private to its polling loop), so the card states the truth instead — retries
+ *   happen automatically every 20 s. No snapshot timestamp is shown either (none exists on state).
+ * - The hot-zone highlight/tip is computed from the REAL rows (highest bookings+hails demand,
+ *   shown only when any demand exists) — never hardcoded to a fixed zone.
  * - Rows beyond the fixed table height scroll INSIDE the table container only.
  */
 @Composable
@@ -65,31 +68,34 @@ fun ZoneStatisticsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
+            .background(CaptainPalette.bg)
             .padding(start = 72.dp, end = 72.dp, top = 44.dp, bottom = 36.dp),
     ) {
-        // Header (Figma 25:226 + 25:338): title · auto-refresh chip · back-to-plot.
+        // Header: title · auto-refresh chip · back-to-plot.
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "Zone statistics — live supply & demand",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 28.sp,
-                color = Deck.textPrimary,
+                color = CaptainPalette.textPrimary,
             )
             Spacer(Modifier.weight(1f))
-            Box(
+            Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Deck.card)
+                    .background(CaptainPalette.raised)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(15.dp))
                 Text(
-                    "⟳ auto-refresh 20 s",
+                    "auto-refresh 20 s",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Medium,
                     fontSize = 14.sp,
-                    color = Deck.textSecondary,
+                    color = CaptainPalette.textSecondary,
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -98,16 +104,17 @@ fun ZoneStatisticsScreen(
                     .width(220.dp)
                     .height(52.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Deck.card)
+                    .background(CaptainPalette.raised)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(12.dp))
                     .clickable { navController.popBackStack() },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "← BACK TO PLOT",
+                    "BACK TO PLOT",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
-                    color = Deck.textSecondary,
+                    color = CaptainPalette.textSecondary,
                 )
             }
         }
@@ -119,7 +126,7 @@ fun ZoneStatisticsScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                CircularProgressIndicator(color = Deck.yellow)
+                CircularProgressIndicator(color = CaptainPalette.accent)
             }
             state.stats.isEmpty() -> UnavailableCard(
                 modifier = Modifier.weight(1f),
@@ -133,7 +140,7 @@ fun ZoneStatisticsScreen(
                         "Refresh failed — showing the last received figures. ${state.error}",
                         fontFamily = InterFamily,
                         fontSize = 13.sp,
-                        color = Deck.hired,
+                        color = CaptainPalette.danger,
                         modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
                     )
                 }
@@ -143,7 +150,7 @@ fun ZoneStatisticsScreen(
     }
 }
 
-// Column widths — Figma 25:231's exact 1084 split, kept as weights of the available width.
+// Column widths — kept as weights of the available width.
 private const val ZONE_COL = 300f
 private const val PLOTTED_COL = 130f
 private const val VACANT_COL = 130f
@@ -152,16 +159,13 @@ private const val JOBS_COL = 140f
 private const val BOOKINGS_COL = 130f
 private const val HAILS_COL = 124f
 
-/** Frame `25:291`'s hot-row amber-tinted fill — introduced by the populated frame. */
-private val HotRowBg = Color(0xFF22160B)
-
 /** The zone this table should call out as hottest: most demand (bookings + hails last hour),
  * only when any demand exists at all. Pure derivation from the real rows. */
 private fun hottestZone(stats: List<ZoneStatsDto>): ZoneStatsDto? =
     stats.maxByOrNull { it.bookingsLastHour + it.streetHailsLastHour }
         ?.takeIf { it.bookingsLastHour + it.streetHailsLastHour > 0 }
 
-/** Figma `25:230` — panel table, 52dp card-toned header row + 72dp rows. Rows scroll inside. */
+/** Panel table, 52dp header row + 72dp rows. Rows scroll inside. */
 @Composable
 private fun StatsTable(stats: List<ZoneStatsDto>, modifier: Modifier = Modifier) {
     val hot = hottestZone(stats)
@@ -169,11 +173,11 @@ private fun StatsTable(stats: List<ZoneStatsDto>, modifier: Modifier = Modifier)
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Deck.panel)
-            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(18.dp)),
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp)),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(52.dp).background(Deck.card),
+            modifier = Modifier.fillMaxWidth().height(52.dp).background(CaptainPalette.raised),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HeaderCell("ZONE", ZONE_COL, align = TextAlign.Start)
@@ -198,7 +202,7 @@ private fun StatsRow(row: ZoneStatsDto, hot: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .background(if (hot) HotRowBg else Deck.panel),
+            .background(if (hot) CaptainPalette.warning.copy(alpha = 0.08f) else CaptainPalette.panel),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(modifier = Modifier.weight(ZONE_COL).padding(start = 24.dp)) {
@@ -207,7 +211,7 @@ private fun StatsRow(row: ZoneStatsDto, hot: Boolean) {
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 18.sp,
-                color = if (hot) Deck.stopped else Deck.textPrimary,
+                color = if (hot) CaptainPalette.warning else CaptainPalette.textPrimary,
                 maxLines = 1,
             )
         }
@@ -231,7 +235,7 @@ private fun androidx.compose.foundation.layout.RowScope.HeaderCell(
         fontFamily = InterFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 13.sp,
-        color = Deck.textMuted,
+        color = CaptainPalette.textMuted,
         textAlign = align,
         maxLines = 1,
         modifier = Modifier
@@ -241,7 +245,7 @@ private fun androidx.compose.foundation.layout.RowScope.HeaderCell(
 }
 
 /** Chakra Petch 22 figure — muted at 0, primary otherwise; demand columns go amber when high
- * (≥5/hr), matching the populated frame's amber demand figures (a presentation threshold). */
+ * (≥5/hr), matching the previous presentation threshold. */
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.NumberCell(
     value: Int,
@@ -254,17 +258,17 @@ private fun androidx.compose.foundation.layout.RowScope.NumberCell(
         fontWeight = FontWeight.Medium,
         fontSize = 22.sp,
         color = when {
-            value == 0 -> Deck.textMuted
-            demand && value >= 5 -> Deck.stopped
-            else -> Deck.textPrimary
+            value == 0 -> CaptainPalette.textMuted
+            demand && value >= 5 -> CaptainPalette.warning
+            else -> CaptainPalette.textPrimary
         },
         textAlign = TextAlign.Center,
         modifier = Modifier.weight(weight),
     )
 }
 
-/** Figma `25:336` — amber hot-zone tip bar, composed from the real hottest row (hidden when no
- * zone reports any demand). */
+/** Amber hot-zone tip bar, composed from the real hottest row (hidden when no zone reports any
+ * demand). */
 @Composable
 private fun HotZoneTip(stats: List<ZoneStatsDto>) {
     val hot = hottestZone(stats) ?: return
@@ -272,28 +276,30 @@ private fun HotZoneTip(stats: List<ZoneStatsDto>) {
         modifier = Modifier
             .fillMaxWidth()
             .height(58.dp)
-            .clip(RoundedCornerShape(Deck.R_MD.dp))
-            .background(Deck.stopped.copy(alpha = 0.1f))
-            .border(1.dp, Deck.stopped.copy(alpha = 0.5f), RoundedCornerShape(Deck.R_MD.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.warning.copy(alpha = 0.1f))
+            .border(1.dp, CaptainPalette.warning.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Icon(Icons.Rounded.LocalFireDepartment, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(20.dp))
         Text(
-            "🔥 ${hot.zoneName}: ${hot.streetHailsLastHour} street hails + ${hot.bookingsLastHour} bookings " +
+            "${hot.zoneName}: ${hot.streetHailsLastHour} street hails + ${hot.bookingsLastHour} bookings " +
                 "in the last hour and ${hot.vacantVehicles} vacant cars — best plot right now",
             fontFamily = InterFamily,
             fontWeight = FontWeight.SemiBold,
             fontSize = 17.sp,
-            color = Deck.stopped,
+            color = CaptainPalette.warning,
             maxLines = 1,
         )
     }
 }
 
 /**
- * 26b — unavailable state (Figma `25:392`): big panel card with 📡, headline, explanation, and
- * the frame's three fading skeleton bars. Doubles as the no-zones-configured state (no dedicated
- * frame exists for it) with matching honest copy. No RETRY button — see file doc.
+ * 26b — unavailable state: big panel card with icon, headline, explanation, and three fading
+ * skeleton bars. Doubles as the no-zones-configured state with matching honest copy. No RETRY
+ * button — see file doc.
  */
 @Composable
 private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
@@ -301,14 +307,14 @@ private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
-            .background(Deck.panel)
-            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
             .padding(horizontal = 32.dp, vertical = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Spacer(Modifier.weight(1f))
-        Text("📡", fontSize = 52.sp)
+        Icon(Icons.Rounded.SatelliteAlt, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(52.dp))
         Text(
             text = if (error != null) {
                 "Statistics unavailable — reconnecting to the fleet server"
@@ -318,7 +324,7 @@ private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 24.sp,
-            color = Deck.textPrimary,
+            color = CaptainPalette.textPrimary,
         )
         Text(
             text = if (error != null) {
@@ -330,7 +336,7 @@ private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
             },
             fontFamily = InterFamily,
             fontSize = 16.sp,
-            color = Deck.textSecondary,
+            color = CaptainPalette.textSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.width(620.dp),
         )
@@ -341,7 +347,7 @@ private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
                     .height(26.dp)
                     .alpha(a)
                     .clip(RoundedCornerShape(13.dp))
-                    .background(Deck.card),
+                    .background(CaptainPalette.raised),
             )
         }
         Spacer(Modifier.weight(1f))

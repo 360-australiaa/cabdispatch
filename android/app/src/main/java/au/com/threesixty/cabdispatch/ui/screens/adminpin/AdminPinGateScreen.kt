@@ -13,7 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,28 +31,29 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
-import au.com.threesixty.cabdispatch.ui.deck.DeckKeypad
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 private const val PIN_LENGTH = 6
 
 /**
- * 32 · Admin PIN Gate — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `28:198`).
- * Same presentation-shell contract as before: [onVerify] fires with the entered PIN once
- * [PIN_LENGTH] digits are present and VERIFY is tapped; the server-side verification
+ * 32 · Admin PIN Gate — Captain Taxis purple redesign (2026-08-29 pass), migrated off the old
+ * yellow/black `Deck` palette onto [CaptainPalette] to match [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen],
+ * which embeds this screen inline as its factory-reset sub-screen state. Same presentation-shell
+ * contract as before: [onVerify] fires with the entered PIN once [PIN_LENGTH] digits are present
+ * and VERIFY is tapped; the server-side verification
  * (`POST /v1/fleet/devices/{id}/verify-admin-pin`) and all of its error handling stay entirely
  * with [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.attemptFactoryReset]
  * — this screen only renders [errorMessage]/[verifying] as reported, and a fresh error clears the
  * entered digits so the driver can retry immediately.
  *
- * v2 layout per the frame: left column (🔐 · 32sp title · true "server-verified" copy · dot
- * progress row · the caller's [subtitle] as the red requesting line · error/spinner), the shared
- * [DeckKeypad] (140×78 keys) on the right with a 448×72 yellow VERIFY beneath, ghost Cancel
- * bottom-left. The frame's "Three failed attempts locks admin actions for 15 minutes" sentence is
- * NOT rendered — no such lockout exists anywhere in this codebase, and this screen doesn't claim
+ * Layout: left column (lock icon · 32sp title · true "server-verified" copy · dot progress row ·
+ * the caller's [subtitle] as the danger-tinted requesting line · error/spinner), the shared
+ * [CaptainKeypad] (0-9 numeric pad, elderly-friendly 84dp keys) on the right with a 448×72 primary
+ * VERIFY beneath, outline Cancel bottom-left. No "N failed attempts locks admin actions" copy is
+ * rendered — no such lockout exists anywhere in this codebase, and this screen doesn't claim
  * behaviour it doesn't have.
  */
 @Composable
@@ -67,7 +72,7 @@ fun AdminPinGateScreen(
         if (errorMessage != null) pin = ""
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Deck.canvas)) {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
@@ -78,20 +83,27 @@ fun AdminPinGateScreen(
                 modifier = Modifier.width(440.dp).padding(top = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                Text("🔐", fontSize = 44.sp)
+                Box(
+                    modifier = Modifier.size(64.dp).clip(CircleShape)
+                        .background(CaptainPalette.raised)
+                        .border(1.dp, CaptainPalette.panelBorder, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(32.dp))
+                }
                 Text(
                     "Enter admin PIN to continue",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 32.sp,
-                    color = Deck.textPrimary,
+                    color = CaptainPalette.textPrimary,
                 )
                 Text(
                     "Server-verified — the PIN is checked by the fleet backend and never stored on this device.",
                     fontFamily = InterFamily,
                     fontSize = 16.sp,
                     lineHeight = 22.sp,
-                    color = Deck.textSecondary,
+                    color = CaptainPalette.textSecondary,
                     modifier = Modifier.width(420.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -101,8 +113,8 @@ fun AdminPinGateScreen(
                             modifier = Modifier
                                 .size(20.dp)
                                 .clip(CircleShape)
-                                .background(if (filled) Deck.yellow else Deck.card)
-                                .border(1.dp, Deck.strokeStrong, CircleShape),
+                                .background(if (filled) CaptainPalette.accent else CaptainPalette.raised)
+                                .border(1.dp, CaptainPalette.panelBorder, CircleShape),
                         )
                     }
                 }
@@ -110,9 +122,9 @@ fun AdminPinGateScreen(
                     subtitle,
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                    color = Deck.hired,
+                    fontSize = 16.sp,
+                    lineHeight = 22.sp,
+                    color = CaptainPalette.danger,
                     modifier = Modifier.width(420.dp),
                 )
                 if (errorMessage != null) {
@@ -120,13 +132,13 @@ fun AdminPinGateScreen(
                         errorMessage,
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        color = Deck.hired,
+                        fontSize = 16.sp,
+                        color = CaptainPalette.danger,
                         modifier = Modifier.width(420.dp),
                     )
                 }
                 if (verifying) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Deck.yellow, strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = CaptainPalette.accent, strokeWidth = 2.dp)
                 }
             }
 
@@ -134,30 +146,29 @@ fun AdminPinGateScreen(
 
             // --- Right column: shared keypad + VERIFY ---
             Column {
-                DeckKeypad(
+                CaptainKeypad(
                     onDigit = { d -> if (!verifying && pin.length < PIN_LENGTH) pin += d },
                     onBackspace = { if (!verifying) pin = pin.dropLast(1) },
                     onClear = { if (!verifying) pin = "" },
                 )
                 Spacer(Modifier.height(24.dp))
-                DeckButton(
+                CaptainButton(
                     text = "VERIFY",
-                    kind = DeckButtonKind.Primary,
                     heightDp = 72,
-                    fontSize = 20,
+                    fontSize = 20.sp,
                     enabled = pin.length == PIN_LENGTH && !verifying,
-                    modifier = Modifier.width(448.dp),
+                    widthDp = 448,
                 ) { onVerify(pin) }
             }
         }
 
-        DeckButton(
+        CaptainButton(
             text = "Cancel",
-            kind = DeckButtonKind.Ghost,
+            outline = true,
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 96.dp, bottom = 48.dp)
-                .width(180.dp),
+                .padding(start = 96.dp, bottom = 48.dp),
+            widthDp = 180,
             onClick = onCancel,
         )
     }

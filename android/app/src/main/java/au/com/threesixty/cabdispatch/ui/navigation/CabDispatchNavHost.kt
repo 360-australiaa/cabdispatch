@@ -142,7 +142,25 @@ fun CabDispatchNavHost(
     navController: NavHostController = rememberNavController(),
     startDestination: String = CabDispatchRoutes.SPLASH,
 ) {
-    NavHost(navController = navController, startDestination = startDestination) {
+    // Premium-motion pass (2026-08-29): screens previously hard-cut between routes with zero
+    // transition. One set of defaults here gives every route a consistent 300ms fade+drift —
+    // forward navigation slides content gently up-and-in, back navigation reverses it. Kept
+    // deliberately subtle (24dp travel) so an older driver never perceives it as content
+    // "flying"; purely presentational, no navigation behavior/back-stack change.
+    NavHost(
+        navController = navController,
+        startDestination = startDestination,
+        enterTransition = {
+            androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(300)) +
+                androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(300)) { it / 24 }
+        },
+        exitTransition = { androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)) },
+        popEnterTransition = { androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(300)) },
+        popExitTransition = {
+            androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(220)) { it / 24 }
+        },
+    ) {
         composable(CabDispatchRoutes.SPLASH) {
             SplashScreen(navController = navController)
         }

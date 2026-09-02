@@ -8,27 +8,66 @@ import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.ComplianceDossierDto
+import au.com.threesixty.cabdispatch.data.remote.ComplianceExpiryPageDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DriverAvailabilityDto
+import au.com.threesixty.cabdispatch.data.remote.DriverAvailabilityUpdateDto
+import au.com.threesixty.cabdispatch.data.remote.DriverEarningsTodayReadDto
+import au.com.threesixty.cabdispatch.data.remote.DriverLoginRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DriverLoginResponseDto
+import au.com.threesixty.cabdispatch.data.remote.DuressCancelRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DuressEventDto
+import au.com.threesixty.cabdispatch.data.remote.DuressGpsPointDto
+import au.com.threesixty.cabdispatch.data.remote.DuressSnapshotDto
+import au.com.threesixty.cabdispatch.data.remote.DuressTriggerRequestDto
+import au.com.threesixty.cabdispatch.data.remote.FatigueAlertPageDto
+import au.com.threesixty.cabdispatch.data.remote.JobCreateDto
+import au.com.threesixty.cabdispatch.data.remote.JobDto
+import au.com.threesixty.cabdispatch.data.remote.JobListResponseDto
+import au.com.threesixty.cabdispatch.data.remote.JobOfferDto
 import au.com.threesixty.cabdispatch.data.remote.LoginRequestDto
+import au.com.threesixty.cabdispatch.data.remote.MessageCreateDto
+import au.com.threesixty.cabdispatch.data.remote.MessageDto
+import au.com.threesixty.cabdispatch.data.remote.MessageListResponseDto
+import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
+import au.com.threesixty.cabdispatch.data.remote.MfaLoginRequestDto
+import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
+import au.com.threesixty.cabdispatch.data.remote.PositionPublishResponseDto
+import au.com.threesixty.cabdispatch.data.remote.ReceiptEmailRequestDto
+import au.com.threesixty.cabdispatch.data.remote.ReceiptEmailResponseDto
+import au.com.threesixty.cabdispatch.data.remote.ReceiptSmsRequestDto
+import au.com.threesixty.cabdispatch.data.remote.ReceiptSmsResponseDto
 import au.com.threesixty.cabdispatch.data.remote.RefreshRequestDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftEndDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftReportDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftStartDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.data.remote.TariffPresetDto
+import au.com.threesixty.cabdispatch.data.remote.TariffSigningPublicKeyDto
+import au.com.threesixty.cabdispatch.data.remote.TariffSuggestionDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
+import au.com.threesixty.cabdispatch.data.remote.TemplateMessageCreateDto
 import au.com.threesixty.cabdispatch.data.remote.TokenResponseDto
 import au.com.threesixty.cabdispatch.data.remote.TripCloseRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TripCreateDto
 import au.com.threesixty.cabdispatch.data.remote.TripDto
+import au.com.threesixty.cabdispatch.data.remote.TripFlagRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TripListResponseDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResponseDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResultItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripTickRequestDto
 import au.com.threesixty.cabdispatch.data.remote.UserDto
+import au.com.threesixty.cabdispatch.data.remote.VehiclePageDto
+import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
+import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinResponseDto
+import au.com.threesixty.cabdispatch.data.remote.ZoneListResponseDto
+import au.com.threesixty.cabdispatch.data.remote.ZonePlotReadDto
+import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
@@ -73,7 +112,12 @@ import java.io.IOException
 class OutboxDrainerTest {
 
     @Test
-    fun `open, tick x5, close offline; survives restart; drains on reconnect; resend is idempotent`() = runTest {
+    // Real compile bug fixed 2026-08-29 (found while chasing an unrelated FareEngine fix, then
+    // fixed since it blocked this whole test source set from compiling): a backtick-quoted Kotlin
+    // identifier still has to be a legal JVM name underneath, and `;` is one of the characters the
+    // JVM spec forbids in a method name (it's a descriptor separator) — javac/kotlinc accept the
+    // source but the class file is invalid. Commas read just as clearly and compile.
+    fun `open, tick x5, close offline, survives restart, drains on reconnect, resend is idempotent`() = runTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
@@ -271,6 +315,12 @@ private class FakeTripDao : TripDao {
 
     override fun observeUnsyncedCount(syncedStatus: String): Flow<Int> =
         flowOf(rows.values.count { it.status != syncedStatus })
+
+    // Added 2026-08-29 alongside the OutboxDrainerTest compile-fix pass — real TripDao member,
+    // not exercised by this test (OutboxDrainer never calls it), but a fake implementing an
+    // interface must implement every member regardless of whether the test under scope reaches it.
+    override fun observeRecentTrips(openStatus: String, limit: Int): Flow<List<TripEntity>> =
+        flowOf(rows.values.filter { it.status != openStatus }.sortedByDescending { it.startAt }.take(limit))
 }
 
 /**
@@ -356,12 +406,32 @@ private class FakeApiService : ApiService {
     override suspend fun me(): UserDto = notUsed()
     override suspend fun logout(): Unit = notUsed()
     override suspend fun registerDevice(body: DeviceRegisterRequestDto): DeviceDto = notUsed()
-    override suspend fun deviceHeartbeat(deviceId: String, body: DeviceHeartbeatRequestDto): DeviceDto = notUsed()
+    // deviceSecret param added 2026-08-29 (device-scoped heartbeat auth pass) — see
+    // ApiService.deviceHeartbeat's own doc; not exercised by this test, default kept.
+    override suspend fun deviceHeartbeat(deviceId: String, body: DeviceHeartbeatRequestDto, deviceSecret: String?): DeviceDto = notUsed()
     override suspend fun activeTariff(region: String, at: String?): TariffDto = notUsed()
     override suspend fun currentFaresOrder(region: String, at: String?): TariffDto = notUsed()
     override suspend fun createTrip(body: TripCreateDto): TripDto = notUsed()
-    override suspend fun listTrips(status: String?, type: String?, vehicleId: String?, driverId: String?, skip: Int, limit: Int): TripListResponseDto = notUsed()
+    // shiftId/startAtFrom/startAtTo params added 2026-08-29 (Captain Taxis dashboard pass) — see
+    // ApiService.listTrips's own doc; not exercised by this test, defaults kept.
+    override suspend fun listTrips(
+        status: String?,
+        type: String?,
+        vehicleId: String?,
+        driverId: String?,
+        shiftId: String?,
+        startAtFrom: String?,
+        startAtTo: String?,
+        skip: Int,
+        limit: Int,
+    ): TripListResponseDto = notUsed()
     override suspend fun getTrip(tripId: String): TripDto = notUsed()
+    // Added 2026-08-29 alongside the listTrips/deviceHeartbeat signature changes above — same
+    // "new interface member, not exercised by this test" situation.
+    override suspend fun earningsToday(driverId: String): DriverEarningsTodayReadDto = notUsed()
+    // Pre-existing gap (predates every change in this session) surfaced only once the two fixes
+    // above got this file compiling far enough to reach it.
+    override suspend fun acceptJobOffer(jobId: String, offerId: String): JobOfferDto = notUsed()
     override suspend fun tickTrip(tripId: String, body: TripTickRequestDto): TripDto = notUsed()
     override suspend fun closeTrip(tripId: String, body: TripCloseRequestDto): TripDto = notUsed()
     override suspend fun startShift(body: ShiftStartDto): ShiftDto = notUsed()
@@ -376,6 +446,51 @@ private class FakeApiService : ApiService {
     // are added here, to at least not add to that pre-existing list with brand new gaps.
     override suspend fun uploadUserPhoto(userId: String, file: MultipartBody.Part): UserDto = notUsed()
     override suspend fun getUserPhoto(userId: String): ResponseBody = notUsed()
+
+    // --- Full-interface compile fix, 2026-08-29: FakeApiService had drifted to implementing only
+    // 41 of ApiService's 58 members (confirmed by diffing the two), predating every change in this
+    // session — each of several past passes added just the one or two methods it happened to
+    // touch and left the rest. None of these 37 are exercised by OutboxDrainerTest (it only ever
+    // calls syncTrips on this fake); every one throws via notUsed(), matching the existing
+    // convention for every other unused override above. Signatures copied verbatim from
+    // ApiService.kt's real declarations, not guessed. ---
+    override suspend fun driverLogin(body: DriverLoginRequestDto): DriverLoginResponseDto = notUsed()
+    override suspend fun mfaLogin(body: MfaLoginRequestDto): TokenResponseDto = notUsed()
+    override suspend fun verifyAdminPin(deviceId: String, body: VerifyAdminPinRequestDto): VerifyAdminPinResponseDto = notUsed()
+    override suspend fun setDriverAvailability(body: DriverAvailabilityUpdateDto): DriverAvailabilityDto = notUsed()
+    override suspend fun createJob(body: JobCreateDto): JobDto = notUsed()
+    override suspend fun listJobs(status: String?, skip: Int, limit: Int): JobListResponseDto = notUsed()
+    override suspend fun getJob(jobId: String): JobDto = notUsed()
+    override suspend fun cancelJob(jobId: String): JobDto = notUsed()
+    override suspend fun listJobOffers(jobId: String): List<JobOfferDto> = notUsed()
+    override suspend fun declineJobOffer(jobId: String, offerId: String): JobOfferDto = notUsed()
+    override suspend fun publishPosition(body: PositionPublishRequestDto): PositionPublishResponseDto = notUsed()
+    override suspend fun listVehicles(skip: Int, limit: Int): VehiclePageDto = notUsed()
+    override suspend fun getShift(shiftId: String): ShiftDto = notUsed()
+    override suspend fun flagTrip(tripId: String, body: TripFlagRequestDto): TripDto = notUsed()
+    override suspend fun emailReceipt(tripId: String, body: ReceiptEmailRequestDto): ReceiptEmailResponseDto = notUsed()
+    override suspend fun smsReceipt(tripId: String, body: ReceiptSmsRequestDto): ReceiptSmsResponseDto = notUsed()
+    override suspend fun suggestTariff(lat: Double, lng: Double, vehicleClass: String?): TariffSuggestionDto = notUsed()
+    override suspend fun tariffPresets(): List<TariffPresetDto> = notUsed()
+    override suspend fun tariffSigningPublicKey(): TariffSigningPublicKeyDto = notUsed()
+    override suspend fun triggerDuress(body: DuressTriggerRequestDto): DuressEventDto = notUsed()
+    override suspend fun cancelDuress(eventId: String, body: DuressCancelRequestDto): DuressEventDto = notUsed()
+    override suspend fun getDuressEvent(eventId: String): DuressEventDto = notUsed()
+    override suspend fun postDuressGps(eventId: String, body: DuressGpsPointDto) = notUsed()
+    override suspend fun uploadDuressAudio(eventId: String, file: MultipartBody.Part): DuressEventDto = notUsed()
+    override suspend fun uploadDuressSnapshot(eventId: String, file: MultipartBody.Part, capturedAt: String?): DuressSnapshotDto = notUsed()
+    override suspend fun complianceExpiry(skip: Int, limit: Int): ComplianceExpiryPageDto = notUsed()
+    override suspend fun getComplianceDossier(vehicleId: String): ComplianceDossierDto = notUsed()
+    override suspend fun fatigueAlerts(skip: Int, limit: Int): FatigueAlertPageDto = notUsed()
+    override suspend fun listMessages(driverId: String, skip: Int, limit: Int): MessageListResponseDto = notUsed()
+    override suspend fun sendMessage(body: MessageCreateDto): MessageDto = notUsed()
+    override suspend fun markMessageRead(messageId: String): MessageDto = notUsed()
+    override suspend fun listMessageTemplates(): List<MessageTemplateDto> = notUsed()
+    override suspend fun sendTemplateMessage(code: String, body: TemplateMessageCreateDto): MessageDto = notUsed()
+    override suspend fun listZones(skip: Int, limit: Int): ZoneListResponseDto = notUsed()
+    override suspend fun plotIntoZone(zoneId: String): ZonePlotReadDto = notUsed()
+    override suspend fun unplotZone(): ZonePlotReadDto = notUsed()
+    override suspend fun zoneStats(): List<ZoneStatsDto> = notUsed()
 
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }

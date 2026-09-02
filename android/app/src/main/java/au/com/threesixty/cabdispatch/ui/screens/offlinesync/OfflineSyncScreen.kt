@@ -1,8 +1,12 @@
 package au.com.threesixty.cabdispatch.ui.screens.offlinesync
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,50 +20,56 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CloudUpload
+import androidx.compose.material.icons.rounded.CreditCard
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Sos
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 
 /**
- * 35 · Offline & Sync — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `29:30`).
- * Visual layer only — [OfflineSyncViewModel] (outbox count, tariff-cache read, force-sync
- * enqueue, network poll) is untouched; see its doc for exactly which rows are real vs.
- * deliberately not fabricated.
+ * 35 · Offline & Sync — Captain Taxis purple redesign, moved off the yellow/black `Deck` palette
+ * onto [CaptainPalette] to match the rest of this dispatch-journey group (message thread, trip
+ * detail, incoming trip offer). Visual layer only — [OfflineSyncViewModel] (outbox count,
+ * tariff-cache read, force-sync enqueue, network poll) is untouched; see its doc for exactly which
+ * rows are real vs. deliberately not fabricated.
  *
- * v2 layout, literal from the frame: full-width amber OFFLINE banner (64dp, only while actually
- * offline — same conditional as before), H1, a 2×3 grid of 561×104 status cards (emoji · title ·
- * status line · 12dp state dot), a 300×72 [Deck.info]-blue FORCE SYNC NOW, and a ghost
- * "← Dashboard" pinned to the bottom via Spacer(weight). Zero scroll.
+ * Layout: shared [PaneShell] back+title header, an amber OFFLINE banner (only while actually
+ * offline — same conditional as before) using a real [Icons.Rounded.WarningAmber] glyph, a 2×3
+ * grid of status cards (real Material icon · title · status line · state dot), and a solid
+ * FORCE SYNC NOW action. The previous separate "← Dashboard" ghost button is dropped in favour of
+ * the single header back affordance, matching the other three screens in this group.
  *
- * Honesty notes vs. the frame (same policy as [OfflineSyncViewModel]'s doc and the
+ * Honesty notes vs. the previous version (same policy as [OfflineSyncViewModel]'s doc and the
  * Permissions-screen precedent of stating "not on this build" rather than faking a state):
- * - "Driver login cache" and the "Duress path — SMS fallback" cards exist in the frame but have
- *   no backing feature anywhere in this codebase; they render as explicit not-on-this-build
- *   informational cards (neutral dot), not as fabricated healthy states.
- * - The frame's "Offline maps" card slot shows the real Network status instead (the same
- *   `ConnectivityManager` check the old version of this screen surfaced) — offline-map region
- *   state isn't exposed to this screen's ViewModel, and inventing "up to date · 2.1 GB" would be
- *   fiction.
- * - No status strip: the frame composes the shared `c/status-strip`, but on this route there is
- *   no real [au.com.threesixty.cabdispatch.ui.deck.StripStatus] source (that wiring lives on the
- *   dashboard's ViewModel), matching the other ported standalone screens.
- *
- * Navigation contract unchanged: the single back affordance pops (the old screen's two separate
- * "Back"/"DASHBOARD" buttons both did exactly that; the frame draws one ghost button).
+ * - "Driver login cache" and the "Duress path — SMS fallback" cards have no backing feature
+ *   anywhere in this codebase; they render as explicit not-on-this-build informational cards
+ *   ([CaptainPalette.dialNeutral] dot), not as fabricated healthy states.
+ * - The "Network" card shows the real `ConnectivityManager` status this screen's ViewModel
+ *   already surfaced — offline-map region state isn't exposed here, and inventing "up to date ·
+ *   2.1 GB" would be fiction.
  */
 @Composable
 fun OfflineSyncScreen(
@@ -68,51 +78,43 @@ fun OfflineSyncScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize().background(Deck.canvas)) {
-        if (state.isOffline) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(64.dp)
-                    .background(Color(0xFF221407))
-                    .padding(horizontal = 24.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("⚠", fontSize = 24.sp, color = Deck.stopped)
-                Text(
-                    "OFFLINE — the meter is fully operational. Trips queue locally and sync when coverage returns.",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 17.sp,
-                    color = Deck.stopped,
-                )
+    PaneShell(title = "Offline & Sync", onBack = { navController.popBackStack() }) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (state.isOffline) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(CaptainPalette.warning.copy(alpha = 0.14f))
+                        .border(1.dp, CaptainPalette.warning.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(26.dp))
+                    Text(
+                        "OFFLINE — the meter is fully operational. Trips queue locally and sync when coverage returns.",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = CaptainPalette.warning,
+                    )
+                }
+                Spacer(Modifier.height(20.dp))
             }
-            Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Deck.stopped))
-        }
-
-        Column(modifier = Modifier.fillMaxSize().padding(start = 72.dp, end = 72.dp, bottom = 36.dp)) {
-            Spacer(Modifier.height(if (state.isOffline) 30.dp else 96.dp))
-            Text(
-                "Offline mode & sync status",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 30.sp,
-                color = Deck.textPrimary,
-            )
-            Spacer(Modifier.height(24.dp))
 
             val tariff = state.cachedTariff
             val cards = listOf(
                 listOf(
                     SyncCard(
-                        emoji = "📤",
+                        icon = Icons.Rounded.CloudUpload,
                         title = "Trips pending sync",
                         status = if (state.pendingOutboxCount == 0) "0 — all synced" else "${state.pendingOutboxCount} queued locally",
                         tone = if (state.pendingOutboxCount == 0) SyncTone.OK else SyncTone.WARN,
                     ),
                     SyncCard(
-                        emoji = "🔏",
+                        icon = Icons.Rounded.VerifiedUser,
                         title = "Cached tariff",
                         status = if (tariff != null) "${tariff.name} · Ed25519 verified offline ✓" else "No cached tariff",
                         tone = if (tariff != null) SyncTone.OK else SyncTone.WARN,
@@ -120,13 +122,13 @@ fun OfflineSyncScreen(
                 ),
                 listOf(
                     SyncCard(
-                        emoji = "👤",
+                        icon = Icons.Rounded.Person,
                         title = "Driver login cache",
                         status = "Not on this build — PIN login is live-only",
                         tone = SyncTone.NEUTRAL,
                     ),
                     SyncCard(
-                        emoji = "🆘",
+                        icon = Icons.Rounded.Sos,
                         title = "Duress path",
                         status = "Data relay via dispatch — no SMS fallback on this build",
                         tone = SyncTone.NEUTRAL,
@@ -134,13 +136,13 @@ fun OfflineSyncScreen(
                 ),
                 listOf(
                     SyncCard(
-                        emoji = "💳",
+                        icon = Icons.Rounded.CreditCard,
                         title = "Card payments",
                         status = "Offline capture enabled — settles on reconnect",
                         tone = SyncTone.OK,
                     ),
                     SyncCard(
-                        emoji = "📶",
+                        icon = Icons.Rounded.Wifi,
                         title = "Network",
                         status = if (state.isOffline) "Offline — sync resumes automatically on reconnect" else "Connected",
                         tone = if (state.isOffline) SyncTone.WARN else SyncTone.OK,
@@ -155,29 +157,15 @@ fun OfflineSyncScreen(
                 }
             }
 
-            Spacer(Modifier.height(44.dp))
-            Box(
-                modifier = Modifier
-                    .width(300.dp)
-                    .height(72.dp)
-                    .clip(RoundedCornerShape(Deck.R_MD.dp))
-                    .background(Deck.info)
-                    .clickable(onClick = viewModel::forceSyncNow),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (state.syncTriggeredJustNow) "⟳ SYNC REQUESTED" else "⟳ FORCE SYNC NOW",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = Color(0xFF04121F),
-                )
-            }
+            Spacer(Modifier.height(32.dp))
+            SyncButton(
+                text = if (state.syncTriggeredJustNow) "Sync requested" else "Force sync now",
+                icon = Icons.Rounded.Sync,
+                onClick = viewModel::forceSyncNow,
+                modifier = Modifier.width(300.dp),
+            )
 
             Spacer(Modifier.weight(1f))
-            DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp)) {
-                navController.popBackStack()
-            }
         }
     }
 }
@@ -185,7 +173,7 @@ fun OfflineSyncScreen(
 private enum class SyncTone { OK, WARN, NEUTRAL }
 
 private data class SyncCard(
-    val emoji: String,
+    val icon: ImageVector,
     val title: String,
     val status: String,
     val tone: SyncTone,
@@ -193,43 +181,43 @@ private data class SyncCard(
 
 @Composable
 private fun SyncStatusCard(card: SyncCard, modifier: Modifier = Modifier) {
-    val dotColor = when (card.tone) {
-        SyncTone.OK -> Deck.forHire
-        SyncTone.WARN -> Deck.stopped
-        SyncTone.NEUTRAL -> Deck.offDuty
+    val (dotColor, iconTint) = when (card.tone) {
+        SyncTone.OK -> CaptainPalette.success to CaptainPalette.success
+        SyncTone.WARN -> CaptainPalette.warning to CaptainPalette.warning
+        SyncTone.NEUTRAL -> CaptainPalette.dialNeutral to CaptainPalette.textMuted
     }
-    val shape = RoundedCornerShape(Deck.R_LG.dp)
+    val shape = RoundedCornerShape(16.dp)
     val borderModifier = if (card.tone == SyncTone.WARN) {
-        Modifier.border(1.5.dp, Deck.stopped.copy(alpha = 0.7f), shape)
+        Modifier.border(1.5.dp, CaptainPalette.warning.copy(alpha = 0.7f), shape)
     } else {
-        Modifier.border(1.dp, Deck.strokeSubtle, shape)
+        Modifier.border(1.dp, CaptainPalette.panelBorder, shape)
     }
     Row(
         modifier = modifier
             .height(104.dp)
             .clip(shape)
-            .background(Deck.panel)
+            .background(CaptainPalette.panel)
             .then(borderModifier)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(card.emoji, fontSize = 26.sp)
+        Icon(card.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(28.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 card.title,
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 17.sp,
-                color = Deck.textPrimary,
+                color = CaptainPalette.textPrimary,
             )
             Text(
                 card.status,
                 fontFamily = InterFamily,
                 fontSize = 14.sp,
                 color = when (card.tone) {
-                    SyncTone.WARN -> Deck.stopped
-                    else -> Deck.textMuted
+                    SyncTone.WARN -> CaptainPalette.warning
+                    else -> CaptainPalette.textMuted
                 },
             )
         }
@@ -239,5 +227,32 @@ private fun SyncStatusCard(card: SyncCard, modifier: Modifier = Modifier) {
                 .clip(CircleShape)
                 .background(dotColor),
         )
+    }
+}
+
+/**
+ * Local button variant mirroring [au.com.threesixty.cabdispatch.ui.theme.CaptainButton]'s
+ * press-scale/shape but with a leading icon slot — used for Force Sync Now, replacing the
+ * previous "⟳" emoji glyph with a real [Icons.Rounded.Sync] icon.
+ */
+@Composable
+private fun SyncButton(text: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(16.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.95f else 1f, animationSpec = tween(120), label = "sync-btn-press")
+    Row(
+        modifier = modifier
+            .height(72.dp)
+            .scale(scale)
+            .clip(shape)
+            .background(if (pressed) CaptainPalette.primary.copy(alpha = 0.85f) else CaptainPalette.primary)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .padding(horizontal = 28.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(24.dp))
+        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
     }
 }

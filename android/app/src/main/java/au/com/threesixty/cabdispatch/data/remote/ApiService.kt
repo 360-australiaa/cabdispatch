@@ -7,6 +7,7 @@ import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -82,10 +83,23 @@ interface ApiService {
     @POST("/v1/fleet/devices/register")
     suspend fun registerDevice(@Body body: DeviceRegisterRequestDto): DeviceDto
 
+    /**
+     * [deviceSecret], when non-null, is sent as `X-Device-Secret` — the device-scoped credential
+     * the backend added 2026-08-29 specifically so this call can authenticate with NO driver
+     * session at all (see [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]'s "real
+     * precondition" section for why that mattered: a parked, logged-off, or freshly-rebooted
+     * tablet has no [au.com.threesixty.cabdispatch.data.AppContainer.accessToken] in memory, so
+     * every poll used to 401 until a driver signed in online). [okhttp3.Interceptor] still adds
+     * `Authorization` when a token happens to be in memory too — the backend accepts either, so
+     * sending both is harmless; it's what makes the bearer path keep working unchanged for a
+     * device paired before this field existed (no secret == this header omitted == old behaviour).
+     * `null` -> the header is omitted, not sent empty, via [retrofit2.http.Header]'s null handling.
+     */
     @POST("/v1/fleet/devices/{deviceId}/heartbeat")
     suspend fun deviceHeartbeat(
         @Path("deviceId") deviceId: String,
         @Body body: DeviceHeartbeatRequestDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
     ): DeviceDto
 
     /**
@@ -176,15 +190,40 @@ interface ApiService {
     @POST("/v1/trips")
     suspend fun createTrip(@Body body: TripCreateDto): TripDto
 
+    /**
+     * `shift_id`/`start_at_from`/`start_at_to` (2026-08-29, Captain Taxis dashboard pass — see
+     * backend's own contract doc, Part 4.2) are additive filters on top of the existing params;
+     * `null` (the default) omits each from the query exactly as before this pass, so every
+     * existing call site is unaffected. Used by [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s
+     * shift-scoped "TRIPS — N Completed / M Active" stat: one call with `status = "closed"`, one
+     * with `status = "open"`, both scoped to the current shift via `shiftId`, reading only
+     * [TripListResponseDto.total] off each.
+     */
     @GET("/v1/trips")
     suspend fun listTrips(
         @Query("status") status: String? = null,
         @Query("type") type: String? = null,
         @Query("vehicle_id") vehicleId: String? = null,
         @Query("driver_id") driverId: String? = null,
+        @Query("shift_id") shiftId: String? = null,
+        @Query("start_at_from") startAtFrom: String? = null,
+        @Query("start_at_to") startAtTo: String? = null,
         @Query("skip") skip: Int = 0,
         @Query("limit") limit: Int = 50,
     ): TripListResponseDto
+
+    /**
+     * `GET /v1/trips/earnings/today` (new, 2026-08-29 — backend contract Part 4.3). Sydney-local
+     * calendar day, not UTC. [DriverEarningsTodayRead.pctChange] is `null` when there is no
+     * yesterday baseline to compare against — callers MUST treat `null` as "hide the comparison",
+     * never as `0`. Read only for its trend text
+     * ([DeckHomeScreen][au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen] keeps
+     * showing the existing Room-backed [au.com.threesixty.cabdispatch.domain.TodayStats.earningsTotal]
+     * as the primary $ figure — offline-safe, already the established convention — and only adds
+     * this call's `pctChange` as an annotation once it loads).
+     */
+    @GET("/v1/trips/earnings/today")
+    suspend fun earningsToday(@Query("driver_id") driverId: String): DriverEarningsTodayReadDto
 
     @GET("/v1/trips/{tripId}")
     suspend fun getTrip(@Path("tripId") tripId: String): TripDto
@@ -577,6 +616,16 @@ data class UserDto(
      * `photo_url != null` check can drive "has a photo" UI state without an extra network round
      * trip. See `ui/screens/profile/ProfileViewModel.kt`. */
     @SerialName("photo_url") val photoUrl: String? = null,
+    /**
+     * The real backing field for a "VERIFIED" badge (2026-08-29, backend contract Part 2.1/10:
+     * `"suitability_status == \"clear\""` is the concept a driver-verification badge should map
+     * to — not a field literally named "verified"). Values beyond `"clear"` (e.g. pending/
+     * flagged) are real but this app has no other UI for them yet — see
+     * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s header, which shows
+     * VERIFIED only on an exact `"clear"` match and shows nothing (not a false claim) otherwise.
+     * `null` is treated the same as "not clear" — never assumed verified by omission.
+     */
+    @SerialName("suitability_status") val suitabilityStatus: String? = null,
 )
 
 @Serializable
@@ -595,12 +644,17 @@ data class DeviceHeartbeatRequestDto(
 )
 
 /**
- * [locateRequested]/[rebootRequested] mirror the backend's MDM-lite command flags (
- * `backend/app/schemas/fleet.py::DeviceRead`, see `POST /v1/fleet/devices/{id}/locate`/`/reboot`)
- * — an admin sets one via the dashboard, the device reads it back on its next [ApiService.deviceHeartbeat]
- * call. [locateRequested] is the one this app actually acts on:
- * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.loadDeviceStatus] answers a
- * set flag by publishing a fresh position (see [PositionPublishRequestDto] /
+ * [kioskLocked]/[forceUpdatePending]/[locateRequested]/[rebootRequested] mirror the backend's
+ * MDM-lite command flags (`backend/app/schemas/fleet.py::DeviceRead`, see
+ * `POST /v1/fleet/devices/{id}/kiosk-lock`/`/force-update`/`/locate`/`/reboot`) — an admin sets one
+ * via the dashboard, the device reads it back on its next [ApiService.deviceHeartbeat] call. Those
+ * endpoints are pure flag-set columns with no push channel behind them, so this response body is
+ * the *only* way any of them ever reaches the tablet; since 2026-08-29
+ * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat] polls this endpoint for the
+ * process lifetime and acts on the first three: [kioskLocked] drives app-wide screen pinning in
+ * [au.com.threesixty.cabdispatch.MainActivity], [forceUpdatePending] drives a persistent driver-
+ * facing banner (this app has no self-update path — see that class's doc), and [locateRequested] is
+ * answered by publishing a fresh position (see [PositionPublishRequestDto] /
  * [ApiService.publishPosition]). [rebootRequested] is deliberately left unconsumed here — see the
  * backend's own HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`: actually rebooting the OS
  * needs device-owner-level Android permissions this app does not hold, so this stays a
@@ -624,13 +678,26 @@ data class DeviceDto(
     val network: String?,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /**
+     * The device-scoped heartbeat credential (backend, 2026-08-29) — present ONLY on a
+     * [ApiService.registerDevice] response, ONE TIME, right after a (re-)pair; every other
+     * response that returns a [DeviceDto] (heartbeat, locate, etc.) omits it, and the backend never
+     * returns it again after this call. [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.submitPairingCode]
+     * must persist it via [au.com.threesixty.cabdispatch.domain.DevicePairingStore.saveDeviceSecret]
+     * in the same breath as the device id — miss this one response and there is no way to fetch it
+     * again short of re-pairing. Re-pairing rotates it: a fresh secret is issued and the previous
+     * one stops authenticating immediately, mirrored client-side by simply overwriting the stored
+     * value. `null` on a device paired before this field existed — that device keeps authenticating
+     * on the driver-bearer path unmodified until it next re-pairs.
+     */
+    @SerialName("device_secret") val deviceSecret: String? = null,
 )
 
 /**
  * Body for [ApiService.publishPosition] (`POST /v1/fleet/positions`, backend's
  * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Three call
  * sites, all best-effort/fire-and-forget: the MDM "locate" response
- * ([SettingsViewModel.loadDeviceStatus][au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]),
+ * ([DeviceCommandHeartbeat][au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]),
  * the ambient 30s while-on-shift heartbeat
  * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat], Taxi Meter
  * SaaS Complete Blueprint §6.2.2 "vehicle.heartbeat"), and (separately, still unwired — see
@@ -848,6 +915,19 @@ data class TripListResponseDto(
     val total: Int,
     val skip: Int,
     val limit: Int,
+)
+
+/** `GET /v1/trips/earnings/today` response (backend contract Part 4.3, 2026-08-29). Money fields
+ * are decimal-as-string per this file's header convention. [pctChange] `null` means the backend
+ * had no yesterday baseline to compare against — render "—", never a fabricated 0%. */
+@Serializable
+data class DriverEarningsTodayReadDto(
+    @SerialName("driver_id") val driverId: String,
+    val date: String,
+    @SerialName("today_total") val todayTotal: String,
+    @SerialName("yesterday_total") val yesterdayTotal: String,
+    @SerialName("pct_change") val pctChange: Double? = null,
+    @SerialName("trips_completed_today") val tripsCompletedToday: Int,
 )
 
 /** A single raw GPS/speed fix, as recorded by the in-vehicle meter. */
@@ -1071,6 +1151,19 @@ data class JobDto(
     @SerialName("accepted_by_driver_id") val acceptedByDriverId: String?,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /**
+     * `job_type`/`distance_km`/`eta_min` (2026-08-29, backend contract Part 4.1/7) — server-computed
+     * at job creation (straight-line haversine + a flat 30km/h heuristic per the backend's own
+     * doc, NOT routed/live-traffic; the backend's own field comment flags this as an
+     * approximation). `null` on a job created before this migration landed — callers must degrade
+     * (e.g. [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s dispatch card
+     * falls back to a live-GPS straight-line distance and omits ETA entirely when this is null,
+     * rather than showing a stale/wrong number). `jobType` defaults `"booked"` server-side
+     * (migration `9a9364f2c706`'s `server_default`).
+     */
+    @SerialName("job_type") val jobType: String? = null, // "booked" | "rank_hail"
+    @SerialName("distance_km") val distanceKm: String? = null,
+    @SerialName("eta_min") val etaMin: Int? = null,
 )
 
 @Serializable

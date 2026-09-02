@@ -24,7 +24,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,47 +47,44 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import au.com.threesixty.cabdispatch.R
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.ComplianceExpiryItemDto
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
-import au.com.threesixty.cabdispatch.ui.deck.DeckButton
-import au.com.threesixty.cabdispatch.ui.deck.DeckButtonKind
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
-import au.com.threesixty.cabdispatch.ui.theme.Deck
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import java.io.ByteArrayOutputStream
 
 /**
- * 30 · Profile — Command Deck v2 port (Figma `h0PSsXQ971dOJvt25tN7BA` node `27:89`).
- * [ProfileViewModel] is kept ENTIRELY: photo capture/upload (TakePicturePreview + GetContent
- * launchers, CAMERA runtime-permission request), the read-only compliance dossier, and error
- * dismiss — this pass only replaces presentation.
+ * 30 · Profile — reskinned onto [CaptainPalette]/[au.com.threesixty.cabdispatch.ui.theme.CaptainWidgets]
+ * (2026-08-29 purple migration pass). [ProfileViewModel] is kept ENTIRELY: photo capture/upload
+ * (TakePicturePreview + GetContent launchers, CAMERA runtime-permission request), the read-only
+ * compliance dossier, and error dismiss — this pass only replaces presentation, off the old
+ * yellow/black `Deck` tokens.
  *
- * Layout per the frame: title top-left, a 400dp identity card (140dp avatar, "Tap to update
- * photo", label/value attribute rows) and a compliance column filling the rest, ghost
- * "← Dashboard" pinned bottom-left. ZERO vertical scroll — the dossier checklist renders as a
- * 2-wide grid of compact cards so all seven cl.14 items + the expiry warnings resolve on canvas.
+ * Layout: title top-left, an identity card (140dp avatar, "Tap to update photo", label/value
+ * attribute rows) and a compliance column filling the rest, outline "Dashboard" pinned bottom-left.
+ * ZERO vertical scroll — the dossier checklist renders as a 2-wide grid of compact cards so all
+ * seven cl.14 items + the expiry warnings resolve on canvas.
  *
- * NEW real data: the frame's amber compliance-expiry warning cards ("expiring in 54 days — renew
- * soon") load the real `GET /v1/fleet/compliance-expiry` feed ([AppContainer.apiService]
+ * NEW real data: the amber compliance-expiry warning cards ("expiring in 54 days — renew soon")
+ * load the real `GET /v1/fleet/compliance-expiry` feed ([AppContainer.apiService]
  * `complianceExpiry()`) via a small screen-local loader — editing [ProfileViewModel] is off-limits
  * for this pass — and the section simply hides on failure/empty.
  *
- * Honesty deviations, flagged: the frame's LICENCE / AUTHORITY identity rows have no backing
- * fields on [DriverSession] (name/driverId/vehicleId only) so they are not rendered; the frame's
- * status strip is dashboard-owned state and is omitted (ShiftStart/Permissions port precedent).
- * The old Settings tab embedding is gone per the flat v2 frame — Settings keeps its own route,
- * reachable via the bottom-right ghost entry so no destination is lost; [onFactoryReset] stays in
- * the signature (the NavHost contract) even though the embedded Settings host moved out.
+ * Honesty deviations, flagged: the LICENCE / AUTHORITY identity rows have no backing fields on
+ * [DriverSession] (name/driverId/vehicleId only) so they are not rendered; the status strip is
+ * dashboard-owned state and is omitted. [onFactoryReset] stays in the signature (the NavHost
+ * contract) even though the embedded Settings host lives on its own route.
  */
 @Composable
 fun ProfileScreen(
@@ -101,10 +105,10 @@ fun ProfileScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Deck.canvas)
+            .background(CaptainPalette.bg)
             .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
     ) {
-        Text("Driver profile", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Deck.textPrimary)
+        Text("Driver profile", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = CaptainPalette.textPrimary)
         Spacer(Modifier.height(20.dp))
 
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
@@ -114,19 +118,19 @@ fun ProfileScreen(
 
         Spacer(Modifier.height(16.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
-            DeckButton(text = "← Dashboard", kind = DeckButtonKind.Ghost, modifier = Modifier.width(220.dp)) {
+            CaptainButton(text = "Dashboard", outline = true, modifier = Modifier.width(220.dp)) {
                 navController.popBackStack()
             }
             Spacer(Modifier.weight(1f))
-            DeckButton(text = "Settings & diagnostics →", kind = DeckButtonKind.Ghost, modifier = Modifier.width(280.dp)) {
+            CaptainButton(text = "Settings & diagnostics", outline = true, modifier = Modifier.width(300.dp)) {
                 navController.navigate(CabDispatchRoutes.SETTINGS)
             }
         }
     }
 }
 
-/** The frame's 400dp identity card — avatar + photo actions + attribute rows. All photo
- * capture/upload logic below is byte-for-byte the pre-port behaviour, only restyled. */
+/** The 400dp identity card — avatar + photo actions + attribute rows. All photo capture/upload
+ * logic below is byte-for-byte the pre-port behaviour, only restyled. */
 @Composable
 private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
     val context = LocalContext.current
@@ -167,101 +171,100 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .width(400.dp)
-            .fillMaxHeight()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Deck.panel)
-            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(24.dp))
-            .padding(28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+    CaptainPanel(
+        modifier = Modifier.width(400.dp).fillMaxHeight(),
+        cornerRadiusDp = 24,
     ) {
-        Box(
-            modifier = Modifier
-                .size(140.dp)
-                .clip(CircleShape)
-                .background(Deck.raised)
-                .border(2.dp, Deck.strokeStrong, CircleShape)
-                .clickable { launchCamera() },
-            contentAlignment = Alignment.Center,
+        Column(
+            modifier = Modifier.fillMaxSize().padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            when (val p = photoState) {
-                is ProfilePhotoUiState.Loaded -> Image(
-                    bitmap = p.bitmap.asImageBitmap(),
-                    contentDescription = "Profile photo",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                )
-                // Placeholder headshot fallback — matches the dashboard identity chip so "no real
-                // photo yet" reads the same everywhere (kept from the 2026-08-27 fidelity pass).
-                else -> Image(
-                    painter = painterResource(R.drawable.dummy_driver_photo),
-                    contentDescription = "Driver photo placeholder",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                )
-            }
-            if (isUploadingPhoto || photoState is ProfilePhotoUiState.Loading) {
-                Box(
-                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp), color = Deck.yellow, strokeWidth = 2.dp)
+            Box(
+                modifier = Modifier
+                    .size(140.dp)
+                    .clip(CircleShape)
+                    .background(CaptainPalette.raised)
+                    .border(2.dp, CaptainPalette.panelBorder, CircleShape)
+                    .clickable { launchCamera() },
+                contentAlignment = Alignment.Center,
+            ) {
+                when (val p = photoState) {
+                    is ProfilePhotoUiState.Loaded -> Image(
+                        bitmap = p.bitmap.asImageBitmap(),
+                        contentDescription = "Profile photo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                    )
+                    // No real photo yet — initials placeholder, same fallback DriverAvatar uses
+                    // elsewhere, rather than a stock/generic image standing in for a real person.
+                    else -> {
+                        val initials = session?.driverName
+                            ?.split(" ")?.mapNotNull { it.firstOrNull()?.uppercase() }?.take(2)?.joinToString("")
+                            ?: "—"
+                        Text(initials, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 46.sp, color = CaptainPalette.textPrimary)
+                    }
+                }
+                if (isUploadingPhoto || photoState is ProfilePhotoUiState.Loading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp), color = CaptainPalette.accent, strokeWidth = 2.dp)
+                    }
                 }
             }
-        }
-        Text(
-            "📷 Tap to update photo",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 14.sp,
-            color = Deck.info,
-            modifier = Modifier.clickable { launchCamera() },
-        )
-        Text(
-            "Choose from gallery",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp,
-            color = Deck.yellow,
-            modifier = Modifier.clickable { galleryLauncher.launch("image/*") },
-        )
-        Text(
-            "Used by dispatch & duress monitoring",
-            fontFamily = InterFamily,
-            fontSize = 12.sp,
-            color = Deck.textMuted,
-        )
-
-        if (cameraPermissionDenied) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.clickable { launchCamera() },
+            ) {
+                Icon(Icons.Rounded.CameraAlt, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
+                Text("Tap to update photo", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.accent)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.clickable { galleryLauncher.launch("image/*") },
+            ) {
+                Icon(Icons.Rounded.PhotoLibrary, contentDescription = null, tint = CaptainPalette.primary, modifier = Modifier.size(16.dp))
+                Text("Choose from gallery", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CaptainPalette.primary)
+            }
             Text(
-                "Camera permission was not granted — use the gallery instead, or allow Camera in Android Settings.",
+                "Used by dispatch & duress monitoring",
                 fontFamily = InterFamily,
-                fontSize = 11.sp,
-                color = Deck.textMuted,
+                fontSize = 12.sp,
+                color = CaptainPalette.textMuted,
             )
-        }
-        photoUploadError?.let { message ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(message, fontFamily = InterFamily, fontSize = 11.sp, color = Deck.hired)
+
+            if (cameraPermissionDenied) {
                 Text(
-                    "Dismiss",
+                    "Camera permission was not granted — use the gallery instead, or allow Camera in Android Settings.",
                     fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
                     fontSize = 11.sp,
-                    color = Deck.textSecondary,
-                    modifier = Modifier.clickable { viewModel.dismissPhotoError() },
+                    color = CaptainPalette.textMuted,
                 )
             }
-        }
+            photoUploadError?.let { message ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(message, fontFamily = InterFamily, fontSize = 11.sp, color = CaptainPalette.danger)
+                    Text(
+                        "Dismiss",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = CaptainPalette.textSecondary,
+                        modifier = Modifier.clickable { viewModel.dismissPhotoError() },
+                    )
+                }
+            }
 
-        Spacer(Modifier.height(2.dp))
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            IdentityAttribute("NAME", session?.driverName ?: "Not signed in")
-            IdentityAttribute("DRIVER ID", session?.driverId ?: "—")
-            session?.vehicleId?.let { IdentityAttribute("VEHICLE", it) }
+            Spacer(Modifier.height(2.dp))
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                IdentityAttribute("NAME", session?.driverName ?: "Not signed in")
+                IdentityAttribute("DRIVER ID", session?.driverId ?: "—")
+                session?.vehicleId?.let { IdentityAttribute("VEHICLE", it) }
+            }
         }
     }
 }
@@ -269,15 +272,15 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
 @Composable
 private fun IdentityAttribute(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Deck.textMuted)
-        Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Deck.textPrimary)
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = CaptainPalette.textMuted)
+        Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
     }
 }
 
 /**
- * The frame's compliance column: expiry warning cards (real `GET /v1/fleet/compliance-expiry`
- * rows, amber when near, red when expired) above the real cl.14 dossier checklist
- * ([ProfileViewModel.complianceState]) rendered as a 2-wide grid of compact cards.
+ * The compliance column: expiry warning cards (real `GET /v1/fleet/compliance-expiry` rows, amber
+ * when near, red when expired) above the real cl.14 dossier checklist ([ProfileViewModel.complianceState])
+ * rendered as a 2-wide grid of compact cards.
  */
 @Composable
 private fun ComplianceColumn(
@@ -293,7 +296,7 @@ private fun ComplianceColumn(
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 13.sp,
-            color = Deck.textMuted,
+            color = CaptainPalette.textMuted,
         )
 
         // Real expiry-feed warning cards (capped to 3 so the no-scroll canvas always resolves).
@@ -301,10 +304,10 @@ private fun ComplianceColumn(
 
         when (val s = state) {
             is ComplianceUiState.Loading -> Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Deck.yellow)
+                CircularProgressIndicator(color = CaptainPalette.accent)
             }
             is ComplianceUiState.Error -> {
-                Text(s.message, fontFamily = InterFamily, fontSize = 13.sp, color = Deck.textSecondary)
+                Text(s.message, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textSecondary)
                 ComplianceGrid(FALLBACK_DOC_TYPES.map { it to null })
             }
             is ComplianceUiState.Loaded -> {
@@ -315,24 +318,24 @@ private fun ComplianceColumn(
     }
 }
 
-/** One real `ComplianceExpiryItem` row — the frame's amber "expiring in 54 days" card. */
+/** One real `ComplianceExpiryItem` row — the amber "expiring in 54 days" card. */
 @Composable
 private fun ExpiryCard(item: ComplianceExpiryItemDto) {
     val expired = item.daysRemaining < 0 || item.status.equals("expired", ignoreCase = true)
-    val accent = if (expired) Deck.hired else Deck.stopped
+    val accent = if (expired) CaptainPalette.danger else CaptainPalette.warning
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Deck.panel)
+            .background(CaptainPalette.panel)
             .border(1.5.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
             .padding(horizontal = 22.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(item.label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Deck.textPrimary)
+            Text(item.label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
             Text(
                 if (expired) {
                     "${item.field} expired ${item.expiryDate}"
@@ -344,13 +347,13 @@ private fun ExpiryCard(item: ComplianceExpiryItemDto) {
                 color = accent,
             )
         }
-        StatusBadge(symbol = if (expired) "✕" else "⚠", color = accent)
+        StatusBadge(icon = if (expired) Icons.Rounded.Cancel else Icons.Rounded.Warning, color = accent)
     }
 }
 
 @Composable
 private fun OverallBanner(compliant: Boolean) {
-    val color = if (compliant) Deck.forHire else Deck.stopped
+    val color = if (compliant) CaptainPalette.success else CaptainPalette.warning
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -367,7 +370,7 @@ private fun OverallBanner(compliant: Boolean) {
             fontFamily = InterFamily,
             fontWeight = FontWeight.SemiBold,
             fontSize = 13.sp,
-            color = Deck.textPrimary,
+            color = CaptainPalette.textPrimary,
         )
     }
 }
@@ -391,8 +394,8 @@ private fun ComplianceCard(label: String, satisfied: Boolean?, modifier: Modifie
         modifier = modifier
             .height(56.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Deck.panel)
-            .border(1.dp, Deck.strokeSubtle, RoundedCornerShape(16.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -402,19 +405,19 @@ private fun ComplianceCard(label: String, satisfied: Boolean?, modifier: Modifie
             fontFamily = InterFamily,
             fontWeight = FontWeight.SemiBold,
             fontSize = 14.sp,
-            color = Deck.textPrimary,
+            color = CaptainPalette.textPrimary,
             modifier = Modifier.weight(1f),
         )
         when (satisfied) {
-            true -> StatusBadge("✓", Deck.forHire)
-            false -> StatusBadge("⚠", Deck.stopped)
-            null -> Text("—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Deck.textMuted)
+            true -> StatusBadge(icon = Icons.Rounded.CheckCircle, color = CaptainPalette.success)
+            false -> StatusBadge(icon = Icons.Rounded.Warning, color = CaptainPalette.warning)
+            null -> Text("—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = CaptainPalette.textMuted)
         }
     }
 }
 
 @Composable
-private fun StatusBadge(symbol: String, color: Color) {
+private fun StatusBadge(icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color) {
     Box(
         modifier = Modifier
             .size(32.dp)
@@ -422,7 +425,7 @@ private fun StatusBadge(symbol: String, color: Color) {
             .background(color.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center,
     ) {
-        Text(symbol, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = color)
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(17.dp))
     }
 }
 
