@@ -14,8 +14,11 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
-import { mfaDisable, mfaSetup, mfaVerify } from "./api";
+import { mfaDisable, mfaSetup, mfaVerify, setAdminPin } from "./api";
 import type { MfaSetupResponse } from "./types";
+
+/** Matches the backend's `_PIN_PATTERN` in `app/schemas/tenant.py` (4-8 digits). */
+const ADMIN_PIN_PATTERN = /^\d{4,8}$/;
 
 function errorMessage(error: unknown, fallback: string): string {
   return (error as { response?: { data?: { detail?: string } }; message?: string })?.response
@@ -33,6 +36,10 @@ export default function SecuritySettingsPage() {
   // Disable flow: password re-entry inside a confirmation modal.
   const [disableModalOpen, setDisableModalOpen] = useState(false);
   const [disablePassword, setDisablePassword] = useState("");
+
+  // Admin PIN flow (owner-only, write-only — never re-displayed once saved).
+  const [adminPin, setAdminPinValue] = useState("");
+  const [adminPinConfirm, setAdminPinConfirm] = useState("");
 
   const setupMutation = useMutation({
     mutationFn: mfaSetup,
@@ -57,6 +64,14 @@ export default function SecuritySettingsPage() {
       setDisableModalOpen(false);
       setDisablePassword("");
       await refreshUser();
+    },
+  });
+
+  const adminPinMutation = useMutation({
+    mutationFn: (pin: string) => setAdminPin(user!.tenant_id!, { pin }),
+    onSuccess: () => {
+      setAdminPinValue("");
+      setAdminPinConfirm("");
     },
   });
 
@@ -90,7 +105,18 @@ export default function SecuritySettingsPage() {
     disableMutation.reset();
   }
 
+  const adminPinMismatch =
+    adminPin.length > 0 && adminPinConfirm.length > 0 && adminPin !== adminPinConfirm;
+  const adminPinValid = ADMIN_PIN_PATTERN.test(adminPin) && adminPin === adminPinConfirm;
+
+  function handleAdminPinSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!adminPinValid) return;
+    adminPinMutation.mutate(adminPin);
+  }
+
   const mfaEnabled = user?.mfa_enabled ?? false;
+  const isOwner = user?.role === "owner";
 
   return (
     <div>
@@ -239,6 +265,89 @@ export default function SecuritySettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {isOwner && user?.tenant_id && (
+        <Card className="mt-6 max-w-2xl">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <CardTitle>Admin PIN</CardTitle>
+            </div>
+            <CardDescription>
+              This PIN protects the factory-reset option on drivers' Android tablets — a driver (or
+              anyone with the tablet) needs it before the app will wipe itself. Only share it with
+              people who should be able to do that. For security, the current PIN is never shown
+              here — only whether your save succeeded.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleAdminPinSubmit} className="max-w-xs space-y-4">
+              <div>
+                <label
+                  htmlFor="admin-pin"
+                  className="mb-1.5 block text-sm font-medium text-foreground"
+                >
+                  New PIN (4-8 digits)
+                </label>
+                <Input
+                  id="admin-pin"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={8}
+                  value={adminPin}
+                  onChange={(e) =>
+                    setAdminPinValue(e.target.value.replace(/\D/g, "").slice(0, 8))
+                  }
+                  placeholder="••••"
+                  className="text-center text-lg tracking-[0.3em]"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="admin-pin-confirm"
+                  className="mb-1.5 block text-sm font-medium text-foreground"
+                >
+                  Confirm PIN
+                </label>
+                <Input
+                  id="admin-pin-confirm"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={8}
+                  value={adminPinConfirm}
+                  onChange={(e) =>
+                    setAdminPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 8))
+                  }
+                  placeholder="••••"
+                  className="text-center text-lg tracking-[0.3em]"
+                />
+              </div>
+
+              {adminPinMismatch && (
+                <p className="text-sm text-destructive">PINs don't match.</p>
+              )}
+
+              <Button type="submit" disabled={!adminPinValid || adminPinMutation.isPending}>
+                {adminPinMutation.isPending ? "Saving…" : "Save admin PIN"}
+              </Button>
+
+              {adminPinMutation.isError && (
+                <p className="flex items-center gap-2 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  {errorMessage(adminPinMutation.error, "Couldn't save the admin PIN.")}
+                </p>
+              )}
+              {adminPinMutation.isSuccess && (
+                <p className="flex items-center gap-2 text-sm text-success">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  Admin PIN saved.
+                </p>
+              )}
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <Modal
         open={disableModalOpen}

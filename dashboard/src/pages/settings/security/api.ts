@@ -1,5 +1,7 @@
 import apiClient from "@/lib/apiClient";
 import type {
+  AdminPinSetRequest,
+  AdminPinSetResponse,
   MfaDisableRequest,
   MfaSetupResponse,
   MfaStatusResponse,
@@ -25,5 +27,23 @@ export async function mfaVerify(body: MfaVerifyRequest): Promise<MfaStatusRespon
 /** Requires re-entering the current password (not a TOTP code) to turn MFA back off. */
 export async function mfaDisable(body: MfaDisableRequest): Promise<MfaStatusResponse> {
   const res = await apiClient.post<MfaStatusResponse>("/v1/auth/mfa/disable", body);
+  return res.data;
+}
+
+/**
+ * Owner-only. Sets/updates the tenant's admin PIN — the PIN the driver's
+ * Android tablet requires before it will run a factory reset (see
+ * `AdminPinGateScreen` / `POST /v1/fleet/devices/{id}/verify-admin-pin`).
+ * There is no separate "update" route or a way to read the PIN back
+ * (write-only, like a password) — posting again overwrites the previous PIN.
+ */
+export async function setAdminPin(
+  tenantId: string,
+  body: AdminPinSetRequest,
+): Promise<AdminPinSetResponse> {
+  const res = await apiClient.post<AdminPinSetResponse>(
+    `/v1/tenants/${tenantId}/admin-pin`,
+    body,
+  );
   return res.data;
 }

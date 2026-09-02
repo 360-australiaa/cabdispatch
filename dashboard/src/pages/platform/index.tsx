@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building2, Car, Plus, Route } from "lucide-react";
+import { AlertTriangle, Building2, Car, Plus, Route, Siren, Users } from "lucide-react";
 import {
   Badge,
   Button,
@@ -17,6 +17,7 @@ import {
   useCreateTenant,
   usePlatformHealth,
   usePlatformTenants,
+  useTenantSummary,
   PLATFORM_PAGE_LIMIT,
   type CreateTenantValues,
   type PlatformTenant,
@@ -47,7 +48,71 @@ function HealthSummary() {
         <CardTitle>Platform health</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {healthQuery.isError ? (
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load platform health. Check the backend connection and try again.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {tiles.map(({ label, value, icon: Icon }) => (
+              <div
+                key={label}
+                className="flex items-center gap-3 rounded-md border border-border p-4"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {healthQuery.isLoading ? "..." : (value ?? "-")}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Read-only health rollup for one tenant, opened from a tenants-table row click. */
+function TenantDetailModal({
+  tenantId,
+  tenantName,
+  onClose,
+}: {
+  tenantId: string | null;
+  tenantName: string | undefined;
+  onClose: () => void;
+}) {
+  const summaryQuery = useTenantSummary(tenantId);
+  const summary = summaryQuery.data;
+
+  const tiles = [
+    { label: "Vehicles", value: summary?.vehicle_count, icon: Car },
+    { label: "Drivers", value: summary?.driver_count, icon: Users },
+    { label: "Trips (last 30 days)", value: summary?.trip_count_last_30_days, icon: Route },
+    { label: "Active duress events", value: summary?.active_duress_count, icon: Siren },
+  ];
+
+  return (
+    <Modal
+      open={tenantId != null}
+      onClose={onClose}
+      title={tenantName ?? "Tenant"}
+      description="Health rollup for this tenant."
+    >
+      {summaryQuery.isError && (
+        <p className="flex items-center gap-2 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Failed to load this tenant's summary. Check the backend connection and try again.
+        </p>
+      )}
+      {!summaryQuery.isError && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {tiles.map(({ label, value, icon: Icon }) => (
             <div
               key={label}
@@ -59,14 +124,14 @@ function HealthSummary() {
               <div>
                 <p className="text-xs text-muted-foreground">{label}</p>
                 <p className="text-lg font-semibold text-foreground">
-                  {healthQuery.isLoading ? "..." : (value ?? "-")}
+                  {summaryQuery.isLoading ? "..." : (value ?? "-")}
                 </p>
               </div>
             </div>
           ))}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </Modal>
   );
 }
 
@@ -81,6 +146,8 @@ export default function PlatformConsolePage() {
   const [formOpen, setFormOpen] = useState(false);
   const [formValues, setFormValues] = useState<CreateTenantValues>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
 
   function openCreate() {
     setFormValues(EMPTY_FORM);
@@ -148,12 +215,21 @@ export default function PlatformConsolePage() {
           <CardTitle>Tenants</CardTitle>
         </CardHeader>
         <CardContent>
+          {tenantsQuery.isError && (
+            <p className="mb-3 flex items-center gap-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              Failed to load tenants. Check the backend connection and try again.
+            </p>
+          )}
           <Table
             columns={columns}
             data={tenantsQuery.data?.items ?? []}
             rowKey={(t) => t.id}
             isLoading={tenantsQuery.isLoading}
-            emptyState="No tenants yet."
+            emptyState={
+              tenantsQuery.isError ? "Couldn't load tenants." : "No tenants yet."
+            }
+            onRowClick={(t) => setSelectedTenantId(t.id)}
           />
           {pageCount > 1 && (
             <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
@@ -247,6 +323,12 @@ export default function PlatformConsolePage() {
           </label>
         </div>
       </Modal>
+
+      <TenantDetailModal
+        tenantId={selectedTenantId}
+        tenantName={tenantsQuery.data?.items.find((t) => t.id === selectedTenantId)?.name}
+        onClose={() => setSelectedTenantId(null)}
+      />
     </div>
   );
 }
