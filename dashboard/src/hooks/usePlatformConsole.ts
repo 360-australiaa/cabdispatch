@@ -18,10 +18,13 @@ export interface Page<T> {
   limit: number;
 }
 
+export type TenantStatus = "active" | "trial" | "suspended";
+
 export interface PlatformTenant {
   id: string;
   name: string;
   plan: string;
+  status: TenantStatus;
   created_at: string;
 }
 
@@ -46,6 +49,20 @@ export interface CreateTenantValues {
   tsp_number?: string | null;
   bsp_number?: string | null;
   plan?: string;
+}
+
+export interface PlatformBillingSummary {
+  mrr_aud: string;
+  plan_counts: Record<string, number>;
+  status_counts: Record<string, number>;
+}
+
+export interface TenantSubscription {
+  id: string;
+  vehicle_id: string;
+  plan: string;
+  status: string;
+  stripe_subscription_id: string | null;
 }
 
 export const PLATFORM_PAGE_LIMIT = 20;
@@ -103,6 +120,52 @@ export function useCreateTenant() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform", "tenants"] });
       qc.invalidateQueries({ queryKey: ["platform", "health"] });
+    },
+  });
+}
+
+/** Cross-tenant MRR rollup + plan/status breakdowns. mrr_aud/counts are
+ * always server-computed (GET /v1/platform/billing/summary) — never derived
+ * from anything client-supplied. */
+export function usePlatformBillingSummary() {
+  return useQuery({
+    queryKey: ["platform", "billing", "summary"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<PlatformBillingSummary>("/v1/platform/billing/summary");
+      return data;
+    },
+  });
+}
+
+/** One tenant's subscriptions — the support-triage view inside
+ * `TenantDetailModal`'s Billing sub-section. */
+export function useTenantBilling(tenantId: string | null) {
+  return useQuery({
+    queryKey: ["platform", "tenants", tenantId, "billing"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<TenantSubscription[]>(
+        `/v1/platform/tenants/${tenantId}/billing`,
+      );
+      return data;
+    },
+    enabled: Boolean(tenantId),
+  });
+}
+
+/** Suspend/reactivate/trial-flag a tenant from the tenants table. Refetches
+ * the tenant list (and its summary, in case it's open) on success. */
+export function useUpdateTenantStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ tenantId, status }: { tenantId: string; status: TenantStatus }) => {
+      const { data } = await apiClient.patch<PlatformTenant>(`/v1/platform/tenants/${tenantId}`, {
+        status,
+      });
+      return data;
+    },
+    onSuccess: (_data, { tenantId }) => {
+      qc.invalidateQueries({ queryKey: ["platform", "tenants"] });
+      qc.invalidateQueries({ queryKey: ["platform", "tenants", tenantId, "summary"] });
     },
   });
 }

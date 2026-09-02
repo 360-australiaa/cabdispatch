@@ -25,3 +25,30 @@ export function formatDateTime(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
+
+/** Tenant lifecycle status -> Badge variant. active=green, trial=gold/amber,
+ * suspended=red. Same "one switch per status field" convention as
+ * `pages/duress/format.ts`'s `statusBadgeVariant`. */
+export function tenantStatusBadgeVariant(
+  status: string,
+): "default" | "primary" | "accent" | "success" | "destructive" | "outline" {
+  switch (status) {
+    case "active":
+      return "success";
+    case "trial":
+      return "accent";
+    case "suspended":
+      return "destructive";
+    default:
+      return "default";
+  }
+}
+
+/** "$49.00" from a Decimal-as-string like the backend's mrr_aud/price_aud
+ * fields. */
+export function formatAud(amount: string | number | null | undefined): string {
+  if (amount == null) return "—";
+  const n = typeof amount === "string" ? Number(amount) : amount;
+  if (Number.isNaN(n)) return "—";
+  return n.toLocaleString(undefined, { style: "currency", currency: "AUD" });
+}

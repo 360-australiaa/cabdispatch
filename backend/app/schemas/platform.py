@@ -8,9 +8,12 @@ owner - an ordinary tenant's owner never sees these shapes.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Generic, TypeVar
+from decimal import Decimal
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.tenant import VALID_TENANT_STATUSES
 
 # --- Pagination (local to this domain, same shape as app.schemas.fleet.Page,
 # until a shared one exists in app.core) -----------------------------------------
@@ -25,6 +28,13 @@ class Page(BaseModel, Generic[T]):
     limit: int
 
 
+# Tenant lifecycle status, mirrors app.models.tenant.VALID_TENANT_STATUSES -
+# a plain Literal (not an import of that tuple into a Literal, which Pydantic
+# can't build dynamically) so it must be kept in sync with that tuple by hand.
+TenantStatus = Literal["active", "trial", "suspended"]
+assert set(TenantStatus.__args__) == set(VALID_TENANT_STATUSES)  # keep the two definitions honest
+
+
 # --- GET /v1/platform/tenants -------------------------------------------------
 
 
@@ -34,6 +44,7 @@ class PlatformTenantRead(BaseModel):
     id: str
     name: str
     plan: str
+    status: TenantStatus
     created_at: datetime
 
 
@@ -69,10 +80,53 @@ class PlatformHealth(BaseModel):
     total_trips_today: int
 
 
+# --- PATCH /v1/platform/tenants/{id} -------------------------------------------
+
+
+class TenantStatusUpdate(BaseModel):
+    status: TenantStatus
+
+
+# --- GET /v1/platform/billing/summary ------------------------------------------
+
+
+class PlatformBillingSummary(BaseModel):
+    """See app.services.platform.get_platform_billing_summary's docstring
+    for exactly which subscription statuses feed mrr_aud/plan_counts vs.
+    status_counts."""
+
+    mrr_aud: Decimal
+    plan_counts: dict[str, int]
+    status_counts: dict[str, int]
+
+
+# --- GET /v1/platform/tenants/{id}/billing -------------------------------------
+
+
+class TenantSubscriptionRead(BaseModel):
+    """One subscription row for the platform-owner's per-tenant billing
+    support-triage view — deliberately a smaller shape than
+    app.schemas.billing.SubscriptionRead (no tenant_id, since the caller
+    already knows it from the path; no price_aud/timestamps, not needed for
+    this at-a-glance view)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    vehicle_id: str
+    plan: str
+    status: str
+    stripe_subscription_id: str | None = None
+
+
 __all__ = [
     "Page",
+    "PlatformBillingSummary",
     "PlatformHealth",
     "PlatformTenantCreate",
     "PlatformTenantRead",
+    "TenantStatus",
+    "TenantStatusUpdate",
+    "TenantSubscriptionRead",
     "TenantSummary",
 ]

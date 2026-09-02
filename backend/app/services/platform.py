@@ -21,15 +21,26 @@ functions at all.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.billing import PLAN_PRICES_AUD, STATUS_ACTIVE, STATUS_TRIALING, Subscription
 from app.models.duress import DURESS_TERMINAL_STATUSES, DuressEvent
 from app.models.fleet import Vehicle
 from app.models.tenant import Tenant
 from app.models.trips import Trip
 from app.models.user import ROLE_DRIVER, User
+
+# Statuses counted as "revenue-live" for the platform-wide MRR rollup below.
+# Deliberately broader than just STATUS_ACTIVE: a "trialing" subscription
+# already has a real per-plan price attached (see
+# app.services.billing.price_for_plan / create_subscription) and represents
+# a provisioned, billable seat the same as "active" - only past_due /
+# canceled / incomplete are excluded, since those are not currently
+# generating recurring revenue.
+ACTIVE_EQUIVALENT_SUBSCRIPTION_STATUSES = (STATUS_ACTIVE, STATUS_TRIALING)
 
 
 class PlatformError(Exception):
@@ -152,11 +163,80 @@ async def get_platform_health(session: AsyncSession) -> dict[str, int]:
     }
 
 
+async def get_platform_billing_summary(session: AsyncSession) -> dict:
+    """Cross-tenant MRR rollup - deliberately unscoped by
+    get_current_tenant_id (see module docstring), same pattern as
+    get_platform_health. Loads every Subscription row on the platform (no
+    tenant filter) and computes:
+
+    - mrr_aud: sum of PLAN_PRICES_AUD[plan] for every subscription whose
+      status is in ACTIVE_EQUIVALENT_SUBSCRIPTION_STATUSES. Always derived
+      from the plan-price lookup table, never from a subscription's stored
+      price_aud - that field can in principle drift (e.g. a historical
+      price change) whereas PLAN_PRICES_AUD is the current, single source
+      of truth for what a plan costs today (see
+      app.services.billing.price_for_plan's own docstring).
+    - plan_counts: count of active-equivalent subscriptions per plan.
+    - status_counts: count of ALL subscriptions per status, active-equivalent
+      or not - this is the only one of the three that also surfaces
+      past_due/canceled/incomplete subscriptions, since it exists to show
+      the full status mix, not just the billable slice.
+    """
+    result = await session.execute(select(Subscription))
+    subscriptions = list(result.scalars().all())
+
+    mrr_aud = Decimal("0")
+    plan_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+
+    for sub in subscriptions:
+        status_counts[sub.status] = status_counts.get(sub.status, 0) + 1
+        if sub.status in ACTIVE_EQUIVALENT_SUBSCRIPTION_STATUSES:
+            mrr_aud += PLAN_PRICES_AUD.get(sub.plan, Decimal("0"))
+            plan_counts[sub.plan] = plan_counts.get(sub.plan, 0) + 1
+
+    return {
+        "mrr_aud": mrr_aud,
+        "plan_counts": plan_counts,
+        "status_counts": status_counts,
+    }
+
+
+async def get_tenant_billing(session: AsyncSession, *, tenant_id: str) -> list[Subscription]:
+    """One tenant's subscriptions, newest first - the support-triage view a
+    platform-owner uses to review a network's billing without impersonating
+    them (switching ?tenant_id= via get_current_tenant_id would still mean
+    acting AS that tenant; this is read-only and cross-tenant by design, same
+    bypass as every other function in this module)."""
+    result = await session.execute(
+        select(Subscription)
+        .where(Subscription.tenant_id == tenant_id)
+        .order_by(Subscription.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def update_tenant_status(session: AsyncSession, tenant: Tenant, *, status_value: str) -> Tenant:
+    """Suspend/reactivate/trial-flag a tenant from the platform console
+    (PATCH /v1/platform/tenants/{tenant_id}). Takes an already-loaded Tenant
+    (the router loads it via tenant_service.get_tenant_or_404 first, same
+    "load then mutate" shape as tenant_service.set_admin_pin /
+    update_theme)."""
+    tenant.status = status_value
+    await session.commit()
+    await session.refresh(tenant)
+    return tenant
+
+
 __all__ = [
+    "ACTIVE_EQUIVALENT_SUBSCRIPTION_STATUSES",
     "PlatformError",
     "TenantNameRequiredError",
     "create_tenant",
+    "get_platform_billing_summary",
     "get_platform_health",
+    "get_tenant_billing",
     "get_tenant_counts",
     "list_tenants",
+    "update_tenant_status",
 ]

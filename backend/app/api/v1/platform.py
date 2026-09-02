@@ -29,9 +29,12 @@ from app.core.database import get_session
 from app.core.security import PLATFORM_TENANT_ID, require_role
 from app.schemas.platform import (
     Page,
+    PlatformBillingSummary,
     PlatformHealth,
     PlatformTenantCreate,
     PlatformTenantRead,
+    TenantStatusUpdate,
+    TenantSubscriptionRead,
     TenantSummary,
 )
 from app.services import platform as platform_service
@@ -119,6 +122,55 @@ async def get_platform_health(
     started today (UTC calendar day) - across every tenant."""
     health = await platform_service.get_platform_health(session)
     return PlatformHealth(**health)
+
+
+@router.patch("/tenants/{tenant_id}", response_model=PlatformTenantRead)
+async def update_platform_tenant(
+    tenant_id: str,
+    payload: TenantStatusUpdate,
+    session: AsyncSession = Depends(get_session),
+    _owner=Depends(require_platform_owner),
+):
+    """Suspend/reactivate/trial-flag a tenant from the platform console.
+    Reuses tenant_service.get_tenant_or_404, same as the /summary route
+    above."""
+    try:
+        tenant = await tenant_service.get_tenant_or_404(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+    return await platform_service.update_tenant_status(session, tenant, status_value=payload.status)
+
+
+@router.get("/billing/summary", response_model=PlatformBillingSummary)
+async def get_platform_billing_summary(
+    session: AsyncSession = Depends(get_session),
+    _owner=Depends(require_platform_owner),
+):
+    """Cross-tenant MRR rollup: monthly recurring revenue, plan-tier and
+    status breakdowns across every tenant's subscriptions - always
+    server-computed (see app.services.platform.get_platform_billing_summary),
+    never trusts any client-supplied figure."""
+    summary = await platform_service.get_platform_billing_summary(session)
+    return PlatformBillingSummary(**summary)
+
+
+@router.get("/tenants/{tenant_id}/billing", response_model=list[TenantSubscriptionRead])
+async def get_platform_tenant_billing(
+    tenant_id: str,
+    session: AsyncSession = Depends(get_session),
+    _owner=Depends(require_platform_owner),
+):
+    """Support-triage view: one tenant's subscriptions (vehicle/plan/status/
+    stripe id), for platform staff reviewing a network's billing without
+    impersonating them via the ?tenant_id= override on every other endpoint
+    (see app.core.security.get_current_tenant_id)."""
+    try:
+        await tenant_service.get_tenant_or_404(session, tenant_id=tenant_id)
+    except tenant_service.TenantError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
+
+    return await platform_service.get_tenant_billing(session, tenant_id=tenant_id)
 
 
 __all__ = ["router"]

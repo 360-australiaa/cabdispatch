@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
 from app.core import security
 from app.core.security import PLATFORM_TENANT_ID
+from app.models.billing import (
+    PLAN_BASIC,
+    PLAN_ENTERPRISE,
+    PLAN_PRO,
+    STATUS_ACTIVE,
+    STATUS_CANCELED,
+    STATUS_TRIALING,
+    Subscription,
+)
 from app.models.duress import DURESS_STATUS_OPEN, DURESS_STATUS_RESOLVED, DURESS_TRIGGER_BUTTON, DuressEvent
 from app.models.fleet import Vehicle
 from app.models.tenant import Tenant
@@ -52,6 +62,9 @@ async def _make_tenant(session, *, name: str, plan: str = "standard") -> Tenant:
         ("POST", "/v1/platform/tenants", {"name": "Nope Cabs"}),
         ("GET", "/v1/platform/tenants/{tenant_id}/summary", None),
         ("GET", "/v1/platform/health", None),
+        ("GET", "/v1/platform/billing/summary", None),
+        ("GET", "/v1/platform/tenants/{tenant_id}/billing", None),
+        ("PATCH", "/v1/platform/tenants/{tenant_id}", {"status": "suspended"}),
     ],
 )
 async def test_normal_tenant_owner_gets_403_on_every_platform_route(client, session, method, path, json_body):
@@ -62,6 +75,8 @@ async def test_normal_tenant_owner_gets_403_on_every_platform_route(client, sess
     url = path.format(tenant_id=caller_tenant_id)
     if method == "GET":
         resp = await client.get(url, headers=headers)
+    elif method == "PATCH":
+        resp = await client.patch(url, json=json_body, headers=headers)
     else:
         resp = await client.post(url, json=json_body, headers=headers)
 
@@ -276,3 +291,152 @@ async def test_platform_health_aggregates_across_tenants(client, session):
     assert body["total_tenants"] >= 2
     assert body["total_vehicles"] >= 2
     assert body["total_trips_today"] >= 1
+
+
+async def test_platform_billing_summary_computes_mrr_correctly(client, session):
+    """MRR is derived from PLAN_PRICES_AUD for active-equivalent
+    (active/trialing) subscriptions only — a canceled subscription must not
+    contribute. Asserted as a delta (before/after) rather than an absolute
+    total since this rollup is deliberately platform-wide/unscoped and other
+    tests in the shared test DB may already have created subscriptions."""
+    headers = await _platform_owner_headers(client, session)
+
+    before = (await client.get("/v1/platform/billing/summary", headers=headers)).json()
+
+    tenant_a = await _make_tenant(session, name="Billing Tenant A")
+    tenant_b = await _make_tenant(session, name="Billing Tenant B")
+
+    session.add(
+        Subscription(
+            tenant_id=tenant_a.id,
+            vehicle_id="veh-bill-a1",
+            plan=PLAN_BASIC,
+            status=STATUS_ACTIVE,
+            price_aud=Decimal("29.00"),
+        )
+    )
+    session.add(
+        Subscription(
+            tenant_id=tenant_a.id,
+            vehicle_id="veh-bill-a2",
+            plan=PLAN_PRO,
+            status=STATUS_TRIALING,
+            price_aud=Decimal("49.00"),
+        )
+    )
+    session.add(
+        Subscription(
+            tenant_id=tenant_b.id,
+            vehicle_id="veh-bill-b1",
+            plan=PLAN_ENTERPRISE,
+            status=STATUS_CANCELED,
+            price_aud=Decimal("79.00"),
+        )
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/platform/billing/summary", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    mrr_delta = Decimal(str(body["mrr_aud"])) - Decimal(str(before["mrr_aud"]))
+    assert mrr_delta == Decimal("29.00") + Decimal("49.00")
+
+    assert body["plan_counts"].get(PLAN_BASIC, 0) == before["plan_counts"].get(PLAN_BASIC, 0) + 1
+    assert body["plan_counts"].get(PLAN_PRO, 0) == before["plan_counts"].get(PLAN_PRO, 0) + 1
+    # The canceled enterprise subscription is not active-equivalent, so it
+    # must not be counted toward plan_counts...
+    assert body["plan_counts"].get(PLAN_ENTERPRISE, 0) == before["plan_counts"].get(PLAN_ENTERPRISE, 0)
+    # ...but it IS still visible in status_counts, which covers every status.
+    assert body["status_counts"].get(STATUS_CANCELED, 0) == before["status_counts"].get(STATUS_CANCELED, 0) + 1
+
+
+async def test_platform_owner_can_view_one_tenants_billing(client, session):
+    headers = await _platform_owner_headers(client, session)
+    target = await _make_tenant(session, name="Triage Target Tenant")
+    other = await _make_tenant(session, name="Not Triage Target Tenant")
+
+    session.add(
+        Subscription(
+            tenant_id=target.id,
+            vehicle_id="veh-triage-1",
+            plan=PLAN_PRO,
+            status=STATUS_ACTIVE,
+            price_aud=Decimal("49.00"),
+            stripe_subscription_id="mock_sub_triage",
+        )
+    )
+    session.add(
+        Subscription(
+            tenant_id=other.id,
+            vehicle_id="veh-other-1",
+            plan=PLAN_BASIC,
+            status=STATUS_ACTIVE,
+            price_aud=Decimal("29.00"),
+        )
+    )
+    await session.commit()
+
+    resp = await client.get(f"/v1/platform/tenants/{target.id}/billing", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["vehicle_id"] == "veh-triage-1"
+    assert body[0]["plan"] == PLAN_PRO
+    assert body[0]["status"] == STATUS_ACTIVE
+    assert body[0]["stripe_subscription_id"] == "mock_sub_triage"
+
+
+async def test_platform_tenant_billing_unknown_tenant_404(client, session):
+    headers = await _platform_owner_headers(client, session)
+
+    resp = await client.get("/v1/platform/tenants/does-not-exist/billing", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_platform_owner_can_suspend_and_reactivate_a_tenant(client, session):
+    headers = await _platform_owner_headers(client, session)
+    target = await _make_tenant(session, name="Suspendable Tenant")
+
+    resp = await client.get("/v1/platform/tenants", headers=headers)
+    matching = next(row for row in resp.json()["items"] if row["id"] == target.id)
+    assert matching["status"] == "active"
+
+    suspend_resp = await client.patch(
+        f"/v1/platform/tenants/{target.id}",
+        json={"status": "suspended"},
+        headers=headers,
+    )
+    assert suspend_resp.status_code == 200
+    assert suspend_resp.json()["status"] == "suspended"
+
+    reactivate_resp = await client.patch(
+        f"/v1/platform/tenants/{target.id}",
+        json={"status": "active"},
+        headers=headers,
+    )
+    assert reactivate_resp.status_code == 200
+    assert reactivate_resp.json()["status"] == "active"
+
+
+async def test_update_tenant_status_rejects_unknown_status(client, session):
+    headers = await _platform_owner_headers(client, session)
+    target = await _make_tenant(session, name="Bad Status Tenant")
+
+    resp = await client.patch(
+        f"/v1/platform/tenants/{target.id}",
+        json={"status": "not-a-real-status"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_update_tenant_status_unknown_tenant_404(client, session):
+    headers = await _platform_owner_headers(client, session)
+
+    resp = await client.patch(
+        "/v1/platform/tenants/does-not-exist",
+        json={"status": "suspended"},
+        headers=headers,
+    )
+    assert resp.status_code == 404

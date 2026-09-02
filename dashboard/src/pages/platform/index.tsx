@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { AlertTriangle, Building2, Car, Plus, Route, Siren, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  Building2,
+  Car,
+  CheckCircle2,
+  CreditCard,
+  Plus,
+  Route,
+  Siren,
+  Users,
+} from "lucide-react";
 import {
   Badge,
   Button,
@@ -15,14 +26,18 @@ import {
 } from "@/components/ui";
 import {
   useCreateTenant,
+  usePlatformBillingSummary,
   usePlatformHealth,
   usePlatformTenants,
+  useTenantBilling,
   useTenantSummary,
+  useUpdateTenantStatus,
   PLATFORM_PAGE_LIMIT,
   type CreateTenantValues,
   type PlatformTenant,
+  type TenantStatus,
 } from "@/hooks/usePlatformConsole";
-import { errorMessage, formatDateTime } from "./format";
+import { errorMessage, formatAud, formatDateTime, tenantStatusBadgeVariant } from "./format";
 
 const EMPTY_FORM: CreateTenantValues = {
   name: "",
@@ -75,6 +90,102 @@ function HealthSummary() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** MRR headline + per-plan subscription counts, server-computed via
+ * GET /v1/platform/billing/summary — never trusts anything client-supplied. */
+function BillingSummary() {
+  const billingQuery = usePlatformBillingSummary();
+  const billing = billingQuery.data;
+  const planEntries = Object.entries(billing?.plan_counts ?? {});
+
+  return (
+    <Card className="mb-6">
+      <CardHeader>
+        <CardTitle>Billing</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {billingQuery.isError ? (
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load platform billing. Check the backend connection and try again.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex items-center gap-3 rounded-md border border-border p-4">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+                <CreditCard className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">MRR</p>
+                <p className="text-lg font-semibold text-foreground">
+                  {billingQuery.isLoading ? "..." : formatAud(billing?.mrr_aud)}
+                </p>
+              </div>
+            </div>
+            <div className="rounded-md border border-border p-4 sm:col-span-2">
+              <p className="mb-2 text-xs text-muted-foreground">Active subscriptions by plan</p>
+              {billingQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">...</p>
+              ) : planEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active subscriptions yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {planEntries.map(([plan, count]) => (
+                    <Badge key={plan} variant="outline">
+                      {plan}: {count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** This tenant's subscriptions — the platform-owner's support-triage view,
+ * so staff can review a network's billing without impersonating them via
+ * the ?tenant_id= override every other endpoint supports. */
+function TenantBillingSection({ tenantId }: { tenantId: string | null }) {
+  const billingQuery = useTenantBilling(tenantId);
+  const subscriptions = billingQuery.data ?? [];
+
+  return (
+    <div className="mt-4">
+      <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">Billing</p>
+      {billingQuery.isError && (
+        <p className="flex items-center gap-2 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Failed to load this tenant's billing. Check the backend connection and try again.
+        </p>
+      )}
+      {!billingQuery.isError && billingQuery.isLoading && (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      )}
+      {!billingQuery.isError && !billingQuery.isLoading && subscriptions.length === 0 && (
+        <p className="text-sm text-muted-foreground">No subscriptions for this tenant.</p>
+      )}
+      {subscriptions.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {subscriptions.map((sub) => (
+            <div
+              key={sub.id}
+              className="flex items-center justify-between rounded-md border border-border p-3 text-sm"
+            >
+              <span className="font-medium text-foreground">Vehicle {sub.vehicle_id}</span>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">{sub.plan}</Badge>
+                <Badge variant={tenantStatusBadgeVariant(sub.status)}>{sub.status}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -131,6 +242,8 @@ function TenantDetailModal({
           ))}
         </div>
       )}
+
+      <TenantBillingSection tenantId={tenantId} />
     </Modal>
   );
 }
@@ -142,12 +255,18 @@ export default function PlatformConsolePage() {
   const [skip, setSkip] = useState(0);
   const tenantsQuery = usePlatformTenants(skip);
   const createTenant = useCreateTenant();
+  const updateTenantStatus = useUpdateTenantStatus();
 
   const [formOpen, setFormOpen] = useState(false);
   const [formValues, setFormValues] = useState<CreateTenantValues>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+
+  function toggleTenantStatus(tenant: PlatformTenant) {
+    const nextStatus: TenantStatus = tenant.status === "suspended" ? "active" : "suspended";
+    updateTenantStatus.mutate({ tenantId: tenant.id, status: nextStatus });
+  }
 
   function openCreate() {
     setFormValues(EMPTY_FORM);
@@ -183,11 +302,44 @@ export default function PlatformConsolePage() {
       render: (t) => <Badge variant="outline">{t.plan}</Badge>,
     },
     {
+      key: "status",
+      header: "Status",
+      sortable: true,
+      render: (t) => <Badge variant={tenantStatusBadgeVariant(t.status)}>{t.status}</Badge>,
+    },
+    {
       key: "created_at",
       header: "Created",
       sortable: true,
       sortAccessor: (t) => new Date(t.created_at),
       render: (t) => formatDateTime(t.created_at),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (t) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={updateTenantStatus.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleTenantStatus(t);
+          }}
+        >
+          {t.status === "suspended" ? (
+            <>
+              <CheckCircle2 className="h-4 w-4" />
+              Reactivate
+            </>
+          ) : (
+            <>
+              <Ban className="h-4 w-4" />
+              Suspend
+            </>
+          )}
+        </Button>
+      ),
     },
   ];
 
@@ -209,6 +361,7 @@ export default function PlatformConsolePage() {
       />
 
       <HealthSummary />
+      <BillingSummary />
 
       <Card>
         <CardHeader>
