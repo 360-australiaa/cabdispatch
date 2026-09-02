@@ -152,3 +152,64 @@ export interface DuressSnapshotNotification {
   snapshot_id: string;
   captured_at: string;
 }
+
+/** Mirrors backend `app/schemas/duress_device.py` + `app/models/duress_device.py`
+ * -- the physical CT-DPD-01 panic-button hardware, factory-provisioned and
+ * bound to one vehicle. `DuressDeviceRead` NEVER includes the shared secret
+ * (encrypted or plaintext) -- see that model's module docstring for why this
+ * is the one place in the codebase a secret is stored reversibly (Fernet,
+ * not hashed): HMAC verification needs the plaintext back, unlike password
+ * checking. Neither `create` nor `rotate-secret` returns the secret either --
+ * the operator supplies it (it's already burned into/re-flashed onto the
+ * physical unit's firmware); this backend never generates one server-side. */
+export interface DuressDevice {
+  id: string;
+  tenant_id: string;
+  device_code: string;
+  vehicle_id: string | null;
+  phone_number: string | null;
+  battery_pct: number | null;
+  on_battery: boolean;
+  gnss_fix: boolean;
+  signal_csq: number | null;
+  firmware_version: string | null;
+  last_seen_at: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DuressDeviceListResponse {
+  items: DuressDevice[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Body for `POST /v1/duress-devices`. `plaintext_secret` is the device's
+ * K_dev shared secret as already provisioned into its firmware -- Fernet-
+ * encrypted at rest immediately and never returned by any read endpoint
+ * again after this call. */
+export interface DuressDeviceCreateBody {
+  device_code: string;
+  vehicle_id?: string | null;
+  phone_number?: string | null;
+  plaintext_secret: string;
+}
+
+/** Body for `PATCH /v1/duress-devices/{id}`. Notably does NOT include
+ * `device_code` (immutable after provisioning) or the secret (rotated via
+ * its own dedicated endpoint below). */
+export interface DuressDeviceUpdateBody {
+  vehicle_id?: string | null;
+  phone_number?: string | null;
+  active?: boolean;
+}
+
+/** Body for `POST /v1/duress-devices/{id}/rotate-secret` -- the
+ * re-provisioning flow when a device's firmware is re-flashed with a new
+ * K_dev. The caller supplies the new plaintext secret; the response is a
+ * plain `DuressDeviceRead` (the secret itself is never echoed back). */
+export interface DuressDeviceRotateSecretBody {
+  plaintext_secret: string;
+}

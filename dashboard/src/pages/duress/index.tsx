@@ -1,14 +1,18 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Siren } from "lucide-react";
+import { Cpu, Siren } from "lucide-react";
 import { Badge, Button, Card, CardContent, PageHeader, Select, Table } from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
+import { cn } from "@/lib/utils";
 import { listDuressEvents } from "./api";
+import { DevicesPanel } from "./DevicesPanel";
 import { EventDetailPanel } from "./EventDetailPanel";
 import { TriggerEventModal } from "./TriggerEventModal";
 import { formatDateTime, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
+
+type ViewTab = "events" | "devices";
 
 const PAGE_SIZE = 20;
 
@@ -28,6 +32,7 @@ export default function DuressPage() {
   // This page's own row-click/close controls own selectedId from then on.
   const [searchParams] = useSearchParams();
 
+  const [tab, setTab] = useState<ViewTab>("events");
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [openOnly, setOpenOnly] = useState(false);
@@ -87,12 +92,27 @@ export default function DuressPage() {
         title="Duress Desk"
         description="Open and escalating panic-button events across the fleet, with a live GPS trace while an event is under review."
         actions={
-          <Button variant="destructive" onClick={() => setTriggerModalOpen(true)}>
-            <Siren className="h-4 w-4" /> Trigger event
-          </Button>
+          tab === "events" ? (
+            <Button variant="destructive" onClick={() => setTriggerModalOpen(true)}>
+              <Siren className="h-4 w-4" /> Trigger event
+            </Button>
+          ) : undefined
         }
       />
 
+      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
+        <TabButton active={tab === "events"} onClick={() => setTab("events")} icon={<Siren className="h-4 w-4" />}>
+          Events
+        </TabButton>
+        <TabButton active={tab === "devices"} onClick={() => setTab("devices")} icon={<Cpu className="h-4 w-4" />}>
+          Devices
+        </TabButton>
+      </div>
+
+      {tab === "devices" && <DevicesPanel />}
+
+      {tab === "events" && (
+      <>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
           <Card>
@@ -195,6 +215,34 @@ export default function DuressPage() {
           eventsQuery.refetch();
         }}
       />
+      </>
+      )}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  icon?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
+        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
