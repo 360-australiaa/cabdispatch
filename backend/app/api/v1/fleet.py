@@ -34,6 +34,7 @@ from app.schemas.fleet import (
     VehicleLifetimeTotals,
     VehiclePilotReport,
     VehicleRead,
+    VehicleShiftHistoryItem,
     VehicleUpdate,
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
@@ -277,6 +278,36 @@ async def get_vehicle_pilot_report(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found") from exc
     except InvalidDateRangeError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/vehicles/{vehicle_id}/shift-history", response_model=Page[VehicleShiftHistoryItem])
+async def get_vehicle_shift_history(
+    vehicle_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which drivers has this vehicle had -- past shifts (and the currently-
+    open one, if any), newest-first. A real operational question: one vehicle
+    often runs back-to-back 12-hour shifts across two+ drivers per day, and
+    `current_driver_id`/`current_driver_name` on `GET /v1/vehicles` (the live
+    ops domain) only ever answers "right now". See
+    app.services.fleet.list_vehicle_shift_history.
+
+    Any authenticated tenant user may fetch this -- same convention as
+    GET /vehicles/{vehicle_id}/evidence-pack above (dispatchers/owners/admins
+    all need this, not just admins)."""
+    try:
+        items, total = await fleet_service.list_vehicle_shift_history(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, skip=skip, limit=limit
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return Page[VehicleShiftHistoryItem](
+        items=[VehicleShiftHistoryItem(**i) for i in items], total=total, skip=skip, limit=limit
+    )
 
 
 # ==================================================================================

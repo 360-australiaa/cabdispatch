@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
-import { Badge, Modal } from "@/components/ui";
+import { Badge, Modal, Table, type TableColumn } from "@/components/ui";
+import type { VehicleShiftHistoryItem } from "./types";
 import {
   batteryColor,
   formatLatLng,
@@ -10,6 +11,7 @@ import {
   statusBadgeVariant,
 } from "./utils";
 import { useDriverDetailQuery, useVehicleDetailQuery } from "./useVehicleDetail";
+import { useVehicleShiftHistoryQuery } from "./useVehicleShiftHistory";
 
 export interface VehicleDetailModalProps {
   vehicleId: string | null;
@@ -25,6 +27,53 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     </div>
   );
 }
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatDuration(startAt: string, endAt: string | null): string {
+  const start = new Date(startAt).getTime();
+  if (Number.isNaN(start)) return "—";
+  const end = endAt ? new Date(endAt).getTime() : Date.now();
+  const minutes = Math.max(0, Math.round((end - start) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours}h ${mins}m${endAt ? "" : " (ongoing)"}`;
+}
+
+const SHIFT_HISTORY_COLUMNS: TableColumn<VehicleShiftHistoryItem>[] = [
+  {
+    key: "driver_name",
+    header: "Driver",
+    render: (row) => row.driver_name ?? row.driver_id,
+  },
+  {
+    key: "start_at",
+    header: "Start",
+    sortable: true,
+    sortAccessor: (row) => new Date(row.start_at).getTime(),
+    render: (row) => formatDateTime(row.start_at),
+  },
+  {
+    key: "end_at",
+    header: "End",
+    render: (row) => (row.end_at ? formatDateTime(row.end_at) : "—"),
+  },
+  {
+    key: "duration",
+    header: "Duration",
+    render: (row) => formatDuration(row.start_at, row.end_at),
+  },
+];
 
 /**
  * Vehicle drill-down opened from either the Vehicles table (row click) or a
@@ -43,6 +92,8 @@ export function VehicleDetailModal({ vehicleId, open, onClose }: VehicleDetailMo
   // needed for those.
   const driverQuery = useDriverDetailQuery(open ? vehicle?.current_driver_id ?? null : null);
   const driver = driverQuery.data;
+
+  const shiftHistoryQuery = useVehicleShiftHistoryQuery(open ? vehicleId : null);
 
   return (
     <Modal
@@ -144,6 +195,20 @@ export function VehicleDetailModal({ vehicleId, open, onClose }: VehicleDetailMo
                 <Field label="On since">{formatRelativeTime(vehicle.current_shift_start_at)}</Field>
               </div>
             )}
+          </div>
+
+          <div className="rounded-lg border border-border p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Shift history
+            </p>
+            <Table
+              columns={SHIFT_HISTORY_COLUMNS}
+              data={shiftHistoryQuery.data?.items ?? []}
+              rowKey={(row) => row.shift_id}
+              pageSize={5}
+              isLoading={shiftHistoryQuery.isLoading}
+              emptyState="No past shifts recorded for this vehicle."
+            />
           </div>
         </div>
       )}

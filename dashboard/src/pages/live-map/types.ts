@@ -63,6 +63,21 @@ export interface DriverLiveRead {
   current_trip_id: string | null;
 }
 
+/** One row of `GET /v1/fleet/vehicles/{id}/shift-history` -- "which drivers
+ * has this vehicle had", not just the live current one (that's
+ * VehicleLiveRead.current_driver_* above). Newest-first by start_at. */
+export interface VehicleShiftHistoryItem {
+  shift_id: string;
+  driver_id: string;
+  /** Null only if the driver's User row is gone. */
+  driver_name: string | null;
+  start_at: string;
+  /** Null means this shift is still open. */
+  end_at: string | null;
+  distance_km: string;
+  fare_total: string;
+}
+
 export type DuressTrigger = "button" | "gesture" | "voice" | "auto";
 export type DuressStatus = "open" | "escalating" | "dispatched" | "resolved" | "cancelled";
 

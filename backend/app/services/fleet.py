@@ -9,10 +9,12 @@ import secrets
 import string
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
+from app.models.shift import Shift
+from app.models.user import User
 
 # Codes exclude visually-ambiguous characters (0/O, 1/I) since a driver may need
 # to key one in by hand if the QR scan fails.
@@ -248,3 +250,80 @@ async def set_reboot_requested(session: AsyncSession, device: Device, *, enabled
     await session.commit()
     await session.refresh(device)
     return device
+
+
+# --- Shift history (past-shifts-per-vehicle pass) ----------------------------
+# `app.services.live_ops._open_shifts_by_vehicle` already answers "who has
+# this vehicle checked out RIGHT NOW" (derived live, never a cached pointer —
+# see that function's docstring). What's missing is the past: a real fleet
+# commonly runs one vehicle across two 12h shifts/day under two different
+# drivers, and nothing before this pass could answer "which drivers has this
+# vehicle had". This is additive, read-only history — it does not touch
+# live_ops.py's live/current-state logic at all.
+
+
+async def _driver_names_by_id(
+    session: AsyncSession, *, tenant_id: str, driver_ids: set[str]
+) -> dict[str, str]:
+    """Batch name lookup for a set of driver ids — avoids an N+1 query when
+    composing a page of shifts, each potentially needing its driver's display
+    name. Same batching pattern as `app.services.live_ops._driver_names_by_id`
+    (kept as a separate, domain-local copy rather than importing that
+    underscore-prefixed helper across domains)."""
+    if not driver_ids:
+        return {}
+    result = await session.execute(
+        select(User.id, User.name).where(User.tenant_id == tenant_id, User.id.in_(driver_ids))
+    )
+    return {row.id: row.name for row in result}
+
+
+async def list_vehicle_shift_history(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, skip: int = 0, limit: int = 20
+) -> tuple[list[dict], int]:
+    """Every `Shift` (past, and the currently-open one if any) ever run on
+    this vehicle, newest-first by `start_at`, tenant-scoped and paginated
+    (same `{items, total, skip, limit}` `Page[T]` contract as every other list
+    endpoint in this file). Raises `VehicleNotFoundError` if `vehicle_id`
+    doesn't belong to this tenant — same 404 convention as every other
+    per-vehicle lookup here.
+
+    Returns composed dicts (driver_name joined in via `_driver_names_by_id`,
+    `fare_total` = cash_total + card_total), not bare ORM rows — mirrors
+    `app.services.live_ops.list_vehicles_live`'s own "compose a dict per row"
+    shape, since the response needs a field (driver_name) that isn't a column
+    on `Shift` itself.
+    """
+    await get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+
+    count_stmt = select(func.count()).select_from(Shift).where(
+        Shift.tenant_id == tenant_id, Shift.vehicle_id == vehicle_id
+    )
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    result = await session.execute(
+        select(Shift)
+        .where(Shift.tenant_id == tenant_id, Shift.vehicle_id == vehicle_id)
+        .order_by(Shift.start_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    shifts = result.scalars().all()
+
+    driver_names = await _driver_names_by_id(
+        session, tenant_id=tenant_id, driver_ids={s.driver_id for s in shifts}
+    )
+
+    items = [
+        {
+            "shift_id": s.id,
+            "driver_id": s.driver_id,
+            "driver_name": driver_names.get(s.driver_id),
+            "start_at": s.start_at,
+            "end_at": s.end_at,
+            "distance_km": s.km_total,
+            "fare_total": s.cash_total + s.card_total,
+        }
+        for s in shifts
+    ]
+    return items, total

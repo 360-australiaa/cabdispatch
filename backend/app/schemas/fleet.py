@@ -267,6 +267,33 @@ class VehicleLifetimeTotals(BaseModel):
     generated_at: datetime
 
 
+# --- Shift history (past-shifts-per-vehicle pass) ---------------------------
+# Response shape for `GET /v1/fleet/vehicles/{id}/shift-history` -- "which
+# drivers has this vehicle had", not just the live current one (that's
+# app.schemas.live_ops.VehicleLiveRead.current_driver_*, derived the same
+# "no cached pointer, always live off the shifts table" way). See
+# app.services.fleet.list_vehicle_shift_history.
+
+
+class VehicleShiftHistoryItem(BaseModel):
+    """One row of `GET /v1/fleet/vehicles/{id}/shift-history` -- a past (or
+    currently open) `Shift` (owned by the sibling shift domain) run on this
+    vehicle, with the driver's display name joined in so a dashboard doesn't
+    need a second lookup. Newest-first (start_at DESC)."""
+
+    shift_id: str
+    driver_id: str
+    driver_name: str | None = Field(
+        default=None, description="Display name for driver_id -- None only if the driver's User row is gone."
+    )
+    start_at: datetime
+    end_at: datetime | None = Field(default=None, description="None means this shift is still open.")
+    distance_km: Decimal = Field(description="Shift.km_total -- recomputed server-side at shift close.")
+    fare_total: Decimal = Field(
+        description="Shift.cash_total + Shift.card_total -- total takings recorded for this shift."
+    )
+
+
 # --- Pilot-report evidence pack (operations-cycle tracking pass) ------------
 # Response shape for `GET /v1/fleet/vehicles/{id}/pilot-report`. See
 # app.services.fleet_reports.vehicle_pilot_report for the exact

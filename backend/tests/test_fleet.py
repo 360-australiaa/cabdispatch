@@ -14,11 +14,15 @@ the same "integration step wires it up" reason.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
 from app.models.fleet import Device, DevicePairingCode, Vehicle  # noqa: F401
+from app.models.shift import Shift
+from app.models.user import ROLE_DRIVER, User
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -492,3 +496,158 @@ async def test_locate_and_reboot_flags_are_independent(client, session):
     assert body["reboot_requested"] is False
     assert body["kiosk_locked"] is False
     assert body["force_update_pending"] is False
+
+
+# --- shift history: "which drivers has this vehicle had" -------------------------
+
+
+async def _make_driver(session, *, tenant_id, name="Driver One"):
+    driver = User(
+        tenant_id=tenant_id, role=ROLE_DRIVER, name=name, email=f"{uuid.uuid4()}@example.com", status="active"
+    )
+    session.add(driver)
+    await session.commit()
+    await session.refresh(driver)
+    return driver
+
+
+async def _make_shift(
+    session, *, tenant_id, driver_id, vehicle_id, start_at, end_at=None, km_total=Decimal("0"),
+    cash_total=Decimal("0"), card_total=Decimal("0"),
+):
+    shift = Shift(
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        vehicle_id=vehicle_id,
+        start_at=start_at,
+        end_at=end_at,
+        km_total=km_total,
+        cash_total=cash_total,
+        card_total=card_total,
+    )
+    session.add(shift)
+    await session.commit()
+    await session.refresh(shift)
+    return shift
+
+
+async def test_vehicle_shift_history_returns_past_shifts_newest_first_with_driver_names(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant")
+    resp = await _create_vehicle(client, headers, rego="TX-HIST")
+    vehicle_id = resp.json()["id"]
+
+    # Resolve the tenant_id backing `headers` via a fresh vehicle lookup isn't
+    # available directly, so pull it off the created vehicle's own response.
+    tenant_id = resp.json()["tenant_id"]
+
+    driver_a = await _make_driver(session, tenant_id=tenant_id, name="Alice Morning")
+    driver_b = await _make_driver(session, tenant_id=tenant_id, name="Bob Evening")
+
+    now = datetime.now(UTC)
+    older_shift = await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver_a.id,
+        vehicle_id=vehicle_id,
+        start_at=now - timedelta(hours=24),
+        end_at=now - timedelta(hours=12),
+        km_total=Decimal("120.500"),
+        cash_total=Decimal("80.00"),
+        card_total=Decimal("40.00"),
+    )
+    newer_shift = await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver_b.id,
+        vehicle_id=vehicle_id,
+        start_at=now - timedelta(hours=11),
+        end_at=now - timedelta(hours=1),
+        km_total=Decimal("95.250"),
+        cash_total=Decimal("50.00"),
+        card_total=Decimal("60.00"),
+    )
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert body["skip"] == 0
+    assert body["limit"] == 20
+
+    items = body["items"]
+    assert len(items) == 2
+    # Newest-first: driver B's more-recent shift comes before driver A's.
+    assert items[0]["shift_id"] == newer_shift.id
+    assert items[0]["driver_id"] == driver_b.id
+    assert items[0]["driver_name"] == "Bob Evening"
+    assert Decimal(str(items[0]["distance_km"])) == Decimal("95.250")
+    assert Decimal(str(items[0]["fare_total"])) == Decimal("110.00")
+
+    assert items[1]["shift_id"] == older_shift.id
+    assert items[1]["driver_id"] == driver_a.id
+    assert items[1]["driver_name"] == "Alice Morning"
+    assert Decimal(str(items[1]["distance_km"])) == Decimal("120.500")
+    assert Decimal(str(items[1]["fare_total"])) == Decimal("120.00")
+
+
+async def test_vehicle_shift_history_paginates(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Shift History Paging Tenant")
+    resp = await _create_vehicle(client, headers, rego="TX-HISTPAGE")
+    vehicle_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
+
+    driver = await _make_driver(session, tenant_id=tenant_id, name="Solo Driver")
+    now = datetime.now(UTC)
+    for i in range(3):
+        await _make_shift(
+            session,
+            tenant_id=tenant_id,
+            driver_id=driver.id,
+            vehicle_id=vehicle_id,
+            start_at=now - timedelta(hours=i),
+            end_at=now - timedelta(hours=i) + timedelta(minutes=30),
+        )
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history?limit=2&skip=0", headers=headers)
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 2
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history?limit=2&skip=2", headers=headers)
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 1
+
+
+async def test_vehicle_shift_history_unknown_vehicle_404s(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.get("/v1/fleet/vehicles/does-not-exist/shift-history", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_vehicle_shift_history_is_tenant_isolated(client, session):
+    headers_a = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant A")
+    headers_b = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant B")
+
+    resp = await _create_vehicle(client, headers_a, rego="TX-HISTISO")
+    vehicle_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
+
+    driver = await _make_driver(session, tenant_id=tenant_id, name="Isolated Driver")
+    await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver.id,
+        vehicle_id=vehicle_id,
+        start_at=datetime.now(UTC) - timedelta(hours=2),
+        end_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+
+    # Tenant B's dispatcher must never see tenant A's vehicle or its shifts.
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers_b)
+    assert resp.status_code == 404
+
+    # Tenant A itself still sees its own shift.
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers_a)
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
