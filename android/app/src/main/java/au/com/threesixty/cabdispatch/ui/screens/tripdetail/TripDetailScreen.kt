@@ -54,6 +54,7 @@ import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.domain.format.asPaymentMethodLabel
 import au.com.threesixty.cabdispatch.domain.format.asTripTypeLabel
+import au.com.threesixty.cabdispatch.domain.format.toBigDecimalOrZero
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
@@ -227,15 +228,40 @@ private fun FareCard(state: TripDetailUiState.Loaded) {
     val b = state.breakdown
     CaptainPanel(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FareLineRow("Flagfall", b.flagFall.asMoney())
-            if (b.peakCharge.signum() > 0) FareLineRow("Peak time charge", b.peakCharge.asMoney())
-            FareLineRow("Distance", b.distanceCharge.asMoney())
-            FareLineRow("Waiting", b.waitingCharge.asMoney())
+            // Negotiated ("Set Price") trips billed the agreed amount, not the metered accrual —
+            // show that instead of a flagfall/distance/waiting breakdown that would contradict what
+            // was actually charged (see FareBreakdown.negotiatedTotal's doc). Mirrors the same
+            // display-layer choice made in CloseAndPayScreen.kt's TotalCol.
+            if (b.negotiatedTotal != null) {
+                FareLineRow("Agreed price (Set Price)", b.negotiatedTotal.asMoney())
+            } else {
+                FareLineRow("Flagfall", b.flagFall.asMoney())
+                if (b.peakCharge.signum() > 0) FareLineRow("Peak time charge", b.peakCharge.asMoney())
+                FareLineRow("Distance", b.distanceCharge.asMoney())
+                FareLineRow("Waiting", b.waitingCharge.asMoney())
+                if (b.maxiRateApplied) {
+                    // Pre-multiplier components only ("the fare" per the Fares Order) — real
+                    // breakdown fields times the tariff's own real maxiMultiplier, never a
+                    // hardcoded ×1.5. See CloseAndPayScreen.kt's TotalCol for the identical logic.
+                    val meteredBase = b.flagFall + b.peakCharge + b.distanceCharge + b.waitingCharge
+                    val uplift = meteredBase * (state.tariff.maxiMultiplier - java.math.BigDecimal.ONE)
+                    val multiplierLabel = state.tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
+                    FareLineRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", uplift.asMoney())
+                }
+            }
             if (b.tolls.signum() > 0) FareLineRow("Tolls", b.tolls.asMoney())
-            if (b.psl.signum() > 0) FareLineRow("PSL levy", b.psl.asMoney())
+            if (b.psl.signum() > 0) FareLineRow("Point to Point Transport Levy", b.psl.asMoney())
             if (b.cleaningFee.signum() > 0) FareLineRow("Cleaning fee", b.cleaningFee.asMoney())
             if (b.extras.signum() > 0) FareLineRow("Extras", b.extras.asMoney())
-            if (b.surcharge.signum() > 0) FareLineRow("Non-cash surcharge", b.surcharge.asMoney())
+            if (b.surcharge.signum() > 0) {
+                // trip.surchargePct is the real percentage this trip was actually closed with
+                // (persisted on TripEntity at close time) — not re-derived/guessed here. A non-zero
+                // surcharge always implies a real non-null/non-zero persisted percentage (the
+                // engine's surcharge formula is `fareTotal * pct / 100`; pct=0 would mean 0
+                // surcharge), so no null branch is needed.
+                val pct = trip.surchargePct?.toBigDecimalOrZero() ?: java.math.BigDecimal.ZERO
+                FareLineRow("Non-cash payment surcharge (${pct.stripTrailingZeros().toPlainString()}%)", b.surcharge.asMoney())
+            }
             FareLineRow("GST included", b.gstComponent.asMoney())
 
             Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
