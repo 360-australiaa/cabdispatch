@@ -23,6 +23,7 @@ import {
 } from "./api";
 import { CameraSnapshotPanel } from "./CameraSnapshotPanel";
 import { DeviceCallSummary } from "./DeviceCallSummary";
+import { DuressAudioPlayer } from "./DuressAudioPlayer";
 import { EscalationTimeline } from "./EscalationTimeline";
 import { GpsTracePanel } from "./GpsTracePanel";
 import { EditEventModal } from "./EditEventModal";
@@ -220,6 +221,8 @@ export function EventDetailPanel({
                 Live GPS relay is restricted to owner/admin/dispatcher roles.
               </p>
             )}
+
+            <DuressAudioPlayer eventId={event.id} audioRef={event.audio_ref} />
 
             <CameraSnapshotPanel
               eventId={event.id}
