@@ -33,6 +33,7 @@ from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import Trip  # noqa: F401 — see module docstring
+from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
 from app.services.fare_engine import round_down, round_half_up
 from app.services.trips import compute_variance_pct, haversine_km
@@ -817,6 +818,10 @@ async def test_sync_voucher_payment_persists_voucher_code(client: AsyncClient, s
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real voucher ledger (app.services.payments.redeem_voucher) now requires
+    # an actual tenant-owned Voucher row to redeem against.
+    session.add(Voucher(tenant_id=tenant_id, code="SAVE10", value_aud=Decimal("10.00")))
+    await session.commit()
 
     now = datetime.now(UTC)
     trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
@@ -1078,6 +1083,10 @@ async def test_close_trip_with_voucher_payment_method_redeems_and_stores_code(
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real voucher ledger (app.services.payments.redeem_voucher) now requires
+    # an actual tenant-owned Voucher row to redeem against.
+    session.add(Voucher(tenant_id=tenant_id, code="PROMO-2026-XYZ", value_aud=Decimal("20.00")))
+    await session.commit()
 
     trip = await _create_trip(
         client,
@@ -1121,6 +1130,12 @@ async def test_close_trip_with_account_payment_method_stores_reference(
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real corporate-account ledger (app.services.payments.validate_account_reference)
+    # now requires an actual tenant-owned, active CorporateAccount row.
+    session.add(
+        CorporateAccount(tenant_id=tenant_id, reference="ACME-CORP-0042", company_name="Acme Corp")
+    )
+    await session.commit()
 
     trip = await _create_trip(
         client,

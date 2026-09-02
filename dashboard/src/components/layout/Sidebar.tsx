@@ -17,6 +17,7 @@ import {
   Building2,
   MapPinned,
   ScrollText,
+  Ticket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -43,6 +44,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/fleet", label: "Fleet & Drivers", icon: Car },
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
+  { to: "/vouchers", label: "Vouchers & Accounts", icon: Ticket },
   // GET /v1/audit-log has no role gate server-side (any authenticated tenant
   // user may read the trail) -- so this nav item stays visible to every
   // role, same as every other item above. Only the in-page "Verify chain"

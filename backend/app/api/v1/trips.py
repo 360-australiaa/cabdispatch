@@ -11,6 +11,7 @@ the sole multi-tenancy enforcement mechanism in this system.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -239,15 +240,23 @@ async def sync_trips(
         # closes the real gap the sync-item schema had until now: voucher_code/account_reference/
         # split_payments used to round-trip through TripSyncItemDto on the Android side but were
         # silently dropped here since this schema didn't declare them.
+        # Generated up front (rather than left to Trip's default factory) so a
+        # voucher redemption below can record the real id of the row that's
+        # about to be inserted on Voucher.redeemed_by_trip_id.
+        new_trip_id = str(uuid.uuid4())
         split_payments_to_store: list[dict] | None = None
         if item.payment_method == "voucher":
             try:
-                payments_service.redeem_voucher(voucher_code=item.voucher_code or "")
+                await payments_service.redeem_voucher(
+                    session, tenant_id=tenant_id, voucher_code=item.voucher_code or "", trip_id=new_trip_id
+                )
             except InvalidVoucherCodeError as exc:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         elif item.payment_method == "account":
             try:
-                payments_service.validate_account_reference(account_reference=item.account_reference or "")
+                await payments_service.validate_account_reference(
+                    session, tenant_id=tenant_id, account_reference=item.account_reference or ""
+                )
             except InvalidAccountReferenceError as exc:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         elif item.payment_method == "split_fare":
@@ -262,6 +271,7 @@ async def sync_trips(
             split_payments_to_store = [{"method": leg.method, "amount": str(leg.amount)} for leg in item.split_payments]
 
         trip = Trip(
+            id=new_trip_id,
             tenant_id=tenant_id,
             client_uuid=item.client_uuid,
             vehicle_id=item.vehicle_id,

@@ -29,6 +29,7 @@ from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
 from app.models.trips import Trip
 from app.models.user import User
+from app.models.vouchers import CorporateAccount, Voucher
 from app.models.zones import Zone
 
 # live_ops owns no table of its own (see app/services/live_ops.py) — nothing
@@ -38,6 +39,7 @@ __all__ = [
     "AuditLog",
     "Base",
     "ComplianceDocument",
+    "CorporateAccount",
     "Device",
     "DevicePairingCode",
     "DeviceVersionHistory",
@@ -62,5 +64,6 @@ __all__ = [
     "Trip",
     "User",
     "Vehicle",
+    "Voucher",
     "Zone",
 ]

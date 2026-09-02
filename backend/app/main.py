@@ -53,6 +53,15 @@ per-zone demand snapshot matching a screen on a real competitor taxi meter
 (MTI). Owns one new table (`zones`); reads shifts/live_ops/jobs/trips
 read-only for the stats aggregation (see app.services.zones).
 
+vouchers (/v1/vouchers) and corporate-accounts (/v1/corporate-accounts) are
+new in this pass: real backing ledgers for the trips domain's "voucher"/
+"account" Trip.payment_method values, replacing the earlier non-empty-
+string-only stub validation in app.services.payments.redeem_voucher /
+validate_account_reference (see app/models/vouchers.py). Each owns one new
+table and its own CRUD router (list/get open to any authenticated tenant
+user, create/update/delete owner/admin-only); neither collides with any
+existing domain's path prefix.
+
 platform (/v1/platform) is new in this pass: a platform-owner-only admin
 console - GET/POST /v1/platform/tenants (list every tenant / onboard a
 new one), GET /v1/platform/tenants/{id}/summary (per-tenant health
@@ -72,6 +81,7 @@ from app.api.v1.audit_log import router as audit_log_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
 from app.api.v1.compliance import router as compliance_router
+from app.api.v1.corporate_accounts import router as corporate_accounts_router
 from app.api.v1.duress import router as duress_router
 from app.api.v1.duress_device import router as duress_device_router
 from app.api.v1.fatigue_alerts import router as fatigue_alerts_router
@@ -91,6 +101,7 @@ from app.api.v1.tariffs import router as tariffs_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
+from app.api.v1.vouchers import router as vouchers_router
 from app.api.v1.zones import router as zones_router
 from app.core.config import settings
 
@@ -134,3 +145,5 @@ app.include_router(fatigue_alerts_router)
 app.include_router(tenants_router)
 app.include_router(zones_router)
 app.include_router(platform_router)
+app.include_router(vouchers_router)
+app.include_router(corporate_accounts_router)

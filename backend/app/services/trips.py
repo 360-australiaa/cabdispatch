@@ -273,9 +273,13 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     )
     split_payments_to_store: list[dict] | None = None
     if params.payment_method == "voucher":
-        payments_service.redeem_voucher(voucher_code=resolved_voucher_code or "")
+        await payments_service.redeem_voucher(
+            session, tenant_id=tenant_id, voucher_code=resolved_voucher_code or "", trip_id=trip.id
+        )
     elif params.payment_method == "account":
-        payments_service.validate_account_reference(account_reference=resolved_account_reference or "")
+        await payments_service.validate_account_reference(
+            session, tenant_id=tenant_id, account_reference=resolved_account_reference or ""
+        )
     elif params.payment_method == "split_fare":
         if not params.split_payments:
             raise SplitPaymentMismatchError("split_fare requires at least one sub-payment in split_payments")

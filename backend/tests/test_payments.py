@@ -10,6 +10,7 @@ against the endpoints as built, per the task instructions.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from tests.conftest import auth_headers
@@ -463,43 +464,183 @@ async def test_stripe_webhook_ignores_unmapped_event_types(client, session):
     assert resp.json()["payment_id"] is None
 
 
-# --- voucher / account stub validation (blueprint 5.2.5, used by the trips ------
+# --- voucher / account real ledger (blueprint 5.2.5, used by the trips ------
 # domain's new "voucher"/"account" Trip.payment_method values — see
 # app.services.trips.close_trip / tests/test_trips.py for the endpoint-level
-# coverage of those; these are direct unit tests of the stub functions
-# themselves)
+# coverage of those; these are direct unit tests of the service functions
+# themselves, backed by real app.models.vouchers.Voucher / CorporateAccount
+# rows (this pass replaced the earlier non-empty-string-only stub). See
+# tests/test_vouchers.py / tests/test_corporate_accounts.py for the CRUD-
+# router-level tests over the same two tables.
 
 
-def test_redeem_voucher_accepts_a_non_empty_code():
-    from app.services.payments import redeem_voucher
+async def _make_tenant(session, *, name: str = "Voucher Test Tenant") -> str:
+    from app.models.tenant import Tenant
 
-    result = redeem_voucher(voucher_code="PROMO-2026-XYZ")
-    assert result == {"voucher_code": "PROMO-2026-XYZ", "redeemed": True}
+    tenant = Tenant(name=name, plan="standard")
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    return tenant.id
 
 
-def test_redeem_voucher_rejects_empty_code():
+async def test_redeem_voucher_succeeds_once_then_fails_on_reuse(session):
+    from app.models.vouchers import Voucher
     from app.services.payments import InvalidVoucherCodeError, redeem_voucher
 
+    tenant_id = await _make_tenant(session)
+    voucher = Voucher(tenant_id=tenant_id, code="PROMO-2026-XYZ", value_aud=Decimal("15.00"))
+    session.add(voucher)
+    await session.commit()
+    await session.refresh(voucher)
+
+    trip_id = str(uuid.uuid4())
+    result = await redeem_voucher(session, tenant_id=tenant_id, voucher_code="PROMO-2026-XYZ", trip_id=trip_id)
+    await session.commit()
+    assert result == {"voucher_code": "PROMO-2026-XYZ", "redeemed": True, "value_aud": Decimal("15.00")}
+
+    await session.refresh(voucher)
+    assert voucher.redeemed_at is not None
+    assert voucher.redeemed_by_trip_id == trip_id
+
+    try:
+        await redeem_voucher(
+            session, tenant_id=tenant_id, voucher_code="PROMO-2026-XYZ", trip_id=str(uuid.uuid4())
+        )
+        assert False, "expected InvalidVoucherCodeError on reuse"
+    except InvalidVoucherCodeError:
+        pass
+
+
+async def test_redeem_voucher_rejects_expired_voucher(session):
+    from app.models.vouchers import Voucher
+    from app.services.payments import InvalidVoucherCodeError, redeem_voucher
+
+    tenant_id = await _make_tenant(session)
+    voucher = Voucher(
+        tenant_id=tenant_id,
+        code="EXPIRED-2025",
+        value_aud=Decimal("10.00"),
+        expires_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    session.add(voucher)
+    await session.commit()
+
+    try:
+        await redeem_voucher(session, tenant_id=tenant_id, voucher_code="EXPIRED-2025", trip_id=str(uuid.uuid4()))
+        assert False, "expected InvalidVoucherCodeError"
+    except InvalidVoucherCodeError:
+        pass
+
+
+async def test_redeem_voucher_rejects_unknown_code(session):
+    from app.services.payments import InvalidVoucherCodeError, redeem_voucher
+
+    tenant_id = await _make_tenant(session)
+    try:
+        await redeem_voucher(session, tenant_id=tenant_id, voucher_code="DOES-NOT-EXIST", trip_id=str(uuid.uuid4()))
+        assert False, "expected InvalidVoucherCodeError"
+    except InvalidVoucherCodeError:
+        pass
+
+
+async def test_redeem_voucher_rejects_empty_code(session):
+    from app.services.payments import InvalidVoucherCodeError, redeem_voucher
+
+    tenant_id = await _make_tenant(session)
     for bad_code in ("", "   "):
         try:
-            redeem_voucher(voucher_code=bad_code)
+            await redeem_voucher(session, tenant_id=tenant_id, voucher_code=bad_code, trip_id=str(uuid.uuid4()))
             assert False, "expected InvalidVoucherCodeError"
         except InvalidVoucherCodeError:
             pass
 
 
-def test_validate_account_reference_accepts_a_non_empty_reference():
+async def test_redeem_voucher_is_tenant_isolated(session):
+    from app.models.vouchers import Voucher
+    from app.services.payments import InvalidVoucherCodeError, redeem_voucher
+
+    tenant_a_id = await _make_tenant(session, name="Voucher Tenant A")
+    tenant_b_id = await _make_tenant(session, name="Voucher Tenant B")
+
+    voucher = Voucher(tenant_id=tenant_a_id, code="SHARED-CODE", value_aud=Decimal("5.00"))
+    session.add(voucher)
+    await session.commit()
+
+    try:
+        await redeem_voucher(session, tenant_id=tenant_b_id, voucher_code="SHARED-CODE", trip_id=str(uuid.uuid4()))
+        assert False, "expected InvalidVoucherCodeError for a different tenant's voucher"
+    except InvalidVoucherCodeError:
+        pass
+
+
+async def test_validate_account_reference_accepts_active_account(session):
+    from app.models.vouchers import CorporateAccount
     from app.services.payments import validate_account_reference
 
-    validate_account_reference(account_reference="ACME-CORP-0042")  # must not raise
+    tenant_id = await _make_tenant(session)
+    account = CorporateAccount(tenant_id=tenant_id, reference="ACME-CORP-0042", company_name="Acme Corp")
+    session.add(account)
+    await session.commit()
+
+    result = await validate_account_reference(session, tenant_id=tenant_id, account_reference="ACME-CORP-0042")
+    assert result == {"account_reference": "ACME-CORP-0042", "company_name": "Acme Corp", "active": True}
 
 
-def test_validate_account_reference_rejects_empty_reference():
+async def test_validate_account_reference_rejects_inactive_account(session):
+    from app.models.vouchers import CorporateAccount
     from app.services.payments import InvalidAccountReferenceError, validate_account_reference
 
+    tenant_id = await _make_tenant(session)
+    account = CorporateAccount(
+        tenant_id=tenant_id, reference="INACTIVE-CORP", company_name="Suspended Pty Ltd", active=False
+    )
+    session.add(account)
+    await session.commit()
+
+    try:
+        await validate_account_reference(session, tenant_id=tenant_id, account_reference="INACTIVE-CORP")
+        assert False, "expected InvalidAccountReferenceError"
+    except InvalidAccountReferenceError:
+        pass
+
+
+async def test_validate_account_reference_rejects_unknown_reference(session):
+    from app.services.payments import InvalidAccountReferenceError, validate_account_reference
+
+    tenant_id = await _make_tenant(session)
+    try:
+        await validate_account_reference(session, tenant_id=tenant_id, account_reference="DOES-NOT-EXIST")
+        assert False, "expected InvalidAccountReferenceError"
+    except InvalidAccountReferenceError:
+        pass
+
+
+async def test_validate_account_reference_rejects_empty_reference(session):
+    from app.services.payments import InvalidAccountReferenceError, validate_account_reference
+
+    tenant_id = await _make_tenant(session)
     for bad_ref in ("", "   "):
         try:
-            validate_account_reference(account_reference=bad_ref)
+            await validate_account_reference(session, tenant_id=tenant_id, account_reference=bad_ref)
             assert False, "expected InvalidAccountReferenceError"
         except InvalidAccountReferenceError:
             pass
+
+
+async def test_validate_account_reference_is_tenant_isolated(session):
+    from app.models.vouchers import CorporateAccount
+    from app.services.payments import InvalidAccountReferenceError, validate_account_reference
+
+    tenant_a_id = await _make_tenant(session, name="Account Tenant A")
+    tenant_b_id = await _make_tenant(session, name="Account Tenant B")
+
+    account = CorporateAccount(tenant_id=tenant_a_id, reference="SHARED-REF", company_name="Tenant A Co")
+    session.add(account)
+    await session.commit()
+
+    try:
+        await validate_account_reference(session, tenant_id=tenant_b_id, account_reference="SHARED-REF")
+        assert False, "expected InvalidAccountReferenceError for a different tenant's account"
+    except InvalidAccountReferenceError:
+        pass

@@ -16,6 +16,7 @@ import PslPage from "@/pages/psl";
 import FleetPage from "@/pages/fleet";
 import CompliancePage from "@/pages/compliance";
 import BillingPage from "@/pages/billing";
+import VouchersPage from "@/pages/vouchers";
 import WhiteLabelPage from "@/pages/settings/white-label";
 import SecuritySettingsPage from "@/pages/settings/security";
 import PlatformConsolePage from "@/pages/platform";
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
       { path: "fleet", element: <FleetPage /> },
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
+      { path: "vouchers", element: <VouchersPage /> },
       { path: "audit-log", element: <AuditLogPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
       { path: "settings/security", element: <SecuritySettingsPage /> },
