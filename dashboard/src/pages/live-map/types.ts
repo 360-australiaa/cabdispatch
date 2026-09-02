@@ -47,6 +47,22 @@ export interface VehicleLiveRead {
   current_shift_start_at: string | null;
 }
 
+/** One row of `GET /v1/drivers`, and the shape of `GET /v1/drivers/{id}`. */
+export interface DriverLiveRead {
+  id: string;
+  tenant_id: string;
+  name: string;
+  phone: string | null;
+  /** User.status from the user domain. */
+  user_status: string;
+  on_shift: boolean;
+  shift_id: string | null;
+  /** Vehicle currently assigned via the open shift, if on_shift. */
+  vehicle_id: string | null;
+  shift_start_at: string | null;
+  current_trip_id: string | null;
+}
+
 export type DuressTrigger = "button" | "gesture" | "voice" | "auto";
 export type DuressStatus = "open" | "escalating" | "dispatched" | "resolved" | "cancelled";
 

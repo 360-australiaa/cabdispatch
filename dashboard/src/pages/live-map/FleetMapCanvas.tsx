@@ -8,6 +8,10 @@ import { statusColor } from "./utils";
 interface FleetMapCanvasProps {
   vehicles: VehicleLiveRead[];
   duressEvents: DuressEventRead[];
+  /** Called when a non-duress vehicle's marker/pin is clicked (a duress-active
+   * one always deep-links straight to its event instead -- see
+   * buildMarkerElement / PlainCanvasMap's onClick below). */
+  onSelectVehicle: (vehicleId: string) => void;
 }
 
 type PlottedVehicle = VehicleLiveRead & { lat: number; lng: number };
@@ -33,6 +37,7 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 interface MapDataProps {
   plotted: PlottedVehicle[];
   duressByVehicleId: Map<string, DuressEventRead>;
+  onSelectVehicle: (vehicleId: string) => void;
 }
 
 /**
@@ -41,7 +46,7 @@ interface MapDataProps {
  * otherwise falls back to a plain-SVG lat/lng plot so the page never breaks
  * for anyone without a token set up (see PlainCanvasMap below).
  */
-export function FleetMapCanvas({ vehicles, duressEvents }: FleetMapCanvasProps) {
+export function FleetMapCanvas({ vehicles, duressEvents, onSelectVehicle }: FleetMapCanvasProps) {
   const plotted = useMemo(
     () => vehicles.filter((v): v is PlottedVehicle => v.lat != null && v.lng != null),
     [vehicles],
@@ -58,10 +63,12 @@ export function FleetMapCanvas({ vehicles, duressEvents }: FleetMapCanvasProps) 
   }, [duressEvents]);
 
   if (MAPBOX_TOKEN) {
-    return <MapboxFleetMap plotted={plotted} duressByVehicleId={duressByVehicleId} />;
+    return (
+      <MapboxFleetMap plotted={plotted} duressByVehicleId={duressByVehicleId} onSelectVehicle={onSelectVehicle} />
+    );
   }
 
-  return <PlainCanvasMap plotted={plotted} duressByVehicleId={duressByVehicleId} />;
+  return <PlainCanvasMap plotted={plotted} duressByVehicleId={duressByVehicleId} onSelectVehicle={onSelectVehicle} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +90,7 @@ function buildMarkerElement(
   vehicle: PlottedVehicle,
   duressEvent: DuressEventRead | undefined,
   navigate: NavigateFunction,
+  onSelectVehicle: (vehicleId: string) => void,
 ): HTMLDivElement {
   const size = duressEvent ? 16 : 12;
   const color = duressEvent ? "var(--destructive)" : statusColor(vehicle.live_status);
@@ -104,8 +112,12 @@ function buildMarkerElement(
     ? `${vehicle.rego} — active duress event`
     : `${vehicle.rego} (${vehicle.live_status})${telemetrySuffix}`;
 
+  // Every marker is clickable: a duress-active vehicle deep-links straight to
+  // its open event (existing, highest-priority behavior); any other vehicle
+  // opens the vehicle detail panel instead.
+  el.style.cursor = "pointer";
+
   if (duressEvent) {
-    el.style.cursor = "pointer";
     // Pulsing ring around duress vehicles — same "red pin" treatment as the
     // plain-canvas fallback's animated <circle>.
     const ring = document.createElement("div");
@@ -118,6 +130,8 @@ function buildMarkerElement(
     ring.style.pointerEvents = "none";
     el.appendChild(ring);
     el.addEventListener("click", () => navigate(`/duress?event=${duressEvent.id}`));
+  } else {
+    el.addEventListener("click", () => onSelectVehicle(vehicle.id));
   }
 
   const label = document.createElement("span");
@@ -137,7 +151,7 @@ function buildMarkerElement(
   return el;
 }
 
-function MapboxFleetMap({ plotted, duressByVehicleId }: MapDataProps) {
+function MapboxFleetMap({ plotted, duressByVehicleId, onSelectVehicle }: MapDataProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -181,10 +195,10 @@ function MapboxFleetMap({ plotted, duressByVehicleId }: MapDataProps) {
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = plotted.map((v) => {
       const duressEvent = duressByVehicleId.get(v.id);
-      const el = buildMarkerElement(v, duressEvent, navigate);
+      const el = buildMarkerElement(v, duressEvent, navigate, onSelectVehicle);
       return new mapboxgl.Marker({ element: el, anchor: "center" }).setLngLat([v.lng, v.lat]).addTo(map);
     });
-  }, [plotted, duressByVehicleId, navigate]);
+  }, [plotted, duressByVehicleId, navigate, onSelectVehicle]);
 
   return (
     <div className="relative">
@@ -206,12 +220,13 @@ function MapboxFleetMap({ plotted, duressByVehicleId }: MapDataProps) {
 /**
  * Plain-SVG lat/lng plot, used when no Mapbox token is configured. Vehicles
  * are projected into a local bounding box (not real map tiles), colored by
- * live status, and any vehicle with an open duress event is drawn oversized
- * in red with a click target that routes to `/duress?event=<id>` (the "red
+ * live status. Every vehicle pin is clickable: one with an open duress event
+ * is drawn oversized in red and routes to `/duress?event=<id>` (the "red
  * pin" requirement — since a duress row itself has no lat/lng, its pin
- * position is its vehicle's last-known position).
+ * position is its vehicle's last-known position); any other vehicle opens
+ * the vehicle detail panel instead.
  */
-function PlainCanvasMap({ plotted, duressByVehicleId }: MapDataProps) {
+function PlainCanvasMap({ plotted, duressByVehicleId, onSelectVehicle }: MapDataProps) {
   const navigate = useNavigate();
 
   const bounds = useMemo(() => {
@@ -292,8 +307,8 @@ function PlainCanvasMap({ plotted, duressByVehicleId }: MapDataProps) {
           <g
             key={v.id}
             transform={`translate(${x}, ${y})`}
-            className={duressEvent ? "cursor-pointer" : undefined}
-            onClick={duressEvent ? () => navigate(`/duress?event=${duressEvent.id}`) : undefined}
+            className="cursor-pointer"
+            onClick={() => (duressEvent ? navigate(`/duress?event=${duressEvent.id}`) : onSelectVehicle(v.id))}
           >
             {duressEvent && (
               <circle r={13} fill="none" stroke="var(--destructive)" strokeWidth={2} opacity={0.5}>
