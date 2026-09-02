@@ -78,6 +78,20 @@ class VehicleLiveRead(BaseModel):
         "trip's last tick; 'none' = no position known at all."
     )
     current_trip_id: str | None
+    current_driver_id: str | None = Field(
+        description="Driver on this vehicle's currently-open Shift, if any -- 'who has this "
+        "vehicle checked out right now'. Never a cached pointer: always derived live from the "
+        "shift domain, same convention as DriverLiveRead.vehicle_id's own doc comment."
+    )
+    current_driver_name: str | None = Field(
+        description="Display name for current_driver_id, joined in for a dashboard that doesn't "
+        "want a second lookup."
+    )
+    current_shift_id: str | None
+    current_shift_start_at: datetime | None = Field(
+        description="When the current shift started -- e.g. to show 'Driver X, on since 6:00am' "
+        "in a fleet list."
+    )
 
 
 # --- drivers --------------------------------------------------------------------

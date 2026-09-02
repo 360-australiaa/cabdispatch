@@ -18,6 +18,14 @@ class ShiftStart(BaseModel):
     inspection_json: dict | None = Field(
         default=None, description="Pre-shift vehicle inspection checklist, freeform."
     )
+    force_handover: bool = Field(
+        default=False,
+        description=(
+            "If the vehicle already has an open shift under a different driver, "
+            "setting this to true closes that shift and proceeds (a real shift "
+            "changeover) instead of the request being rejected with 409."
+        ),
+    )
 
 
 class ShiftEnd(BaseModel):

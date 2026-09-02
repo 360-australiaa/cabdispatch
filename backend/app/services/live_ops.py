@@ -341,12 +341,48 @@ async def _open_trips_by_vehicle(session: AsyncSession, *, tenant_id: str) -> di
     return by_vehicle
 
 
+async def _open_shifts_by_vehicle(session: AsyncSession, *, tenant_id: str) -> dict[str, Shift]:
+    """One open shift per vehicle_id -- "who currently has this vehicle
+    checked out", the answer to a real operational question (one vehicle
+    often runs back-to-back shifts across two+ drivers, e.g. a 12h/12h
+    double-shift) that nothing in this codebase surfaced before this pass.
+    Same "Shift.end_at IS NULL == currently active" convention as
+    `_open_shifts_by_driver` above; see `app.services.shift.start_shift`'s
+    own docstring for the guarantee that at most one open shift ever exists
+    per vehicle at a time."""
+    result = await session.execute(
+        select(Shift)
+        .where(Shift.tenant_id == tenant_id, Shift.end_at.is_(None))
+        .order_by(Shift.start_at.desc())
+    )
+    by_vehicle: dict[str, Shift] = {}
+    for shift in result.scalars():
+        by_vehicle.setdefault(shift.vehicle_id, shift)
+    return by_vehicle
+
+
+async def _driver_names_by_id(
+    session: AsyncSession, *, tenant_id: str, driver_ids: set[str]
+) -> dict[str, str]:
+    """Batch name lookup for a set of driver ids -- avoids an N+1 query when
+    composing a page of vehicles, each potentially needing its current
+    driver's display name."""
+    if not driver_ids:
+        return {}
+    result = await session.execute(
+        select(User.id, User.name).where(User.tenant_id == tenant_id, User.id.in_(driver_ids))
+    )
+    return {row.id: row.name for row in result}
+
+
 def _compose_vehicle_live(
     vehicle: Vehicle,
     *,
     device: Device | None,
     open_trip: Trip | None,
     live_position: dict[str, Any] | None,
+    current_shift: Shift | None = None,
+    current_driver_name: str | None = None,
 ) -> dict[str, Any]:
     if live_position is not None:
         lat, lng = live_position["lat"], live_position["lng"]
@@ -398,6 +434,10 @@ def _compose_vehicle_live(
         "position_updated_at": position_updated_at,
         "position_source": position_source,
         "current_trip_id": open_trip.id if open_trip else None,
+        "current_driver_id": current_shift.driver_id if current_shift else None,
+        "current_driver_name": current_driver_name if current_shift else None,
+        "current_shift_id": current_shift.id if current_shift else None,
+        "current_shift_start_at": current_shift.start_at if current_shift else None,
     }
 
 
@@ -431,11 +471,20 @@ async def list_vehicles_live(
 
     devices = await _devices_by_vehicle(session, tenant_id=tenant_id)
     open_trips = await _open_trips_by_vehicle(session, tenant_id=tenant_id)
+    open_shifts = await _open_shifts_by_vehicle(session, tenant_id=tenant_id)
+    driver_names = await _driver_names_by_id(
+        session, tenant_id=tenant_id, driver_ids={s.driver_id for s in open_shifts.values()}
+    )
     live_cache = fleet_broadcaster.get_all_latest(tenant_id)
 
     composed = [
         _compose_vehicle_live(
-            v, device=devices.get(v.id), open_trip=open_trips.get(v.id), live_position=live_cache.get(v.id)
+            v,
+            device=devices.get(v.id),
+            open_trip=open_trips.get(v.id),
+            live_position=live_cache.get(v.id),
+            current_shift=open_shifts.get(v.id),
+            current_driver_name=driver_names.get(open_shifts[v.id].driver_id) if v.id in open_shifts else None,
         )
         for v in vehicles
     ]
@@ -451,9 +500,19 @@ async def get_vehicle_live(session: AsyncSession, *, tenant_id: str, vehicle_id:
     vehicle = await get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
     devices = await _devices_by_vehicle(session, tenant_id=tenant_id)
     open_trips = await _open_trips_by_vehicle(session, tenant_id=tenant_id)
+    open_shifts = await _open_shifts_by_vehicle(session, tenant_id=tenant_id)
+    current_shift = open_shifts.get(vehicle_id)
+    driver_names = await _driver_names_by_id(
+        session, tenant_id=tenant_id, driver_ids={current_shift.driver_id} if current_shift else set()
+    )
     live_position = fleet_broadcaster.get_latest(tenant_id, vehicle_id)
     return _compose_vehicle_live(
-        vehicle, device=devices.get(vehicle_id), open_trip=open_trips.get(vehicle_id), live_position=live_position
+        vehicle,
+        device=devices.get(vehicle_id),
+        open_trip=open_trips.get(vehicle_id),
+        live_position=live_position,
+        current_shift=current_shift,
+        current_driver_name=driver_names.get(current_shift.driver_id) if current_shift else None,
     )
 
 

@@ -253,7 +253,11 @@ async def test_list_shifts_pagination_and_filters(client: AsyncClient, session: 
     active_only = await client.get(
         "/v1/shifts", params={"driver_id": driver_a, "active_only": True}, headers=headers
     )
-    assert active_only.json()["total"] == 2  # none ended yet
+    # driver_a has 2 shift ROWS total (asserted above), but only 1 truly open:
+    # starting the second one auto-closed the first (see
+    # test_starting_a_new_shift_auto_closes_the_same_drivers_own_dangling_shift)
+    # -- a driver can never have two simultaneously open shifts.
+    assert active_only.json()["total"] == 1
 
 
 async def test_driver_cannot_patch_or_delete_shift(client: AsyncClient, session: AsyncSession):
@@ -319,3 +323,145 @@ async def test_tenant_isolation_on_shifts(client: AsyncClient, session: AsyncSes
 
     cross_tenant_resp = await client.get(f"/v1/shifts/{shift_id}", headers=tenant_b_headers)
     assert cross_tenant_resp.status_code == 404
+
+
+# --- one-vehicle-two-drivers handover (operational safety pass) -------------
+#
+# Real fleets run one vehicle across back-to-back shifts by different drivers
+# (a classic 12h/12h double-shift). Two failure modes must never be possible:
+# (1) two drivers simultaneously "having" the same vehicle on paper (who's
+#     actually liable if there's an incident?), and (2) one driver somehow
+#     on shift in two vehicles/twice at once (undermines the fatigue-hours
+#     limit entirely). See app.services.shift.start_shift's own docstring.
+
+
+async def test_second_driver_cannot_start_a_shift_on_a_vehicle_already_in_use(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    vehicle_id = str(uuid.uuid4())
+    driver_a, driver_b = str(uuid.uuid4()), str(uuid.uuid4())
+
+    first = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_a, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_b, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert second.status_code == 409, second.text
+    detail = second.json()["detail"]
+    assert detail["conflicting_driver_id"] == driver_a
+    assert detail["conflicting_shift_id"] == first.json()["id"]
+
+    # The vehicle still shows exactly one open shift — driver A's, untouched.
+    list_resp = await client.get(
+        "/v1/shifts", params={"vehicle_id": vehicle_id, "active_only": "true"}, headers=headers
+    )
+    items = list_resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["driver_id"] == driver_a
+    assert items[0]["end_at"] is None
+
+
+async def test_force_handover_closes_the_outgoing_drivers_shift_and_opens_the_new_one(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="dispatcher")
+    vehicle_id = str(uuid.uuid4())
+    driver_a, driver_b = str(uuid.uuid4()), str(uuid.uuid4())
+
+    morning = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_a, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert morning.status_code == 201, morning.text
+    morning_shift_id = morning.json()["id"]
+
+    evening = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_b, "vehicle_id": vehicle_id, "force_handover": True},
+        headers=headers,
+    )
+    assert evening.status_code == 201, evening.text
+    assert evening.json()["driver_id"] == driver_b
+    assert evening.json()["end_at"] is None
+
+    # The outgoing driver's shift is now closed, stamped at the handover moment.
+    closed = await client.get(f"/v1/shifts/{morning_shift_id}", headers=headers)
+    assert closed.json()["end_at"] is not None
+    assert closed.json()["end_at"] == evening.json()["start_at"]
+
+    # Vehicle history now shows a clean back-to-back handover, newest first —
+    # this IS the "which drivers have had this vehicle, and when" view.
+    history = await client.get(
+        "/v1/shifts", params={"vehicle_id": vehicle_id}, headers=headers
+    )
+    items = history.json()["items"]
+    assert len(items) == 2
+    assert items[0]["driver_id"] == driver_b  # newest first
+    assert items[1]["driver_id"] == driver_a
+
+
+async def test_starting_a_new_shift_auto_closes_the_same_drivers_own_dangling_shift(
+    client: AsyncClient, session: AsyncSession
+):
+    """A driver forgetting to tap "End Shift" (crash, flat battery, drove home
+    without closing out — this happens constantly in real fleets) must not
+    permanently jam that driver out of ever starting a new shift, and must
+    not require dispatcher intervention to recover from."""
+    headers = await auth_headers(client, session, role="driver")
+    driver_id = str(uuid.uuid4())
+    old_vehicle, new_vehicle = str(uuid.uuid4()), str(uuid.uuid4())
+
+    first = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": old_vehicle},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    first_shift_id = first.json()["id"]
+
+    second = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": new_vehicle},
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["vehicle_id"] == new_vehicle
+    assert second.json()["end_at"] is None
+
+    stale = await client.get(f"/v1/shifts/{first_shift_id}", headers=headers)
+    assert stale.json()["end_at"] is not None
+
+
+async def test_same_driver_starting_a_new_shift_on_the_same_vehicle_is_not_a_conflict(
+    client: AsyncClient, session: AsyncSession
+):
+    """A driver re-starting on the SAME vehicle they were already on (e.g. a
+    quick restart after correcting a mistaken checklist entry) is just the
+    own-dangling-shift auto-close path — never a 409, and never needs
+    force_handover, since there's no other driver being displaced."""
+    headers = await auth_headers(client, session, role="driver")
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+
+    first = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text

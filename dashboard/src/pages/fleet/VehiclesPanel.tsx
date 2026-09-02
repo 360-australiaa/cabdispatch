@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Archive, BarChart3, Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Archive, BarChart3, Copy, History, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -18,6 +19,7 @@ import {
   useDeviceOptions,
   useGeneratePairingCode,
   useUpdateVehicle,
+  useVehicleLiveOptions,
   useVehicles,
   type VehicleFilters,
   PAGE_LIMIT,
@@ -48,6 +50,7 @@ function statusBadgeVariant(status: VehicleStatus) {
 }
 
 export function VehiclesPanel() {
+  const navigate = useNavigate();
   const [skip, setSkip] = useState(0);
   const [regoSearch, setRegoSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -64,6 +67,7 @@ export function VehiclesPanel() {
 
   const vehiclesQuery = useVehicles(skip, filters);
   const deviceOptionsQuery = useDeviceOptions();
+  const vehicleLiveOptionsQuery = useVehicleLiveOptions();
 
   const deviceByVehicleId = useMemo(() => {
     const map = new Map<string, string>();
@@ -72,6 +76,19 @@ export function VehiclesPanel() {
     }
     return map;
   }, [deviceOptionsQuery.data]);
+
+  // "Who has this vehicle checked out right now" -- always derived live from
+  // the shift domain (see useVehicleLiveOptions' own doc comment), never a
+  // stored pointer on the vehicle row itself.
+  const currentDriverByVehicleId = useMemo(() => {
+    const map = new Map<string, { name: string; since: string }>();
+    for (const v of vehicleLiveOptionsQuery.data ?? []) {
+      if (v.current_driver_name && v.current_shift_start_at) {
+        map.set(v.id, { name: v.current_driver_name, since: v.current_shift_start_at });
+      }
+    }
+    return map;
+  }, [vehicleLiveOptionsQuery.data]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Vehicle | null>(null);
@@ -186,12 +203,38 @@ export function VehiclesPanel() {
         );
       },
     },
+    {
+      key: "current_driver",
+      header: "Current driver",
+      render: (v) => {
+        const current = currentDriverByVehicleId.get(v.id);
+        if (!current) return <span className="text-xs text-muted-foreground">Unassigned</span>;
+        return (
+          <div className="text-sm">
+            <div className="font-medium">{current.name}</div>
+            <div className="text-xs text-muted-foreground">since {formatDateTime(current.since)}</div>
+          </div>
+        );
+      },
+    },
     { key: "updated_at", header: "Updated", sortable: true, render: (v) => formatDateTime(v.updated_at) },
     {
       key: "actions",
       header: "",
       render: (v) => (
         <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Shift history for ${v.rego}`}
+            title="Shift history — every driver who has had this vehicle, and when"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/shifts?vehicle_id=${v.id}`);
+            }}
+          >
+            <History className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"

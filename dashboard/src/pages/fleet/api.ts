@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
+import type { Page as LiveOpsPage, VehicleLiveRead } from "@/pages/live-map/types";
 import type {
   ComplianceExpiryItem,
   Device,
@@ -54,6 +55,30 @@ export function useVehicleOptions() {
       });
       return data.items;
     },
+  });
+}
+
+/** Cross-references each vehicle's CURRENT driver -- "who has this vehicle
+ * checked out right now" -- by hitting the Live Ops rollup (`GET /v1/vehicles`,
+ * a different domain/endpoint from the CRUD `/v1/fleet/vehicles` list above;
+ * see backend/app/services/live_ops.py's module docstring for why these are
+ * two separate endpoints). Same "second lightweight lookup query, joined
+ * client-side" pattern already used for `deviceByVehicleId` in
+ * VehiclesPanel.tsx -- this domain deliberately never denormalizes a
+ * "current driver" pointer onto the Vehicle row itself; it's always derived
+ * live from the shift domain's open shifts, so it can never go stale. Polls
+ * every 30s so a fleet list left open catches shift changeovers reasonably
+ * promptly without needing a live socket. */
+export function useVehicleLiveOptions() {
+  return useQuery({
+    queryKey: ["fleet", "vehicles", "live-options"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<LiveOpsPage<VehicleLiveRead>>("/v1/vehicles", {
+        params: { skip: 0, limit: LOOKUP_LIMIT },
+      });
+      return data.items;
+    },
+    refetchInterval: 30_000,
   });
 }
 

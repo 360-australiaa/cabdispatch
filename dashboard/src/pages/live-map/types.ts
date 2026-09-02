@@ -38,6 +38,13 @@ export interface VehicleLiveRead {
   position_updated_at: string | null;
   position_source: PositionSource;
   current_trip_id: string | null;
+  /** Driver on this vehicle's currently-open shift, if any -- "who has this
+   * vehicle checked out right now". Always derived live from the shift
+   * domain, never a cached pointer. */
+  current_driver_id: string | null;
+  current_driver_name: string | null;
+  current_shift_id: string | null;
+  current_shift_start_at: string | null;
 }
 
 export type DuressTrigger = "button" | "gesture" | "voice" | "auto";

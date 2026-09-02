@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FileText, Pencil, Play, Square, Trash2 } from "lucide-react";
 import {
   Badge,
@@ -36,9 +37,16 @@ export default function ShiftsPage() {
   const { user } = useAuth();
   const canManage = !!user && MANAGE_ROLES.has(user.role);
 
+  // Lets a "Shift history" link from the Fleet -> Vehicles page (or any other
+  // page) deep-link straight into a pre-filtered view, e.g. /shifts?vehicle_id=<id>.
+  // Read once on mount only -- this page's own filter controls own the state
+  // from then on, so picking a different vehicle in the dropdown doesn't
+  // fight with the URL.
+  const [searchParams] = useSearchParams();
+
   const [page, setPage] = useState(0);
   const [driverFilter, setDriverFilter] = useState("");
-  const [vehicleFilter, setVehicleFilter] = useState("");
+  const [vehicleFilter, setVehicleFilter] = useState(() => searchParams.get("vehicle_id") ?? "");
   const [reconciledFilter, setReconciledFilter] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
 
