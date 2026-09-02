@@ -77,6 +77,9 @@ class Tariff(Base, TimestampMixin):
     multi_hire_pct: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("0.75"))
     psl_amount: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("1.32"))
     surcharge_pct_cap: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("5.0"))
+    cleaning_fee_cap: Mapped[Decimal] = mapped_column(
+        _RATE, nullable=False, default=Decimal("124.14")
+    )
 
 
 class Extra(Base, TimestampMixin):

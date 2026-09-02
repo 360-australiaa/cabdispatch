@@ -3,8 +3,9 @@
 Creates:
   - the platform tenant "TCT" (id = the PLATFORM_TENANT_ID sentinel in
     app.core.security), a global (tenant_id IS NULL) Fares Order reference
-    tariff for both urban and country regions with the EXACT NSW Fares Order
-    2025 (no.2) rates (re-derived from app.services.fare_engine's
+    tariff for both urban and country regions with the EXACT NSW Point to
+    Point Transport (Fares) Order 2026 rates (re-derived from
+    app.services.fare_engine's
     URBAN_TARIFF / COUNTRY_TARIFF constants — the same source of truth the
     golden fare-engine tests assert against, not re-guessed).
   - a demo tenant "Lilly Cabs" with its own urban rank/hail tariff, a copy of
@@ -52,9 +53,10 @@ DEMO_DRIVER_PIN = "123456"
 PLATFORM_TENANT_NAME = "TCT"
 DEMO_TENANT_NAME = "Lilly Cabs"
 
-# NSW Fares Order 2025 (no.2), effective 3 Nov 2025 — matches the golden
-# fare-engine tests in tests/test_fare_engine_golden.py exactly.
-FARES_ORDER_EFFECTIVE_FROM = datetime(2025, 11, 3, tzinfo=UTC)
+# NSW Point to Point Transport (Fares) Order 2026, effective 1 June 2026 —
+# matches the golden fare-engine tests in tests/test_fare_engine_golden.py
+# exactly.
+FARES_ORDER_EFFECTIVE_FROM = datetime(2026, 6, 1, tzinfo=UTC)
 
 # Rate fields shared 1:1 between fare_engine.Tariff and the DB Tariff model
 # (see app.services.tariffs._FARE_ENGINE_FIELDS).
@@ -74,6 +76,7 @@ _RATE_FIELDS = (
     "multi_hire_pct",
     "psl_amount",
     "surcharge_pct_cap",
+    "cleaning_fee_cap",
 )
 
 

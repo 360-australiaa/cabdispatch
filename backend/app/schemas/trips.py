@@ -96,7 +96,27 @@ class TripCreate(BaseModel):
     account_reference: str | None = None
     time_class: TimeClass = "day"
     is_peak: bool = False
+    # DEVICE ADVISORY ONLY: this raw flag is accepted for backward
+    # compatibility but never trusted for billing — the router looks up the
+    # real Vehicle.vehicle_class server-side (see
+    # app.services.trips.resolve_is_maxi_vehicle) to decide whether the
+    # trip's vehicle is actually a maxi-cab, ignoring whatever a device
+    # sends here.
     maxi: bool = False
+    passenger_count: int = Field(
+        default=1,
+        ge=1,
+        le=11,
+        description="Actual passengers carried — the primary legal trigger (>=5) for the maxi rate.",
+    )
+    wheelchair_hiring: bool = Field(
+        default=False,
+        description="Carrying a wheelchair passenger — always overrides the maxi rate off (Order cl 2(d)(ii)).",
+    )
+    airport_rank_requested_maxi: bool = Field(
+        default=False,
+        description="A maxi-cab specifically requested at a Sydney Airport rank — triggers the maxi rate independent of passenger_count, except for a wheelchair hiring.",
+    )
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     gps_trace_ref: str | None = None
@@ -224,7 +244,12 @@ class TripSyncItem(BaseModel):
     split_payments: list[SplitPaymentItem] | None = None
     time_class: TimeClass = "day"
     is_peak: bool = False
+    # DEVICE ADVISORY ONLY — see TripCreate.maxi's doc comment above; the
+    # router resolves the authoritative value from Vehicle.vehicle_class.
     maxi: bool = False
+    passenger_count: int = Field(default=1, ge=1, le=11)
+    wheelchair_hiring: bool = False
+    airport_rank_requested_maxi: bool = False
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     cleaning_fee: Decimal = Decimal(0)
@@ -269,6 +294,9 @@ class TripRead(BaseModel):
     time_class: str
     is_peak: bool
     maxi: bool
+    passenger_count: int
+    wheelchair_hiring: bool
+    airport_rank_requested_maxi: bool
     start_at: datetime
     end_at: datetime | None
     start_lat: float

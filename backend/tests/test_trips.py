@@ -29,10 +29,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import Trip  # noqa: F401 — see module docstring
-from app.services.fare_engine import round_half_up
+from app.services import fare_engine as fe
+from app.services.fare_engine import round_down, round_half_up
 from app.services.trips import compute_variance_pct, haversine_km
 from tests.conftest import auth_headers
 
@@ -43,42 +45,36 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _seed_tariff(session: AsyncSession, *, tenant_id: str, region: str = "urban") -> TariffRow:
-    """Inserts a real tariffs-domain row with exactly the Fares Order 2025
-    (no.2) rates, mirroring app.services.fare_engine.URBAN_TARIFF/COUNTRY_TARIFF."""
-    if region == "urban":
-        row = TariffRow(
-            tenant_id=tenant_id,
-            name="Standard Urban",
-            region="urban",
-            effective_from=datetime(2025, 11, 3, tzinfo=UTC),
-            booked=False,
-            flag_fall=Decimal("5.00"),
-            peak_charge=Decimal("2.56"),
-            dist_rate_1=Decimal("2.52"),
-            dist_rate_2=Decimal("2.29"),
-            night_rate_1=Decimal("3.00"),
-            night_rate_2=Decimal("2.73"),
-            holiday_rate_1=Decimal(0),
-            holiday_rate_2=Decimal(0),
-            waiting_rate_per_min=Decimal("1.092"),
-        )
-    else:
-        row = TariffRow(
-            tenant_id=tenant_id,
-            name="Standard Country",
-            region="country",
-            effective_from=datetime(2025, 11, 3, tzinfo=UTC),
-            booked=False,
-            flag_fall=Decimal("5.11"),
-            peak_charge=Decimal(0),
-            dist_rate_1=Decimal("2.41"),
-            dist_rate_2=Decimal("3.30"),
-            night_rate_1=Decimal("2.87"),
-            night_rate_2=Decimal("3.93"),
-            holiday_rate_1=Decimal("2.87"),
-            holiday_rate_2=Decimal("3.93"),
-            waiting_rate_per_min=Decimal("1.045"),
-        )
+    """Inserts a real tariffs-domain row with exactly the current Point to
+    Point Transport (Fares) Order rates — DERIVED from
+    app.services.fare_engine.URBAN_TARIFF/COUNTRY_TARIFF (never a second,
+    independently-hardcoded copy of the numbers) so this helper can never
+    silently drift out of sync with the engine the next time the rate card
+    changes, the way it did across the 2025->2026 Order update."""
+    engine_tariff = fe.URBAN_TARIFF if region == "urban" else fe.COUNTRY_TARIFF
+    row = TariffRow(
+        tenant_id=tenant_id,
+        name="Standard Urban" if region == "urban" else "Standard Country",
+        region=region,
+        effective_from=datetime(2026, 6, 1, tzinfo=UTC),
+        booked=False,
+        flag_fall=engine_tariff.flag_fall,
+        peak_charge=engine_tariff.peak_charge,
+        dist_rate_1=engine_tariff.dist_rate_1,
+        dist_rate_2=engine_tariff.dist_rate_2,
+        night_rate_1=engine_tariff.night_rate_1,
+        night_rate_2=engine_tariff.night_rate_2,
+        holiday_rate_1=engine_tariff.holiday_rate_1,
+        holiday_rate_2=engine_tariff.holiday_rate_2,
+        waiting_rate_per_min=engine_tariff.waiting_rate_per_min,
+        dist_km_threshold=engine_tariff.dist_km_threshold,
+        speed_threshold_kmh=engine_tariff.speed_threshold_kmh,
+        maxi_multiplier=engine_tariff.maxi_multiplier,
+        multi_hire_pct=engine_tariff.multi_hire_pct,
+        psl_amount=engine_tariff.psl_amount,
+        surcharge_pct_cap=engine_tariff.surcharge_pct_cap,
+        cleaning_fee_cap=engine_tariff.cleaning_fee_cap,
+    )
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -285,7 +281,7 @@ async def test_tick_distance_mode_accrues_distance_charge(client: AsyncClient, s
 
     expected_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
     expected_m = round(expected_km * 1000)
-    expected_dist_amount = round_half_up(expected_km * Decimal("2.52"))
+    expected_dist_amount = round_half_up(expected_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
 
     assert abs(body["distance_m"] - expected_m) <= 2
     assert Decimal(body["dist_amount"]) == expected_dist_amount
@@ -317,7 +313,7 @@ async def test_tick_waiting_mode_accrues_waiting_charge(client: AsyncClient, ses
     assert resp.status_code == 200
     body = resp.json()
 
-    expected_wait_amount = round_half_up(Decimal(2) * Decimal("1.092"))  # 2 minutes
+    expected_wait_amount = round_half_up(Decimal(2) * Decimal("1.130"))  # 2 minutes, 2026 Order waiting rate
     assert Decimal(body["wait_amount"]) == expected_wait_amount
     assert body["dist_amount"] == "0.00"
     assert body["waiting_s"] == 120
@@ -490,7 +486,7 @@ async def test_close_trip_computes_breakdown(client: AsyncClient, session: Async
     body = resp.json()
 
     assert body["status"] == "closed"
-    assert body["flag_fall"] == "5.00"
+    assert body["flag_fall"] == "5.17"
     assert Decimal(body["total"]) == Decimal(body["subtotal"]) + Decimal(body["surcharge"])
     assert Decimal(body["gst_component"]) == round_half_up(Decimal(body["total"]) / Decimal(11))
     assert body["receipt_ref"]
@@ -510,6 +506,45 @@ async def test_close_already_closed_trip_is_409(client: AsyncClient, session: As
 
 
 async def test_close_airport_fixed_trip_ignores_metered_charges(client: AsyncClient, session: AsyncSession):
+    """The $80 maxi airport fixed fare requires the vehicle to genuinely be a
+    maxi-cab (resolved server-side from Vehicle.vehicle_class) AND 5+
+    passengers — a raw client-supplied `maxi=True` claim on its own (with no
+    real maxi vehicle behind it) is advisory-only and must NOT unlock it, per
+    app.services.trips.resolve_is_maxi_vehicle."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    maxi_vehicle = Vehicle(rego="MAXI-01", tenant_id=tenant_id, vehicle_class=VEHICLE_CLASS_MAXI)
+    session.add(maxi_vehicle)
+    await session.commit()
+
+    trip = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        type="airport_fixed",
+        vehicle_id=maxi_vehicle.id,
+        passenger_count=5,
+        # This raw flag is advisory-only now and deliberately left False here
+        # to prove the $80 fare comes from the real vehicle_class + passenger
+        # count, not from trusting this field.
+        maxi=False,
+    )
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == "80.00"
+    assert body["flag_fall"] == "0.00"
+
+
+async def test_close_airport_fixed_trip_ignores_raw_maxi_claim_without_a_real_maxi_vehicle(
+    client: AsyncClient, session: AsyncSession
+):
+    """The inverse of the test above: a device claiming maxi=True for a
+    vehicle_id that isn't a registered maxi-cab (or doesn't exist at all)
+    must still be billed the standard $60 fixed fare."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -518,8 +553,7 @@ async def test_close_airport_fixed_trip_ignores_metered_charges(client: AsyncCli
     resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total"] == "80.00"
-    assert body["flag_fall"] == "0.00"
+    assert body["total"] == "60.00"
 
 
 # --- sync (offline replay) --------------------------------------------------
@@ -557,8 +591,8 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
 
     distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
-    expected_dist_amount = round_half_up(distance_km * Decimal("2.52"))
-    expected_fare_total = round_half_up(Decimal("5.00") + expected_dist_amount)  # cash, no surcharge
+    expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
+    expected_fare_total = round_down(Decimal("5.17") + expected_dist_amount)  # cash, no surcharge; server rounds fare_total DOWN, never up
 
     item = _sync_item(
         tariff_id=tariff.id,
@@ -739,23 +773,24 @@ async def test_sync_split_fare_matching_sum_persists_split_payments(
     start_lat, start_lng = -33.8688, 151.2093
     now = datetime.now(UTC)
     trace = [{"lat": start_lat, "lng": start_lng, "speed_kmh": 0, "ts": now.isoformat()}]
-    # No distance travelled -> total is just flag_fall ($5.00) for this tariff, matching
-    # test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no surcharge" note.
+    # No distance travelled -> total is just flag_fall ($5.17, 2026 Order) for this tariff,
+    # matching test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no
+    # surcharge" note.
     item = _sync_item(
         tariff_id=tariff.id,
         gps_trace=trace,
-        device_total="5.00",
+        device_total="5.17",
         start_lat=start_lat,
         start_lng=start_lng,
         payment_method="split_fare",
-        split_payments=[{"method": "cash", "amount": "2.00"}, {"method": "card", "amount": "3.00"}],
+        split_payments=[{"method": "cash", "amount": "2.17"}, {"method": "card", "amount": "3.00"}],
     )
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
     assert resp.status_code == 200, resp.text
     trip = resp.json()["results"][0]["trip"]
     assert trip["payment_method"] == "split_fare"
     assert trip["split_payments"] == [
-        {"method": "cash", "amount": "2.00"},
+        {"method": "cash", "amount": "2.17"},
         {"method": "card", "amount": "3.00"},
     ]
 

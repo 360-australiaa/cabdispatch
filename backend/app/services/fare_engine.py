@@ -1,20 +1,28 @@
 """NSW tariff-switching fare engine.
 
-PURE module — no DB, no FastAPI imports. Implements the NSW Fares Order 2025
-(no.2), effective 3 Nov 2025, GST-inclusive rates transcribed exactly from the
-product spec (do not "correct" these from memory):
+PURE module — no DB, no FastAPI imports. Implements the NSW Point to Point
+Transport (Fares) Order 2026, effective 1 June 2026, GST-inclusive rates
+transcribed exactly from the product spec (do not "correct" these from
+memory). The prior 2025 (no.2) card is kept below purely as historical
+changelog reference — it is not live and not reachable from any code path.
 
 | Component                                   | Urban          | Country        |
 |----------------------------------------------|----------------|----------------|
-| Hiring Charge (flag fall)                    | $5.00          | $5.11          |
-| Peak Time Hiring Charge (urban only)          | $2.56          | n/a            |
-| Distance Rate >=26km/h, first 12km            | $2.52/km       | $2.41/km       |
-| Distance Rate >=26km/h, beyond 12km           | $2.29/km       | $3.30/km       |
-| Night Distance Rate (10pm-6am any night), <12km | $3.00/km     | $2.87/km       |
-| Night Distance Rate, beyond 12km              | $2.73/km       | $3.93/km       |
-| Holiday Distance Rate (country only), <12km   | n/a            | $2.87/km       |
-| Holiday Distance Rate, beyond 12km            | n/a            | $3.93/km       |
-| Waiting Time <26km/h                          | 109.2 c/min    | 104.5 c/min    |
+| Hiring Charge (flag fall)                    | $5.17          | $5.29          |
+| Peak Time Hiring Charge (urban only)          | $2.65          | n/a            |
+| Distance Rate >=26km/h, first 12km            | $2.61/km       | $2.49/km       |
+| Distance Rate >=26km/h, beyond 12km           | $2.37/km       | $3.41/km       |
+| Night Distance Rate (10pm-6am any night), <12km | $3.10/km     | $2.97/km       |
+| Night Distance Rate, beyond 12km              | $2.82/km       | $4.07/km       |
+| Holiday Distance Rate (country only), <12km   | n/a            | $2.97/km       |
+| Holiday Distance Rate, beyond 12km            | n/a            | $4.07/km       |
+| Waiting Time <26km/h                          | 113.0 c/min    | 108.1 c/min    |
+| Cleaning fee cap (both areas)                 | $124.14 (+GST already folded in per the Order's convention here) | same |
+
+Prior card (2025 no.2, effective 3 Nov 2025 — superseded, historical only):
+Hiring $5.00/$5.11, Peak $2.56, Distance $2.52/$2.29 and $2.41/$3.30, Night
+$3.00/$2.73 and $2.87/$3.93, Holiday $2.87/$3.93, Waiting 109.2c/104.5c per
+min.
 
 Fare engine rule: at any instant exactly ONE of Distance Rate or Waiting Time
 accrues, switched by the 26km/h threshold (never both, never neither, while
@@ -22,11 +30,23 @@ HIRED). `time_class` (day/night/holiday) and the peak-hiring flag are fixed at
 journey commencement and do not change mid-trip even if the clock crosses a
 boundary. The first-12km/beyond-12km distance band applies to cumulative trip
 distance.
+
+Maxi-cab rate (Order cl 2(d)): up to 150% of "the fare" — flag fall + peak
+charge + distance charge + waiting charge ONLY, never tolls/PSL/extras/
+cleaning fee — applies only when `FareState.maxi_applied` is true, itself a
+DERIVED, non-settable property of `is_maxi_vehicle` (the vehicle's real
+seating class — resolved authoritatively server-side from
+`Vehicle.vehicle_class`, see app.services.trips, never trusted from a raw
+client-supplied flag), `passenger_count` (>=5 triggers it), `wheelchair_hiring`
+(always overrides it off — cl 2(d)(ii)'s carve-out), and
+`airport_rank_requested_maxi` (a maxi specifically requested at a Sydney
+Airport rank triggers it independent of passenger count, again except for a
+wheelchair hiring).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from enum import Enum
 
 # --- rounding helpers --------------------------------------------------------
@@ -37,8 +57,19 @@ CENT = Decimal("0.01")
 def round_half_up(amount: Decimal) -> Decimal:
     """Quantize to cents, half-up (<0.5c down, >=0.5c up) — the rounding rule
     the Fares Order mandates for the non-cash surcharge, applied generally here
-    for all displayed money amounts."""
+    for all displayed money amounts other than the metered fare total itself
+    (see round_down below)."""
     return amount.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def round_down(amount: Decimal) -> Decimal:
+    """Quantize to cents, always DOWN. Per Act s76(5)/(6): a rank/hail fare
+    must never exceed the regulated maximum, and rounding down is always
+    lawful while rounding up is not — so the metered fare total itself
+    (FareBreakdown.fare_total) rounds this way, never half-up. Non-cash
+    surcharge and the GST-component figure keep round_half_up — that is the
+    Order's own explicit rule for those two (cl 4(a)), untouched."""
+    return amount.quantize(CENT, rounding=ROUND_DOWN)
 
 
 def _d(value) -> Decimal:
@@ -86,6 +117,12 @@ class Tariff:
     multi_hire_pct: Decimal = Decimal("0.75")
     psl_amount: Decimal = Decimal("1.32")
     surcharge_pct_cap: Decimal = Decimal("5.0")
+    # Order cl 2(f): up to $124.14 (GST inclusive per this Tariff's own
+    # convention, matching every other money field here) — only chargeable
+    # when soiling means the vehicle can't reasonably be used before
+    # cleaning. Enforced by FareEngine.close(), which clamps any requested
+    # cleaning_fee to this cap rather than trusting the caller.
+    cleaning_fee_cap: Decimal = Decimal("124.14")
 
     _RATE_FIELDS = (
         "flag_fall",
@@ -97,36 +134,38 @@ class Tariff:
         "holiday_rate_1",
         "holiday_rate_2",
         "waiting_rate_per_min",
+        "cleaning_fee_cap",
     )
 
 
-# Default tariffs to ship — NSW Fares Order 2025 (no.2), effective 3 Nov 2025.
+# Default tariffs to ship — NSW Point to Point Transport (Fares) Order 2026,
+# effective 1 June 2026.
 URBAN_TARIFF = Tariff(
-    name="urban-2025-no2",
+    name="urban-2026",
     area=AreaClass.URBAN,
-    flag_fall=Decimal("5.00"),
-    peak_charge=Decimal("2.56"),
-    dist_rate_1=Decimal("2.52"),
-    dist_rate_2=Decimal("2.29"),
-    night_rate_1=Decimal("3.00"),
-    night_rate_2=Decimal("2.73"),
+    flag_fall=Decimal("5.17"),
+    peak_charge=Decimal("2.65"),
+    dist_rate_1=Decimal("2.61"),
+    dist_rate_2=Decimal("2.37"),
+    night_rate_1=Decimal("3.10"),
+    night_rate_2=Decimal("2.82"),
     holiday_rate_1=Decimal(0),
     holiday_rate_2=Decimal(0),
-    waiting_rate_per_min=Decimal("1.092"),
+    waiting_rate_per_min=Decimal("1.130"),
 )
 
 COUNTRY_TARIFF = Tariff(
-    name="country-2025-no2",
+    name="country-2026",
     area=AreaClass.COUNTRY,
-    flag_fall=Decimal("5.11"),
+    flag_fall=Decimal("5.29"),
     peak_charge=Decimal(0),
-    dist_rate_1=Decimal("2.41"),
-    dist_rate_2=Decimal("3.30"),
-    night_rate_1=Decimal("2.87"),
-    night_rate_2=Decimal("3.93"),
-    holiday_rate_1=Decimal("2.87"),
-    holiday_rate_2=Decimal("3.93"),
-    waiting_rate_per_min=Decimal("1.045"),
+    dist_rate_1=Decimal("2.49"),
+    dist_rate_2=Decimal("3.41"),
+    night_rate_1=Decimal("2.97"),
+    night_rate_2=Decimal("4.07"),
+    holiday_rate_1=Decimal("2.97"),
+    holiday_rate_2=Decimal("4.07"),
+    waiting_rate_per_min=Decimal("1.081"),
 )
 
 AIRPORT_FIXED_FARE_STANDARD = Decimal("60.00")
@@ -196,7 +235,19 @@ class FareState:
     tariff: Tariff
     time_class: TimeClass = TimeClass.DAY
     is_peak: bool = False  # urban-only peak hiring charge flag, fixed at commencement
-    maxi: bool = False
+
+    # Maxi-cab rate eligibility (Order cl 2(d)) — four raw inputs feeding one
+    # DERIVED, non-settable `maxi_applied` property below. Never set
+    # maxi_applied directly; there is no field for it, by design, so nothing
+    # can bill the 150% rate without genuinely satisfying the legal
+    # condition. `is_maxi_vehicle` must be resolved server-side from the
+    # real `Vehicle.vehicle_class` (see app.services.trips) — never trusted
+    # from a raw client-supplied boolean.
+    is_maxi_vehicle: bool = False
+    passenger_count: int = 1
+    wheelchair_hiring: bool = False
+    airport_rank_requested_maxi: bool = False
+
     hired: bool = True
 
     cumulative_distance_km: Decimal = field(default_factory=lambda: Decimal(0))
@@ -218,6 +269,17 @@ class FareState:
     # they do for a normal metered trip (per the competitor's own "doesn't
     # include levies and/or tolls" on-screen disclaimer this mirrors).
     negotiated_total: Decimal | None = None
+
+    @property
+    def maxi_applied(self) -> bool:
+        """The single source of truth for whether the 150% maxi rate is
+        legally active right now — a wheelchair hiring always overrides it
+        off (cl 2(d)(ii)); otherwise it's on for 5+ passengers or a maxi
+        specifically requested at a Sydney Airport rank, but only on a
+        vehicle that is actually a maxi-cab in the first place."""
+        return self.is_maxi_vehicle and not self.wheelchair_hiring and (
+            self.passenger_count >= 5 or self.airport_rank_requested_maxi
+        )
 
 
 @dataclass
@@ -316,6 +378,11 @@ class FareEngine:
         `state`, so it may safely be called mid-trip e.g. at each hirer's
         drop-off in a multiple-hiring scenario) fare breakdown."""
 
+        # Order cl 2(f): clamp any requested cleaning fee to the tariff's cap
+        # regardless of what the caller asked for — the enforced maximum,
+        # not merely a display-layer suggestion.
+        cleaning_fee = min(cleaning_fee, state.tariff.cleaning_fee_cap)
+
         if state.fixed_fare is not None:
             # Sydney Airport Fixed Fare Trial: no PSL, tolls, or peak allowed on
             # top — only the non-cash surcharge and a cleaning fee.
@@ -338,7 +405,7 @@ class FareEngine:
                 psl=Decimal(0),
                 cleaning_fee=cleaning_fee,
                 extras=Decimal(0),
-                maxi_applied=state.maxi,
+                maxi_applied=state.maxi_applied,
                 fare_total=fare_total,
                 surcharge=surcharge,
                 grand_total=grand_total,
@@ -367,8 +434,8 @@ class FareEngine:
                 + cleaning_fee
             )
 
-            maxi_applied = state.maxi
-            fare_total = round_half_up(subtotal)
+            maxi_applied = state.maxi_applied
+            fare_total = round_down(subtotal)
 
             surcharge = Decimal(0)
             if payment_method == "card":
@@ -401,22 +468,23 @@ class FareEngine:
         peak_charge = state.tariff.peak_charge if state.is_peak else Decimal(0)
         psl = state.tariff.psl_amount if include_psl else Decimal(0)
 
-        subtotal = (
+        # Order cl 2(d): the 150% maxi rate applies only to "the fare" — flag
+        # fall + peak charge + distance + waiting — never to tolls, PSL,
+        # extras, or the cleaning fee, which are added on top unmultiplied.
+        metered_fare = (
             flag_fall
             + peak_charge
             + state.accrued_distance_charge
             + state.accrued_waiting_charge
-            + state.tolls
-            + psl
-            + state.extras
-            + cleaning_fee
         )
 
-        maxi_applied = state.maxi
+        maxi_applied = state.maxi_applied
         if maxi_applied:
-            subtotal = subtotal * state.tariff.maxi_multiplier
+            metered_fare = metered_fare * state.tariff.maxi_multiplier
 
-        fare_total = round_half_up(subtotal)
+        subtotal = metered_fare + state.tolls + psl + state.extras + cleaning_fee
+
+        fare_total = round_down(subtotal)
 
         surcharge = Decimal(0)
         if payment_method == "card":

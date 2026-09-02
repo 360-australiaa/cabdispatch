@@ -117,7 +117,19 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # module docstring, deviation #3) ---
     time_class: Mapped[str] = mapped_column(String(10), nullable=False, default="day")
     is_peak: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Resolved server-side from Vehicle.vehicle_class at trip-creation time
+    # (see app.services.trips.resolve_is_maxi_vehicle) — a snapshot of "was
+    # this vehicle a maxi-cab when the trip started", never a raw
+    # client-supplied billing flag. Combined with passenger_count/
+    # wheelchair_hiring/airport_rank_requested_maxi below via
+    # FareState.maxi_applied to decide whether the 150% rate actually
+    # applied — see app.services.fare_engine's module docstring.
     maxi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    passenger_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    wheelchair_hiring: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    airport_rank_requested_maxi: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     # --- location / timing ---
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

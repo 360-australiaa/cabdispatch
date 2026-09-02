@@ -57,6 +57,7 @@ from app.services.trips import (
     compute_variance_pct,
     flag_trip_for_review,
     recompute_from_trace,
+    resolve_is_maxi_vehicle,
 )
 
 router = APIRouter(prefix="/v1/trips", tags=["trips"])
@@ -88,6 +89,12 @@ async def create_trip(
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
+    # Authoritative: resolved server-side from the vehicle's real
+    # vehicle_class, never taken from payload.maxi (accepted but ignored for
+    # billing — see TripCreate.maxi's doc comment).
+    is_maxi_vehicle = await resolve_is_maxi_vehicle(
+        session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id
+    )
     trip = Trip(
         tenant_id=tenant_id,
         client_uuid=payload.client_uuid,
@@ -99,7 +106,10 @@ async def create_trip(
         status=TRIP_STATUS_OPEN,
         time_class=payload.time_class,
         is_peak=payload.is_peak,
-        maxi=payload.maxi,
+        maxi=is_maxi_vehicle,
+        passenger_count=payload.passenger_count,
+        wheelchair_hiring=payload.wheelchair_hiring,
+        airport_rank_requested_maxi=payload.airport_rank_requested_maxi,
         start_at=payload.start_at or datetime.now(UTC),
         start_lat=payload.start_lat,
         start_lng=payload.start_lng,
@@ -147,6 +157,9 @@ async def sync_trips(
             results.append(TripSyncResultItem(client_uuid=item.client_uuid, duplicate=True, trip=trip))
             continue
 
+        is_maxi_vehicle = await resolve_is_maxi_vehicle(
+            session, tenant_id=tenant_id, vehicle_id=item.vehicle_id
+        )
         try:
             breakdown, distance_m, moving_s, waiting_s = await recompute_from_trace(
                 session,
@@ -155,7 +168,10 @@ async def sync_trips(
                 trip_type=item.type,
                 time_class=item.time_class,
                 is_peak=item.is_peak,
-                maxi=item.maxi,
+                is_maxi_vehicle=is_maxi_vehicle,
+                passenger_count=item.passenger_count,
+                wheelchair_hiring=item.wheelchair_hiring,
+                airport_rank_requested_maxi=item.airport_rank_requested_maxi,
                 tolls=item.tolls,
                 extras=item.extras,
                 cleaning_fee=item.cleaning_fee,
@@ -232,7 +248,10 @@ async def sync_trips(
             status=TRIP_STATUS_CLOSED,
             time_class=item.time_class,
             is_peak=item.is_peak,
-            maxi=item.maxi,
+            maxi=is_maxi_vehicle,
+            passenger_count=item.passenger_count,
+            wheelchair_hiring=item.wheelchair_hiring,
+            airport_rank_requested_maxi=item.airport_rank_requested_maxi,
             start_at=item.start_at,
             end_at=item.end_at,
             start_lat=item.start_lat,

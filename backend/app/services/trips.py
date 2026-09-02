@@ -16,6 +16,7 @@ from math import asin, cos, radians, sin, sqrt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip
@@ -78,6 +79,23 @@ async def resolve_tariff(session: AsyncSession, *, tenant_id: str, tariff_id: st
         raise UnknownTariffError(str(exc)) from exc
 
 
+async def resolve_is_maxi_vehicle(session: AsyncSession, *, tenant_id: str, vehicle_id: str) -> bool:
+    """The authoritative source of "is this vehicle a maxi-cab" — the real
+    `Vehicle.vehicle_class` row, scoped to the requesting tenant. Deliberately
+    never derived from a client-supplied boolean: a device claiming
+    `maxi=true` must not be able to unlock the 150% rate on its own say-so,
+    since that field feeds directly into FareState.is_maxi_vehicle and,
+    combined with passenger_count, whether the maxi rate legally applies. An
+    unknown/foreign vehicle_id resolves to False (not a maxi) rather than
+    raising — trip creation's own vehicle_id validation (if any) is a
+    separate concern from fare classification."""
+    result = await session.execute(
+        select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.tenant_id == tenant_id)
+    )
+    vehicle = result.scalar_one_or_none()
+    return vehicle is not None and vehicle.vehicle_class == "maxi"
+
+
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
     """Great-circle distance between two lat/lng points, in kilometres."""
     phi1, phi2 = radians(lat1), radians(lat2)
@@ -93,21 +111,29 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
     trip row's currently-persisted running totals. Safe to call repeatedly —
     does not mutate `trip`."""
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=trip.tariff_id)
-    fixed_fare = airport_fixed_fare(trip.maxi) if trip.type == TRIP_TYPE_AIRPORT_FIXED else None
-    return FareState(
+    state = FareState(
         tariff=tariff,
         time_class=TimeClass(trip.time_class),
         is_peak=trip.is_peak,
-        maxi=trip.maxi,
+        # trip.maxi was resolved authoritatively from the vehicle's real
+        # vehicle_class at trip-creation time (see create_trip/sync_trips in
+        # app.api.v1.trips) — safe to read back as-is here, it was never
+        # taken from a raw client-supplied flag.
+        is_maxi_vehicle=trip.maxi,
+        passenger_count=trip.passenger_count,
+        wheelchair_hiring=trip.wheelchair_hiring,
+        airport_rank_requested_maxi=trip.airport_rank_requested_maxi,
         hired=True,
         cumulative_distance_km=Decimal(trip.distance_m) / Decimal(1000),
         accrued_distance_charge=trip.dist_amount,
         accrued_waiting_charge=trip.wait_amount,
         tolls=trip.tolls,
         extras=trip.extras,
-        fixed_fare=fixed_fare,
         negotiated_total=trip.negotiated_total,
     )
+    if trip.type == TRIP_TYPE_AIRPORT_FIXED:
+        state.fixed_fare = airport_fixed_fare(state.maxi_applied)
+    return state
 
 
 async def apply_tick(
@@ -276,7 +302,10 @@ async def recompute_from_trace(
     trip_type: str,
     time_class: str,
     is_peak: bool,
-    maxi: bool,
+    is_maxi_vehicle: bool,
+    passenger_count: int,
+    wheelchair_hiring: bool,
+    airport_rank_requested_maxi: bool,
     tolls: Decimal,
     extras: Decimal,
     cleaning_fee: Decimal,
@@ -293,19 +322,22 @@ async def recompute_from_trace(
     trace, used by POST /v1/trips/sync to validate a device's own total.
     Returns (breakdown, distance_m, moving_s, waiting_s)."""
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=tariff_id)
-    fixed_fare = airport_fixed_fare(maxi) if trip_type == TRIP_TYPE_AIRPORT_FIXED else None
 
     state = FareState(
         tariff=tariff,
         time_class=TimeClass(time_class),
         is_peak=is_peak,
-        maxi=maxi,
+        is_maxi_vehicle=is_maxi_vehicle,
+        passenger_count=passenger_count,
+        wheelchair_hiring=wheelchair_hiring,
+        airport_rank_requested_maxi=airport_rank_requested_maxi,
         hired=True,
         tolls=tolls,
         extras=extras + cleaning_fee,
-        fixed_fare=fixed_fare,
         negotiated_total=negotiated_total,
     )
+    if trip_type == TRIP_TYPE_AIRPORT_FIXED:
+        state.fixed_fare = airport_fixed_fare(state.maxi_applied)
 
     prev_lat, prev_lng, prev_ts = start_lat, start_lng, start_at
     moving_s = 0

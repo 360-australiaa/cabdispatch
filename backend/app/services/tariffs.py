@@ -37,6 +37,7 @@ _FARE_ENGINE_FIELDS = (
     "multi_hire_pct",
     "psl_amount",
     "surcharge_pct_cap",
+    "cleaning_fee_cap",
 )
 
 _AREA_BY_REGION = {

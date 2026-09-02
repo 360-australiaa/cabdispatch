@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app.core.database import AsyncSessionLocal
 from app.models.tariffs import Tariff
+from app.services import fare_engine as fe
 from app.services.tariff_signing import RATE_FIELDS
 from app.services.tariffs import classify_time_of_day
 from tests.conftest import auth_headers
@@ -285,23 +286,41 @@ async def test_fares_order_current_404_before_global_row_seeded(client, session)
 async def test_fares_order_current_returns_global_row_once_seeded(client, session):
     headers = await auth_headers(client, session, role="admin")
 
+    # DERIVED from fe.URBAN_TARIFF (never a second, independently-hardcoded
+    # copy of the rate numbers) -- this row is a real, lastingly-committed
+    # global (tenant_id IS NULL) row that persists for the rest of THIS
+    # pytest session (the shared test_dev.db is only wiped at session
+    # start/end, not per-test -- see conftest.py), and every later test in
+    # this file that creates a rank/hail tariff gets validated against
+    # whatever reference row is sitting here. A hardcoded literal copy drifts
+    # out of sync with the engine the next time the rate card changes (as it
+    # did across the 2025->2026 Order update) and silently breaks every test
+    # after this one in the file with a confusing "exceeds Fares Order
+    # reference cap" 422, nowhere near this test itself.
     async with AsyncSessionLocal() as raw_session:
         global_row = Tariff(
             tenant_id=None,
-            name="NSW Fares Order 2025 (no.2) — urban",
+            name="NSW Fares Order 2026 — urban",
             region="urban",
-            effective_from=datetime(2025, 11, 3, tzinfo=UTC),
+            effective_from=datetime(2026, 6, 1, tzinfo=UTC),
             effective_to=None,
             booked=False,
-            flag_fall=Decimal("5.00"),
-            peak_charge=Decimal("2.56"),
-            dist_rate_1=Decimal("2.52"),
-            dist_rate_2=Decimal("2.29"),
-            night_rate_1=Decimal("3.00"),
-            night_rate_2=Decimal("2.73"),
-            holiday_rate_1=Decimal(0),
-            holiday_rate_2=Decimal(0),
-            waiting_rate_per_min=Decimal("1.092"),
+            flag_fall=fe.URBAN_TARIFF.flag_fall,
+            peak_charge=fe.URBAN_TARIFF.peak_charge,
+            dist_rate_1=fe.URBAN_TARIFF.dist_rate_1,
+            dist_rate_2=fe.URBAN_TARIFF.dist_rate_2,
+            night_rate_1=fe.URBAN_TARIFF.night_rate_1,
+            night_rate_2=fe.URBAN_TARIFF.night_rate_2,
+            holiday_rate_1=fe.URBAN_TARIFF.holiday_rate_1,
+            holiday_rate_2=fe.URBAN_TARIFF.holiday_rate_2,
+            waiting_rate_per_min=fe.URBAN_TARIFF.waiting_rate_per_min,
+            dist_km_threshold=fe.URBAN_TARIFF.dist_km_threshold,
+            speed_threshold_kmh=fe.URBAN_TARIFF.speed_threshold_kmh,
+            maxi_multiplier=fe.URBAN_TARIFF.maxi_multiplier,
+            multi_hire_pct=fe.URBAN_TARIFF.multi_hire_pct,
+            psl_amount=fe.URBAN_TARIFF.psl_amount,
+            surcharge_pct_cap=fe.URBAN_TARIFF.surcharge_pct_cap,
+            cleaning_fee_cap=fe.URBAN_TARIFF.cleaning_fee_cap,
         )
         raw_session.add(global_row)
         await raw_session.commit()
@@ -503,7 +522,7 @@ async def test_create_tariff_from_airport_rank_preset(client, session):
     assert body["name"] == "Sydney Airport Rank"
     assert body["region"] == "urban"
     assert body["booked"] is False
-    assert Decimal(body["flag_fall"]) == Decimal("5.00")  # unchanged Fares Order rate
+    assert Decimal(body["flag_fall"]) == Decimal("5.17")  # 2026 Fares Order urban rate
     assert body["tenant_id"] is not None
 
     # preset creation writes exactly one change-log entry, same as a normal POST
