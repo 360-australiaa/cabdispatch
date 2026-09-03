@@ -63,6 +63,12 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import java.io.ByteArrayOutputStream
+import java.time.Instant
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 /**
  * 30 · Profile — reskinned onto [CaptainPalette]/[au.com.threesixty.cabdispatch.ui.theme.CaptainWidgets]
@@ -81,10 +87,38 @@ import java.io.ByteArrayOutputStream
  * `complianceExpiry()`) via a small screen-local loader — editing [ProfileViewModel] is off-limits
  * for this pass — and the section simply hides on failure/empty.
  *
- * Honesty deviations, flagged: the LICENCE / AUTHORITY identity rows have no backing fields on
- * [DriverSession] (name/driverId/vehicleId only) so they are not rendered; the status strip is
- * dashboard-owned state and is omitted. [onFactoryReset] stays in the signature (the NavHost
- * contract) even though the embedded Settings host lives on its own route.
+ * Honesty deviations, flagged: the status strip is dashboard-owned state and is omitted.
+ * [onFactoryReset] stays in the signature (the NavHost contract) even though the embedded
+ * Settings host lives on its own route.
+ *
+ * Phase H (2026-09-03) additions:
+ * - **Identity card**: the VEHICLE row now shows "GHP-1 · Toyota Camry Hybrid" instead of just the
+ *   rego, once [ProfileViewModel.vehicleDetail] resolves ([au.com.threesixty.cabdispatch.data.remote.VehicleDto.make]/`.model`,
+ *   threaded from the backend's `Vehicle.make`/`.model`). Same gap `DeckHomeScreen.kt`'s own header
+ *   comment flags as "no vehicle make/model field exists ... backend-requirements candidate in
+ *   DASHBOARD_REDESIGN_2026.md" — that backend field now exists (this session's earlier fleet
+ *   pass), so this card can honestly show it; falls back to the bare rego, same as before, when
+ *   make/model are unset or the fetch fails. PHONE/MEMBER SINCE rows read [ProfileViewModel.userDetail]
+ *   (`GET /v1/auth/me`) and are omitted entirely (never a placeholder) when that value is `null`.
+ * - **No rating row**: checked this session — there is no rating concept anywhere in the backend
+ *   (no column, no endpoint, no schema field). Per this codebase's zero-fake-affordance rule, no
+ *   placeholder number is added; the row simply doesn't exist.
+ * - **No new EDIT PROFILE button**: `PATCH /v1/users/{id}` (name/phone/email/etc.) is
+ *   owner/admin-only server-side (`backend/app/api/v1/users.py::update_user`) — a driver cannot
+ *   legitimately self-edit those fields today. The one field a driver CAN legitimately self-edit,
+ *   their own photo (`POST /v1/users/{id}/photo`, self-or-staff gated), already has a real, working
+ *   affordance — the avatar tap / "Tap to update photo" row in [IdentityCard] below — so no second,
+ *   redundant button is added for it.
+ * - **Documents tab**: a new [ProfileTab] pill switch (PROFILE | DOCUMENTS) now sits beside the
+ *   title. DOCUMENTS shows real Licence/Registration/Insurance rows
+ *   ([DocumentsPane]) with a genuine Verified/Expiring soon/Expired status computed from
+ *   [au.com.threesixty.cabdispatch.data.remote.UserDto.driverLicenseExpiry]/
+ *   [au.com.threesixty.cabdispatch.data.remote.VehicleDto.registrationExpiry]/`.insuranceExpiry` —
+ *   read-only, no upload: `POST /v1/compliance/documents` (the only upload mechanism that exists)
+ *   is staff-role-gated (owner/admin/dispatcher) for every doc type, existing or new, so wiring an
+ *   upload button for a driver account would either silently 403 or need a real RBAC change this
+ *   Android-scoped pass isn't positioned to make unprompted — see [DocumentsPane]'s own doc.
+ *   "Police check" is omitted entirely, per task instructions — no backend field exists anywhere.
  */
 @Composable
 fun ProfileScreen(
@@ -93,6 +127,7 @@ fun ProfileScreen(
     viewModel: ProfileViewModel = viewModel(),
 ) {
     val session by SessionHolder.session.collectAsState()
+    var activeTab by remember { mutableStateOf(ProfileTab.PROFILE) }
 
     // Screen-local compliance-expiry loader (see class doc): null = failed/hidden, empty = loaded
     // none. Real network read, degrades to hiding the cards.
@@ -108,12 +143,22 @@ fun ProfileScreen(
             .background(CaptainPalette.bg)
             .padding(start = 72.dp, end = 72.dp, top = 40.dp, bottom = 24.dp),
     ) {
-        Text("Driver profile", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = CaptainPalette.textPrimary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Driver profile", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = CaptainPalette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ProfileTabPill("Profile", selected = activeTab == ProfileTab.PROFILE) { activeTab = ProfileTab.PROFILE }
+                ProfileTabPill("Documents", selected = activeTab == ProfileTab.DOCUMENTS) { activeTab = ProfileTab.DOCUMENTS }
+            }
+        }
         Spacer(Modifier.height(20.dp))
 
-        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
-            IdentityCard(session, viewModel)
-            ComplianceColumn(viewModel = viewModel, expiryItems = expiryItems, modifier = Modifier.weight(1f))
+        when (activeTab) {
+            ProfileTab.PROFILE -> Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
+                IdentityCard(session, viewModel)
+                ComplianceColumn(viewModel = viewModel, expiryItems = expiryItems, modifier = Modifier.weight(1f))
+            }
+            ProfileTab.DOCUMENTS -> DocumentsPane(viewModel = viewModel, modifier = Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(16.dp))
@@ -137,6 +182,8 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
     val photoState by viewModel.photoState.collectAsState()
     val isUploadingPhoto by viewModel.isUploadingPhoto.collectAsState()
     val photoUploadError by viewModel.photoUploadError.collectAsState()
+    val vehicleDetail by viewModel.vehicleDetail.collectAsState()
+    val userDetail by viewModel.userDetail.collectAsState()
     var cameraPermissionDenied by remember { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
@@ -263,7 +310,19 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 IdentityAttribute("NAME", session?.driverName ?: "Not signed in")
                 IdentityAttribute("DRIVER ID", session?.driverId ?: "—")
-                session?.vehicleId?.let { IdentityAttribute("VEHICLE", it) }
+                // "GHP-1 · Toyota Camry Hybrid" once vehicleDetail resolves real make/model —
+                // falls back to the bare rego (pre-Phase-H behaviour) when either is unset/unknown.
+                // See this file's class doc for the DASHBOARD_REDESIGN_2026.md gap this closes.
+                session?.vehicleId?.let { rego ->
+                    val makeModel = vehicleDetail
+                        ?.let { v -> listOfNotNull(v.make, v.model).joinToString(" ") }
+                        ?.takeIf { it.isNotBlank() }
+                    IdentityAttribute("VEHICLE", if (makeModel != null) "$rego · $makeModel" else rego)
+                }
+                // Real fields from GET /v1/auth/me — omitted entirely (never a placeholder/dash
+                // row) when userDetail hasn't loaded yet or the driver has no phone on file.
+                userDetail?.phone?.takeIf { it.isNotBlank() }?.let { IdentityAttribute("PHONE", it) }
+                userDetail?.createdAt?.let { formatMemberSince(it) }?.let { IdentityAttribute("MEMBER SINCE", it) }
             }
         }
     }
@@ -427,6 +486,148 @@ private fun StatusBadge(icon: androidx.compose.ui.graphics.vector.ImageVector, c
     ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(17.dp))
     }
+}
+
+// ============================================================================
+// Documents tab (Phase H, 2026-09-03)
+// ============================================================================
+
+private enum class ProfileTab { PROFILE, DOCUMENTS }
+
+/** Small pill switch mirroring `ui/screens/vouchers/VouchersPaneContent.kt`'s `VoucherTabPill`
+ * styling (no count badge here — just two states). */
+@Composable
+private fun ProfileTabPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val bg = if (selected) CaptainPalette.primary else CaptainPalette.raised
+    val textColor = if (selected) CaptainPalette.textPrimary else CaptainPalette.textSecondary
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, if (selected) CaptainPalette.primary else CaptainPalette.panelBorder, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label.uppercase(), color = textColor, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+    }
+}
+
+/**
+ * Real, read-only Licence/Registration/Insurance status rows — deliberately NOT the mockup's
+ * upload/view Documents tab. Sourced from real expiry-date fields already on the backend
+ * (`User.driver_license_expiry` via [ProfileViewModel.userDetail]'s `GET /v1/auth/me`;
+ * `Vehicle.registration_expiry`/`.insurance_expiry` via [ProfileViewModel.vehicleDetail]'s
+ * `GET /v1/fleet/vehicles`), status computed client-side by [documentStatusFor] using the same
+ * 30-day warning threshold `backend/app/core/config.py`'s `COMPLIANCE_EXPIRY_WARNING_DAYS` default
+ * uses (not read live — a plain client-side mirror of that constant, since there's no endpoint
+ * that exposes the threshold itself).
+ *
+ * "Police Check" is intentionally absent — no backend field/doc-type exists anywhere for it, and
+ * inventing one is a product decision outside this task's scope, not something to build unprompted.
+ *
+ * No upload/view affordance: the only real upload mechanism, `POST /v1/compliance/documents`
+ * (`backend/app/api/v1/compliance.py`), is gated to `owner`/`admin`/`dispatcher` for every
+ * `doc_type` — existing Cl.14 evidence types AND any new license/rego/insurance type this pass
+ * could add to `VALID_DOC_TYPES`. Extending that tuple alone would not make upload real for a
+ * driver account; it would still 403. Loosening that RBAC gate is a real product/security decision
+ * (who may attest a driver's own licence is genuine?) outside this Android-focused pass's scope, so
+ * this tab stays an honest read-only status list rather than a button that would either silently
+ * fail or need an unplanned backend RBAC change.
+ */
+@Composable
+private fun DocumentsPane(viewModel: ProfileViewModel, modifier: Modifier = Modifier) {
+    val userDetail by viewModel.userDetail.collectAsState()
+    val vehicleDetail by viewModel.vehicleDetail.collectAsState()
+
+    Column(modifier = modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text(
+            "REAL DOCUMENT STATUS — from the licence/registration/insurance expiry dates on file. " +
+                "Upload isn't available from this device (compliance-document upload is a staff-only " +
+                "action server-side today).",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = CaptainPalette.textMuted,
+        )
+        DocumentStatusRow("DRIVER LICENCE", userDetail?.driverLicenseExpiry)
+        DocumentStatusRow("VEHICLE REGISTRATION", vehicleDetail?.registrationExpiry)
+        DocumentStatusRow("VEHICLE INSURANCE", vehicleDetail?.insuranceExpiry)
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+private enum class DocumentStatus { VERIFIED, EXPIRING_SOON, EXPIRED, UNKNOWN }
+
+/** Mirrors `app.services.compliance_expiry._status_for`'s expired/expiring_soon/(not-near) logic,
+ * client-side, plus an explicit UNKNOWN for a `null`/unparseable date — that service never treats
+ * a missing date as expired (fail-open, see its own module doc) and neither does this. */
+private fun documentStatusFor(expiryIso: String?, warningDays: Long = 30): DocumentStatus {
+    val expiry = expiryIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return DocumentStatus.UNKNOWN
+    val today = LocalDate.now()
+    return when {
+        expiry.isBefore(today) -> DocumentStatus.EXPIRED
+        ChronoUnit.DAYS.between(today, expiry) <= warningDays -> DocumentStatus.EXPIRING_SOON
+        else -> DocumentStatus.VERIFIED
+    }
+}
+
+private fun formatExpiryDate(expiryIso: String): String =
+    runCatching { LocalDate.parse(expiryIso) }.getOrNull()
+        ?.let { DateTimeFormatter.ofPattern("d MMM yyyy").format(it) }
+        ?: expiryIso
+
+@Composable
+private fun DocumentStatusRow(label: String, expiryIso: String?) {
+    val status = documentStatusFor(expiryIso)
+    val (statusText, accent) = when (status) {
+        DocumentStatus.VERIFIED -> "Verified" to CaptainPalette.success
+        DocumentStatus.EXPIRING_SOON -> "Expiring soon" to CaptainPalette.warning
+        DocumentStatus.EXPIRED -> "Expired" to CaptainPalette.danger
+        DocumentStatus.UNKNOWN -> "Not on file" to CaptainPalette.textMuted
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(76.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(CaptainPalette.panel)
+            .border(1.5.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+            Text(
+                if (expiryIso != null) "Expires ${formatExpiryDate(expiryIso)}" else "Not on file",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                color = CaptainPalette.textSecondary,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(accent.copy(alpha = 0.16f))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(statusText.uppercase(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = accent)
+        }
+    }
+}
+
+/** "MMM yyyy" from a full `created_at` ISO instant (e.g. `UserDto.createdAt`) — same
+ * Instant-then-OffsetDateTime-fallback parse [au.com.threesixty.cabdispatch.ui.screens.messages.formatMessageClockTime]
+ * already uses for a backend timestamp that may or may not carry an explicit UTC offset. Returns
+ * `null` (never a raw ISO string) on a genuinely unparseable value, so the identity row simply
+ * omits itself rather than showing raw JSON-ish text. */
+private fun formatMemberSince(iso: String): String? {
+    val instant = runCatching { Instant.parse(iso) }
+        .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .getOrNull() ?: return null
+    return DateTimeFormatter.ofPattern("MMM yyyy").format(instant.atZone(ZoneId.systemDefault()))
 }
 
 /** JPEG-encodes a captured preview [Bitmap] for upload — unchanged from before this visual pass. */

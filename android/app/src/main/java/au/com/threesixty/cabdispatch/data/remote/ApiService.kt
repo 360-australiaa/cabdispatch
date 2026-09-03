@@ -133,7 +133,11 @@ interface ApiService {
      * can resolve a manually-typed rego to the real vehicle UUID [publishPosition] actually
      * requires in [PositionPublishRequestDto.vehicleId] — found live: that endpoint 404s
      * "Vehicle not found" on a rego string, only ever accepting the real `id`. No server-side
-     * rego filter is assumed/used here; the caller fetches the page and matches client-side. */
+     * rego filter is assumed/used here; the caller fetches the page and matches client-side.
+     * Second caller since Phase H (2026-09-03): `ui/screens/profile/ProfileViewModel.kt`'s
+     * `loadVehicleDetail` fetches this same page and matches on [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]/
+     * `.vehicleId` to read [VehicleDto.make]/`.model`/`.registrationExpiry`/`.insuranceExpiry` for
+     * the Profile screen — same "no pagination loop" caveat applies to that caller too. */
     @GET("/v1/fleet/vehicles")
     suspend fun listVehicles(
         @Query("skip") skip: Int = 0,
@@ -657,6 +661,20 @@ data class UserDto(
      * `null` is treated the same as "not clear" — never assumed verified by omission.
      */
     @SerialName("suitability_status") val suitabilityStatus: String? = null,
+    /**
+     * Added for `ui/screens/profile/ProfileScreen.kt`'s Identity card (Phase H, 2026-09-03) —
+     * `backend/app/schemas/user.py`'s `UserBase`/`UserRead` already carried [phone]/[createdAt]/
+     * [driverLicenseExpiry] on every `GET /v1/auth/me` response, this DTO just wasn't reading them
+     * yet. [phone] is the driver's contact number (`null` if never set — an honest "—", not a
+     * fetch failure). [createdAt] backs the Identity card's "Member since" row. [driverLicenseExpiry]
+     * (plain `YYYY-MM-DD`, no time component — a Pydantic `date`, not `datetime`) backs the
+     * Documents tab's LICENCE row's real Verified/Expiring soon/Expired status — `null` means
+     * "unknown", the same fail-open convention `app.services.compliance_expiry`'s own doc
+     * describes, never rendered as expired.
+     */
+    val phone: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("driver_license_expiry") val driverLicenseExpiry: String? = null,
 )
 
 @Serializable
@@ -737,13 +755,25 @@ data class DeviceDto(
  * documented examples ("available"/"on_trip"/"offline"/"break") — any short non-empty string
  * round-trips fine.
  */
-/** One row of `GET /v1/fleet/vehicles` — only the fields [ApiService.listVehicles]'s one caller
- * actually needs (`rego` to match against, `id` to resolve to); the real response carries more
- * (vin/vehicle_class/status/...) that this app has no use for yet, left off rather than guessed. */
+/** One row of `GET /v1/fleet/vehicles`. Originally only carried `id`/`rego` (the one field
+ * [ApiService.listVehicles]'s login-time caller needed) — [make]/[model]/[registrationExpiry]/
+ * [insuranceExpiry] were added for `ui/screens/profile/ProfileScreen.kt`'s Identity card
+ * ("GHP-1 · Toyota Camry Hybrid" instead of just the rego) and its Documents tab's real
+ * Registration/Insurance expiry-status rows (Phase H, 2026-09-03) — see `backend/app/schemas/fleet.py`'s
+ * `VehicleBase`, which already carried all four fields on the wire; this DTO just wasn't reading
+ * them yet. The rest of the real response (vin/vehicle_class/status/...) still has no on-device
+ * use, left off rather than guessed. All four new fields are nullable with a `null` default —
+ * `null` means genuinely unset on this vehicle's row (a real, honest "—" case, not a decode
+ * failure) and, per `data/JsonConfig.kt`'s `ignoreUnknownKeys`, also keeps this DTO safe against
+ * any older cached/mocked payload that predates them. */
 @Serializable
 data class VehicleDto(
     val id: String,
     val rego: String,
+    val make: String? = null,
+    val model: String? = null,
+    @SerialName("registration_expiry") val registrationExpiry: String? = null,
+    @SerialName("insurance_expiry") val insuranceExpiry: String? = null,
 )
 
 @Serializable
