@@ -317,6 +317,12 @@ async def sync_trips(
             review_notes=auto_flag_reason,
             receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
             negotiated_total=item.negotiated_total,
+            # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (deviation #6).
+            # This is the ONLY network path this app's offline-first close flow actually makes
+            # (see TripSyncItemDto's own doc comment, ApiService.kt), so a tip entered on-device
+            # must round-trip here, not only through the direct (no real call site) /close
+            # endpoint above — never folded into breakdown/device_total either side.
+            tip_amount=item.tip_amount,
         )
         session.add(trip)
         try:
@@ -542,6 +548,7 @@ async def close_trip_endpoint(
         split_payments=(
             [item.model_dump() for item in payload.split_payments] if payload.split_payments else None
         ),
+        tip_amount=payload.tip_amount,
     )
     try:
         await close_trip(session, tenant_id=tenant_id, trip=trip, params=params)

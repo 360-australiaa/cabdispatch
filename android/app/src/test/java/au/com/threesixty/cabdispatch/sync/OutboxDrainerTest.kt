@@ -10,6 +10,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.ComplianceDossierDto
 import au.com.threesixty.cabdispatch.data.remote.ComplianceExpiryPageDto
+import au.com.threesixty.cabdispatch.data.remote.CorporateAccountPageDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
@@ -65,6 +66,7 @@ import au.com.threesixty.cabdispatch.data.remote.UserDto
 import au.com.threesixty.cabdispatch.data.remote.VehiclePageDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinResponseDto
+import au.com.threesixty.cabdispatch.data.remote.VoucherPageDto
 import au.com.threesixty.cabdispatch.data.remote.ZoneListResponseDto
 import au.com.threesixty.cabdispatch.data.remote.ZonePlotReadDto
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
@@ -479,6 +481,8 @@ private class FakeApiService : ApiService {
     override suspend fun postDuressGps(eventId: String, body: DuressGpsPointDto) = notUsed()
     override suspend fun uploadDuressAudio(eventId: String, file: MultipartBody.Part): DuressEventDto = notUsed()
     override suspend fun uploadDuressSnapshot(eventId: String, file: MultipartBody.Part, capturedAt: String?): DuressSnapshotDto = notUsed()
+    override suspend fun listVouchers(redeemed: Boolean?, skip: Int, limit: Int): VoucherPageDto = notUsed()
+    override suspend fun listCorporateAccounts(active: Boolean?, skip: Int, limit: Int): CorporateAccountPageDto = notUsed()
     override suspend fun complianceExpiry(skip: Int, limit: Int): ComplianceExpiryPageDto = notUsed()
     override suspend fun getComplianceDossier(vehicleId: String): ComplianceDossierDto = notUsed()
     override suspend fun fatigueAlerts(skip: Int, limit: Int): FatigueAlertPageDto = notUsed()

@@ -61,6 +61,20 @@ No column in the brief's list was renamed, dropped, or retyped.
    before starting the meter" UX this mirrors); stored on the trip row
    distinct from `total` so it stays visible on the receipt/trip detail even
    after tolls/PSL/surcharge are layered on top at close.
+6. `tip_amount` is added by a later feature step (Close & Pay "tips"
+   pass) on top of the domain brief's original field list. A driver tip is
+   NOT part of the NSW-regulated metered fare — it is never folded into
+   `subtotal`/`surcharge`/`total`/`gst_component` (see
+   `app.services.fare_engine.FareEngine.close`, which never reads it) and is
+   deliberately kept as its own free-standing column so it can be shown on
+   the receipt/trip detail without distorting the fare/GST figures a
+   regulator or the ATO would read off this row. Nullable, no backfill
+   needed (NULL/absent means "no tip recorded" — every existing trip has
+   none). Settable only at close time (`TripCloseRequest.tip_amount` /
+   `TripSyncItem.tip_amount`, not `TripCreate` — a tip is a post-fare,
+   payment-time decision, unlike the pre-trip `negotiated_total` above); see
+   `app.services.trips.close_trip` and `app.api.v1.trips.sync_trips` for
+   where it's persisted.
 """
 from __future__ import annotations
 
@@ -207,3 +221,10 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # engine falls back to its usual flag/distance/time computation whenever
     # this column is NULL (see app.services.trips.build_fare_state).
     negotiated_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # --- driver tip (module docstring deviation #6). Deliberately separate from
+    # `total`/`subtotal`/`gst_component` — see app.services.fare_engine.FareEngine.close,
+    # which never reads this column, and app.services.trips.close_trip, which assigns it
+    # directly rather than folding it into the fare-engine breakdown. NULL means "no tip
+    # recorded" (every trip before this pass, and every trip closed without one).
+    tip_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)

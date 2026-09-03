@@ -55,6 +55,15 @@ def _validate_split_payments_required(
         raise ValueError("split_payments is required (and non-empty) when payment_method is 'split_fare'")
 
 
+def _validate_tip_amount(tip_amount: Decimal | None) -> None:
+    """Shared sanity check for the driver-entered tip (Close & Pay "tips"
+    pass) — a tip is never negative. No upper cap: unlike `negotiated_total`
+    (a substitute for the regulated fare, which the Fares Order caps) a tip
+    is a voluntary, uncapped, non-fare payment."""
+    if tip_amount is not None and tip_amount < 0:
+        raise ValueError("tip_amount must not be negative")
+
+
 def _validate_negotiated_total(negotiated_total: Decimal | None) -> None:
     """Shared sanity-cap check for the negotiated/"Set Price" fixed fare
     (competitor "Set Price" feature; NSW allows pre-arranged/negotiated
@@ -197,9 +206,18 @@ class TripCloseRequest(BaseModel):
     cleaning_fee: Decimal = Decimal(0)
     include_psl: bool = False
     receipt_ref: str | None = None
+    tip_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Driver tip (Close & Pay 'tips' pass) — a voluntary, non-fare amount, "
+            "never folded into fare_total/surcharge/total/gst_component. `null` "
+            "means no tip was recorded for this close."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripCloseRequest":
+        _validate_tip_amount(self.tip_amount)
         # payment_method=None here means "keep the trip's existing
         # payment_method" (see app.api.v1.trips.close_trip_endpoint) — only
         # cross-validate voucher_code/account_reference/split_payments against
@@ -276,12 +294,22 @@ class TripSyncItem(BaseModel):
         ),
     )
     device_total: Decimal = Field(..., description="The total the offline device computed on-vehicle")
+    tip_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Same driver tip as TripCloseRequest.tip_amount — carried through "
+            "offline sync so a trip opened+closed on-device with a driver-entered "
+            "tip doesn't lose it on replay. Never part of device_total: the "
+            "on-device fare engine's own total excludes it, same as the server's."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripSyncItem":
         _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
         _validate_split_payments_required(self.payment_method, self.split_payments)
         _validate_negotiated_total(self.negotiated_total)
+        _validate_tip_amount(self.tip_amount)
         return self
 
 
@@ -338,6 +366,7 @@ class TripRead(BaseModel):
     account_reference: str | None
     split_payments: list[dict] | None = Field(default_factory=list)
     negotiated_total: Decimal | None
+    tip_amount: Decimal | None
     created_at: datetime
     updated_at: datetime
 

@@ -129,14 +129,46 @@ sealed interface CloseAndPayUiState {
         val splitLegBMethod: SplitLegMethod,
         val splitLegBAmount: String,
         val breakdown: FareBreakdown,
+        /**
+         * Driver tip (Close & Pay "tips" pass) — a voluntary, non-fare amount, deliberately kept
+         * OFF [breakdown]/[FareBreakdown.grandTotal] (mirrors the backend's `Trip.tip_amount`,
+         * see that column's doc). Defaults to [BigDecimal.ZERO] (no tip), same "signum() > 0 means
+         * show it" convention this state already uses for [cleaningFee]/extras. Set via
+         * [CloseAndPayViewModel.setTip].
+         */
+        val tip: BigDecimal = BigDecimal.ZERO,
+        /**
+         * Real "N Available" count for the VOUCHER button (`GET /v1/vouchers?redeemed=false`,
+         * see [CloseAndPayViewModel.loadPaymentGridCounts]). `null` means "unknown" — still
+         * loading, or the call failed — and MUST render as no badge/a neutral state, never a
+         * fabricated number (this app's zero-fake-affordance rule).
+         */
+        val voucherAvailableCount: Int? = null,
+        /** Real active-count for the ACCOUNT button (`GET /v1/corporate-accounts?active=true`).
+         * Same "`null` = unknown, never fabricated" rule as [voucherAvailableCount]. */
+        val corporateAccountActiveCount: Int? = null,
         val paymentInFlight: Boolean,
         val paymentError: String?,
         val paymentLinkUrl: String?,
     ) : CloseAndPayUiState {
+        /**
+         * The amount actually collected from the passenger for cash/card-family payments —
+         * [FareBreakdown.grandTotal] (the regulated fare) plus [tip] on top. Deliberately NOT used
+         * for [PaymentMethodOption.SPLIT_FARE] (the backend's `SplitPaymentMismatchError` check
+         * sums split legs against the fare-only `grand_total`, see
+         * `app.services.trips.close_trip`/`sync_trips` — splitting a tip across legs isn't
+         * supported in this v1, see [SplitFareEntryScreen]'s own tip caption) or for
+         * [PaymentMethodOption.VOUCHER]/[PaymentMethodOption.ACCOUNT] (those rails settle the fare
+         * amount specifically; a tip alongside them is still recorded, just not part of "the
+         * amount charged to that rail").
+         */
+        val totalDue: BigDecimal
+            get() = breakdown.grandTotal + tip
+
         val changeDue: BigDecimal?
             get() {
                 val tendered = cashTendered.toBigDecimalOrNull() ?: return null
-                val change = tendered - breakdown.grandTotal
+                val change = tendered - totalDue
                 return if (change >= BigDecimal.ZERO) change else null
             }
 
@@ -145,7 +177,8 @@ sealed interface CloseAndPayUiState {
          * unallocated (zero once the two legs exactly sum to [FareBreakdown.grandTotal] — the
          * reading [SplitFareEntryScreen][au.com.threesixty.cabdispatch.ui.screens.closepay] shows
          * the driver, mirroring [changeDue]'s pattern for the Cash sub-screen). Can be negative
-         * (over-allocated).
+         * (over-allocated). Deliberately against [FareBreakdown.grandTotal], NOT [totalDue] — see
+         * that property's own doc for why a tip isn't split across legs in this v1.
          */
         val splitRemaining: BigDecimal?
             get() {
@@ -157,7 +190,7 @@ sealed interface CloseAndPayUiState {
         val canConfirm: Boolean
             get() = when (paymentMethod) {
                 PaymentMethodOption.CASH ->
-                    (cashTendered.toBigDecimalOrNull() ?: BigDecimal.ZERO) >= breakdown.grandTotal
+                    (cashTendered.toBigDecimalOrNull() ?: BigDecimal.ZERO) >= totalDue
                 PaymentMethodOption.CABCHARGE -> docketNumber.isNotBlank()
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> true
                 PaymentMethodOption.VOUCHER -> voucherCode.isNotBlank()
@@ -268,10 +301,33 @@ class CloseAndPayViewModel : ViewModel() {
             splitLegBMethod = SplitLegMethod.CARD,
             splitLegBAmount = "",
             breakdown = breakdown,
+            tip = BigDecimal.ZERO,
+            voucherAvailableCount = null,
+            corporateAccountActiveCount = null,
             paymentInFlight = false,
             paymentError = null,
             paymentLinkUrl = null,
         )
+        loadPaymentGridCounts()
+    }
+
+    /**
+     * Real "N Available"/active-count for the VOUCHER/ACCOUNT payment-grid buttons — backed by
+     * the now-real `GET /v1/vouchers`/`GET /v1/corporate-accounts` endpoints (SaaS-platform
+     * Phase 3 voucher ledger, commit 1f93840). Each call is independent and never fabricates a
+     * count on failure: a thrown exception (offline, 5xx, etc.) leaves the corresponding
+     * `ReadyToClose` field `null` ("unknown"), which the screen must render as no badge/a neutral
+     * state — see [CloseAndPayUiState.ReadyToClose.voucherAvailableCount]'s doc.
+     */
+    private fun loadPaymentGridCounts() {
+        viewModelScope.launch {
+            val count = runCatching { AppContainer.apiService.listVouchers(redeemed = false, limit = 1).total }.getOrNull()
+            updateReady { it.copy(voucherAvailableCount = count) }
+        }
+        viewModelScope.launch {
+            val count = runCatching { AppContainer.apiService.listCorporateAccounts(active = true, limit = 1).total }.getOrNull()
+            updateReady { it.copy(corporateAccountActiveCount = count) }
+        }
     }
 
     private fun recompute(
@@ -354,6 +410,15 @@ class CloseAndPayViewModel : ViewModel() {
 
     fun setIncludePsl(include: Boolean) = updateReady { state -> recomputed(state.copy(includePsl = include)) }
 
+    /**
+     * Sets (or clears, with [BigDecimal.ZERO]) the driver tip — see
+     * [CloseAndPayUiState.ReadyToClose.tip]'s doc. Deliberately does NOT call [recomputed]:
+     * unlike [setCleaningFee]/[setIncludePsl]/[setSurchargePct] above, a tip never re-derives
+     * [FareBreakdown] (it never reaches [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]
+     * at all) — only [CloseAndPayUiState.ReadyToClose.totalDue] (a plain addition) changes.
+     */
+    fun setTip(amount: BigDecimal) = updateReady { state -> state.copy(tip = amount.coerceAtLeast(BigDecimal.ZERO)) }
+
     fun setCashTendered(value: String) = updateReady { it.copy(cashTendered = value) }
 
     fun setDocketNumber(value: String) = updateReady { it.copy(docketNumber = value) }
@@ -385,8 +450,11 @@ class CloseAndPayViewModel : ViewModel() {
         }
     }
 
-    private fun amountCents(breakdown: FareBreakdown): Long =
-        breakdown.grandTotal.movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
+    /** [state.totalDue][CloseAndPayUiState.ReadyToClose.totalDue] (fare + tip) — the tap-to-pay/
+     * payment-link mock gateway charges the tip along with the fare, same as a real card terminal
+     * tip prompt would. */
+    private fun amountCents(state: CloseAndPayUiState.ReadyToClose): Long =
+        state.totalDue.movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
 
     /**
      * Ensures [block] appears to take at least [PROCESSING_MIN_MS] — spec §7 step 2: "Selecting a
@@ -408,7 +476,7 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val result = withMinimumProcessingDelay {
-                AppContainer.cardPaymentGateway.collectPayment(amountCents(state.breakdown))
+                AppContainer.cardPaymentGateway.collectPayment(amountCents(state))
             }
             result.onSuccess {
                 finalizeClose(state)
@@ -422,7 +490,7 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val result = withMinimumProcessingDelay {
-                AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state.breakdown))
+                AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state))
             }
             result.onSuccess { link ->
                 updateReady { it.copy(paymentInFlight = false, paymentLinkUrl = link.url) }
@@ -483,6 +551,7 @@ class CloseAndPayViewModel : ViewModel() {
                 } else {
                     null
                 },
+                tip = state.tip.takeIf { it.signum() > 0 }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString(),
             )
             _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
         }
@@ -519,6 +588,10 @@ class CloseAndPayViewModel : ViewModel() {
                 }
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> Unit
             }
+            // Tip (Close & Pay "tips" pass) — shown as its own line, added at the receipt level
+            // only (see [total] below and Trip.tip_amount's backend doc, deviation #6): never
+            // folded into fareTotal/gstComponent, which stay exactly the regulated-fare figures.
+            if (state.tip.signum() > 0) add(ReceiptLine("Tip", state.tip.money()))
         }
         return Receipt(
             tripId = trip.clientUuid,
@@ -529,7 +602,9 @@ class CloseAndPayViewModel : ViewModel() {
             fareLines = lines,
             subtotal = b.fareTotal.money(),
             surcharge = b.surcharge.money(),
-            total = b.grandTotal.money(),
+            // Includes the tip — this is the actual amount the passenger paid overall, unlike
+            // b.grandTotal (the regulated fare alone). See the Tip ReceiptLine added above.
+            total = state.totalDue.money(),
             gstComponent = b.gstComponent.money(),
             paymentMethod = state.paymentMethod.label,
             receiptRef = trip.receiptRef,

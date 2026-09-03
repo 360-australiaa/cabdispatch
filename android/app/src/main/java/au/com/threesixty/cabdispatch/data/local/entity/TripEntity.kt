@@ -127,6 +127,16 @@ data class TripEntity(
      */
     val negotiatedTotal: String? = null,
 
+    /**
+     * Driver tip (Close & Pay "tips" pass) — mirrors the backend's `Trip.tip_amount`. Decimal-
+     * as-string, same convention as [tolls]/[extras]/[negotiatedTotal]. Deliberately NOT part of
+     * [deviceTotal]/the fare engine's own total (backend `Trip.tip_amount`'s doc, deviation #6) —
+     * a tip is a voluntary, non-fare amount, never allowed to distort the regulated fare/GST
+     * figures. `null` for every trip closed without one (the default, unchanged for every
+     * existing call site).
+     */
+    val tip: String? = null,
+
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",
 

@@ -238,6 +238,10 @@ class CloseParams:
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[dict] | None = None
+    # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (module docstring
+    # deviation #6). Deliberately NOT passed to engine.close() below; assigned straight onto
+    # the trip row so it can never influence fare_total/surcharge/total/gst_component.
+    tip_amount: Decimal | None = None
 
 
 async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, params: CloseParams) -> FareBreakdown:
@@ -313,6 +317,9 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     trip.end_lng = params.end_lng
     trip.max_fare_check_passed = True  # no device_total to compare for online closes
     trip.receipt_ref = params.receipt_ref or f"RCPT-{trip.id[:8].upper()}"
+    # Assigned straight from params, never derived from `breakdown` — a tip is not part of
+    # the fare-engine's output (see Trip.tip_amount's doc, deviation #6 above).
+    trip.tip_amount = params.tip_amount
 
     return breakdown
 

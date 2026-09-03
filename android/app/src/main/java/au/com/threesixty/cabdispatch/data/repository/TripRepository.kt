@@ -189,6 +189,9 @@ class TripRepository(
          * JSON-encoded onto that column as-is; see [TripSyncItemDto]'s own doc for the known gap around this
          * not yet reaching the server via [toSyncItemDto]/`POST /v1/trips/sync`. */
         splitPayments: List<SplitPaymentEntryDto>? = null,
+        /** Driver tip (Close & Pay "tips" pass) — see [TripEntity.tip]'s doc. `null` = no tip
+         * recorded for this close. */
+        tip: String? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("closeTrip() called for unknown trip clientUuid=$clientUuid")
@@ -211,6 +214,7 @@ class TripRepository(
             voucherCode = voucherCode,
             accountReference = accountReference,
             splitPaymentsJson = splitPayments?.let { cabDispatchJson.encodeToString(it) },
+            tip = tip,
             updatedAt = now,
         )
         tripDao.update(updated)
@@ -302,6 +306,11 @@ class TripRepository(
             gpsTrace = decodeGpsTrace(trip.gpsTraceJson),
             receiptRef = trip.receiptRef,
             deviceTotal = trip.deviceTotal,
+            // See TripEntity.tip's doc — a tip is never folded into deviceTotal above (the
+            // fare-engine total), it round-trips as its own field, same "send it anyway,
+            // forward-compatible" convention this method already uses for voucherCode/
+            // accountReference/splitPayments.
+            tipAmount = trip.tip,
         )
     }
 

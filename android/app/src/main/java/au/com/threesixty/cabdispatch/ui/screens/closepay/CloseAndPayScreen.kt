@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccessibleForward
 import androidx.compose.material.icons.rounded.Backspace
@@ -67,6 +69,7 @@ import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
@@ -75,6 +78,7 @@ import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlinx.coroutines.launch
 
 /**
@@ -219,6 +223,7 @@ private fun TotalCol(
     state: CloseAndPayUiState.ReadyToClose,
     vm: CloseAndPayViewModel,
     onReportSoiling: () -> Unit,
+    onAddTip: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val breakdown = state.breakdown
@@ -228,7 +233,15 @@ private fun TotalCol(
     // zeroes psl regardless, so a PSL toggle here would be showing a control with no real effect.
     val isAirportFixed = state.trip.type == "airport_fixed"
 
-    Column(modifier = modifier.width(400.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    // Scrollable (2026-09-03 tips live pass, real device finding): the added Tip row pushed
+    // "Report vehicle soiling" (and, on a taller breakdown, other rows) behind the fixed
+    // "← Back to meter" button at the bottom of MethodPickerScreen's Box — this Column had no
+    // scroll of its own, so overflow was silently clipped rather than reachable. Same class of
+    // bug Phase A's live pass found and fixed on HiredScreen.kt (content clipping behind footer).
+    Column(
+        modifier = modifier.width(400.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
         Text("Close & Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
         Column(
             modifier = Modifier
@@ -241,8 +254,10 @@ private fun TotalCol(
             Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
             // Count-up entrance (premium pass): rolls 0 -> total over ~650ms once on entry, then
             // renders the EXACT BigDecimal `.money()` string from that point on — the animated
-            // frames are presentation only; the settled figure is always the engine's own total.
-            val target = remember(breakdown.grandTotal) { breakdown.grandTotal.toFloat() }
+            // frames are presentation only; the settled figure is always [state.totalDue] (fare +
+            // tip, see that property's doc — never the fare-engine's own `breakdown.grandTotal`
+            // alone once a tip is added).
+            val target = remember(state.totalDue) { state.totalDue.toFloat() }
             var countStarted by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) { countStarted = true }
             val counted by animateFloatAsState(
@@ -251,12 +266,21 @@ private fun TotalCol(
                 label = "total-countup",
             )
             Text(
-                if (counted >= target) breakdown.grandTotal.money() else "$%.2f".format(counted),
+                if (counted >= target) state.totalDue.money() else "$%.2f".format(counted),
                 fontFamily = ChakraPetch,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 84.sp,
                 color = CaptainPalette.success,
             )
+            if (state.tip.signum() > 0) {
+                Text(
+                    "Includes ${state.tip.money()} tip",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -271,7 +295,24 @@ private fun TotalCol(
                 BreakdownRow("Agreed price (Set Price)", breakdown.negotiatedTotal.money())
             } else {
                 BreakdownRow("Flagfall", breakdown.flagFall.money())
-                BreakdownRow("Fare (distance + time)", (breakdown.distanceCharge + breakdown.waitingCharge + breakdown.peakCharge).money())
+                BreakdownRow("Distance", breakdown.distanceCharge.money())
+                BreakdownRow("Time", breakdown.waitingCharge.money())
+                // Informational only, same wording/placement as HiredScreen.kt's Fare Breakdown
+                // card (Phase A): the night-rate uplift is already baked into Distance/Time above
+                // (the fare engine applies the night per-km/per-min rate directly — there is no
+                // separate night-surcharge line item), so this never adds to the total itself,
+                // only explains the higher Distance/Time figures when it applies.
+                if (state.trip.timeClass.equals("night", ignoreCase = true)) {
+                    val nightMultiplierLabel = if (tariff.distRate1.signum() > 0) {
+                        "${tariff.nightRate1.divide(tariff.distRate1, 2, RoundingMode.HALF_UP)}×"
+                    } else {
+                        null
+                    }
+                    BreakdownRow("Night Fare (${nightMultiplierLabel ?: "—"})", "included above")
+                }
+                if (breakdown.peakCharge.signum() > 0) {
+                    BreakdownRow("Peak Hiring", breakdown.peakCharge.money())
+                }
                 if (breakdown.maxiRateApplied) {
                     // "The fare" per the Fares Order = flagfall + peak + distance + waiting — the
                     // ONLY component the maxi multiplier applies to (see FareEngine.close()'s own
@@ -300,6 +341,13 @@ private fun TotalCol(
                 BreakdownRow("Non-cash payment surcharge ($pctLabel%)", breakdown.surcharge.money())
             }
             BreakdownRow("GST included", breakdown.gstComponent.money())
+            // Tip (Close & Pay "tips" pass) — its own line, added at the display level only:
+            // never part of any figure above it (Flagfall..GST included are all real
+            // FareBreakdown/tariff fields, untouched by state.tip). See CloseAndPayUiState
+            // .ReadyToClose.tip/.totalDue's own doc and the backend Trip.tip_amount column doc.
+            if (state.tip.signum() > 0) {
+                BreakdownRow("Tip", state.tip.money())
+            }
         }
         if (breakdown.negotiatedTotal != null) {
             Text(
@@ -310,8 +358,32 @@ private fun TotalCol(
             )
         }
         CleaningFeeEntryRow(currentFee = state.cleaningFee, cap = tariff.cleaningFeeCap, onClick = onReportSoiling)
+        TipEntryRow(currentTip = state.tip, onClick = onAddTip)
+        // Clears the fixed "← Back to meter" button (MethodPickerScreen's BottomStart-aligned
+        // overlay) when scrolled all the way down — see this Column's verticalScroll doc above.
+        Spacer(Modifier.height(88.dp))
     }
 }
+
+/**
+ * Unified close-button label (Part 4, "unified close-button treatment") — every payment flow's
+ * final confirm button previously read a differently-verbed label ("Confirm & Close Trip",
+ * "Record & Close Trip", "Redeem & Close Trip", "Charge Account & Close", "Take Payments &
+ * Close") despite all using the exact same [CaptainButton] size/weight/gradient already. Rather
+ * than lose the flow-specific meaning those verbs carried, this keeps ONE constant verb phrase
+ * ("CLOSE TRIP") and appends the method + amount inline instead — every flow still says exactly
+ * what will happen and for how much, just with identical wording structure. `state.paymentInFlight`
+ * still swaps this out for "Processing…" at every call site, unchanged.
+ */
+private fun closeButtonLabel(method: PaymentMethodOption, amount: BigDecimal): String =
+    "CLOSE TRIP — ${method.label.uppercase()} ${amount.money()}"
+
+/** Small shared suffix for the non-cash/non-card payment-rail sub-screens (CabCharge/Voucher/
+ * Account) — those totals settle the fare only (see [CloseAndPayUiState.ReadyToClose.totalDue]'s
+ * doc for why), so a tip is called out as collected separately rather than silently vanishing
+ * from the driver's view once they leave the method picker. Empty string when there's no tip. */
+private fun tipSeparateSuffix(tip: BigDecimal): String =
+    if (tip.signum() > 0) " Plus a ${tip.money()} tip, collected separately." else ""
 
 @Composable
 private fun BreakdownRow(label: String, value: String) {
@@ -400,6 +472,47 @@ private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick
     }
 }
 
+/** Entry point for [CloseAndPayViewModel.setTip] (Close & Pay "tips" pass) — same tappable-row
+ * shape as [CleaningFeeEntryRow] immediately above, for visual consistency between the two "tap
+ * to add an extra amount" rows on this screen. */
+@Composable
+private fun TipEntryRow(currentTip: BigDecimal, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.raised)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column {
+            Text(
+                if (currentTip.signum() > 0) "Tip added" else "Add a tip",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = CaptainPalette.textPrimary,
+            )
+            Text(
+                "Collected on top of the fare — never part of the metered total or GST",
+                fontFamily = InterFamily,
+                fontSize = 12.sp,
+                color = CaptainPalette.textMuted,
+            )
+        }
+        Text(
+            if (currentTip.signum() > 0) currentTip.money() else "+",
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 20.sp,
+            color = CaptainPalette.accent,
+        )
+    }
+}
+
 /** Dialog for [CleaningFeeEntryRow] — mirrors `HiredScreen.kt`'s `CustomTollDialog` shape/keypad
  * pattern for visual consistency across the app's few "type an amount on the shared keypad" flows.
  * The amount typed here is never sent uncapped: [CloseAndPayViewModel.setCleaningFee] itself clamps
@@ -465,6 +578,98 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
     }
 }
 
+/**
+ * "Add a tip", tapped — same $2/$5/$10 preset-chip + "Custom amount…" shape as `HiredScreen.kt`'s
+ * `TollPresetDialog` (Phase A step 5), reused rather than re-invented for visual consistency
+ * across the app's "quick preset or type your own" dialogs. `onSelectPreset`/`onCustom` map
+ * straight to [CloseAndPayViewModel.setTip] at the call site.
+ */
+@Composable
+private fun TipPresetDialog(
+    currentTip: BigDecimal,
+    onDismiss: () -> Unit,
+    onSelectPreset: (BigDecimal) -> Unit,
+    onCustom: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(480.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+            .padding(28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+        Text(
+            if (currentTip.signum() > 0) "Current tip: ${currentTip.money()}" else "Collected on top of the fare — never part of the metered total or GST.",
+            fontFamily = InterFamily,
+            fontSize = 14.sp,
+            color = CaptainPalette.textSecondary,
+        )
+        listOf(BigDecimal("2.00"), BigDecimal("5.00"), BigDecimal("10.00")).forEach { preset ->
+            CaptainChip("TIP", preset.money(), modifier = Modifier.fillMaxWidth()) {
+                onSelectPreset(preset)
+            }
+        }
+        CaptainButton(text = "Custom amount…", outline = true, modifier = Modifier.fillMaxWidth()) { onCustom() }
+        if (currentTip.signum() > 0) {
+            CaptainButton(text = "Remove tip", outline = true, modifier = Modifier.fillMaxWidth()) { onSelectPreset(BigDecimal.ZERO) }
+        }
+        CaptainButton(text = "Close", outline = true, modifier = Modifier.fillMaxWidth()) { onDismiss() }
+    }
+}
+
+/** "Custom amount…", tapped — mirrors `HiredScreen.kt`'s `CustomTollDialog`/this file's own
+ * [CleaningFeeDialog] shape/keypad exactly: reuses [CaptainKeypad], no new keypad implementation. */
+@Composable
+private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Unit) {
+    var cents by remember { mutableStateOf("") }
+    val amount = if (cents.isEmpty()) BigDecimal.ZERO else BigDecimal(cents).movePointLeft(2)
+
+    Column(
+        modifier = Modifier
+            .width(480.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+            .padding(30.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Custom tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+        Box(
+            modifier = Modifier
+                .width(448.dp)
+                .height(72.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(CaptainPalette.inset),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                amount.money(),
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 38.sp,
+                color = CaptainPalette.success,
+            )
+        }
+        CaptainKeypad(
+            onDigit = { d -> if (cents.length < 6) cents += d },
+            onBackspace = { cents = cents.dropLast(1) },
+            onClear = { cents = "" },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
+            CaptainButton(
+                text = "Add tip",
+                enabled = amount > BigDecimal.ZERO,
+                modifier = Modifier.weight(1.4f),
+            ) { onConfirm(amount) }
+        }
+    }
+}
+
 @Composable
 private fun MethodPickerScreen(
     state: CloseAndPayUiState.ReadyToClose,
@@ -474,10 +679,12 @@ private fun MethodPickerScreen(
     onDispute: () -> Unit,
 ) {
     var showCleaningDialog by remember { mutableStateOf(false) }
+    var showTipDialog by remember { mutableStateOf(false) }
+    var showCustomTipDialog by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {
-            TotalCol(state = state, vm = vm, onReportSoiling = { showCleaningDialog = true })
+            TotalCol(state = state, vm = vm, onReportSoiling = { showCleaningDialog = true }, onAddTip = { showTipDialog = true })
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -495,8 +702,20 @@ private fun MethodPickerScreen(
                     color = CaptainPalette.textMuted,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard(Icons.Rounded.ConfirmationNumber, "VOUCHER", CaptainPalette.warning) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
-                    PayCard(Icons.Rounded.Business, "ACCOUNT", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
+                    PayCard(
+                        Icons.Rounded.ConfirmationNumber,
+                        "VOUCHER",
+                        CaptainPalette.warning,
+                        // Never fabricate a count while loading/on failure — null renders no
+                        // subtitle at all, matching this app's zero-fake-affordance rule.
+                        subtitle = state.voucherAvailableCount?.let { "$it Available" },
+                    ) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
+                    PayCard(
+                        Icons.Rounded.Business,
+                        "ACCOUNT",
+                        CaptainPalette.textSecondary,
+                        subtitle = state.corporateAccountActiveCount?.let { "$it Active" },
+                    ) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     PayCard(Icons.Rounded.CallSplit, "SPLIT FARE", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.SPLIT_FARE, PaymentSubScreen.SPLIT_FARE_ENTRY) }
@@ -524,10 +743,34 @@ private fun MethodPickerScreen(
             },
         )
     }
+
+    CaptainDialogScrim(visible = showTipDialog, onDismissRequest = { showTipDialog = false }) {
+        TipPresetDialog(
+            currentTip = state.tip,
+            onDismiss = { showTipDialog = false },
+            onSelectPreset = { amount ->
+                showTipDialog = false
+                vm.setTip(amount)
+            },
+            onCustom = {
+                showTipDialog = false
+                showCustomTipDialog = true
+            },
+        )
+    }
+    CaptainDialogScrim(visible = showCustomTipDialog, onDismissRequest = { showCustomTipDialog = false }) {
+        CustomTipDialog(
+            onDismiss = { showCustomTipDialog = false },
+            onConfirm = { amount ->
+                showCustomTipDialog = false
+                vm.setTip(amount)
+            },
+        )
+    }
 }
 
 @Composable
-private fun PayCard(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+private fun PayCard(icon: ImageVector, label: String, accent: Color, subtitle: String? = null, onClick: () -> Unit) {
     CaptainPanel(
         modifier = Modifier.width(357.dp).height(118.dp).clickable(onClick = onClick),
         raised = true,
@@ -547,7 +790,14 @@ private fun PayCard(icon: ImageVector, label: String, accent: Color, onClick: ()
             ) {
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(30.dp))
             }
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)
+            Column {
+                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)
+                // Real backend-derived count only — never shown while null (loading/failed), see
+                // this parameter's call sites in MethodPickerScreen.
+                subtitle?.let {
+                    Text(it, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                }
+            }
         }
     }
 }
@@ -566,7 +816,16 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Amount tendered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
-            Text("Total due ${state.breakdown.grandTotal.money()}", fontFamily = InterFamily, fontSize = 17.sp, color = CaptainPalette.textSecondary)
+            Text(
+                if (state.tip.signum() > 0) {
+                    "Total due ${state.totalDue.money()} (incl. ${state.tip.money()} tip)"
+                } else {
+                    "Total due ${state.totalDue.money()}"
+                },
+                fontFamily = InterFamily,
+                fontSize = 17.sp,
+                color = CaptainPalette.textSecondary,
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -595,7 +854,7 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                         widthDp = 110,
                     ) {
                         cents = when (preset) {
-                            "Exact" -> state.breakdown.grandTotal.movePointRight(2).toBigInteger().toString()
+                            "Exact" -> state.totalDue.movePointRight(2).toBigInteger().toString()
                             else -> preset.drop(1) + "00"
                         }
                         vm.setCashTendered(BigDecimal(cents).movePointLeft(2).toPlainString())
@@ -618,10 +877,11 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 CaptainButton(text = "Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
-                    text = if (state.paymentInFlight) "Processing…" else "Confirm & Close Trip",
+                    text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.totalDue),
                     heightDp = 72,
+                    fontSize = 17.sp,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    widthDp = 268,
+                    widthDp = 320,
                     onClick = vm::confirmPayment,
                 )
             }
@@ -635,7 +895,8 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
 private fun DocketEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
     LabeledEntryScreen(
         title = "CabCharge / TTSS docket",
-        totalLine = "Total due ${state.breakdown.grandTotal.money()} — docket number required for reconciliation.",
+        totalLine = "Total due ${state.breakdown.grandTotal.money()} — docket number required for reconciliation." +
+            tipSeparateSuffix(state.tip),
         value = state.docketNumber,
         onValueChar = { c -> vm.setDocketNumber(state.docketNumber + c) },
         onBackspace = { vm.setDocketNumber(state.docketNumber.dropLast(1)) },
@@ -643,7 +904,7 @@ private fun DocketEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseA
         canConfirm = state.canConfirm && !state.paymentInFlight,
         inFlight = state.paymentInFlight,
         error = state.paymentError,
-        confirmLabel = "Record & Close Trip",
+        confirmLabel = closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
         onConfirm = vm::confirmPayment,
         onBack = onBack,
     )
@@ -687,7 +948,8 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    "Total due ${state.breakdown.grandTotal.money()} — voucher redeemed against the full amount.",
+                    "Total due ${state.breakdown.grandTotal.money()} — voucher redeemed against the full amount." +
+                        tipSeparateSuffix(state.tip),
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
@@ -712,10 +974,11 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
-                    text = if (state.paymentInFlight) "Processing…" else "Redeem & Close Trip",
+                    text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
                     heightDp = 72,
+                    fontSize = 17.sp,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    widthDp = 268,
+                    widthDp = 320,
                     onClick = vm::confirmPayment,
                 )
             }
@@ -729,7 +992,8 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
 private fun AccountEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -> Unit) {
     LabeledEntryScreen(
         title = "Account payment",
-        totalLine = "Total due ${state.breakdown.grandTotal.money()} — invoiced to the linked account.",
+        totalLine = "Total due ${state.breakdown.grandTotal.money()} — invoiced to the linked account." +
+            tipSeparateSuffix(state.tip),
         value = state.accountReference,
         onValueChar = { c -> vm.setAccountReference(state.accountReference + c) },
         onBackspace = { vm.setAccountReference(state.accountReference.dropLast(1)) },
@@ -737,7 +1001,7 @@ private fun AccountEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
         canConfirm = state.canConfirm && !state.paymentInFlight,
         inFlight = state.paymentInFlight,
         error = state.paymentError,
-        confirmLabel = "Charge Account & Close",
+        confirmLabel = closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
         onConfirm = vm::confirmPayment,
         onBack = onBack,
         useAlphaGrid = true,
@@ -799,8 +1063,9 @@ private fun LabeledEntryScreen(
                 CaptainButton(
                     text = if (inFlight) "Processing…" else confirmLabel,
                     heightDp = 72,
+                    fontSize = 17.sp,
                     enabled = canConfirm,
-                    widthDp = 268,
+                    widthDp = 320,
                     onClick = onConfirm,
                 )
             }
@@ -868,6 +1133,18 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
             ) {
                 Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
                 Text(state.breakdown.grandTotal.money(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, color = CaptainPalette.success)
+            }
+            // Split legs must sum exactly to the fare-only grand total (the backend's
+            // `SplitPaymentMismatchError` check, app.services.trips.close_trip/sync_trips) — a tip
+            // isn't split across legs in this v1, so it's called out separately rather than
+            // silently added to (or missing from) the total above.
+            if (state.tip.signum() > 0) {
+                Text(
+                    "Plus a ${state.tip.money()} tip — collected separately (e.g. in cash), not split across legs.",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textMuted,
+                )
             }
             SplitLegRow(
                 icon = Icons.Rounded.Payments,
@@ -941,10 +1218,11 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
-                    text = if (state.paymentInFlight) "Processing…" else "Take Payments & Close",
+                    text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
                     heightDp = 72,
+                    fontSize = 17.sp,
                     enabled = state.canConfirm && !state.paymentInFlight,
-                    widthDp = 268,
+                    widthDp = 320,
                     onClick = vm::confirmPayment,
                 )
             }

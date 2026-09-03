@@ -1382,3 +1382,124 @@ async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_
     body = resp.json()
     assert body["total"] == "45.00"
     assert body["subtotal"] == "45.00"
+
+
+# --- tips (Close & Pay "tips" pass) -----------------------------------------
+
+
+async def test_close_trip_persists_tip_amount(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={"tip_amount": "5.00"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(body["tip_amount"]) == Decimal("5.00")
+
+
+async def test_close_trip_without_tip_leaves_tip_amount_null(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["tip_amount"] is None
+
+
+async def test_close_trip_negative_tip_amount_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={"tip_amount": "-1.00"}, headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_close_trip_tip_amount_is_never_folded_into_fare_total_or_gst(
+    client: AsyncClient, session: AsyncSession
+):
+    """The whole point of keeping tip_amount off the fare engine: closing the
+    SAME trip shape with and without a tip must produce an IDENTICAL
+    subtotal/surcharge/total/gst_component — only tip_amount itself differs."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    trip_no_tip = await _create_trip(client, headers, tariff.id)
+    trip_with_tip = await _create_trip(client, headers, tariff.id)
+
+    resp_no_tip = await client.post(f"/v1/trips/{trip_no_tip['id']}/close", json={}, headers=headers)
+    resp_with_tip = await client.post(
+        f"/v1/trips/{trip_with_tip['id']}/close", json={"tip_amount": "20.00"}, headers=headers
+    )
+    assert resp_no_tip.status_code == 200
+    assert resp_with_tip.status_code == 200
+    no_tip = resp_no_tip.json()
+    with_tip = resp_with_tip.json()
+
+    assert no_tip["tip_amount"] is None
+    assert Decimal(with_tip["tip_amount"]) == Decimal("20.00")
+
+    for field in ("flag_fall", "dist_amount", "wait_amount", "peak_amount", "subtotal", "surcharge", "total", "gst_component"):
+        assert with_tip[field] == no_tip[field], f"{field} differs between tipped/untipped close ({with_tip[field]} vs {no_tip[field]})"
+
+
+async def test_sync_persists_tip_amount_without_affecting_device_total_variance(
+    client: AsyncClient, session: AsyncSession
+):
+    """The real Android call path (see ApiService.kt's TripSyncItemDto doc) —
+    a tip entered on-device must round-trip through /v1/trips/sync, and must
+    not be counted as part of device_total for the max-fare variance check."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    end_lat, end_lng = -33.8600, 151.2093
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+
+    distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
+    expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
+    expected_fare_total = round_down(Decimal("5.17") + expected_dist_amount)  # cash, no surcharge
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total=str(expected_fare_total),  # device_total deliberately excludes the tip below
+        start_lat=start_lat,
+        start_lng=start_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+        tip_amount="10.00",
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert Decimal(trip["tip_amount"]) == Decimal("10.00")
+    assert trip["max_fare_check_passed"] is True
+    assert Decimal(trip["variance_pct"]) <= Decimal("1.0")
+    assert Decimal(trip["total"]) == expected_fare_total
+
+
+async def test_tip_amount_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Tenant A Tips")
+    tenant_a = await _tenant_of(client, headers_a)
+    tariff_a = await _seed_tariff(session, tenant_id=tenant_a)
+    trip = await _create_trip(client, headers_a, tariff_a.id)
+
+    close_resp = await client.post(
+        f"/v1/trips/{trip['id']}/close", json={"tip_amount": "7.50"}, headers=headers_a
+    )
+    assert close_resp.status_code == 200
+    assert Decimal(close_resp.json()["tip_amount"]) == Decimal("7.50")
+
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Tenant B Tips")
+    resp = await client.get(f"/v1/trips/{trip['id']}", headers=headers_b)
+    assert resp.status_code == 404

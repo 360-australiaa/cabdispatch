@@ -287,6 +287,35 @@ interface ApiService {
         @Query("limit") limit: Int = 20,
     ): FatigueAlertPageDto
 
+    // ---- Vouchers / Corporate Accounts (Close & Pay payment-grid pass, real backend endpoints
+    // added by the SaaS-platform Phase 3 voucher-ledger workstream, commit 1f93840) ----
+
+    /**
+     * Backs the Close & Pay VOUCHER button's real "N Available" count — mirrors
+     * `GET /v1/vouchers?redeemed=false` (`backend/app/api/v1/vouchers.py`). Only [redeemed]/
+     * [limit] are used on-device today (a small count query, not a full listing UI); [skip]
+     * defaults match the backend's own. A failed/loading call must never fabricate a count — see
+     * the call site in [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel].
+     */
+    @GET("/v1/vouchers")
+    suspend fun listVouchers(
+        @Query("redeemed") redeemed: Boolean? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): VoucherPageDto
+
+    /**
+     * Backs the Close & Pay ACCOUNT button's real active-count/balance indicator — mirrors
+     * `GET /v1/corporate-accounts` (`backend/app/api/v1/corporate_accounts.py`). Same
+     * never-fabricate-on-failure rule as [listVouchers].
+     */
+    @GET("/v1/corporate-accounts")
+    suspend fun listCorporateAccounts(
+        @Query("active") active: Boolean? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): CorporateAccountPageDto
+
     // ---- Shifts (S1 open, S5 close/report) ----
 
     @POST("/v1/shifts/start")
@@ -931,6 +960,14 @@ data class TripDto(
      * `TripRead` schemas expose so far has been 1:1 with the model, but flagged as the one
      * unverified assumption in this DTO. */
     @SerialName("negotiated_total") val negotiatedTotal: String? = null,
+    /**
+     * Driver tip (Close & Pay "tips" pass) — mirrors the backend's `Trip.tip_amount`. Nullable-
+     * defaulted (not required) per this file's own convention for a field added after this DTO
+     * already had live callers. Deliberately NOT folded into [total]/[gstComponent] — see the
+     * backend `Trip.tip_amount` doc comment (deviation #6): a tip is a voluntary, non-fare
+     * amount, never part of the regulated fare/GST figures this DTO otherwise mirrors 1:1.
+     */
+    @SerialName("tip_amount") val tipAmount: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )
@@ -996,6 +1033,8 @@ data class TripCloseRequestDto(
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
     @SerialName("include_psl") val includePsl: Boolean = false,
     @SerialName("receipt_ref") val receiptRef: String? = null,
+    /** See [TripDto.tipAmount]'s doc. `null` = no tip recorded for this close. */
+    @SerialName("tip_amount") val tipAmount: String? = null,
 )
 
 /**
@@ -1061,6 +1100,13 @@ data class TripSyncItemDto(
     @SerialName("receipt_ref") val receiptRef: String? = null,
     /** The total the offline device computed on-vehicle. */
     @SerialName("device_total") val deviceTotal: String,
+    /**
+     * See [TripDto.tipAmount]'s doc. This is the field that actually matters for tips to reach
+     * the server: `POST /v1/trips/sync` is the ONLY network call this app's offline-first close
+     * flow makes (see this class's own doc above) — a tip entered on-device round-trips here, not
+     * through [ApiService.closeTrip]/[TripCloseRequestDto], which has no real call site.
+     */
+    @SerialName("tip_amount") val tipAmount: String? = null,
 )
 
 /** Body for [ApiService.flagTrip] (`PATCH /v1/trips/{id}/flag`, backend's `TripFlagRequest`) — the
@@ -1083,6 +1129,43 @@ data class TripSyncResultItemDto(
 
 @Serializable
 data class TripSyncResponseDto(val results: List<TripSyncResultItemDto>)
+
+/** Mirrors the backend's `VoucherRead` (`backend/app/api/v1/vouchers.py`) — only the fields the
+ * Close & Pay payment grid actually reads are declared; money/dates as decimal-as-string/ISO
+ * strings per this file's header convention. */
+@Serializable
+data class VoucherDto(
+    val id: String,
+    val code: String,
+    @SerialName("value_aud") val valueAud: String,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("redeemed_at") val redeemedAt: String? = null,
+)
+
+@Serializable
+data class VoucherPageDto(
+    val items: List<VoucherDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors the backend's `CorporateAccountRead` (`backend/app/api/v1/corporate_accounts.py`). */
+@Serializable
+data class CorporateAccountDto(
+    val id: String,
+    val reference: String,
+    @SerialName("company_name") val companyName: String,
+    val active: Boolean,
+)
+
+@Serializable
+data class CorporateAccountPageDto(
+    val items: List<CorporateAccountDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
 
 @Serializable
 data class ShiftStartDto(
