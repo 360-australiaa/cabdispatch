@@ -126,6 +126,7 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessagesWheelContent
+import au.com.threesixty.cabdispatch.ui.screens.pricing.PricingPaneContent
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsPaneVariant
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
@@ -477,6 +478,12 @@ fun DeckHomeScreen(
                         CaptainPane.ZONES -> PaneShell("Zones", onBack = { pane = CaptainPane.DASHBOARD }) {
                             ZonesPaneContent(navController)
                         }
+                        // Real, standalone, view-only tariff display (Phase E) — replaces the old
+                        // mislabelled alias where PRICING silently opened the Set Price dialog
+                        // (see RAIL_ITEMS' own comment and PricingPaneContent's class doc for why).
+                        CaptainPane.PRICING -> PaneShell("Pricing", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            PricingPaneContent()
+                        }
                         CaptainPane.MESSAGES -> PaneShell("Messages", onBack = { pane = CaptainPane.DASHBOARD }) {
                             MessagesWheelContent(onOpenThread = { navController.navigate(CabDispatchRoutes.MESSAGES_THREAD) })
                         }
@@ -515,7 +522,6 @@ fun DeckHomeScreen(
                 onSelectPane = { pane = it },
                 menuExpanded = menuExpanded,
                 onToggleMenu = { menuExpanded = !menuExpanded },
-                onOpenPricing = { showSetPrice = true },
                 onOpenVouchers = { showVoucherInfo = true },
                 onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
                 onOpenSettings = { navController.navigate(CabDispatchRoutes.SETTINGS) },
@@ -603,7 +609,6 @@ fun DeckHomeScreen(
         pane = pane,
         hasActiveTrip = hasActiveTrip,
         onSelectPane = { pane = it; menuExpanded = false },
-        onOpenPricing = { showSetPrice = true; menuExpanded = false },
         onOpenVouchers = { showVoucherInfo = true; menuExpanded = false },
         onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE); menuExpanded = false },
         onOpenSettings = { navController.navigate(CabDispatchRoutes.SETTINGS); menuExpanded = false },
@@ -627,7 +632,7 @@ private sealed interface MeterStartPhase {
 
 /** The rail's fixed destinations (`01 · HOME — Collapsed Rail` / `02 · HOME — Expanded Menu`) —
  * see this file's class doc for exactly which Figma items are aliased, dropped, or added and why. */
-private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, MESSAGES, MAP, METER }
+private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, PRICING, MESSAGES, MAP, METER }
 
 /** `rememberCoroutineScope()`, spelled out under a distinct name only so this file's own
  * [kotlinx.coroutines.launch] call above reads unambiguously next to the unrelated
@@ -1666,7 +1671,6 @@ private data class RailItem(
 )
 private sealed interface RailAction {
     data class ToPane(val pane: CaptainPane) : RailAction
-    data object OpenPricing : RailAction
     data object OpenVouchers : RailAction
     data object OpenProfile : RailAction
     data object OpenSettings : RailAction
@@ -1690,7 +1694,7 @@ private fun railItems(hasActiveTrip: Boolean) = listOf(
     RailItem(Icons.Rounded.SsidChart, 4, "EARNINGS", "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
     RailItem(Icons.Rounded.History, 5, "HISTORY", "SHIFT SUMMARY", RailAction.ToPane(CaptainPane.SHIFT)),
     RailItem(Icons.Rounded.LocationOn, 6, "ZONES", "PLOT ZONES", RailAction.ToPane(CaptainPane.ZONES)),
-    RailItem(Icons.Rounded.Sell, 7, "PRICING", "SET PRICE", RailAction.OpenPricing),
+    RailItem(Icons.Rounded.Sell, 7, "PRICING", "FARE STRUCTURE", RailAction.ToPane(CaptainPane.PRICING)),
     RailItem(Icons.Rounded.ConfirmationNumber, 8, "VOUCHERS", "VOUCHERS", RailAction.OpenVouchers),
     RailItem(Icons.Rounded.Person, 9, "DRIVER", "DRIVER PORTAL", RailAction.OpenProfile),
     RailItem(Icons.Rounded.SettingsSuggest, 10, "SETTINGS", "SETTINGS", RailAction.OpenSettings),
@@ -1712,7 +1716,6 @@ private fun CaptainNavRail(
     onSelectPane: (CaptainPane) -> Unit,
     menuExpanded: Boolean,
     onToggleMenu: () -> Unit,
-    onOpenPricing: () -> Unit,
     onOpenVouchers: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -1722,7 +1725,6 @@ private fun CaptainNavRail(
     fun dispatch(action: RailAction) {
         when (action) {
             is RailAction.ToPane -> onSelectPane(action.pane)
-            RailAction.OpenPricing -> onOpenPricing()
             RailAction.OpenVouchers -> onOpenVouchers()
             RailAction.OpenProfile -> onOpenProfile()
             RailAction.OpenSettings -> onOpenSettings()
@@ -1815,7 +1817,6 @@ private fun CaptainNavFlyout(
     pane: CaptainPane,
     hasActiveTrip: Boolean,
     onSelectPane: (CaptainPane) -> Unit,
-    onOpenPricing: () -> Unit,
     onOpenVouchers: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -1825,7 +1826,6 @@ private fun CaptainNavFlyout(
     fun dispatch(action: RailAction) {
         when (action) {
             is RailAction.ToPane -> onSelectPane(action.pane)
-            RailAction.OpenPricing -> onOpenPricing()
             RailAction.OpenVouchers -> onOpenVouchers()
             RailAction.OpenProfile -> onOpenProfile()
             RailAction.OpenSettings -> onOpenSettings()
