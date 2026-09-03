@@ -9,6 +9,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -29,10 +30,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.ConfirmationNumber
 import androidx.compose.material.icons.rounded.DirectionsCar
@@ -40,10 +46,7 @@ import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.rounded.Sell
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,16 +59,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -81,6 +92,7 @@ import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TollPresets
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
+import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.toMoneyString
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.overlays.DuressActiveBanner
@@ -94,60 +106,54 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
+import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import java.math.BigDecimal
 import java.math.RoundingMode
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
- * 18/18b · Hired — Meter, Phase A shell-integration pass (2026-09-03). Was previously a standalone
- * full-screen route ("deliberately no nav rail/drive panel" — see git history prior to this pass);
- * now embedded as [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s
- * `CaptainPane.METER` pane, the same "one shell, swap embedded content per rail item" pattern the
- * `*WheelContent` panes already use (`ShiftWheelContent`, `EarningsWheelContent`, etc.) — see that
- * file's own class doc ("Meter joins the shared shell") and its `startOnMeter` param doc for how a
- * driver actually lands here. The header/footer/nav-rail a driver sees while HIRED now come from
- * that shared shell, not from this file — this composable owns only the content area DeckHomeScreen
- * hands it (the same slot `MeterCard`/`LiveDispatchCard` occupy for `CaptainPane.DASHBOARD`).
+ * 18/18b · Hired — Meter. Phase A (2026-09-03) embedded this as
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `CaptainPane.METER` pane
+ * (shared header/footer/nav-rail — see that file's class doc and its `startOnMeter` param); this
+ * composable owns only the content slot DeckHomeScreen hands it. The "game-level" visual pass
+ * (same day) re-laid that slot out to match the reference mockup, purely presentationally:
  *
  * All metering logic is untouched [HiredViewModel]: live [FareState] ticks, pause/resume,
  * addToll persistence, endTrip → Close & Pay, duress state machine (hidden gesture + overlays) —
- * every `viewModel.*` call and `fareState.*`/`duressState` read below is byte-for-byte the same
- * call/read this screen made before this pass; only the surrounding layout changed:
+ * every `viewModel.*` call and `fareState.*`/`duressState` read below is the same call/read this
+ * screen has always made; only the surrounding layout/art changed:
  *
- * - **Circular [ActiveMeterDial]** replaces the old rounded-rect meter well — same
- *   rotating-arc/radial-gradient glow technique as the well's old `MeterWellGlow` (now
- *   [MeterDialGlow]; the sweep/glow/pulse Canvas math is unchanged, only the outer shape is now a
- *   circle rather than a rounded rect, and a full ring stroke was added to read as a dial rather
- *   than a glowing panel), plus the same fare-tick flash/scale pulse the well always had.
- * - **[FareBreakdownCard]** revives [HiredViewModel.breakdownExpanded]/`.toggleBreakdown()` —
- *   previously wired on the ViewModel but never read/called by this screen — as a real HIDE/SHOW
- *   toggle over `fareState.breakdown`'s existing fields. No new fare data, just a real card instead
- *   of the old flat `chargesRow` of chips.
- * - **[TripDetailsCard]** — trip ID/pickup/drop-off/distance/duration/avg-speed. Pickup/drop-off
- *   read `SessionHolder.pendingTrip.value`'s new `originAddress`/`destAddress` (see
- *   `domain/Session.kt`'s `TripContext` doc) — `null` for a trip with no dispatch-offer address to
- *   carry (a street hail/rank job, or one accepted via the Dispatch wheel-content pane, which this
- *   pass's edit scope didn't extend to) renders "—", never a fabricated address. Avg speed is plain
- *   arithmetic over `fareState.distanceKm`/`.movingSeconds` — no new engine field.
- * - **Vertical action stack** (SET PRICE / ADD TOLL / PAUSE FARE / MORE) replaces the old
- *   horizontal `chargesRow` + controls `Row`. PAUSE FARE still calls `togglePause()` exactly; ADD
- *   TOLL opens the same toll presets (`TollPresets.ALL`) + custom-amount pad via `addToll()`
- *   exactly, just reached through one stack entry instead of four inline chips. SET PRICE is
- *   **read-only/informational** here — see [SetPriceInfoDialog]'s doc for why: `TripContext.negotiatedTotal`
- *   is real, already-wired data (it decided this trip's fixed fare at Start Meter time and is
- *   already persisted to `TripEntity.negotiatedTotal`), but nothing in [HiredViewModel] can *change*
- *   it mid-trip, so this pass does not fabricate a working "edit price" affordance — it shows the
- *   real value (or the real absence of one) and explains why it can't be changed here, the same
- *   honest-affordance treatment this screen's own EXTRAS button already used before this pass.
- *   MORE tucks the previously-inline passenger-count-correction and speech-toggle affordances into
- *   one overflow sheet — same `updatePassengerCount()`/`toggleSpeech()` calls, unchanged.
+ * - **Five-column layout** on the shell's fixed 1280×800 logical canvas (`MainActivity`'s
+ *   `FixedDesignCanvas` — the SM-T575 is scaled onto it, so every dp below is authored against the
+ *   ~992×420dp this pane actually receives under the shared header/footer/rail): NIGHT/DAY FARE
+ *   tile + status ([NightFareTile]/[MeterStatusTile]) · the dial floating over a real Mapbox
+ *   backdrop ([MeterBackdropMap] + [ActiveMeterDial]) · the SET PRICE/ADD TOLL/PAUSE FARE/MORE
+ *   action tiles ([MeterActionStack]) · a scrolling far-right column with [FareBreakdownCard] and
+ *   [TripDetailsCard]. Nothing but that far-right column scrolls — Phase A's left-column scroll
+ *   (an on-device overflow fix) is gone because the dial no longer stacks readouts/actions/END
+ *   TRIP beneath itself.
+ * - **[ActiveMeterDial] is a speedometer**: the outer ring is a REAL 0–120 km/h scale whose arc
+ *   sweeps to `fareState.currentSpeedKmh` (the engine's own speed, the same one it accrues
+ *   distance against — not the mockup's decorative 0–350). Inside: the fare ring (bloom pulses on
+ *   every fare tick), car icon, ACTIVE FARE, the fare figure with the tick flash/scale pop,
+ *   RUNNING (glowing accent) / PAUSED (amber), TARIFF + EXTRAS, DISTANCE/TIME, and the **END FARE**
+ *   button INSIDE the dial — the exact `viewModel.endTrip { navigate(CLOSE_PAY) }` call the old
+ *   full-width END TRIP bar made.
+ * - **[MeterBackdropMap]** — real map, real route (every vertex a real GPS fix), real pickup pin,
+ *   NO destination pin (no real destination coordinates exist on [TripContext]) — see its doc.
+ * - **[FareBreakdownCard]** keeps [HiredViewModel.breakdownExpanded]/`.toggleBreakdown()` as the
+ *   HIDE/SHOW toggle; rows now carry the mockup's coloured dot bullets. **[TripDetailsCard]** is
+ *   the vertical pickup→drop-off timeline + DISTANCE/DURATION/AVG SPEED/WAITING. Both still render
+ *   an honest "—" wherever data is missing (see `TripContext.originAddress`'s doc).
+ * - SET PRICE remains **read-only/informational** ([SetPriceInfoDialog]'s doc explains why); ADD
+ *   TOLL/MORE open the same dialogs; PAUSE FARE calls `togglePause()` exactly.
  *
  * The hidden duress gesture zone's modifier (`align(Alignment.BottomEnd).padding(end = 12.dp,
  * bottom = 12.dp)`) and `onTriggered = viewModel::onDuressTriggered` call are reproduced verbatim
- * below — this pass does not move, resize, or reveal it. It now anchors to this pane's own content
- * box (DeckHomeScreen's METER slot) rather than the full physical screen, since that box no longer
- * spans the whole display once the shared header/footer/nav-rail wrap around it, but the gesture
- * itself (invisible, bottom-end corner of its container, 3 taps inside 800ms) is unchanged.
+ * below — this pass does not move, resize, or reveal it (explicit user decision: no visible duress
+ * button on this screen).
  */
 @Composable
 fun HiredScreen(
@@ -163,10 +169,16 @@ fun HiredScreen(
     // Best-effort read of the same hand-off payload HiredViewModel.init already reads once — see
     // TripContext.originAddress/.destAddress/.negotiatedTotal's docs. A screen-local read (same
     // "screen-local loader" convention DeckHomeScreen's HomeExtras/DriverAvatar already use), not a
-    // new field added to HiredViewModel itself — this pass's HiredViewModel edit budget is spent
-    // entirely on being read-only. Degrades to nulls (every dependent row below already shows "—")
-    // if this VM instance somehow outlives the pendingTrip hand-off it was created from.
+    // new field added to HiredViewModel itself. Degrades to nulls (every dependent row below
+    // already shows "—") if this VM instance somehow outlives the pendingTrip hand-off.
     val tripContext by SessionHolder.pendingTrip.collectAsState()
+    // Real persisted trip row (Room, via the same observeActiveTrip Flow DeckHomeScreen's
+    // hasActiveTrip read uses) — only for the Trip Details timeline's real pickup time
+    // (TripEntity.startAt) — and its persisted GPS trace for the backdrop's route polyline.
+    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
+    val persistedTrace by AppContainer.tripRepository.observeActiveTripGpsTrace().collectAsState(initial = emptyList())
+    val liveTrace = rememberLiveTrace()
+    val liveFix by AppContainer.speedSource.locationFix.collectAsState()
 
     var showTollPad by remember { mutableStateOf(false) }
     var showTollMenu by remember { mutableStateOf(false) }
@@ -174,8 +186,7 @@ fun HiredScreen(
     var showSetPriceInfo by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
     // Point to Point Transport (Fares) Order 2026 UI-wiring pass: mid-trip passenger-count
-    // correction — see HiredViewModel.updatePassengerCount's doc. Now reached from the MORE sheet
-    // rather than a floating "PAX n ✎" affordance on the well, but the same dialog/call.
+    // correction — see HiredViewModel.updatePassengerCount's doc. Reached from the MORE sheet.
     var showPassengerEdit by remember { mutableStateOf(false) }
 
     var showStartedBanner by remember { mutableStateOf(false) }
@@ -189,42 +200,19 @@ fun HiredScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // --- compact status row (state pill now lives on the dial itself; this keeps the
-            // band/time-class/SIGNED + GPS readout the old topBar carried, without duplicating the
-            // driver avatar/name/clock the shared header above this pane already shows) ---
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${fareState.band.label.uppercase()} — ${fareState.timeClass.label.uppercase()} · SIGNED ✓",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.warning,
-                )
-                Spacer(Modifier.width(18.dp))
-                val gpsOk = AppContainer.speedSource.locationFix.collectAsState().value != null
-                Text(
-                    "GPS ●",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = if (gpsOk) CaptainPalette.success else CaptainPalette.danger,
-                )
-            }
-
             // --- Maxi rate / wheelchair-hiring indicators (Point to Point Transport (Fares)
             // Order 2026 UI-wiring pass). Read ONLY [fareState.maxiRateApplied] — the pure fare
             // engine's own derived flag, copied through by FareEngineImpl — never recomputed here
             // from isMaxiVehicle/passengerCount/wheelchairHiring directly, so this banner can never
-            // drift from what is actually being charged. Unchanged from the pre-shell-integration
-            // version, just relocated above the new two-column layout instead of the old meter well.
+            // drift from what is actually being charged. Take vertical room only while visible.
             AnimatedVisibility(visible = fareState.maxiRateApplied, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 14.dp)
+                        .padding(bottom = 10.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(CaptainPalette.warning)
-                        .padding(horizontal = 24.dp, vertical = 10.dp),
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -232,7 +220,7 @@ fun HiredScreen(
                         "⚠  MAXI RATE ×1.5 ACTIVE",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.bg,
                     )
@@ -242,69 +230,79 @@ fun HiredScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 14.dp)
+                        .padding(bottom = 10.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(CaptainPalette.panel)
                         .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         "♿  Wheelchair hiring — meter should start once the passenger is safely secured, per NSW Reg cl 82. Ordinary (non-maxi) rate applies.",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         color = CaptainPalette.textSecondary,
                     )
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
-
-            // Real overflow fix, found live on-device (SM-T575): once the header/footer/nav-rail
-            // wrap around this pane (the whole point of Phase A), the vertical room left for the
-            // dial + action stack + Trip Details/Fare Breakdown is much tighter than the old
-            // full-screen route ever had to budget for — a fixed, non-scrolling left column
-            // silently clipped the DISTANCE/TIME/WAITING readouts behind the footer stats bar on
-            // first on-device verification. Both columns now scroll independently, and END TRIP —
-            // the one action that must never be scrolled out of reach — is pinned OUTSIDE this Row
-            // entirely, in its own fixed-height slot below it (see the Box after this Row).
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // --- left: circular dial + readouts + vertical action stack ---
-                Column(
-                    modifier = Modifier.width(420.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
+                // --- col 1: NIGHT/DAY FARE tile + compact status ---
+                Column(modifier = Modifier.width(LEFT_COL_W).fillMaxHeight()) {
+                    NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
+                    Spacer(Modifier.height(10.dp))
+                    MeterStatusTile(fareState = fareState, gpsOk = liveFix != null, modifier = Modifier.weight(1f))
+                }
+
+                Spacer(Modifier.width(COL_GAP))
+
+                // --- col 2: the dial, floating over the real map backdrop ---
+                Box(
+                    modifier = Modifier
+                        .width(MAP_COL_W)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(CaptainPalette.cardBottom)
+                        .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp)),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        ActiveMeterDial(fareState = fareState, isPaused = isPaused)
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        val movingMin = fareState.movingSeconds / 60
-                        val movingSec = fareState.movingSeconds % 60
-                        val waitMin = fareState.waitingSeconds / 60
-                        val waitSec = fareState.waitingSeconds % 60
-                        MeterDatum("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM")
-                        MeterDatum("TIME", "%d:%02d".format(movingMin, movingSec))
-                        MeterDatum("WAITING", "%d:%02d".format(waitMin, waitSec), highlight = isPaused)
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    MeterActionStack(
+                    MeterBackdropMap(
+                        startLat = tripContext?.startLat,
+                        startLng = tripContext?.startLng,
+                        persistedTrace = persistedTrace,
+                        liveTrace = liveTrace,
+                        liveFix = liveFix,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    ActiveMeterDial(
+                        fareState = fareState,
                         isPaused = isPaused,
-                        negotiatedTotal = tripContext?.negotiatedTotal,
-                        tollsTotal = fareState.breakdown.tolls,
-                        onSetPrice = { showSetPriceInfo = true },
-                        onAddToll = { showTollMenu = true },
-                        onTogglePause = viewModel::togglePause,
-                        onMore = { showMore = true },
+                        onEndFare = {
+                            viewModel.endTrip { navController.navigate(CabDispatchRoutes.CLOSE_PAY) }
+                        },
                     )
                 }
 
-                Spacer(Modifier.width(18.dp))
+                Spacer(Modifier.width(COL_GAP))
 
-                // --- right: Trip Details + Fare Breakdown cards ---
+                // --- col 3: action tiles ---
+                MeterActionStack(
+                    isPaused = isPaused,
+                    negotiatedTotal = tripContext?.negotiatedTotal,
+                    tollsTotal = fareState.breakdown.tolls,
+                    tollCount = fareState.tollsApplied.size,
+                    onSetPrice = { showSetPriceInfo = true },
+                    onAddToll = { showTollMenu = true },
+                    onTogglePause = viewModel::togglePause,
+                    onMore = { showMore = true },
+                    modifier = Modifier.width(ACTION_COL_W).fillMaxHeight(),
+                )
+
+                Spacer(Modifier.width(COL_GAP))
+
+                // --- col 4: Fare Breakdown + Trip Details (the one column allowed to scroll) ---
                 Column(modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                    TripDetailsCard(tripContext = tripContext, fareState = fareState)
-                    Spacer(Modifier.height(16.dp))
                     FareBreakdownCard(
                         breakdown = fareState.breakdown,
                         timeClass = fareState.timeClass,
@@ -312,39 +310,21 @@ fun HiredScreen(
                         expanded = breakdownExpanded,
                         onToggle = viewModel::toggleBreakdown,
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
+                    TripDetailsCard(
+                        tripContext = tripContext,
+                        fareState = fareState,
+                        startAtIso = activeTrip?.startAt,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         "One of distance or waiting accrues at a time — switches automatically at 26 km/h",
                         fontFamily = InterFamily,
-                        fontSize = 13.sp,
+                        fontSize = 10.sp,
                         color = CaptainPalette.textMuted,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                     )
                 }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // Pinned outside both scrolling columns above — the one action on this whole pane
-            // that must always stay reachable, never scrolled out of view (see this file's own
-            // comment on the Row above for the on-device overflow this fixes).
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(76.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Brush.horizontalGradient(listOf(CaptainPalette.primary, CaptainPalette.accent)))
-                    .clickable {
-                        viewModel.endTrip { navController.navigate(CabDispatchRoutes.CLOSE_PAY) }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "END TRIP — CLOSE & PAY",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 19.sp,
-                    color = CaptainPalette.textPrimary,
-                )
             }
         }
 
@@ -356,6 +336,7 @@ fun HiredScreen(
         ) {
             Box(
                 modifier = Modifier
+                    .neonGlow(CaptainPalette.success, 99.dp, strength = 0.8f)
                     .clip(RoundedCornerShape(99.dp))
                     .background(CaptainPalette.success)
                     .padding(horizontal = 22.dp, vertical = 10.dp),
@@ -466,11 +447,23 @@ fun HiredScreen(
     }
 }
 
+// Column widths, authored against the ~992dp this pane receives on the 1280×800 logical canvas
+// (see HiredScreen's class doc). LEFT + MAP + ACTION + 3 gaps = 692dp, leaving ~300dp for the
+// far-right cards column (weight(1f)).
+private val LEFT_COL_W = 130.dp
+private val MAP_COL_W = 380.dp
+private val ACTION_COL_W = 146.dp
+private val COL_GAP = 12.dp
+
+/** Dial diameter (the ring's outer edge). The glow art is drawn on a larger canvas around it. */
+private val DIAL_SIZE = 360.dp
+private val DIAL_ART_SIZE = 470.dp
+
 /** Real night-rate uplift, not a fabricated multiplier — same ratio-of-signed-tariff computation
  * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `NightFareTile` uses (that
  * one is `private` to a different file, so this is a small, deliberate duplicate of the same
  * formula rather than a cross-file reach-around). `null` tariff (no pending-trip hand-off to read
- * it from) hides the ratio rather than showing a bogus one — see [FareBreakdownCard]'s caller. */
+ * it from) hides the ratio rather than showing a bogus one. */
 private fun nightMultiplierLabel(tariff: TariffDto?): String? {
     val t = tariff ?: return null
     val day = t.distRate1.toBigDecimalOrNull() ?: return null
@@ -481,11 +474,152 @@ private fun nightMultiplierLabel(tariff: TariffDto?): String? {
 
 private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(this) }.getOrNull()
 
+// ============================================================================================
+// Shared "neon" helpers
+// ============================================================================================
+
+/**
+ * Soft outer glow around a rounded-rect surface — three expanding, fading rounded rects drawn
+ * behind the content (cheap `drawBehind`, no blur/RenderEffect, per the SM-T575 frame budget).
+ * Place BEFORE `.clip()`/`.background()` in the modifier chain so the glow lands outside the
+ * surface's own bounds. [strength] 0..1 scales every layer's alpha (animate it for a pulse).
+ */
+private fun Modifier.neonGlow(color: Color, cornerRadius: Dp, strength: Float = 1f, spread: Dp = 5.dp): Modifier =
+    drawBehind {
+        if (strength <= 0.01f) return@drawBehind
+        val step = spread.toPx()
+        val r = cornerRadius.toPx()
+        for (i in 3 downTo 1) {
+            val inset = step * i
+            drawRoundRect(
+                color = color.copy(alpha = (0.22f / i) * strength),
+                topLeft = Offset(-inset, -inset),
+                size = Size(size.width + inset * 2, size.height + inset * 2),
+                cornerRadius = CornerRadius(r + inset, r + inset),
+            )
+        }
+    }
+
+/** Text glow — a same-colour paint shadow (blur radius in px), the cheap way to "bloom" a label. */
+private fun glowStyle(color: Color, blurPx: Float = 18f, alpha: Float = 0.85f): TextStyle =
+    TextStyle(shadow = Shadow(color = color.copy(alpha = alpha), offset = Offset.Zero, blurRadius = blurPx))
+
+/** Small stacked column used for every "LABEL over VALUE" readout on this screen. */
+@Composable
+private fun MiniStat(label: String, value: String, valueColor: Color = CaptainPalette.textPrimary, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = valueColor, modifier = Modifier.padding(top = 2.dp))
+    }
+}
+
+// ============================================================================================
+// Column 1 — NIGHT / DAY FARE tile + status
+// ============================================================================================
+
+/**
+ * The mockup's NIGHT FARE tile, state-driven off the engine's own [TimeClass] (the same field the
+ * breakdown's "Night Fare" row keys on — never a local clock check that could disagree with what
+ * is actually being charged). NIGHT: moon, the real night/day ratio off the signed tariff, the
+ * 10 PM – 6 AM window (the local engine's own boundary, `FareEngine.kt#resolveTimeClass`), neon
+ * accent border + glow. DAY/HOLIDAY: a calmer "DAY FARE · 1.00×" variant rather than an empty
+ * slot — 1.00× is literally true (day rate is the baseline the night ratio is measured against).
+ */
+@Composable
+private fun NightFareTile(timeClass: TimeClass, tariff: TariffDto?) {
+    val night = timeClass == TimeClass.NIGHT
+    val shape = RoundedCornerShape(18.dp)
+    val breath by rememberInfiniteTransition(label = "night-tile").animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "night-tile-breath",
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (night) Modifier.neonGlow(CaptainPalette.accent, 18.dp, strength = breath) else Modifier)
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(if (night) 1.5.dp else 1.dp, if (night) CaptainPalette.accent.copy(alpha = 0.85f) else CaptainPalette.panelBorder, shape)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (night) Icons.Rounded.Bedtime else Icons.Rounded.WbSunny,
+                contentDescription = null,
+                tint = if (night) CaptainPalette.accent else CaptainPalette.warning,
+                modifier = Modifier.size(15.dp),
+            )
+            Text(
+                if (night) "NIGHT FARE" else "DAY FARE",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+                letterSpacing = 1.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+        Text(
+            if (night) nightMultiplierLabel(tariff) ?: "—" else "1.00×",
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.Bold,
+            fontSize = 30.sp,
+            color = CaptainPalette.textPrimary,
+            style = if (night) glowStyle(CaptainPalette.accent, 22f) else TextStyle.Default,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            if (night) "10:00 PM – 6:00 AM" else "6:00 AM – 10:00 PM",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 10.sp,
+            color = CaptainPalette.textSecondary,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+    }
+}
+
+/** The band/time-class/SIGNED + GPS readout the old top status row carried, folded into the left
+ * column so the dial gets the pane's full height. Same reads as before. */
+@Composable
+private fun MeterStatusTile(fareState: FareState, gpsOk: Boolean, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, shape)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("STATUS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        StatusLine("TARIFF", fareState.band.label.uppercase().removePrefix("TARIFF ").trim(), CaptainPalette.warning)
+        StatusLine("RATE", fareState.timeClass.label.uppercase(), if (fareState.timeClass == TimeClass.NIGHT) CaptainPalette.accent else CaptainPalette.textPrimary)
+        StatusLine("SIGNED", "✓", CaptainPalette.success)
+        StatusLine("GPS", if (gpsOk) "FIX" else "NO FIX", if (gpsOk) CaptainPalette.success else CaptainPalette.danger)
+        Spacer(Modifier.weight(1f))
+        val waitMin = fareState.waitingSeconds / 60
+        val waitSec = fareState.waitingSeconds % 60
+        StatusLine("WAITING", "%d:%02d".format(waitMin, waitSec), if (fareState.status == TripStatus.STOPPED) CaptainPalette.warning else CaptainPalette.textPrimary)
+    }
+}
+
+@Composable
+private fun StatusLine(label: String, value: String, valueColor: Color) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = CaptainPalette.textSecondary)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = valueColor)
+    }
+}
+
 /**
  * Real ≥56dp circular icon button replacing the previous bare-emoji `Text.clickable` (a real
  * small-touch-target accessibility problem for an elderly driver base) — same
- * `toggleSpeech(!speechEnabled)` call site, just a legible Material icon and a proper hit area. Now
- * reached from [MoreActionsSheet] rather than the old topBar, unchanged otherwise.
+ * `toggleSpeech(!speechEnabled)` call site, just a legible Material icon and a proper hit area.
+ * Reached from [MoreActionsSheet].
  */
 @Composable
 private fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
@@ -507,180 +641,346 @@ private fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
     }
 }
 
+// ============================================================================================
+// Column 2 — the speedometer dial
+// ============================================================================================
+
 /**
- * Circular active-fare dial (Phase A step 2) — car icon center, "ACTIVE FARE $X" with the same
- * fare-tick flash/scale pulse the old rounded-rect well used, RUNNING/PAUSED · WAITING state pill,
- * "TARIFF n + EXTRAS" subtext. Glow behind it is [MeterDialGlow] — the old well's `MeterWellGlow`
- * Canvas technique, unchanged math, now drawn into a square (circular) bounds instead of a
- * rounded-rect one; see that composable's own doc.
+ * The speedometer/fare dial. All art is [MeterDialArt] (one Canvas); everything readable is
+ * plain Compose text on top. The speed arc is bound to `fareState.currentSpeedKmh` — the live
+ * engine's own speed field, the same number FareEngineImpl decides DISTANCE-vs-WAITING accrual
+ * on — animated with a ~300ms spring so it sweeps rather than jumps. It honestly sits at 0 when
+ * the engine sees 0 (no fix / stationary).
+ *
+ * Fare-tick pulse: each time `fareState.total` changes, the numerals flash to success-green and
+ * settle back, the figure pops ~6%, and [MeterDialArt]'s fare-ring bloom flares (via [tickBloom])
+ * and decays over ~700ms — a live increment reads as an event, not a silent number swap.
  */
 @Composable
-private fun ActiveMeterDial(fareState: FareState, isPaused: Boolean, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.size(272.dp), contentAlignment = Alignment.Center) {
-        MeterDialGlow(active = !isPaused, modifier = Modifier.fillMaxSize())
-
-        // Fare-tick pulse — verbatim from the old meter well: each time fareState.total changes,
-        // the numerals flash to success-green and settle back over ~280ms, with a matching 3% scale
-        // pop, so a live increment is visually readable rather than a silent number swap.
-        var lastTotal by remember { mutableStateOf(fareState.total) }
-        var justTicked by remember { mutableStateOf(false) }
-        LaunchedEffect(fareState.total) {
-            if (fareState.total != lastTotal) {
-                lastTotal = fareState.total
-                justTicked = true
-                kotlinx.coroutines.delay(220)
-                justTicked = false
-            }
+private fun ActiveMeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> Unit, modifier: Modifier = Modifier) {
+    var lastTotal by remember { mutableStateOf(fareState.total) }
+    var justTicked by remember { mutableStateOf(false) }
+    LaunchedEffect(fareState.total) {
+        if (fareState.total != lastTotal) {
+            lastTotal = fareState.total
+            justTicked = true
+            kotlinx.coroutines.delay(220)
+            justTicked = false
         }
-        val flashColor by animateColorAsState(
-            targetValue = if (justTicked) CaptainPalette.success else CaptainPalette.textPrimary,
-            animationSpec = tween(if (justTicked) 0 else 280),
-            label = "fare-flash",
-        )
-        val tickScale by animateFloatAsState(
-            targetValue = if (justTicked) 1.03f else 1f,
-            animationSpec = tween(if (justTicked) 60 else 320, easing = FastOutSlowInEasing),
-            label = "fare-scale",
+    }
+    val flashColor by animateColorAsState(
+        targetValue = if (justTicked) CaptainPalette.success else CaptainPalette.textPrimary,
+        animationSpec = tween(if (justTicked) 0 else 280),
+        label = "fare-flash",
+    )
+    val tickScale by animateFloatAsState(
+        targetValue = if (justTicked) 1.06f else 1f,
+        animationSpec = if (justTicked) tween(60, easing = FastOutSlowInEasing) else spring(dampingRatio = 0.45f, stiffness = 500f),
+        label = "fare-scale",
+    )
+    val tickBloom by animateFloatAsState(
+        targetValue = if (justTicked) 1f else 0f,
+        animationSpec = tween(if (justTicked) 40 else 700, easing = FastOutSlowInEasing),
+        label = "fare-bloom",
+    )
+    val speedTarget = fareState.currentSpeedKmh.toFloat().coerceIn(0f, SPEED_SCALE_MAX)
+    val speed by animateFloatAsState(
+        targetValue = speedTarget,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 120f),
+        label = "speed-sweep",
+    )
+    val stateColor by animateColorAsState(
+        targetValue = if (isPaused) CaptainPalette.warning else CaptainPalette.accent,
+        animationSpec = tween(300),
+        label = "state-color",
+    )
+
+    Box(modifier = modifier.size(DIAL_SIZE), contentAlignment = Alignment.Center) {
+        MeterDialArt(
+            speedKmh = speed,
+            active = !isPaused,
+            tickBloom = tickBloom,
+            modifier = Modifier.size(DIAL_ART_SIZE),
         )
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Rounded.DirectionsCar, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(32.dp))
+            Icon(
+                Icons.Rounded.DirectionsCar,
+                contentDescription = null,
+                tint = CaptainPalette.accent,
+                modifier = Modifier.size(22.dp),
+            )
             Text(
                 "ACTIVE FARE",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
+                fontSize = 10.sp,
                 letterSpacing = 2.sp,
                 color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = 3.dp),
             )
             val totalText = fareState.total.toMoneyString()
             Text(
                 totalText,
                 fontFamily = ChakraPetch,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = if (totalText.length > 7) 50.sp else 62.sp,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (totalText.length > 7) 38.sp else 46.sp,
                 color = flashColor,
-                modifier = Modifier.padding(top = 6.dp).scale(tickScale),
+                style = glowStyle(if (justTicked) CaptainPalette.success else CaptainPalette.accent, 24f, 0.7f),
+                modifier = Modifier.scale(tickScale),
             )
-            Box(
-                modifier = Modifier
-                    .padding(top = 12.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(if (isPaused) CaptainPalette.warning else CaptainPalette.success)
-                    .padding(horizontal = 18.dp, vertical = 7.dp),
-            ) {
-                Text(
-                    if (isPaused) "PAUSED · WAITING" else "RUNNING",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    letterSpacing = 1.sp,
-                    color = CaptainPalette.bg,
-                )
-            }
+            Text(
+                if (isPaused) "PAUSED" else "RUNNING",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                letterSpacing = 3.sp,
+                color = stateColor,
+                style = glowStyle(stateColor, 20f),
+            )
             Text(
                 "${fareState.band.label.uppercase()} + EXTRAS",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
+                fontSize = 9.sp,
+                letterSpacing = 1.sp,
                 color = CaptainPalette.textMuted,
-                modifier = Modifier.padding(top = 10.dp),
+                modifier = Modifier.padding(top = 2.dp),
             )
+            Row(modifier = Modifier.padding(top = 7.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val movingMin = fareState.movingSeconds / 60
+                val movingSec = fareState.movingSeconds % 60
+                DialMiniBox("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM")
+                DialMiniBox("TIME", "%d:%02d".format(movingMin, movingSec))
+            }
+            // END FARE — inside the dial, per the mockup. Same endTrip { navigate(CLOSE_PAY) }
+            // call the old full-width END TRIP bar made (see the caller).
+            Box(
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .width(154.dp)
+                    .height(38.dp)
+                    .neonGlow(CaptainPalette.primary, 19.dp, strength = 0.9f, spread = 4.dp)
+                    .clip(RoundedCornerShape(19.dp))
+                    .background(Brush.horizontalGradient(listOf(CaptainPalette.primary, CaptainPalette.accent)))
+                    .border(1.dp, CaptainPalette.accent.copy(alpha = 0.9f), RoundedCornerShape(19.dp))
+                    .gameClick(onClick = onEndFare, shape = RoundedCornerShape(19.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "END FARE",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    letterSpacing = 2.sp,
+                    color = CaptainPalette.textPrimary,
+                )
+            }
         }
     }
 }
 
-/**
- * Ambient glow for the circular dial — the exact rotating-arc/radial-gradient Canvas technique the
- * old meter well's `MeterWellGlow` used (a soft accent radial-gradient blob plus two opposing
- * bright arcs sweeping around), unchanged math, plus one added plain ring stroke so the shape reads
- * as a dial rather than a glowing panel (the well never needed one since its own rounded-rect
- * border already framed it — this composable has no outer border of its own to lean on). Drawn
- * into a Canvas whose bounds are a SQUARE (the caller sizes this a fixed `.size(320.dp)` circle),
- * so the same `drawArc` calls that traced an ellipse inscribed in the well's rectangle now trace a
- * true circle — no different math, only a different (square, not rectangular) canvas. [active]
- * mirrors `fareState.status == TripStatus.HIRED` exactly as before: brighter/faster while a fare is
- * accruing, dimmer/near-still while STOPPED·WAITING, never fully stopped (a frozen dial reads as
- * broken, not paused).
- */
 @Composable
-private fun MeterDialGlow(active: Boolean, modifier: Modifier = Modifier) {
-    val sweepAngle by rememberInfiniteTransition(label = "meter-dial-sweep").animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(if (active) 6000 else 22000, easing = LinearEasing)),
-        label = "meter-dial-sweep-angle",
-    )
-    val glowStrength by animateFloatAsState(
-        targetValue = if (active) 1f else 0.35f,
-        animationSpec = tween(500),
-        label = "meter-dial-glow-strength",
-    )
-    val pulse by rememberInfiniteTransition(label = "meter-dial-pulse").animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "meter-dial-pulse-v",
-    )
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-        val maxR = kotlin.math.hypot(w, h) / 2.4f
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(CaptainPalette.accent.copy(alpha = 0.16f * glowStrength * pulse), Color.Transparent),
-                center = Offset(cx, cy),
-                radius = maxR,
-            ),
-            radius = maxR,
-            center = Offset(cx, cy),
-        )
-        val strokeW = 3.dp.toPx()
-        val ringRadius = kotlin.math.min(w, h) / 2f - strokeW
-        drawCircle(color = CaptainPalette.panelBorder, radius = ringRadius, center = Offset(cx, cy), style = Stroke(width = strokeW))
-        val inset = strokeW * 1.5f
-        val rectSize = androidx.compose.ui.geometry.Size(w - inset * 2, h - inset * 2)
-        val topLeft = Offset(inset, inset)
-        drawArc(
-            color = CaptainPalette.accent.copy(alpha = 0.5f * glowStrength),
-            startAngle = sweepAngle,
-            sweepAngle = 60f,
-            useCenter = false,
-            topLeft = topLeft,
-            size = rectSize,
-            style = Stroke(width = strokeW, cap = StrokeCap.Round),
-        )
-        drawArc(
-            color = CaptainPalette.accent.copy(alpha = 0.5f * glowStrength),
-            startAngle = sweepAngle + 180f,
-            sweepAngle = 60f,
-            useCenter = false,
-            topLeft = topLeft,
-            size = rectSize,
-            style = Stroke(width = strokeW, cap = StrokeCap.Round),
-        )
+private fun DialMiniBox(label: String, value: String) {
+    Column(
+        modifier = Modifier
+            .width(88.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(CaptainPalette.bg.copy(alpha = 0.55f))
+            .border(1.dp, CaptainPalette.accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 8.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.warning)
     }
 }
 
+private const val SPEED_SCALE_MAX = 120f
+private const val SPEED_ARC_START = 135f
+private const val SPEED_ARC_SWEEP = 270f
+
+/**
+ * All of the dial's Canvas art, drawn on a canvas larger than the dial itself so the glow can
+ * spill past the ring (the caller sizes this [DIAL_ART_SIZE] around a [DIAL_SIZE] dial; every
+ * radius below is derived from [DIAL_SIZE], not from the canvas). Layers, back to front:
+ *
+ * 1. Four stacked radial-gradient discs of decreasing alpha — the layered bloom — breathing on a
+ *    slow loop and flaring with [tickBloom]; dimmer while paused ([active] false), never off (a
+ *    dead dial reads as broken, not paused).
+ * 2. A solid, near-opaque inner disc so the fare/labels sit on a stable surface over the map.
+ * 3. The fare ring: a thick accent ring with a wide low-alpha bloom stroke under it, plus two
+ *    opposing bright arcs rotating around it (the old `MeterDialGlow` sweep, kept).
+ * 4. The speedometer: a neutral track arc over 270° (7:30 → 4:30 o'clock), tick marks every
+ *    5 km/h (major every 20), numeric labels 0–120, and the live speed arc (accent, with its own
+ *    soft bloom) sweeping to [speedKmh].
+ *
+ * Everything is `drawArc`/`drawCircle`/`drawLine` + native text — no blur/RenderEffect, so it
+ * stays cheap on the SM-T575.
+ */
 @Composable
-private fun MeterDatum(label: String, value: String, highlight: Boolean = false) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CaptainPalette.textMuted)
-        Text(
-            value,
-            fontFamily = ChakraPetch,
-            fontWeight = FontWeight.Medium,
-            fontSize = 26.sp,
-            color = if (highlight) CaptainPalette.success else CaptainPalette.warning,
+private fun MeterDialArt(speedKmh: Float, active: Boolean, tickBloom: Float, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "meter-dial")
+    val sweepAngle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(if (active) 5000 else 20000, easing = LinearEasing)),
+        label = "meter-dial-sweep",
+    )
+    val breath by transition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1900, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "meter-dial-breath",
+    )
+    val glowStrength by animateFloatAsState(
+        targetValue = if (active) 1f else 0.4f,
+        animationSpec = tween(500),
+        label = "meter-dial-glow-strength",
+    )
+    val accent = CaptainPalette.accent
+    val primary = CaptainPalette.primary
+    val labelColor = CaptainPalette.textSecondary.toArgb()
+    val labelPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+    }
+
+    Canvas(modifier = modifier) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val c = Offset(cx, cy)
+        val R = DIAL_SIZE.toPx() / 2f
+        val bloom = (0.65f + 0.35f * breath) * glowStrength + tickBloom * 0.9f
+
+        // 1. Layered bloom — biggest/faintest first.
+        val glowLayers = listOf(R * 1.30f to 0.07f, R * 1.16f to 0.11f, R * 1.06f to 0.17f, R * 0.98f to 0.26f)
+        glowLayers.forEach { (radius, alpha) ->
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(accent.copy(alpha = (alpha * bloom).coerceAtMost(1f)), Color.Transparent),
+                    center = c,
+                    radius = radius,
+                ),
+                radius = radius,
+                center = c,
+            )
+        }
+
+        // 2. Inner disc (content surface). Sits inside the fare ring.
+        val fareRingR = R - 44.dp.toPx()
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(CaptainPalette.panel.copy(alpha = 0.96f), CaptainPalette.cardBottom.copy(alpha = 0.97f)),
+                center = c,
+                radius = fareRingR,
+            ),
+            radius = fareRingR - 2.dp.toPx(),
+            center = c,
         )
+
+        // 3. Fare ring + bloom + rotating highlights.
+        val fareStroke = 8.dp.toPx()
+        drawCircle(color = accent.copy(alpha = (0.18f + 0.22f * tickBloom) * glowStrength), radius = fareRingR, center = c, style = Stroke(fareStroke * 3f))
+        drawCircle(color = primary.copy(alpha = 0.55f + 0.45f * glowStrength), radius = fareRingR, center = c, style = Stroke(fareStroke))
+        val ringRect = Size(fareRingR * 2, fareRingR * 2)
+        val ringTopLeft = Offset(cx - fareRingR, cy - fareRingR)
+        listOf(sweepAngle, sweepAngle + 180f).forEach { start ->
+            drawArc(
+                brush = Brush.sweepGradient(
+                    colors = listOf(Color.Transparent, accent.copy(alpha = 0.95f * glowStrength), Color.Transparent),
+                    center = c,
+                ),
+                startAngle = start,
+                sweepAngle = 70f,
+                useCenter = false,
+                topLeft = ringTopLeft,
+                size = ringRect,
+                style = Stroke(fareStroke, cap = StrokeCap.Round),
+            )
+        }
+        // Small inner hairline so the disc edge reads crisp against the ring.
+        drawCircle(color = accent.copy(alpha = 0.35f), radius = fareRingR - fareStroke, center = c, style = Stroke(1.dp.toPx()))
+
+        // 4. Speedometer ring.
+        val trackR = R - 8.dp.toPx()
+        val trackStroke = 5.dp.toPx()
+        val trackRect = Size(trackR * 2, trackR * 2)
+        val trackTopLeft = Offset(cx - trackR, cy - trackR)
+        drawArc(
+            color = CaptainPalette.dialNeutral,
+            startAngle = SPEED_ARC_START,
+            sweepAngle = SPEED_ARC_SWEEP,
+            useCenter = false,
+            topLeft = trackTopLeft,
+            size = trackRect,
+            style = Stroke(trackStroke, cap = StrokeCap.Round),
+        )
+        val speedSweep = SPEED_ARC_SWEEP * (speedKmh / SPEED_SCALE_MAX).coerceIn(0f, 1f)
+        if (speedSweep > 0.5f) {
+            drawArc(
+                color = accent.copy(alpha = 0.28f),
+                startAngle = SPEED_ARC_START,
+                sweepAngle = speedSweep,
+                useCenter = false,
+                topLeft = trackTopLeft,
+                size = trackRect,
+                style = Stroke(trackStroke * 3f, cap = StrokeCap.Round),
+            )
+            drawArc(
+                brush = Brush.sweepGradient(listOf(primary, accent, CaptainPalette.success), center = c),
+                startAngle = SPEED_ARC_START,
+                sweepAngle = speedSweep,
+                useCenter = false,
+                topLeft = trackTopLeft,
+                size = trackRect,
+                style = Stroke(trackStroke, cap = StrokeCap.Round),
+            )
+        }
+        // Ticks + labels.
+        val tickOuter = trackR - trackStroke
+        val majorLen = 11.dp.toPx()
+        val minorLen = 5.dp.toPx()
+        val labelR = trackR - 24.dp.toPx()
+        labelPaint.textSize = 10.sp.toPx()
+        labelPaint.color = labelColor
+        val steps = (SPEED_SCALE_MAX / 5f).toInt() // one tick per 5 km/h
+        for (i in 0..steps) {
+            val kmh = i * 5f
+            val major = i % 4 == 0
+            val angleDeg = SPEED_ARC_START + SPEED_ARC_SWEEP * (kmh / SPEED_SCALE_MAX)
+            val rad = Math.toRadians(angleDeg.toDouble())
+            val dirX = cos(rad).toFloat()
+            val dirY = sin(rad).toFloat()
+            val len = if (major) majorLen else minorLen
+            val lit = kmh <= speedKmh
+            drawLine(
+                color = if (lit) accent else CaptainPalette.dialNeutral,
+                start = Offset(cx + dirX * tickOuter, cy + dirY * tickOuter),
+                end = Offset(cx + dirX * (tickOuter - len), cy + dirY * (tickOuter - len)),
+                strokeWidth = (if (major) 2.5.dp else 1.5.dp).toPx(),
+                cap = StrokeCap.Round,
+            )
+            if (major) {
+                val lx = cx + dirX * labelR
+                val ly = cy + dirY * labelR - (labelPaint.ascent() + labelPaint.descent()) / 2f
+                drawContext.canvas.nativeCanvas.drawText(kmh.roundToInt().toString(), lx, ly, labelPaint)
+            }
+        }
+        // Speed value + unit under the scale's bottom gap, on the inner disc's rim.
+        labelPaint.textSize = 9.sp.toPx()
+        labelPaint.color = CaptainPalette.textMuted.toArgb()
+        drawContext.canvas.nativeCanvas.drawText("km/h", cx, cy + R - 14.dp.toPx(), labelPaint)
+        labelPaint.textSize = 13.sp.toPx()
+        labelPaint.color = accent.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(speedKmh.roundToInt().toString(), cx, cy + R - 26.dp.toPx(), labelPaint)
     }
 }
 
 // ============================================================================================
-// Vertical action stack (Phase A step 5) — SET PRICE / ADD TOLL / PAUSE FARE / MORE
+// Column 3 — action tiles (SET PRICE / ADD TOLL / PAUSE FARE / MORE)
 // ============================================================================================
 
 @Composable
@@ -688,82 +988,114 @@ private fun MeterActionStack(
     isPaused: Boolean,
     negotiatedTotal: String?,
     tollsTotal: BigDecimal,
+    tollCount: Int,
     onSetPrice: () -> Unit,
     onAddToll: () -> Unit,
     onTogglePause: () -> Unit,
     onMore: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MeterActionButton(
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        MeterActionTile(
             icon = Icons.Rounded.Sell,
             label = "SET PRICE",
             // Honest status line, not a fake "tap to edit" — see SetPriceInfoDialog's doc for why
             // this button is informational only during an active trip.
-            value = if (negotiatedTotal != null) "Fixed fare — ${formatNegotiatedTotal(negotiatedTotal)}" else "Metered fare",
+            value = if (negotiatedTotal != null) "Fixed · ${formatNegotiatedTotal(negotiatedTotal)}" else "Metered fare",
             onClick = onSetPrice,
+            modifier = Modifier.weight(1f),
         )
-        MeterActionButton(
+        MeterActionTile(
             icon = Icons.Rounded.ConfirmationNumber,
             label = "ADD TOLL",
-            value = "${tollsTotal.toMoneyString()} added so far",
+            value = "${tollsTotal.toMoneyString()} · $tollCount toll${if (tollCount == 1) "" else "s"} added",
+            accentColor = CaptainPalette.warning,
             onClick = onAddToll,
+            modifier = Modifier.weight(1f),
         )
-        MeterActionButton(
+        MeterActionTile(
             icon = if (isPaused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
             label = if (isPaused) "RESUME FARE" else "PAUSE FARE",
-            value = if (isPaused) "Waiting — tap to resume metering" else "Tap when the passenger stops the trip",
-            accentColor = if (isPaused) CaptainPalette.success else CaptainPalette.warning,
+            value = if (isPaused) "Waiting — tap to resume" else "Tap when the trip stops",
+            accentColor = if (isPaused) CaptainPalette.warning else CaptainPalette.success,
+            active = isPaused,
             onClick = onTogglePause,
+            modifier = Modifier.weight(1f),
         )
-        MeterActionButton(
+        MeterActionTile(
             icon = Icons.Rounded.MoreHoriz,
             label = "MORE",
-            value = "Extras · passenger count · speech",
+            value = "Extras · passengers · speech",
             onClick = onMore,
+            modifier = Modifier.weight(1f),
         )
     }
 }
 
+/** Compact square-ish tile: icon in a coloured rounded square, bold label, one-line subtext.
+ * [active] lights the neon border + a breathing outer glow (PAUSE FARE while paused). */
 @Composable
-private fun MeterActionButton(
+private fun MeterActionTile(
     icon: ImageVector,
     label: String,
     value: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     accentColor: Color = CaptainPalette.accent,
+    active: Boolean = false,
 ) {
-    Row(
-        modifier = Modifier
+    val shape = RoundedCornerShape(16.dp)
+    val breath by rememberInfiniteTransition(label = "tile-$label").animateFloat(
+        initialValue = 0.5f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "tile-breath",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (active) accentColor.copy(alpha = 0.9f) else CaptainPalette.panelBorder,
+        animationSpec = tween(250),
+        label = "tile-border",
+    )
+    Column(
+        modifier = modifier
             .fillMaxWidth()
-            .height(66.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .then(if (active) Modifier.neonGlow(accentColor, 16.dp, strength = breath) else Modifier)
+            .clip(shape)
             .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .border(if (active) 1.5.dp else 1.dp, borderColor, shape)
+            .gameClick(onClick = onClick, shape = shape, glowColor = accentColor)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(accentColor.copy(alpha = 0.16f)),
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(accentColor.copy(alpha = if (active) 0.32f else 0.18f))
+                .border(1.dp, accentColor.copy(alpha = if (active) 0.9f else 0.4f), RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = accentColor, modifier = Modifier.size(24.dp))
+            Icon(icon, contentDescription = null, tint = accentColor, modifier = Modifier.size(20.dp))
         }
-        Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-            Text(
-                value,
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-        }
-        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(22.dp))
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            letterSpacing = 0.5.sp,
+            color = if (active) accentColor else CaptainPalette.textPrimary,
+            style = if (active) glowStyle(accentColor, 14f) else TextStyle.Default,
+            modifier = Modifier.padding(top = 7.dp),
+        )
+        Text(
+            value,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 9.5.sp,
+            color = CaptainPalette.textSecondary,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 2.dp),
+        )
     }
 }
 
@@ -823,13 +1155,17 @@ private fun SetPriceInfoDialog(negotiatedTotal: String?, onDismiss: () -> Unit) 
  */
 @Composable
 private fun TollPresetDialog(tollsTotal: BigDecimal, onDismiss: () -> Unit, onAddPreset: (TollPreset) -> Unit, onCustom: () -> Unit) {
+    // Presets in one Row and the two buttons in another (game-level visual pass): this dialog is
+    // hosted inside the ~420dp-tall METER pane (CaptainDialogScrim fills the pane, not the
+    // window), and the previous five-row stack ran ~500dp — its Close button was clipped behind
+    // the footer on-device. Same chips, same callbacks, just laid out to fit.
     Column(
         modifier = Modifier
-            .width(480.dp)
+            .width(720.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(28.dp),
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Add toll", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
@@ -839,13 +1175,17 @@ private fun TollPresetDialog(tollsTotal: BigDecimal, onDismiss: () -> Unit, onAd
             fontSize = 14.sp,
             color = CaptainPalette.textSecondary,
         )
-        TollPresets.ALL.forEach { preset ->
-            CaptainChip(preset.label.uppercase(), preset.amount.toMoneyString(), modifier = Modifier.fillMaxWidth()) {
-                onAddPreset(preset)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TollPresets.ALL.forEach { preset ->
+                CaptainChip(preset.label.uppercase(), preset.amount.toMoneyString(), modifier = Modifier.weight(1f)) {
+                    onAddPreset(preset)
+                }
             }
         }
-        CaptainButton(text = "Custom amount…", outline = true, modifier = Modifier.fillMaxWidth()) { onCustom() }
-        CaptainButton(text = "Close", outline = true, modifier = Modifier.fillMaxWidth()) { onDismiss() }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CaptainButton(text = "Custom amount…", outline = true, modifier = Modifier.weight(1.4f)) { onCustom() }
+            CaptainButton(text = "Close", outline = true, modifier = Modifier.weight(1f)) { onDismiss() }
+        }
     }
 }
 
@@ -907,59 +1247,9 @@ private fun MoreActionsSheet(
     }
 }
 
-// ============================================================================================
-// Trip Details card (Phase A step 4)
-// ============================================================================================
-
-@Composable
-private fun TripDetailsCard(tripContext: TripContext?, fareState: FareState) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-            .padding(20.dp),
-    ) {
-        Text("TRIP DETAILS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-        Spacer(Modifier.height(12.dp))
-        DetailRow("Trip ID", tripContext?.clientUuid?.take(8)?.uppercase() ?: "—")
-        DetailRow("Pickup", tripContext?.originAddress ?: "—")
-        DetailRow("Drop-off", tripContext?.destAddress ?: "—")
-        DetailRow("Distance", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " km")
-        val totalSeconds = fareState.movingSeconds + fareState.waitingSeconds
-        DetailRow("Duration", "%d:%02d".format(totalSeconds / 60, totalSeconds % 60))
-        val avgSpeedKmh = if (fareState.movingSeconds > 0) {
-            (fareState.distanceKm.toDouble() / (fareState.movingSeconds / 3600.0)).roundToInt()
-        } else {
-            0
-        }
-        DetailRow("Avg speed", "$avgSpeedKmh km/h")
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary)
-        Text(
-            value,
-            fontFamily = RobotoMonoFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 14.sp,
-            color = CaptainPalette.textPrimary,
-            textAlign = TextAlign.End,
-            modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false),
-        )
-    }
-}
 
 // ============================================================================================
-// Fare Breakdown card (Phase A step 3) — revives HiredViewModel.breakdownExpanded/toggleBreakdown()
+// Column 4 — Fare Breakdown card (revives HiredViewModel.breakdownExpanded/toggleBreakdown())
 // ============================================================================================
 
 @Composable
@@ -970,84 +1260,216 @@ private fun FareBreakdownCard(
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
+    val shape = RoundedCornerShape(18.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(shape)
             .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-            .padding(20.dp),
+            .border(1.dp, CaptainPalette.panelBorder, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("FARE BREAKDOWN", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+            Text("FARE BREAKDOWN", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 1.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.weight(1f))
             val chevronRotation by animateFloatAsState(if (expanded) 90f else -90f, label = "breakdown-chevron")
             Row(
-                modifier = Modifier.clickable(onClick = onToggle).padding(6.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(1.dp, CaptainPalette.accent.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     if (expanded) "HIDE" else "SHOW",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     color = CaptainPalette.accent,
                 )
                 Icon(
                     Icons.Rounded.ChevronRight,
                     contentDescription = null,
                     tint = CaptainPalette.accent,
-                    modifier = Modifier.size(18.dp).padding(start = 4.dp).rotate(chevronRotation),
+                    modifier = Modifier.size(16.dp).padding(start = 2.dp).rotate(chevronRotation),
                 )
             }
         }
         AnimatedVisibility(visible = expanded, enter = fadeIn(tween(180)), exit = fadeOut(tween(140))) {
-            Column(modifier = Modifier.padding(top = 12.dp)) {
-                BreakdownRow("Base Fare", breakdown.flagFall.toMoneyString())
-                BreakdownRow("Distance", breakdown.distanceAmount.toMoneyString())
-                BreakdownRow("Time", breakdown.waitingAmount.toMoneyString())
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                BreakdownRow("Base fare", breakdown.flagFall.toMoneyString(), CaptainPalette.success)
+                BreakdownRow("Distance", breakdown.distanceAmount.toMoneyString(), CaptainPalette.success)
+                BreakdownRow("Time", breakdown.waitingAmount.toMoneyString(), CaptainPalette.success)
                 // Informational only: the night-rate uplift is already baked into Distance/Time
                 // above (FareEngineImpl applies the night per-km/per-min rate directly — there is
                 // no separate night-surcharge line item to show), so this never adds to `total`
                 // itself, only explains the higher Distance/Time figures when it applies.
                 if (timeClass == TimeClass.NIGHT) {
-                    BreakdownRow("Night Fare (${nightMultiplierLabel ?: "—"})", "included above")
+                    BreakdownRow("Night fare (${nightMultiplierLabel ?: "—"})", "included", CaptainPalette.accent)
                 }
                 if (breakdown.peakAmount.signum() > 0) {
-                    BreakdownRow("Peak Hiring", breakdown.peakAmount.toMoneyString())
+                    BreakdownRow("Peak hiring", breakdown.peakAmount.toMoneyString(), CaptainPalette.accent)
                 }
-                BreakdownRow("Tolls", breakdown.tolls.toMoneyString())
-                BreakdownRow("Levy & Charges", breakdown.psl.toMoneyString())
+                BreakdownRow("Tolls", breakdown.tolls.toMoneyString(), CaptainPalette.warning)
+                BreakdownRow("Levy & charges", breakdown.psl.toMoneyString(), CaptainPalette.danger)
                 if (breakdown.extras.signum() > 0) {
-                    BreakdownRow("Extras", breakdown.extras.toMoneyString())
+                    BreakdownRow("Extras", breakdown.extras.toMoneyString(), CaptainPalette.warning)
                 }
-                Box(Modifier.fillMaxWidth().height(1.dp).padding(vertical = 10.dp).background(CaptainPalette.panelBorder))
-                BreakdownRow("Total", breakdown.total.toMoneyString(), emphasized = true)
             }
+        }
+        // Total row — always visible (HIDE collapses the line items, never the total), neon
+        // accent border + glow, figure in glowing accent.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp)
+                .neonGlow(CaptainPalette.accent, 12.dp, strength = 0.7f, spread = 3.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(CaptainPalette.primary.copy(alpha = 0.16f))
+                .border(1.5.dp, CaptainPalette.accent.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("TOTAL", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.sp, color = CaptainPalette.textPrimary)
+            Text(
+                breakdown.total.toMoneyString(),
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.Bold,
+                fontSize = 22.sp,
+                color = CaptainPalette.accent,
+                style = glowStyle(CaptainPalette.accent, 22f),
+            )
         }
     }
 }
 
 @Composable
-private fun BreakdownRow(label: String, value: String, emphasized: Boolean = false) {
+private fun BreakdownRow(label: String, value: String, dotColor: Color) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .drawBehind { drawCircle(dotColor.copy(alpha = 0.35f), radius = size.minDimension) }
+                .clip(CircleShape)
+                .background(dotColor),
+        )
         Text(
             label,
             fontFamily = InterFamily,
-            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
-            fontSize = if (emphasized) 16.sp else 14.sp,
-            color = if (emphasized) CaptainPalette.textPrimary else CaptainPalette.textSecondary,
+            fontWeight = FontWeight.Medium,
+            fontSize = 12.sp,
+            color = CaptainPalette.textSecondary,
+            modifier = Modifier.padding(start = 10.dp).weight(1f),
         )
         Text(
             value,
             fontFamily = ChakraPetch,
             fontWeight = FontWeight.SemiBold,
-            fontSize = if (emphasized) 20.sp else 15.sp,
-            color = if (emphasized) CaptainPalette.success else CaptainPalette.textPrimary,
+            fontSize = 13.sp,
+            color = CaptainPalette.textPrimary,
         )
+    }
+}
+
+// ============================================================================================
+// Column 4 — Trip Details card (vertical pickup → drop-off timeline)
+// ============================================================================================
+
+/**
+ * [startAtIso] is the persisted `TripEntity.startAt` (real open time) — `null` until Room has the
+ * row, rendering "—". Drop-off time is always "—" here: the trip is in progress. Addresses are
+ * `TripContext.originAddress`/`.destAddress` — "—" when absent (see that doc), never fabricated.
+ */
+@Composable
+private fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, startAtIso: String?) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("TRIP DETAILS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 1.sp, color = CaptainPalette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            Text(
+                tripContext?.clientUuid?.take(8)?.uppercase() ?: "—",
+                fontFamily = RobotoMonoFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp,
+                color = CaptainPalette.textMuted,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        TimelineRow(
+            dotColor = CaptainPalette.success,
+            title = "PICKUP",
+            address = tripContext?.originAddress ?: "—",
+            time = startAtIso?.asLocalTime() ?: "—",
+            connector = true,
+        )
+        TimelineRow(
+            dotColor = CaptainPalette.danger,
+            title = "DROP-OFF",
+            address = tripContext?.destAddress ?: "—",
+            time = "—",
+            connector = false,
+        )
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+        Spacer(Modifier.height(10.dp))
+        val totalSeconds = fareState.movingSeconds + fareState.waitingSeconds
+        val avgSpeedKmh = if (fareState.movingSeconds > 0) {
+            (fareState.distanceKm.toDouble() / (fareState.movingSeconds / 3600.0)).roundToInt()
+        } else {
+            0
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            MiniStat("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " km", modifier = Modifier.weight(1f))
+            MiniStat("DURATION", "%d:%02d".format(totalSeconds / 60, totalSeconds % 60), modifier = Modifier.weight(1f))
+            MiniStat("AVG SPEED", "$avgSpeedKmh km/h", modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun TimelineRow(dotColor: Color, title: String, address: String, time: String, connector: Boolean) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(14.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .drawBehind { drawCircle(dotColor.copy(alpha = 0.35f), radius = size.minDimension * 0.9f) }
+                    .clip(CircleShape)
+                    .background(dotColor),
+            )
+            if (connector) {
+                Box(Modifier.padding(vertical = 3.dp).width(2.dp).height(22.dp).background(CaptainPalette.panelBorder))
+            }
+        }
+        Column(modifier = Modifier.padding(start = 10.dp).weight(1f)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = dotColor)
+                Text(time, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = CaptainPalette.textSecondary)
+            }
+            Text(
+                address,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = CaptainPalette.textPrimary,
+                maxLines = 2,
+                textAlign = TextAlign.Start,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
 
@@ -1119,44 +1541,50 @@ private fun PassengerEditDialog(initialCount: Int, onDismiss: () -> Unit, onConf
 private fun CustomTollDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Unit) {
     var cents by remember { mutableStateOf("") }
     val amount = if (cents.isEmpty()) BigDecimal.ZERO else BigDecimal(cents).movePointLeft(2)
-    Column(
+    // Two columns (amount + buttons | keypad) rather than one stack — same reason as
+    // TollPresetDialog: hosted inside the ~420dp-tall METER pane, and title + amount + a
+    // 4-row keypad + buttons stacked vertically ran past the pane's bottom edge on-device.
+    Row(
         modifier = Modifier
             .clip(RoundedCornerShape(24.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(30.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(22.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp),
     ) {
-        Text("Add toll", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
-        Box(
-            modifier = Modifier
-                .width(448.dp)
-                .height(72.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(CaptainPalette.inset),
-            contentAlignment = Alignment.Center,
+        Column(
+            modifier = Modifier.width(300.dp).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(
-                amount.toMoneyString(),
-                fontFamily = ChakraPetch,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 38.sp,
-                color = CaptainPalette.success,
-            )
+            Text("Add toll", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.inset),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    amount.toMoneyString(),
+                    fontFamily = ChakraPetch,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 38.sp,
+                    color = CaptainPalette.success,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            CaptainButton(
+                text = "Add toll",
+                enabled = amount > BigDecimal.ZERO,
+                modifier = Modifier.fillMaxWidth(),
+            ) { onConfirm(amount) }
+            CaptainButton(text = "Cancel", outline = true, modifier = Modifier.fillMaxWidth(), onClick = onDismiss)
         }
         CaptainKeypad(
             onDigit = { d -> if (cents.length < 5) cents += d },
             onBackspace = { cents = cents.dropLast(1) },
             onClear = { cents = "" },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
-            CaptainButton(
-                text = "Add toll",
-                enabled = amount > BigDecimal.ZERO,
-                modifier = Modifier.weight(1.4f),
-            ) { onConfirm(amount) }
-        }
     }
 }

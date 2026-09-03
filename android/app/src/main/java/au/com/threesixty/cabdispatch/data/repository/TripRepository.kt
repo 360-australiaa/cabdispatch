@@ -13,6 +13,7 @@ import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.time.Instant
@@ -40,6 +41,22 @@ class TripRepository(
 ) {
 
     fun observeActiveTrip(): Flow<TripEntity?> = tripDao.observeActiveTrip()
+
+    /**
+     * Read-only view of the active trip's persisted GPS trace ([TripEntity.gpsTraceJson], decoded)
+     * for the Meter screen's route-polyline backdrop (Meter "game-level" visual pass, 2026-09-03).
+     * Purely additive: same Room `Flow` as [observeActiveTrip], same [decodeGpsTrace] this class
+     * already uses for sync — no new write path, no behavior change. Emits an empty list when there
+     * is no open trip or the trace is still `"[]"`. NOTE (honest gap, not fixed here): the live
+     * meter's own persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
+     * `doPersistTick`) currently calls [tick] with `newPoints = emptyList()`, so this trace only
+     * grows once a caller starts feeding real telemetry points into [tick] — see the Meter
+     * backdrop's own doc for how it supplements this with live fixes in the meantime.
+     */
+    fun observeActiveTripGpsTrace(): Flow<List<TelemetryPointDto>> =
+        tripDao.observeActiveTrip().map { trip ->
+            trip?.let { runCatching { decodeGpsTrace(it.gpsTraceJson) }.getOrDefault(emptyList()) } ?: emptyList()
+        }
 
     fun observeTrip(clientUuid: String): Flow<TripEntity?> = tripDao.observeTrip(clientUuid)
 
