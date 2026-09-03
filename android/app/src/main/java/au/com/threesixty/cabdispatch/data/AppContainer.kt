@@ -6,6 +6,8 @@ import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
+import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
@@ -318,6 +320,13 @@ object AppContainer {
     // websocket support, so `WS /v1/jobs/live` / `WS /v1/messages/live` go through this instead
     // (see RealtimeSocket's doc for why frames are untyped raw JSON strings).
     val realtimeSocket: RealtimeSocket by lazy { RealtimeSocket(okHttpClient) }
+
+    // Mapbox REST gateways for the meter screen's navigator pane (drop-off search + route/steps).
+    // Plain authenticated HTTPS on the public pk.* token, reusing this same OkHttp client — the
+    // Mapbox *SDK* equivalents need a secret sk.* downloads token this project doesn't have (see
+    // MapboxDirections' own doc for the full constraint).
+    val mapboxGeocoding: MapboxGeocoding by lazy { MapboxGeocoding(okHttpClient) }
+    val mapboxDirections: MapboxDirections by lazy { MapboxDirections(okHttpClient) }
     val jobsRepository: JobsRepository by lazy {
         RemoteBackedJobsRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
     }
