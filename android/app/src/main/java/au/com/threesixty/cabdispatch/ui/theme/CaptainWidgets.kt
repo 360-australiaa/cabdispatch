@@ -19,7 +19,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -303,6 +306,103 @@ fun PaneShell(title: String, onBack: () -> Unit, content: @Composable () -> Unit
                 .padding(18.dp),
         ) {
             content()
+        }
+    }
+}
+
+/**
+ * Two-pane "Settings"-style shell — a persistent left tab rail (label list) + a right content
+ * panel that swaps per selected tab without navigating away. A deliberate **sibling** to
+ * [PaneShell], not a rework of it (Settings two-pane pass, 2026-09-03): [PaneShell] is
+ * single-panel by design and every other screen using it — the five reused wheel-content panes,
+ * every routed screen migrated onto the Captain Taxis palette — depends on that exact shape, so
+ * this is new code rather than an added-parameter branch on that composable. Same title+back-arrow
+ * row as [PaneShell] for visual consistency; below it, a fixed-width tab column (this composable
+ * holds no selection state itself — [selectedIndex]/[onSelectTab] are fully caller-controlled,
+ * same convention as everywhere else in this app that separates state from presentation) beside a
+ * bordered content panel that internally scrolls, since some tabs' content (e.g. Settings' Payment
+ * Methods tab, which folds the fare schedule in) run taller than one screen.
+ */
+@Composable
+fun TwoPaneShell(
+    title: String,
+    onBack: () -> Unit,
+    tabs: List<String>,
+    selectedIndex: Int,
+    onSelectTab: (Int) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(CircleShape).background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("←", fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            }
+            Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 16.dp))
+        }
+        Row(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .width(230.dp)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                tabs.forEachIndexed { index, label ->
+                    val selected = index == selectedIndex
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) CaptainPalette.primary.copy(alpha = 0.22f) else androidx.compose.ui.graphics.Color.Transparent)
+                            .then(
+                                if (selected) {
+                                    Modifier.border(1.dp, CaptainPalette.accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .clickable { onSelectTab(index) }
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            label,
+                            fontFamily = InterFamily,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 16.sp,
+                            color = if (selected) CaptainPalette.accent else CaptainPalette.textSecondary,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+                    .padding(20.dp),
+            ) {
+                // Deliberately no forced verticalScroll wrapper here (unlike an earlier draft of
+                // this composable) — same contract as [PaneShell]'s own `content` slot: some tabs
+                // need a plain scrolling Column (Settings' Payment Methods tab, which folds the
+                // fare schedule in), but a LazyColumn-based tab (Settings' Printer tab, reusing the
+                // existing discovered-printers list) would crash measuring inside an
+                // already-vertically-scrolling parent (infinite height constraint) — each tab's own
+                // content composable picks whichever is correct for its own content instead.
+                content()
+            }
         }
     }
 }

@@ -97,7 +97,29 @@ class AvailableTripsWheelViewModel : ViewModel() {
             _uiState.update {
                 it.copy(loading = false, error = null, cards = cards.sortedByDescending { c -> c.offer.offeredAt })
             }
+            maybeAutoAccept()
         }
+    }
+
+    /**
+     * Auto Accept Jobs (Settings -> General, 2026-09-03 Settings two-pane pass) — when the driver
+     * has turned this on ([au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore]), the
+     * next pending offer this ViewModel sees (via [refresh] or a live WS push in
+     * [handleLiveFrame]) is accepted immediately, exactly as if the driver had tapped ACCEPT
+     * themselves — reuses [acceptOffer] verbatim, no separate accept code path to keep honest.
+     *
+     * Only ever acts on a single card per call: a driver can only ever be on one job at a time,
+     * and [acceptOffer]'s own hand-off navigates to S3/Hired the instant it succeeds, so
+     * auto-accepting a second concurrently-listed offer in the same pass would be meaningless.
+     * Skipped while a card is already mid-accept/decline ([AvailableTripsUiState.busyOfferId]) so
+     * this can't double-submit against the same ~20s offer-expiry window every other accept path
+     * in this class already guards against.
+     */
+    private fun maybeAutoAccept() {
+        if (!AppContainer.settingsPreferencesStore.autoAcceptJobs.value) return
+        if (_uiState.value.busyOfferId != null) return
+        val card = _uiState.value.cards.firstOrNull() ?: return
+        acceptOffer(card)
     }
 
     /**
@@ -149,6 +171,7 @@ class AvailableTripsWheelViewModel : ViewModel() {
                         val without = st.cards.filterNot { it.offer.id == offer.id }
                         st.copy(cards = (without + AvailableTripCard(job, offer)).sortedByDescending { it.offer.offeredAt })
                     }
+                    maybeAutoAccept()
                 }
                 .onFailure { refresh() }
         }

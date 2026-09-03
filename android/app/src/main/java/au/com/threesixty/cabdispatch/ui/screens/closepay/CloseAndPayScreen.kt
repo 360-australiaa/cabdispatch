@@ -54,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -681,6 +682,13 @@ private fun MethodPickerScreen(
     var showCleaningDialog by remember { mutableStateOf(false) }
     var showTipDialog by remember { mutableStateOf(false) }
     var showCustomTipDialog by remember { mutableStateOf(false) }
+    // Allow Cash (Settings -> Payment Methods, 2026-09-03 Settings two-pane pass) — real
+    // compliance/business toggle: when off, CASH is disabled (greyed out, non-tappable) here
+    // rather than removed outright, so a driver mid-shift can see *why* the card looks different
+    // instead of it silently vanishing. See au.com.threesixty.cabdispatch.domain
+    // .SettingsPreferencesStore's own doc. Defaults true, matching this screen's behaviour before
+    // this toggle existed.
+    val allowCash by AppContainer.settingsPreferencesStore.allowCash.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {
@@ -688,7 +696,13 @@ private fun MethodPickerScreen(
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard(Icons.Rounded.Payments, "CASH", CaptainPalette.success) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
+                    PayCard(
+                        Icons.Rounded.Payments,
+                        "CASH",
+                        CaptainPalette.success,
+                        subtitle = if (!allowCash) "Disabled in Settings" else null,
+                        enabled = allowCash,
+                    ) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
                     PayCard(Icons.Rounded.CreditCard, "CARD · TAP", CaptainPalette.accent) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -770,9 +784,18 @@ private fun MethodPickerScreen(
 }
 
 @Composable
-private fun PayCard(icon: ImageVector, label: String, accent: Color, subtitle: String? = null, onClick: () -> Unit) {
+private fun PayCard(
+    icon: ImageVector,
+    label: String,
+    accent: Color,
+    subtitle: String? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     CaptainPanel(
-        modifier = Modifier.width(357.dp).height(118.dp).clickable(onClick = onClick),
+        modifier = Modifier.width(357.dp).height(118.dp)
+            .alpha(if (enabled) 1f else 0.4f)
+            .clickable(enabled = enabled, onClick = onClick),
         raised = true,
         cornerRadiusDp = 18,
     ) {
@@ -793,7 +816,9 @@ private fun PayCard(icon: ImageVector, label: String, accent: Color, subtitle: S
             Column {
                 Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)
                 // Real backend-derived count only — never shown while null (loading/failed), see
-                // this parameter's call sites in MethodPickerScreen.
+                // this parameter's call sites in MethodPickerScreen. [enabled]==false's own
+                // "Disabled in Settings" subtitle (Allow Cash toggle) overrides that at the call
+                // site instead of being invented here.
                 subtitle?.let {
                     Text(it, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = CaptainPalette.textMuted)
                 }

@@ -2074,6 +2074,11 @@ private fun DriverIdCard(
 @Composable
 private fun StatusMapPanel(onPlotZone: () -> Unit) {
     val fix by AppContainer.speedSource.locationFix.collectAsState()
+    // Show Map in Background (Settings -> Display, 2026-09-03 Settings two-pane pass) — the real
+    // toggle behind this pane's Mapbox Static Images fetch (see
+    // au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore's own doc). Defaults true, so
+    // a driver who never touches the setting sees exactly the same map this pane always rendered.
+    val showMapInBackground by AppContainer.settingsPreferencesStore.showMapInBackground.collectAsState()
     var sizePx by remember { mutableStateOf(IntSize.Zero) }
     val centerLat = fix?.lat ?: SydneyCbdFallback.LAT
     val centerLng = fix?.lng ?: SydneyCbdFallback.LNG
@@ -2084,7 +2089,9 @@ private fun StatusMapPanel(onPlotZone: () -> Unit) {
             .background(Color(0xFF0D1420))
             .onGloballyPositioned { sizePx = it.size },
     ) {
-        if (sizePx.width > 0 && sizePx.height > 0) {
+        if (!showMapInBackground) {
+            MapHiddenPlaceholder()
+        } else if (sizePx.width > 0 && sizePx.height > 0) {
             val mapUrl = remember(sizePx, centerLat, centerLng) {
                 MapboxStaticImage.url(
                     centerLat = centerLat,
@@ -2164,6 +2171,34 @@ private fun StatusMapPanel(onPlotZone: () -> Unit) {
                 )
             }
             Text("Heartbeat 30 s · GPS live", fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)
+        }
+    }
+}
+
+/** Renders instead of the real Mapbox imagery (or its street-grid fallback) when Settings ->
+ * Display -> "Show Map in Background" is off — honest and static, never a stale/last-cached map
+ * frame. Position pin/heartbeat chip/plot-zone bar above this Box are unaffected: Plot a Zone
+ * stays reachable either way, this setting only governs the map imagery itself. */
+@Composable
+private fun MapHiddenPlaceholder() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Rounded.Map, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(40.dp))
+            Text(
+                "Background map hidden",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                color = CaptainPalette.textMuted,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            Text(
+                "Turn on \"Show Map in Background\" in Settings -> Display to bring it back.",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                color = CaptainPalette.textMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }

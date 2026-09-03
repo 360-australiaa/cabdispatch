@@ -17,6 +17,7 @@ import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
 import au.com.threesixty.cabdispatch.domain.DevicePairingStore
 import au.com.threesixty.cabdispatch.domain.MaxiVehicleStore
+import au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore
 import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
@@ -127,6 +128,11 @@ object AppContainer {
     lateinit var maxiVehicleStore: MaxiVehicleStore
         private set
 
+    /** See [SettingsPreferencesStore]'s own doc — Auto Accept Jobs / Show Map in Background /
+     * Allow Cash, the three real preference rows added in the Settings two-pane pass. */
+    lateinit var settingsPreferencesStore: SettingsPreferencesStore
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
 
@@ -137,6 +143,7 @@ object AppContainer {
         SessionHolder.deviceId = devicePairingStore.getDeviceId()
 
         maxiVehicleStore = MaxiVehicleStore(appContext)
+        settingsPreferencesStore = SettingsPreferencesStore(appContext)
 
         database = Room.databaseBuilder(
             appContext,

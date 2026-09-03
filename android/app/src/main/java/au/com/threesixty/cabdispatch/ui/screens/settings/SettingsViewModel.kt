@@ -89,6 +89,14 @@ data class SettingsUiState(
      * [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s doc. Loaded from that store in
      * [SettingsViewModel.init], updated via [SettingsViewModel.setMaxiVehicle]. */
     val isMaxiVehicle: Boolean = false,
+    /** Settings two-pane pass (2026-09-03) — the three real preference rows, backed by
+     * [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore]. Mirrored into this state the
+     * same way [isMaxiVehicle] is (loaded once in [SettingsViewModel.init], each setter writes
+     * through to the store and updates this copy) even though the store's own `StateFlow`s are
+     * also read directly by other screens — see that store's class doc for why. */
+    val autoAcceptJobs: Boolean = false,
+    val showMapInBackground: Boolean = true,
+    val allowCash: Boolean = true,
 )
 
 /** Real meter/device pairing (2026-08-28 — backend spec: `POST /v1/fleet/devices/register`,
@@ -133,8 +141,29 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             it.copy(
                 pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice,
                 isMaxiVehicle = AppContainer.maxiVehicleStore.isMaxiVehicle(),
+                autoAcceptJobs = AppContainer.settingsPreferencesStore.autoAcceptJobs.value,
+                showMapInBackground = AppContainer.settingsPreferencesStore.showMapInBackground.value,
+                allowCash = AppContainer.settingsPreferencesStore.allowCash.value,
             )
         }
+    }
+
+    /** See [SettingsUiState.autoAcceptJobs]'s doc. */
+    fun setAutoAcceptJobs(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setAutoAcceptJobs(value)
+        _uiState.update { it.copy(autoAcceptJobs = value) }
+    }
+
+    /** See [SettingsUiState.showMapInBackground]'s doc. */
+    fun setShowMapInBackground(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setShowMapInBackground(value)
+        _uiState.update { it.copy(showMapInBackground = value) }
+    }
+
+    /** See [SettingsUiState.allowCash]'s doc. */
+    fun setAllowCash(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setAllowCash(value)
+        _uiState.update { it.copy(allowCash = value) }
     }
 
     /**
