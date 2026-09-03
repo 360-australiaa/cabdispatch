@@ -49,6 +49,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.data.AppContainer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 
 /**
  * Shared "Captain Taxis" purple-design atoms — lifted out of
@@ -530,3 +536,25 @@ fun CaptainDialogScrim(visible: Boolean, onDismissRequest: () -> Unit, content: 
         }
     }
 }
+
+/**
+ * Soft outer glow around a rounded-rect surface (the app's shared 'neon' primitive) — three expanding, fading rounded rects drawn
+ * behind the content (cheap `drawBehind`, no blur/RenderEffect, per the SM-T575 frame budget).
+ * Place BEFORE `.clip()`/`.background()` in the modifier chain so the glow lands outside the
+ * surface's own bounds. [strength] 0..1 scales every layer's alpha (animate it for a pulse).
+ */
+fun Modifier.neonGlow(color: Color, cornerRadius: Dp, strength: Float = 1f, spread: Dp = 5.dp): Modifier =
+    drawBehind {
+        if (strength <= 0.01f) return@drawBehind
+        val step = spread.toPx()
+        val r = cornerRadius.toPx()
+        for (i in 3 downTo 1) {
+            val inset = step * i
+            drawRoundRect(
+                color = color.copy(alpha = (0.22f / i) * strength),
+                topLeft = Offset(-inset, -inset),
+                size = Size(size.width + inset * 2, size.height + inset * 2),
+                cornerRadius = CornerRadius(r + inset, r + inset),
+            )
+        }
+    }

@@ -112,6 +112,7 @@ import java.math.RoundingMode
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 
 /**
  * 18/18b · Hired — Meter. Phase A (2026-09-03) embedded this as
@@ -478,27 +479,9 @@ private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(
 // Shared "neon" helpers
 // ============================================================================================
 
-/**
- * Soft outer glow around a rounded-rect surface — three expanding, fading rounded rects drawn
- * behind the content (cheap `drawBehind`, no blur/RenderEffect, per the SM-T575 frame budget).
- * Place BEFORE `.clip()`/`.background()` in the modifier chain so the glow lands outside the
- * surface's own bounds. [strength] 0..1 scales every layer's alpha (animate it for a pulse).
- */
-private fun Modifier.neonGlow(color: Color, cornerRadius: Dp, strength: Float = 1f, spread: Dp = 5.dp): Modifier =
-    drawBehind {
-        if (strength <= 0.01f) return@drawBehind
-        val step = spread.toPx()
-        val r = cornerRadius.toPx()
-        for (i in 3 downTo 1) {
-            val inset = step * i
-            drawRoundRect(
-                color = color.copy(alpha = (0.22f / i) * strength),
-                topLeft = Offset(-inset, -inset),
-                size = Size(size.width + inset * 2, size.height + inset * 2),
-                cornerRadius = CornerRadius(r + inset, r + inset),
-            )
-        }
-    }
+/** `neonGlow` now lives in [au.com.threesixty.cabdispatch.ui.theme.neonGlow] — promoted out of
+ * this file (where it was private) so Trips/Dispatch/Earnings can share the one glow primitive
+ * instead of each re-inventing or going without. Imported at the top of this file. */
 
 /** Text glow — a same-colour paint shadow (blur radius in px), the cheap way to "bloom" a label. */
 private fun glowStyle(color: Color, blurPx: Float = 18f, alpha: Float = 0.85f): TextStyle =

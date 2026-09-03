@@ -513,7 +513,11 @@ fun DeckHomeScreen(
                         CaptainPane.METER -> HiredScreen(navController = navController)
                     }
                 }
-                if (pane == CaptainPane.DASHBOARD || pane == CaptainPane.METER) {
+                // Footer shift-stats bar: DASHBOARD only. METER deliberately drops it —
+                // metering is a focused two-pane mode (big dial + navigator) per the user's
+                // explicit "header only" decision, so the fare and the road own the screen. The
+                // header (SOS, GPS, battery) stays; shift stats are one tap away on DASHBOARD.
+                if (pane == CaptainPane.DASHBOARD) {
                     Spacer(Modifier.height(18.dp))
                     Row(modifier = Modifier.height(136.dp).fillMaxWidth()) {
                         ShiftStatsBar(
@@ -529,6 +533,10 @@ fun DeckHomeScreen(
                     }
                 }
             }
+            // Nav rail hidden while a fare is accruing (same "header only" decision as the
+            // footer above): the navigator pane needs the width, and leaving the meter mid-fare
+            // is END FARE's job, not a rail tap. Every other pane still shows it.
+            if (pane != CaptainPane.METER) {
             Spacer(Modifier.width(12.dp))
             CaptainNavRail(
                 pane = pane,
@@ -542,6 +550,7 @@ fun DeckHomeScreen(
                 onLogOff = { navController.navigate(CabDispatchRoutes.LOG_OFF) },
                 modifier = Modifier.fillMaxHeight(),
             )
+            }
         }
     }
 
