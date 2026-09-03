@@ -1,6 +1,9 @@
 package au.com.threesixty.cabdispatch.ui.screens.dashboard
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -10,11 +13,20 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,17 +40,21 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachMoney
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.ConfirmationNumber
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.LocationOn
@@ -50,6 +66,7 @@ import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Sell
 import androidx.compose.material.icons.rounded.SettingsSuggest
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SsidChart
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -69,7 +86,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -86,6 +105,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
+import au.com.threesixty.cabdispatch.data.remote.JobDto
 import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
 import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -94,6 +114,7 @@ import au.com.threesixty.cabdispatch.domain.ShiftDurationLimit
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
+import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import au.com.threesixty.cabdispatch.ui.overlays.DuressActiveBanner
 import au.com.threesixty.cabdispatch.ui.overlays.DuressTriggeredOverlay
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
@@ -109,23 +130,25 @@ import au.com.threesixty.cabdispatch.ui.screens.trips.TripsPaneVariant
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent
 import au.com.threesixty.cabdispatch.ui.screens.zones.ZonesPaneContent
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
-import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import au.com.threesixty.cabdispatch.ui.theme.DriverAvatar
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 import au.com.threesixty.cabdispatch.ui.theme.PulsingDot
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import au.com.threesixty.cabdispatch.ui.theme.SosControl
+import au.com.threesixty.cabdispatch.ui.theme.StatLabel
 import au.com.threesixty.cabdispatch.ui.theme.rememberInfiniteFloat
+import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripCard
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel
+import au.com.threesixty.cabdispatch.ui.wheel.content.formatOfferRelativeTime
 import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.material.icons.rounded.Apps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.math.RoundingMode
@@ -135,6 +158,8 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Captain Taxis dashboard — the 2026-08-29 visual pass against the Captain Taxis Figma file
@@ -190,12 +215,14 @@ import java.util.Locale
  * - **"VERIFIED" badge.** Originally shown only as a weak "session exists" proxy (no real per-
  *   driver field was known to exist). The backend's contract confirms a real one:
  *   `UserDto.suitabilityStatus == "clear"` via `GET /v1/auth/me` — see [HomeExtras.verified].
- * - **Nav rail contents — REMOVED 2026-09-03.** This pass previously reconciled Figma's
- *   11-icon collapsed rail with its 13-label expanded flyout. Both are gone: see
- *   [CaptainMenuGrid]'s doc for why all three menu surfaces were deleted and what replaced them.
- *   Everything the reconciliation preserved is still preserved — Messages and Live Map both have
- *   their own tile, and "HELP & SUPPORT"/"NAVIGATE"/"MORE" are still absent because there is
- *   still no screen behind any of them.
+ * - **Nav rail contents.** Figma's collapsed rail has 11 icons and its expanded flyout lists 13
+ *   different (and only partially overlapping) labels — neither list includes **Messages**, a real,
+ *   working, existing feature ([MessagesWheelContent], `MESSAGES_THREAD` route) that this pass must
+ *   not strand (see "do not break existing features"). A Messages entry is added to both; the
+ *   flyout's "HELP & SUPPORT" / "NAVIGATE" / "MORE" (no backing screen for any of them) are left out
+ *   rather than added as menu items that go nowhere. "LIVE MAP" is also added to the flyout only,
+ *   preserving the previous Command Deck's live-position map view ([StatusMapPanel], unchanged)
+ *   rather than deleting a working feature just because it isn't one of the 3 given frames.
  * - **SOS control.** Figma draws SOS as a plain circular tap target. This app's existing duress
  *   trigger is deliberately LONG-PRESS only — see [au.com.threesixty.cabdispatch.ui.deck.DeckNavRail]'s
  *   own doc: "so a knee-bump can't fire a silent alarm." Matching Figma's tap-to-fire literally
@@ -211,31 +238,31 @@ import java.util.Locale
  *
  * ## 2026-08-29, second pass: legibility/prominence for an older driver population
  *
- * User-directed: "majority users are old age... make it full prominent." Deliberately larger type
- * and touch targets everywhere, sized for a driver reading this at arm's length, possibly older,
- * possibly with reduced fine-motor precision — at the cost of some of the reference's density.
+ * User-directed: "majority users are old age... make it full prominent... menu needs to be
+ * properly fixed." Two kinds of change:
  *
- * ## 2026-09-03: one menu, and a menu-only home
- *
- * User verdict on the three-menus-for-one-destination-set situation: "just remove the all menu…
- * then cleanly design the beautiful icons based menu". Delivered as:
- *
- * 1. **All three menu surfaces deleted** — the always-visible `CaptainNavRail`, its hamburger →
- *    `CaptainNavFlyout`, and the chevron edge-handle wired to the same toggle as the hamburger.
- *    Home itself is the menu now: see [CaptainMenuGrid].
- * 2. **The duplicated status card deleted.** `SystemStatusCard`'s GPS/NET/PRN cells were a second
- *    copy of [CaptainHeader]'s own GPS/network/printer dots, off the identical fields; its one
- *    unique cell (meter READY/WAIT) is now [MeterReadyChip] in the header.
- * 3. **`ShiftStatsBar` folded into the header** as [HeaderStatsStrip] — shift time, trips,
- *    earnings and the shift-limit ring are the only genuinely non-duplicated numbers the footer
- *    carried, and the user asked for them to stay glanceable. "Take break now" is the same real
- *    `setAvailable(false)` action it always was.
- * 4. **`MeterCard` and `LiveDispatchCard` came off home.** No flow was deleted with them: the
- *    Start Meter pre-check dialog is what the METER tile opens, Set Price kept its own tile, the
- *    Starting/CANCEL transition became [MeterStartingOverlay], and the offer/accept flow lives on
- *    the Dispatch pane — which the DISPATCH tile badges with the real live offer count so an
- *    incoming job is still impossible to miss from home.
+ * 1. **One menu, not three.** The rail used to be accompanied by a hamburger at its top and a
+ *    chevron half-off its edge, both opening a flyout that listed the same destinations again.
+ *    All three duplicates are gone (2026-09-03, user-directed: "remove the all menu"): the
+ *    [CaptainNavRail] itself is the single menu, scrolls, and now also carries the three
+ *    destinations (Messages, Live map, Log off) that previously lived only in the flyout.
+ * 2. **Deliberately larger type and touch targets everywhere**, sized for a driver reading this at
+ *    arm's length, possibly older, possibly with reduced fine-motor precision. [Deck.TOUCH_MIN]-
+ *    style minimums exist elsewhere in this app for exactly this reason; this pass pushes the same
+ *    principle further for THIS screen specifically. Nothing here shrinks — every touch target
+ *    (rail rows, quick-action tiles, the START METER button, the SOS control) grew, and every
+ *    label/value font size grew, at the cost of some of the reference's density. See each
+ *    composable below for its own before/after.
  */
+private val RAIL_WIDTH = 232.dp
+private val RAIL_GUTTER = 16.dp
+private val CONTENT_END_PADDING = 12.dp
+private val FLYOUT_WIDTH = 280.dp
+
+/** Flyout's right edge lands exactly on the collapsed rail's left edge (plus a hair of breathing
+ * room) — computed from the same constants the content [Row] and [CaptainNavRail] use, rather
+ * than a second hand-tuned magic number that would silently drift the moment either changes. */
+
 @Composable
 fun DeckHomeScreen(
     navController: NavHostController,
@@ -262,8 +289,8 @@ fun DeckHomeScreen(
     // (see that class's own doc), so this is a real Room read, not a guess from [SessionHolder.pendingTrip]
     // (which — a separate, pre-existing gap this pass does not fix — never gets cleared once a trip
     // starts, so it would stay "truthy" long after a trip actually closes). Screen-local loader,
-    // same convention as [HomeExtras] below. Decides what the METER tile does (open the
-    // pre-check dialog vs. jump straight to the live fare) and drives its live pulse.
+    // same convention as [HomeExtras] below. Drives the nav rail's METER alias (see RAIL_ITEMS'
+    // own comment) and gates the footer stats bar for the Meter pane.
     val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
     val hasActiveTrip = activeTrip != null
     var showSetPrice by rememberSaveable { mutableStateOf(false) }
@@ -271,6 +298,7 @@ fun DeckHomeScreen(
     // Start Meter tap now opens this small declaration step first — see TripDetailsDialog's own
     // doc for why (passenger count / maxi-taxi / wheelchair / airport-rank-maxi inputs).
     var showTripDetails by rememberSaveable { mutableStateOf(false) }
+    var showVoucherInfo by rememberSaveable { mutableStateOf(false) }
     // Passenger-facing driver identity (2026-08-29 premium pass): tapping the header avatar now
     // opens a large ID card (photo big enough to match a face against) instead of silently
     // jumping to Profile — the card itself carries the "View profile" path so nothing is lost.
@@ -319,14 +347,7 @@ fun DeckHomeScreen(
         meterPhase = MeterStartPhase.Starting
         scope.launch {
             delay(METER_START_TRANSITION_MS) // real minimum dwell so the transition is visible, not a flash
-            if (meterPhase == MeterStartPhase.Starting) {
-                navController.navigate(CabDispatchRoutes.HIRED)
-                // Real fix that this pass had to make (2026-09-03): the phase used to be left on
-                // Starting forever after navigating. Harmless while MeterCard rendered it as a
-                // dial label; NOT harmless now that Starting draws a blocking MeterStartingOverlay
-                // — coming back to Home would have left the driver stuck behind a modal scrim.
-                meterPhase = MeterStartPhase.Idle
-            }
+            if (meterPhase == MeterStartPhase.Starting) navController.navigate(CabDispatchRoutes.HIRED)
         }
     }
 
@@ -364,38 +385,12 @@ fun DeckHomeScreen(
             onToggleAvailability = { viewModel.setAvailable(!state.isAvailable) },
             onSos = { AppContainer.duressController.trigger(state.session?.vehicleId, state.session?.driverId) },
         )
-        // The deleted footer's genuinely-unique numbers, folded into the header as one compact
-        // strip (the user's own call) — see HeaderStatsStrip's doc. Hidden on the Meter pane for
-        // exactly the reason the footer was already hidden there: metering is a header-only focus
-        // mode, and this strip is the footer's content, not the header's own.
-        // Metering is header-only, which removed every route back to the menu: METER is the one
-        // pane with no PaneShell back-arrow (leaving mid-fare must never read as "go back"), and
-        // the rail is hidden. Without this, checking Messages or Dispatch mid-fare would mean
-        // pressing END FARE — which closes the trip. This returns to the menu with the fare still
-        // running; the METER tile (lit while a fare is live) comes straight back.
-        if (pane == CaptainPane.METER) {
-            MeteringMenuButton(onClick = { pane = CaptainPane.DASHBOARD })
-        }
-        if (pane != CaptainPane.METER) {
-            HeaderStatsStrip(
-                state = state,
-                extras = homeExtras,
-                hasActiveTrip = hasActiveTrip,
-                // Honest local action, unchanged from the deleted ShiftLimitRing: no invented
-                // return-time claim, just the real setAvailable(false) call.
-                onTakeBreak = { viewModel.setAvailable(false) },
-            )
-        }
         // Real bug fixed (2026-09-02): setAvailable's failure path already produced
         // availabilityError, but nothing anywhere rendered it — a failed toggle silently reverted
         // with zero feedback to the driver about why. A small inline banner, not a dialog, so it
         // doesn't block the rest of the screen.
-        // Also the one place a failed Start Meter now surfaces: MeterStartPhase.Failed used to
-        // render inside MeterCard's dial, which no longer exists. Same inline, non-blocking
-        // banner rather than a second error surface.
-        val bannerMessage = state.availabilityError ?: (meterPhase as? MeterStartPhase.Failed)?.message
         AnimatedVisibility(
-            visible = bannerMessage != null,
+            visible = state.availabilityError != null,
             enter = fadeIn(tween(160)),
             exit = fadeOut(tween(140)),
         ) {
@@ -408,7 +403,7 @@ fun DeckHomeScreen(
             ) {
                 Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.danger, modifier = Modifier.size(18.dp))
                 Text(
-                    bannerMessage ?: "",
+                    state.availabilityError ?: "",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
@@ -418,96 +413,128 @@ fun DeckHomeScreen(
             }
         }
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                // Symmetric now that the 232dp nav rail is gone — the old asymmetric
-                // start=32/end=12 existed only to tuck the content up against that rail.
-                .padding(horizontal = 24.dp, vertical = if (pane == CaptainPane.METER) 12.dp else 18.dp),
-        ) {
-            when (pane) {
-                CaptainPane.DASHBOARD -> CaptainMenuGrid(
-                    hasActiveTrip = hasActiveTrip,
-                    liveOfferCount = dispatchState.cards.size,
-                    negotiatedTotal = pendingTrip?.negotiatedTotal,
-                    onSelectPane = { pane = it },
-                    onStartMeterPrecheck = { showTripDetails = true },
-                    onSetPrice = { showSetPrice = true },
-                    onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
-                    onOpenSettings = { navController.navigate(CabDispatchRoutes.SETTINGS) },
-                    onLogOff = { navController.navigate(CabDispatchRoutes.LOG_OFF) },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                CaptainPane.DISPATCH -> PaneShell("Live dispatch", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    AvailableTripsWheelContent(navController = navController)
+        Row(modifier = Modifier.weight(1f).padding(top = 20.dp, start = 32.dp, end = 12.dp, bottom = 20.dp)) {
+            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when (pane) {
+                        CaptainPane.DASHBOARD -> {
+                            MeterCard(
+                                state = state,
+                                meterPhase = meterPhase,
+                                negotiatedTotal = pendingTrip?.negotiatedTotal,
+                                onStartMeter = { showTripDetails = true },
+                                onCancelStart = ::onCancelStart,
+                                onSetPrice = { showSetPrice = true },
+                                onVouchers = { showVoucherInfo = true },
+                                // 590dp -> 660dp (2026-08-29 prominence pass): grown so the bigger
+                                // dial + bigger corner tiles below have real clearance from each
+                                // other instead of visibly colliding — see MeterDial/NightFareTile/
+                                // QuickActionTile's own comments for the exact measurements.
+                                modifier = Modifier.width(660.dp).fillMaxHeight(),
+                            )
+                            Spacer(Modifier.width(16.dp))
+                            LiveDispatchCard(
+                                dispatchState = dispatchState,
+                                onAccept = dispatchViewModel::acceptOffer,
+                                onViewAll = { pane = CaptainPane.DISPATCH },
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        }
+                        CaptainPane.DISPATCH -> PaneShell("Live dispatch", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            AvailableTripsWheelContent(navController = navController)
+                        }
+                        CaptainPane.TRIPS -> PaneShell("Trip history", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            // variant = HISTORY (2026-09-03): the rail item's own flyout label
+                            // ("TRIP HISTORY", see RAIL_ITEMS below) already committed to this
+                            // being the history table, not the MY_TRIPS default — this call was
+                            // the one place still rendering the wrong variant, leaving the real
+                            // history table (filters, pickup/dropoff/distance/duration/status
+                            // columns) genuinely unreachable from the live app. See
+                            // TripsWheelContent's own doc for what each variant shows.
+                            TripsWheelContent(
+                                variant = TripsPaneVariant.HISTORY,
+                                onTripClick = { clientUuid ->
+                                    TripDetailHandoff.set(clientUuid)
+                                    navController.navigate(CabDispatchRoutes.TRIP_DETAIL)
+                                },
+                                onOpenActiveTrip = { navController.navigate(CabDispatchRoutes.CLOSE_PAY) },
+                                onShiftReportClick = { pane = CaptainPane.SHIFT },
+                            )
+                        }
+                        CaptainPane.EARNINGS -> PaneShell("Earnings — this shift", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            EarningsWheelContent()
+                        }
+                        CaptainPane.SHIFT -> PaneShell("Shift summary", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            ShiftWheelContent(
+                                onSubmitted = { summary ->
+                                    ShiftSubmissionHandoff.set(summary)
+                                    navController.navigate(CabDispatchRoutes.SHIFT_SUBMITTED)
+                                },
+                            )
+                        }
+                        // Real tabbed Heat Map/Zone List/Surge Areas/Airport Queue screen (Phase F)
+                        // — replaces the old two-button "Plot into a zone"/"Zone statistics"
+                        // launcher (see ZonesPaneContent's own class doc for why those two
+                        // standalone routes are kept, unchanged, rather than deleted).
+                        CaptainPane.ZONES -> PaneShell("Zones", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            ZonesPaneContent()
+                        }
+                        // Real, standalone, view-only tariff display (Phase E) — replaces the old
+                        // mislabelled alias where PRICING silently opened the Set Price dialog
+                        // (see RAIL_ITEMS' own comment and PricingPaneContent's class doc for why).
+                        CaptainPane.PRICING -> PaneShell("Pricing", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            PricingPaneContent()
+                        }
+                        // Real Available/Used/Expired voucher-ledger browse screen (Phase G) —
+                        // replaces the old mislabelled alias where VOUCHERS silently opened
+                        // VoucherInfoDialog (see RAIL_ITEMS' own comment and VouchersPaneContent's
+                        // class doc for why). That dialog is unaffected and still reachable from
+                        // the Dashboard's own MeterCard VOUCHERS quick-action tile.
+                        CaptainPane.VOUCHERS -> PaneShell("Vouchers", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            VouchersPaneContent()
+                        }
+                        CaptainPane.MESSAGES -> PaneShell("Messages", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            MessagesWheelContent(onOpenThread = { navController.navigate(CabDispatchRoutes.MESSAGES_THREAD) })
+                        }
+                        CaptainPane.MAP -> PaneShell("Live map", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            StatusMapPanel(onPlotZone = { pane = CaptainPane.ZONES })
+                        }
+                        // No PaneShell wrapper here deliberately (unlike every pane above): PaneShell's
+                        // back-arrow reads as "leave this screen", which for an in-progress, revenue-
+                        // accruing fare is the wrong affordance to offer — a driver correcting course
+                        // mid-trip taps another rail item directly (all still reachable, per the
+                        // "header/footer/nav-rail visible while HIRED" decision), never a literal
+                        // "back" out of the meter. See HiredScreen's own doc for the rest of this pane.
+                        CaptainPane.METER -> HiredScreen(navController = navController)
+                    }
                 }
-                CaptainPane.TRIPS -> PaneShell("Trip history", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    // variant = HISTORY (2026-09-03): the old rail's own flyout label
-                    // ("TRIP HISTORY") already committed to this being the history
-                    // table, not the MY_TRIPS default — this call was
-                    // the one place still rendering the wrong variant, leaving the real
-                    // history table (filters, pickup/dropoff/distance/duration/status
-                    // columns) genuinely unreachable from the live app. See
-                    // TripsWheelContent's own doc for what each variant shows.
-                    TripsWheelContent(
-                        variant = TripsPaneVariant.HISTORY,
-                        onTripClick = { clientUuid ->
-                            TripDetailHandoff.set(clientUuid)
-                            navController.navigate(CabDispatchRoutes.TRIP_DETAIL)
-                        },
-                        onOpenActiveTrip = { navController.navigate(CabDispatchRoutes.CLOSE_PAY) },
-                        onShiftReportClick = { pane = CaptainPane.SHIFT },
-                    )
+                if (pane == CaptainPane.DASHBOARD || pane == CaptainPane.METER) {
+                    Spacer(Modifier.height(18.dp))
+                    Row(modifier = Modifier.height(136.dp).fillMaxWidth()) {
+                        ShiftStatsBar(
+                            state = state,
+                            extras = homeExtras,
+                            // Honest local action (see ShiftLimitRing's own doc): no invented
+                            // return-time claim, just the real setAvailable(false) call.
+                            onTakeBreak = { viewModel.setAvailable(false) },
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        SystemStatusCard(state = state, modifier = Modifier.width(230.dp).fillMaxHeight())
+                    }
                 }
-                CaptainPane.EARNINGS -> PaneShell("Earnings — this shift", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    EarningsWheelContent()
-                }
-                CaptainPane.SHIFT -> PaneShell("Shift summary", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    ShiftWheelContent(
-                        onSubmitted = { summary ->
-                            ShiftSubmissionHandoff.set(summary)
-                            navController.navigate(CabDispatchRoutes.SHIFT_SUBMITTED)
-                        },
-                    )
-                }
-                // Real tabbed Heat Map/Zone List/Surge Areas/Airport Queue screen (Phase F)
-                // — replaces the old two-button "Plot into a zone"/"Zone statistics"
-                // launcher (see ZonesPaneContent's own class doc for why those two
-                // standalone routes are kept, unchanged, rather than deleted).
-                CaptainPane.ZONES -> PaneShell("Zones", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    ZonesPaneContent()
-                }
-                // Real, standalone, view-only tariff display (Phase E) — replaces the old
-                // mislabelled alias where PRICING silently opened the Set Price dialog
-                // (see PricingPaneContent's class doc for why).
-                CaptainPane.PRICING -> PaneShell("Pricing", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    PricingPaneContent()
-                }
-                // Real Available/Used/Expired voucher-ledger browse screen (Phase G) —
-                // replaces the old mislabelled alias where VOUCHERS silently opened
-                // VoucherInfoDialog (see VouchersPaneContent's class doc for why). That
-                // dialog is now deleted outright: its only remaining caller was the
-                // MeterCard VOUCHERS quick-action, which went away with MeterCard, and
-                // leaving a second, weaker "what is a voucher" surface behind this real
-                // ledger screen would have been exactly the duplication this pass removes.
-                CaptainPane.VOUCHERS -> PaneShell("Vouchers", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    VouchersPaneContent()
-                }
-                CaptainPane.MESSAGES -> PaneShell("Messages", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    MessagesWheelContent(onOpenThread = { navController.navigate(CabDispatchRoutes.MESSAGES_THREAD) })
-                }
-                CaptainPane.MAP -> PaneShell("Live map", onBack = { pane = CaptainPane.DASHBOARD }) {
-                    StatusMapPanel(onPlotZone = { pane = CaptainPane.ZONES })
-                }
-                // No PaneShell wrapper here deliberately (unlike every pane above): PaneShell's
-                // back-arrow reads as "leave this screen", which for an in-progress, revenue-
-                // accruing fare is the wrong affordance to offer. Metering is a header-only
-                // focus mode: the footer/stats strip is hidden here (see HeaderStatsStrip's
-                // call site above) and the driver leaves via the meter's own END FARE, never
-                // a literal "back". See HiredScreen's own doc for the rest of this pane.
-                CaptainPane.METER -> HiredScreen(navController = navController)
             }
+            Spacer(Modifier.width(12.dp))
+            CaptainNavRail(
+                pane = pane,
+                hasActiveTrip = hasActiveTrip,
+                onSelectPane = { pane = it },
+                onOpenVouchers = { showVoucherInfo = true },
+                onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
+                onOpenSettings = { navController.navigate(CabDispatchRoutes.SETTINGS) },
+                onLogOff = { navController.navigate(CabDispatchRoutes.LOG_OFF) },
+                modifier = Modifier.fillMaxHeight(),
+            )
         }
     }
 
@@ -539,6 +566,9 @@ fun DeckHomeScreen(
             },
         )
     }
+    if (showVoucherInfo) {
+        VoucherInfoDialog(onDismiss = { showVoucherInfo = false })
+    }
     if (showDriverId) {
         DriverIdCard(
             session = state.session,
@@ -559,14 +589,6 @@ fun DeckHomeScreen(
         DuressUiState.Idle -> Unit
     }
 
-    // The Start Meter transition, which used to live inside the (now-deleted) MeterCard dial.
-    // Declared last so it sits above the menu grid; the duress overlays above it still win
-    // z-order-wise because they are declared before it only in source order — a triggered duress
-    // is a full-screen takeover of its own, and a metered start cannot be in flight at the same
-    // time (the tap that starts one navigates away within METER_START_TRANSITION_MS).
-    if (meterPhase is MeterStartPhase.Starting) {
-        MeterStartingOverlay(onCancel = ::onCancelStart)
-    }
     }
 }
 
@@ -683,15 +705,12 @@ private fun CaptainHeader(
         modifier = Modifier
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(CaptainPalette.glowPurpleSoft, Color.Transparent)))
-            .padding(horizontal = 32.dp, vertical = 12.dp),
+            .padding(horizontal = 32.dp, vertical = 26.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 88dp -> 68dp and the row's vertical padding 26dp -> 12dp (2026-09-03): this device is
-        // 960x600 dp, and the header now carries a second row (HeaderStatsStrip) that the deleted
-        // footer used to hold. Measured, not guessed: at the old sizes the header + strip alone
-        // ate 214dp of 600, leaving the menu grid's three rows under 100dp each. The avatar is
-        // still a comfortably large target and still opens the full-size Driver ID card.
-        DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 68)
+        // 72dp -> 88dp + tap now opens the large Driver ID card (passenger face-matching); the
+        // Profile route stays reachable via the card's own "View profile" button and the name tap.
+        DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 88)
         Column(modifier = Modifier.padding(start = 14.dp)) {
             Text("CAPTAIN", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
             Text("TAXIS", fontFamily = InterFamily, fontSize = 12.sp, letterSpacing = 1.sp, color = CaptainPalette.textSecondary)
@@ -840,463 +859,635 @@ private fun StatusDot(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 }
 
 // ============================================================================================
-// Home IS the menu (2026-09-03) — one icon-tile grid, and nothing else
+// Meter card (Figma left card — night fare tile, dial, Set Price / Vouchers quick actions)
 // ============================================================================================
 
-/**
- * The one and only menu in this app now. Replaces THREE surfaces that all reached the same
- * destinations and all had to be deleted together (user verdict: "just remove the all menu…
- * then cleanly design the beautiful icons based menu"):
- *
- * 1. `CaptainNavRail` — an always-visible 232dp right rail of 11 numbered icon+label rows, eating
- *    a quarter of a 960dp-wide tablet on every single pane.
- * 2. The hamburger at the rail's top → `CaptainNavFlyout`, a 280dp panel listing the *same*
- *    destinations again under different labels ("TRIPS"/"TRIP HISTORY", "DISPATCH"/"AVAILABLE
- *    TRIPS", …).
- * 3. A 44dp chevron half-off the rail's edge wired to the *same* `onToggleMenu` as the hamburger
- *    — its own comment admitted it was "the reference's second, always-visible affordance for the
- *    same expand action the hamburger performs above".
- *
- * The navigation model that replaces all three: **home is the menu**. Every other destination
- * already wraps in [PaneShell], whose back arrow returns to [CaptainPane.DASHBOARD] — so there is
- * exactly one way in (a tile) and exactly one way out (the back arrow), and no persistent rail is
- * needed anywhere. Every pane the rail and the flyout could reach has a tile here, including the
- * two the numbered rail deliberately left out (Messages, Live Map) and the three routed screens
- * that only ever lived in the flyout (Profile, Settings, Log off) — nothing became unreachable.
- *
- * Sizing: this runs on an SM-T575 at 1920x1200 px / density 320 = **960 x 600 dp**, so the grid is
- * three weight(1f) rows inside the content area rather than a scrolling list — every tile is on
- * screen at once, ~123dp tall and ~170dp wide, which is a far bigger target than the ~64dp rail
- * rows it replaces (this is a mounted tablet, read at arm's length, often by an older driver).
- * Icon + one word, no numbered prefixes, no duplicate entries.
- */
-private class MenuTileSpec(
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val label: String,
-    /** Icon-chip / border / glow tint. */
-    val tint: Color = CaptainPalette.accent,
-    /** A standing primary destination — glows softly even when idle. Purely a hierarchy cue. */
-    val primary: Boolean = false,
-    /** Something is genuinely happening on this destination RIGHT NOW — pulses the glow. Only
-     * ever set from real state (an open fare, a live offer), never a decorative loop. */
-    val live: Boolean = false,
-    /** Real count for the corner badge, or `null` for no badge. Never a placeholder number. */
-    val badge: Int? = null,
-    /** Real one-line sub-state, or `null`. Never filler copy. */
-    val note: String? = null,
-    val onClick: () -> Unit,
-)
-
-private const val MENU_COLUMNS = 5
-
 @Composable
-private fun CaptainMenuGrid(
-    hasActiveTrip: Boolean,
-    /** `dispatchState.cards.size` — the live offer list [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel]
-     * already keeps warm on this screen (initial fetch + its live subscription). Same list the
-     * Dispatch pane itself renders, so the badge can never disagree with what a tap opens. */
-    liveOfferCount: Int,
-    /** `SessionHolder.pendingTrip.value?.negotiatedTotal` — non-null only when the driver really
-     * did set a fixed price for the trip about to start. */
+private fun MeterCard(
+    state: WheelDashboardUiState,
+    meterPhase: MeterStartPhase,
+    // Real bug fixed (2026-09-02): the SET PRICE tile's subtitle used to be an unconditional
+    // hardcoded "Fixed Fare · ACTIVE" literal regardless of actual state. `negotiatedTotal` is
+    // `SessionHolder.pendingTrip.value?.negotiatedTotal`, collected by the caller — non-null only
+    // when the driver actually used the Set Price flow for the trip about to start.
     negotiatedTotal: String?,
-    onSelectPane: (CaptainPane) -> Unit,
-    onStartMeterPrecheck: () -> Unit,
+    onStartMeter: () -> Unit,
+    onCancelStart: () -> Unit,
     onSetPrice: () -> Unit,
-    onOpenProfile: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onLogOff: () -> Unit,
+    onVouchers: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val tiles = listOf(
-        // METER, per the user's explicit decision: no open fare -> the existing passenger-count /
-        // maxi pre-check dialog (the flow the deleted MeterCard's START METER button used to
-        // launch); an open fare -> straight to the live meter. `hasActiveTrip` is the same real
-        // Room read (TripEntity status=OPEN) the rail's METER row already used.
-        MenuTileSpec(
-            icon = Icons.Rounded.DirectionsCar,
-            label = "METER",
-            tint = if (hasActiveTrip) CaptainPalette.success else CaptainPalette.accent,
-            primary = true,
-            live = hasActiveTrip,
-            onClick = { if (hasActiveTrip) onSelectPane(CaptainPane.METER) else onStartMeterPrecheck() },
-        ),
-        // The fixed-fare flow the deleted MeterCard's SET PRICE quick-action owned. It is a real,
-        // working, pre-existing feature (SetPriceDialogV2 -> startMeter(negotiatedTotal=…)), so it
-        // gets its own tile rather than becoming unreachable when its host card went away.
-        MenuTileSpec(
-            icon = Icons.Rounded.Sell,
-            label = "SET PRICE",
-            tint = if (negotiatedTotal != null) CaptainPalette.success else CaptainPalette.accent,
-            note = negotiatedTotal?.let { "$$it fixed" },
-            onClick = onSetPrice,
-        ),
-        // DISPATCH carries a REAL badge + pulse. Deleting LiveDispatchCard from home would
-        // otherwise have made an incoming job offer invisible from the only screen a waiting
-        // driver actually sits on — a genuine operational regression, not a cosmetic one.
-        MenuTileSpec(
-            icon = Icons.Rounded.SwapHoriz,
-            label = "DISPATCH",
-            tint = if (liveOfferCount > 0) CaptainPalette.warning else CaptainPalette.accent,
-            live = liveOfferCount > 0,
-            badge = liveOfferCount.takeIf { it > 0 },
-            note = when {
-                liveOfferCount <= 0 -> null
-                liveOfferCount == 1 -> "1 offer waiting"
-                else -> "$liveOfferCount offers waiting"
-            },
-            onClick = { onSelectPane(CaptainPane.DISPATCH) },
-        ),
-        MenuTileSpec(Icons.Rounded.Receipt, "TRIPS", onClick = { onSelectPane(CaptainPane.TRIPS) }),
-        MenuTileSpec(Icons.Rounded.SsidChart, "EARNINGS", onClick = { onSelectPane(CaptainPane.EARNINGS) }),
-        MenuTileSpec(Icons.Rounded.LocationOn, "ZONES", onClick = { onSelectPane(CaptainPane.ZONES) }),
-        MenuTileSpec(Icons.Rounded.Map, "MAP", onClick = { onSelectPane(CaptainPane.MAP) }),
-        MenuTileSpec(Icons.Rounded.Mail, "MESSAGES", onClick = { onSelectPane(CaptainPane.MESSAGES) }),
-        MenuTileSpec(Icons.Rounded.History, "SHIFT", onClick = { onSelectPane(CaptainPane.SHIFT) }),
-        // "TARIFF", not "PRICING": the rail called this PRICING and the fixed-fare dialog SET
-        // PRICE, two near-identical words for two entirely different things. This is the
-        // view-only signed fare structure (PricingPaneContent).
-        MenuTileSpec(Icons.Rounded.LocalOffer, "TARIFF", onClick = { onSelectPane(CaptainPane.PRICING) }),
-        MenuTileSpec(Icons.Rounded.ConfirmationNumber, "VOUCHERS", onClick = { onSelectPane(CaptainPane.VOUCHERS) }),
-        MenuTileSpec(Icons.Rounded.Person, "PROFILE", onClick = onOpenProfile),
-        MenuTileSpec(Icons.Rounded.SettingsSuggest, "SETTINGS", onClick = onOpenSettings),
-        MenuTileSpec(Icons.AutoMirrored.Rounded.Logout, "LOG OFF", tint = CaptainPalette.danger, onClick = onLogOff),
-    )
-
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        tiles.chunked(MENU_COLUMNS).forEach { row ->
-            Row(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                row.forEach { spec -> MenuTile(spec = spec, modifier = Modifier.weight(1f).fillMaxHeight()) }
-                // Keeps the short final row's tiles exactly the same size as every other row's
-                // rather than stretching them to fill the width.
-                repeat(MENU_COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-}
-
-/**
- * One menu tile — built entirely from this app's shared vocabulary ([CaptainPanel] surface,
- * [gameClick] press spring, [au.com.threesixty.cabdispatch.ui.theme.neonGlow] for emphasis,
- * [rememberInfiniteFloat]/[PulsingDot] for genuinely-live state) rather than a fourth hand-rolled
- * card style. The glow is state-driven, never ambient decoration: `0f` for an ordinary
- * destination, a soft constant for a standing primary one, a pulse only while
- * [MenuTileSpec.live] is backed by something real.
- */
-@Composable
-private fun MenuTile(spec: MenuTileSpec, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(20.dp)
-    val pulse by rememberInfiniteFloat(enabled = spec.live, from = 0.35f, to = 1f, durationMs = 1300)
-    val glow = when {
-        spec.live -> pulse
-        spec.primary -> 0.5f
-        else -> 0f
-    }
-    Box(modifier = modifier) {
-        CaptainPanel(
-            modifier = Modifier
-                .fillMaxSize()
-                // BEFORE the panel's own clip/background (see neonGlow's doc) so the glow lands
-                // outside the tile instead of being clipped away inside it.
-                .neonGlow(spec.tint, 20.dp, strength = glow, spread = 6.dp)
-                .gameClick(onClick = spec.onClick, shape = shape, glowColor = spec.tint),
-            cornerRadiusDp = 20,
-            raised = spec.primary || spec.live,
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(15.dp))
-                        .background(Brush.verticalGradient(listOf(CaptainPalette.raised, CaptainPalette.cardBottom)))
-                        .border(1.dp, spec.tint.copy(alpha = if (glow > 0f) 0.7f else 0.28f), RoundedCornerShape(15.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(spec.icon, contentDescription = null, tint = spec.tint, modifier = Modifier.size(26.dp))
-                }
-                Text(
-                    spec.label,
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp,
-                    letterSpacing = 0.4.sp,
-                    color = CaptainPalette.textPrimary,
-                    maxLines = 1,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 9.dp),
-                )
-                spec.note?.let { note ->
-                    Text(
-                        note,
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.sp,
-                        color = spec.tint,
-                        maxLines = 1,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 3.dp),
-                    )
-                }
-            }
-        }
-        // Real count only — this Row does not render at all when there is nothing waiting.
-        spec.badge?.takeIf { it > 0 }?.let { count ->
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(7.dp)
-                    .clip(CircleShape)
-                    .background(CaptainPalette.danger)
-                    .border(1.5.dp, CaptainPalette.danger.copy(alpha = pulse), CircleShape)
-                    .padding(horizontal = 9.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PulsingDot(color = CaptainPalette.textPrimary, animated = true, size = 7.dp)
-                Text(
-                    count.toString(),
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textPrimary,
-                    modifier = Modifier.padding(start = 5.dp),
-                )
-            }
-        }
-    }
-}
-
-/**
- * The blocking moment between a real Start Meter tap and the Hired route opening — the one piece
- * of the deleted `MeterCard` that had to survive as its own surface, because that card was where
- * [MeterStartPhase.Starting] used to be visible AND where its CANCEL escape hatch lived. Losing
- * the cancel would have been a real regression (it calls [SessionHolder.clearPendingTrip], the
- * only way to abandon a fixed-fare declaration mid-transition).
- */
-@Composable
-private fun MeterStartingOverlay(onCancel: () -> Unit) {
+    val fixedFareActive = negotiatedTotal != null
     Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.65f)),
-        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            // Prominence pass (2026-09-02): a subtle top-to-bottom gradient instead of a flat
+            // panel fill, plus a faint accent-tinted border — every major Home card gets this
+            // same "gently lit, not flat" treatment (see LiveDispatchCard/ShiftStatsBar/
+            // SystemStatusCard below).
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, Brush.linearGradient(listOf(CaptainPalette.accent.copy(alpha = 0.3f), CaptainPalette.panelBorder)), RoundedCornerShape(18.dp))
+            .padding(20.dp),
     ) {
+        NightFareTile(tariff = state.tariff, modifier = Modifier.align(Alignment.TopStart))
+        MeterDial(
+            meterPhase = meterPhase,
+            enabled = state.tariff != null,
+            onStartMeter = onStartMeter,
+            onCancelStart = onCancelStart,
+            modifier = Modifier.align(Alignment.Center),
+        )
         Column(
-            modifier = Modifier
-                .width(420.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-                .border(1.dp, CaptainPalette.accent.copy(alpha = 0.45f), RoundedCornerShape(24.dp))
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.align(Alignment.CenterEnd),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            val pulse by rememberInfiniteFloat(enabled = true, from = 0.85f, to = 1.1f, durationMs = 900)
+            QuickActionTile(
+                icon = Icons.Rounded.Sell,
+                title = "SET PRICE",
+                subtitle = if (fixedFareActive) "Fixed Fare · ACTIVE" else "Tap to set a price",
+                subtitleColor = if (fixedFareActive) CaptainPalette.success else CaptainPalette.textSecondary,
+                onClick = onSetPrice,
+            )
+            QuickActionTile(
+                icon = Icons.Rounded.ConfirmationNumber,
+                title = "VOUCHERS",
+                subtitle = "Redeemed at payment",
+                subtitleColor = CaptainPalette.textSecondary,
+                onClick = onVouchers,
+            )
+        }
+    }
+}
+
+/** Real night-rate uplift and window, not Figma's mock "1.25× / 10PM–6AM" — see this file's class
+ * doc. `null` tariff (not yet signed/cached) hides the numeric ratio rather than showing a bogus
+ * one. */
+@Composable
+private fun NightFareTile(tariff: au.com.threesixty.cabdispatch.data.remote.TariffDto?, modifier: Modifier = Modifier) {
+    // 172dp -> 156dp (2026-08-29): pulled back slightly so this corner tile clears the also-bigger
+    // meter dial behind it — see MeterCard's width comment. The window text now wraps to two
+    // lines at this width, which is fine (the Column isn't height-constrained) — a real fix, not
+    // a cosmetic call, since the alternative (172dp) visibly overlapped the dial's ring on-device.
+    Column(
+        modifier = modifier
+            .width(156.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
+            Text("NIGHT FARE", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 7.dp))
+        }
+        Text(
+            nightMultiplierLabel(tariff),
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 32.sp,
+            color = CaptainPalette.textPrimary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        // The backend's actual, authoritative night-rate window (confirmed directly by the
+        // backend/architecture agent, 2026-08-29 contract Part 2.3/6): "10pm-6am ... hardcoded
+        // server-side in TimeClass.NIGHT" and safe to display as-is since it's informational only
+        // — the server enforces the real boundary at trip-tick/close time regardless. NOTE for the
+        // record: this app's OWN local FareEngine.kt (used only for HiredScreen's live-ticking
+        // display, a screen outside this pass's 3-screen scope) currently classifies night as
+        // 8pm-6am, not 10pm-6am — a real discrepancy this pass found but does NOT fix here (fixing
+        // the live meter's day/night boundary is a money-calculation change to a different screen,
+        // out of this pass's mandate — flagged in the delivery notes instead).
+        Text(
+            "10:00 PM – 6:00 AM",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 14.sp,
+            color = CaptainPalette.textSecondary,
+            modifier = Modifier.padding(top = 5.dp),
+        )
+    }
+}
+
+private fun nightMultiplierLabel(tariff: au.com.threesixty.cabdispatch.data.remote.TariffDto?): String {
+    val t = tariff ?: return "—"
+    val day = t.distRate1.toBigDecimalOrNull() ?: return "—"
+    val night = t.nightRate1.toBigDecimalOrNull() ?: return "—"
+    if (day.signum() <= 0) return "—"
+    val ratio = night.divide(day, 2, RoundingMode.HALF_UP)
+    return "${ratio}×"
+}
+
+private fun String.toBigDecimalOrNull(): java.math.BigDecimal? = runCatching { java.math.BigDecimal(this) }.getOrNull()
+
+@Composable
+private fun QuickActionTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    subtitleColor: Color,
+    onClick: () -> Unit,
+) {
+    Column(
+        // 126x118 -> 156x172 (2026-08-29, revised after a real on-device check): width pulled back
+        // to clear the dial (see MeterCard's width comment); height grown MORE than first tried —
+        // the first pass's 144dp visibly clipped the subtitle line, confirmed live, not assumed.
+        // Press feedback moved onto the shared gameClick spring/glow (game-feel pass).
+        modifier = Modifier
+            .width(156.dp)
+            .height(172.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
+            .gameClick(onClick = onClick, shape = RoundedCornerShape(20.dp))
+            .padding(16.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(14.dp))
+                .background(Brush.verticalGradient(listOf(CaptainPalette.raised, CaptainPalette.cardBottom)))
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(26.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+        Text(subtitle, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = subtitleColor, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/**
+ * The circular meter gauge — Figma's ~20 concentric-ellipse soft-glow ring is approximated with a
+ * single [Canvas] draw (a few concentric strokes + a tick ring) rather than ported layer-for-layer;
+ * materially cheaper to recompose and visually equivalent at this size. Ticks alternate accent/
+ * neutral every 3rd position, matching the design's own rhythm.
+ */
+@Composable
+private fun MeterDial(
+    meterPhase: MeterStartPhase,
+    enabled: Boolean,
+    onStartMeter: () -> Unit,
+    onCancelStart: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val starting = meterPhase is MeterStartPhase.Starting
+    // Ring/glow brighten from neutral to full accent the moment a real Start Meter tap is in
+    // flight — driven by [meterPhase], never a decorative loop on its own; see this file's class
+    // doc for why the copy stays honest ("STARTING METER…") while the visual treatment below is
+    // free to be as lively as the reference calls for.
+    val ringColor by animateColorAsState(if (starting) CaptainPalette.accent else CaptainPalette.panelBorder, label = "ring-color")
+    // Idle state gently BREATHES (0.32-0.5) rather than sitting at one flat value — a resting HUD
+    // that's never perfectly static reads as "alive and waiting for you", not "off/broken", which
+    // matters most for exactly the moment this control is trying hardest to invite a tap.
+    val restPulse by rememberInfiniteFloat(enabled = !starting, from = 0.32f, to = 0.5f, durationMs = 2200)
+    val glowStrength by animateFloatAsState(if (starting) 1f else restPulse, animationSpec = tween(500), label = "glow-strength")
+    // Slow ambient rotation always running (the reference's light-sweep look); speeds up while
+    // starting so the transition reads as "working", not just a colour change.
+    val sweepAngle by rememberInfiniteTransition(label = "sweep").let { t ->
+        t.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(if (starting) 1400 else 7000, easing = LinearEasing)),
+            label = "sweep-angle",
+        )
+    }
+    val pulse by rememberInfiniteFloat(enabled = true, from = 0.5f, to = 1f, durationMs = 1800)
+
+    // 398dp -> 414dp: bigger than the original, but pulled back from an earlier 430dp pass that
+    // visibly collided with the (also-bigger) corner tiles — see MeterCard's own width comment;
+    // this size was picked by measuring the real overlap live, not guessed twice.
+    Box(modifier = modifier.size(414.dp), contentAlignment = Alignment.Center) {
+        // Soft outer glow — a few oversized, low-alpha radial-gradient circles standing in for
+        // Figma's ~20-layer concentric-ellipse blur (see this composable's own doc above for why
+        // that is a deliberate approximation, not a missed detail).
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val maxR = size.minDimension / 2f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(CaptainPalette.accent.copy(alpha = 0.22f * glowStrength * pulse), Color.Transparent),
+                    center = Offset(cx, cy),
+                    radius = maxR,
+                ),
+                radius = maxR,
+                center = Offset(cx, cy),
+            )
+            val strokeW = 2.dp.toPx()
+            val radius = maxR - strokeW
+            drawCircle(color = ringColor, radius = radius, style = Stroke(width = strokeW))
+            // The rotating "sweep" highlight — one bright arc riding around the ring.
+            drawArc(
+                color = CaptainPalette.accent.copy(alpha = 0.9f * glowStrength),
+                startAngle = sweepAngle,
+                sweepAngle = 46f,
+                useCenter = false,
+                topLeft = Offset(cx - radius, cy - radius),
+                size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
+                style = Stroke(width = strokeW * 2, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+            )
+            val tickRadiusOuter = radius - 14.dp.toPx()
+            val tickRadiusInner = tickRadiusOuter - 10.dp.toPx()
+            val tickCount = 36
+            for (i in 0 until tickCount) {
+                val angle = (2 * Math.PI * i / tickCount)
+                val accentTick = i % 3 == 0
+                val color = if (accentTick) CaptainPalette.accent.copy(alpha = 0.6f + 0.4f * glowStrength) else CaptainPalette.dialNeutral
+                val start = Offset(cx + (tickRadiusInner * cos(angle)).toFloat(), cy + (tickRadiusInner * sin(angle)).toFloat())
+                val end = Offset(cx + (tickRadiusOuter * cos(angle)).toFloat(), cy + (tickRadiusOuter * sin(angle)).toFloat())
+                drawLine(color = color, start = start, end = end, strokeWidth = if (accentTick) 3.dp.toPx() else 2.dp.toPx())
+            }
+            // A handful of orbiting "spark" points riding the same sweep angle, offset around the
+            // ring — the reference's particle-like glints, not literal physics.
+            repeat(5) { i ->
+                val a = Math.toRadians((sweepAngle + i * 72).toDouble())
+                val r = radius - 4.dp.toPx()
+                val p = Offset(cx + (r * cos(a)).toFloat(), cy + (r * sin(a)).toFloat())
+                drawCircle(color = CaptainPalette.accent.copy(alpha = 0.5f * glowStrength), radius = 2.5.dp.toPx(), center = p)
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Rounded.DirectionsCar,
                 contentDescription = null,
                 tint = CaptainPalette.accent,
-                modifier = Modifier.size(48.dp).scale(pulse),
+                modifier = Modifier.size(36.dp).scale(if (starting) pulse else 1f),
             )
-            Text("STARTING METER…", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
             Text(
-                "Opening the fare.",
+                "METER STATUS",
                 fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp,
+                letterSpacing = 0.5.sp,
                 color = CaptainPalette.textSecondary,
-                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp),
             )
-            CaptainButton(text = "CANCEL", outline = true, heightDp = 68, modifier = Modifier.fillMaxWidth(), onClick = onCancel)
+            val (label, sub) = when (meterPhase) {
+                MeterStartPhase.Idle -> "OFF" to "Tap to start a new fare"
+                MeterStartPhase.Starting -> "STARTING" to "Starting meter…"
+                is MeterStartPhase.Failed -> "OFF" to meterPhase.message
+            }
+            // 62sp -> 76sp: the single biggest number on the screen, on purpose — an older driver
+            // glancing over should never have to squint to know whether the meter is running.
+            AnimatedContent(
+                targetState = label,
+                transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.85f)).togetherWith(fadeOut() + scaleOut(targetScale = 1.1f)) },
+                label = "meter-label",
+            ) { animatedLabel ->
+                Text(
+                    animatedLabel,
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 76.sp,
+                    color = CaptainPalette.textPrimary,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+            Text(
+                sub,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 20.sp,
+                color = if (meterPhase is MeterStartPhase.Failed) CaptainPalette.danger else CaptainPalette.textSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 10.dp).width(240.dp),
+            )
+            Spacer(Modifier.height(28.dp))
+            // Primary action on the whole screen — widened and heightened well past the standard
+            // button size (184x54 -> 240x76) so it reads as unmistakably THE thing to press.
+            if (meterPhase is MeterStartPhase.Starting) {
+                CaptainButton(text = "CANCEL", outline = true, widthDp = 240, heightDp = 76, fontSize = 22.sp, onClick = onCancelStart)
+            } else {
+                CaptainButton(text = "▶  START METER", widthDp = 240, heightDp = 76, fontSize = 22.sp, enabled = enabled, onClick = onStartMeter)
+            }
         }
     }
 }
 
 // ============================================================================================
-// Header stats strip — the only genuinely non-duplicated numbers the deleted footer carried
+// Live dispatch card (Figma right card — real JobsRepository data via AvailableTripsWheelViewModel)
 // ============================================================================================
 
-/**
- * Shift time / trips / earnings / shift-limit countdown, folded into the top header as one
- * compact strip (the user's own call), plus the single meter READY/WAIT cell that was the only
- * non-duplicated thing in the deleted `SystemStatusCard`.
- *
- * What this pass deleted rather than moved, and why:
- * - `SystemStatusCard`'s GPS / NET / PRN cells were a literal second copy of the GPS, network and
- *   printer dots [CaptainHeader] draws a few dp above them, off the same
- *   `WheelDashboardUiState.status` fields. One home each; the header's row keeps them.
- * - `MeterCard` and `LiveDispatchCard` came off home entirely — home is the menu now. Neither
- *   flow was deleted: the meter pre-check dialog is what the METER tile opens, Set Price has its
- *   own tile, and the offer/accept flow lives on the Dispatch pane the DISPATCH tile opens.
- *
- * Every value below is the same real source the footer read: [ShiftDurationLimit.remaining] and
- * `session.shiftStartAt` for the clock/ring, `todayStats` for trips + earnings,
- * [HomeExtras.tripsActiveThisShift] / [HomeExtras.earningsPctChange] / [HomeExtras.fatigueAlertCount]
- * for the three backend-fetched extras (each renders nothing at all until it has really loaded),
- * and `state.tariff != null` for meter readiness. "Take break now" is unchanged — the same real
- * `setAvailable(false)` call, claiming no return time this app doesn't know.
- */
-/**
- * "Back to menu" affordance shown only while a fare is accruing.
- *
- * Metering deliberately hides the footer and the nav rail (the user's "header only" call), and the
- * Meter pane deliberately has no [PaneShell] back-arrow — a back-arrow on a revenue-accruing fare
- * reads as "abandon this trip". Those two together left the driver with no way to reach Messages,
- * Dispatch or Zones mid-fare except END FARE, which actually closes the trip and moves to Close &
- * Pay. This is the escape hatch: it changes pane only. The fare, the trip, the duress state and
- * every subscription keep running untouched, and the lit METER tile returns here.
- */
 @Composable
-private fun MeteringMenuButton(onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
+private fun LiveDispatchCard(
+    dispatchState: au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsUiState,
+    onAccept: (AvailableTripCard) -> Unit,
+    onViewAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, Brush.linearGradient(listOf(CaptainPalette.accent.copy(alpha = 0.3f), CaptainPalette.panelBorder)), RoundedCornerShape(18.dp))
+            .padding(20.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(99.dp))
-                .background(CaptainPalette.panel)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(99.dp))
-                .gameClick(onClick = onClick, shape = RoundedCornerShape(99.dp), glowColor = CaptainPalette.accent)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Rounded.Apps,
-                contentDescription = null,
-                tint = CaptainPalette.textSecondary,
-                modifier = Modifier.size(18.dp),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("LIVE DISPATCH", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            if (dispatchState.cards.isNotEmpty()) {
+                val badgePulse by rememberInfiniteFloat(enabled = true, from = 0.7f, to = 1f, durationMs = 1000)
+                Box(
+                    modifier = Modifier
+                        .padding(start = 14.dp)
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Brush.radialGradient(listOf(CaptainPalette.danger, CaptainPalette.danger.copy(alpha = 0.75f))))
+                        .border(1.5.dp, CaptainPalette.danger.copy(alpha = badgePulse), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(dispatchState.cards.size.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textPrimary)
+                }
+            }
+            Spacer(Modifier.weight(1f))
             Text(
-                "MENU",
+                "VIEW ALL",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                letterSpacing = 1.sp,
+                fontSize = 14.sp,
                 color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.clickable(onClick = onViewAll).padding(8.dp),
             )
-            Text(
-                "· fare keeps running",
-                fontFamily = InterFamily,
-                fontSize = 11.sp,
-                color = CaptainPalette.textMuted,
-                modifier = Modifier.padding(start = 8.dp),
-            )
+        }
+        Spacer(Modifier.height(14.dp))
+        when {
+            dispatchState.loading && dispatchState.cards.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("Loading offers…", fontFamily = InterFamily, fontSize = 17.sp, color = CaptainPalette.textSecondary)
+            }
+            dispatchState.cards.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    dispatchState.error ?: "No live offers right now",
+                    fontFamily = InterFamily,
+                    fontSize = 17.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+            }
+            else -> LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                items(dispatchState.cards, key = { it.offer.id }) { card ->
+                    DispatchOfferRow(
+                        card = card,
+                        busy = dispatchState.busyOfferId == card.offer.id,
+                        onAccept = { onAccept(card) },
+                    )
+                }
+            }
+        }
+        dispatchState.actionError?.let {
+            Text(it, fontFamily = InterFamily, fontSize = 15.sp, color = CaptainPalette.danger, modifier = Modifier.padding(top = 10.dp))
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(top = 14.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Brush.horizontalGradient(listOf(CaptainPalette.primary.copy(alpha = 0.22f), CaptainPalette.inset)))
+                .border(1.dp, CaptainPalette.accent.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                .gameClick(onClick = onViewAll, shape = RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("VIEW ALL JOBS   →", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
         }
     }
 }
 
 @Composable
-private fun HeaderStatsStrip(
+private fun DispatchOfferRow(card: AvailableTripCard, busy: Boolean, onAccept: () -> Unit) {
+    val job = card.job
+    // Real server-computed distance/ETA (2026-08-29 backend contract Part 2.6/4.1: haversine +
+    // a flat 30km/h heuristic, explicitly flagged by the backend as an approximation, not routed/
+    // live-traffic) when present. `null` on a job created before that migration landed — falls
+    // back to this app's own live-GPS straight-line distance (no ETA fabricated locally), then to
+    // the offer's relative-request-time text if even a GPS fix isn't available yet.
+    val fix by AppContainer.speedSource.locationFix.collectAsState()
+    val distanceLabel = when {
+        job.distanceKm != null && job.etaMin != null ->
+            "${job.distanceKm} km · ${job.etaMin} min (approx.)"
+        fix != null -> "%.1f km away".format(Locale.ENGLISH, GeoMath.distanceKm(fix!!.lat, fix!!.lng, job.originLat, job.originLng))
+        else -> formatOfferRelativeTime(card.offer.offeredAt)
+    }
+    // Real job_type badge (2026-08-29 contract) — "NEW OFFER" is the honest fallback for a job
+    // created before that field existed (server_default backfills "booked" going forward, but a
+    // null here would still mean "we don't actually know").
+    val (badgeText, badgeColor) = when (job.jobType) {
+        "rank_hail" -> "RANK JOB" to CaptainPalette.warning
+        "booked" -> "BOOKED" to CaptainPalette.primary
+        else -> "NEW OFFER" to CaptainPalette.primary
+    }
+    // Client-side comma-split of the backend's single free-text address field into a street line
+    // + locality line — per the backend contract's own note (Part 2.6): the two-line look in the
+    // design is NOT two separate backend fields.
+    val (originStreet, originLocality) = splitAddress(job.originAddress)
+    val (destStreet, destLocality) = splitAddress(job.destAddress)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(CaptainPalette.inset)
+            // Colour-coded elevation (2026-09-02 prominence pass): each offer row's border now
+            // tints with its own badge colour (purple = BOOKED, amber = RANK JOB) instead of a
+            // uniform neutral border — the same purple/amber/green/red coding used everywhere
+            // else on this screen (SOS, availability pill, SET PRICE ACTIVE state, …).
+            .border(1.dp, badgeColor.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.clip(RoundedCornerShape(16.dp))
+                    .background(Brush.horizontalGradient(listOf(badgeColor, badgeColor.copy(alpha = 0.75f))))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Text(badgeText, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CaptainPalette.textPrimary)
+            }
+            Spacer(Modifier.weight(1f))
+            Text(distanceLabel, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textSecondary)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(originStreet, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary, maxLines = 1)
+                if (originLocality != null) {
+                    Text(originLocality, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textSecondary, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+                }
+                Text(destStreet, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary, maxLines = 1, modifier = Modifier.padding(top = 8.dp))
+                if (destLocality != null) {
+                    Text(destLocality, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textSecondary, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("EST. FARE", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = CaptainPalette.textSecondary)
+                Text(
+                    "$${card.job.fareEstimateLow}–$${card.job.fareEstimateHigh}",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    color = CaptainPalette.textPrimary,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        CaptainButton(text = if (busy) "…" else "ACCEPT", widthDp = null, heightDp = 54, fontSize = 18.sp, enabled = !busy, onClick = onAccept, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+// ============================================================================================
+// Bottom bar: shift stats + shift limit + system status
+// ============================================================================================
+
+/** Splits a single free-text address ("12 Railway Parade, Lakemba NSW 2195") into a street line
+ * and a locality line on the first comma — see [DispatchOfferRow]'s own doc for why this is a
+ * client-side string operation, not two backend fields. No comma (an address that doesn't follow
+ * the "street, suburb state postcode" shape) just renders as one line, locality `null`. */
+private fun splitAddress(address: String): Pair<String, String?> {
+    val idx = address.indexOf(',')
+    if (idx < 0) return address to null
+    return address.substring(0, idx).trim() to address.substring(idx + 1).trim()
+}
+
+@Composable
+private fun ShiftStatsBar(
     state: WheelDashboardUiState,
     extras: HomeExtras,
-    hasActiveTrip: Boolean,
     onTakeBreak: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val remaining = ShiftDurationLimit.remaining(state.session?.shiftStartAt)
+    val elapsedFraction = remaining?.let { r ->
+        val limit = ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0
+        val remainingSec = r.seconds.toDouble()
+        ((limit - remainingSec) / limit).toFloat().coerceIn(0f, 1f)
+    } ?: 0f
+    val elapsedLabel = shiftElapsedLabel(state.session?.shiftStartAt)
+
     Row(
         modifier = modifier
-            .fillMaxWidth()
-            .height(74.dp)
-            .background(Brush.verticalGradient(listOf(Color.Transparent, CaptainPalette.glowPurpleSoft)))
-            .padding(horizontal = 32.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clip(RoundedCornerShape(18.dp))
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+            .padding(20.dp),
     ) {
-        HeaderStat(
-            icon = Icons.Rounded.Schedule,
-            label = "SHIFT",
-            value = shiftElapsedLabel(state.session?.shiftStartAt) ?: "—",
-            sub = state.session?.shiftStartAt?.let { "since ${formatClockTime(it)}" } ?: "no active shift",
-        )
-        HeaderStatDivider()
-        HeaderStat(
-            icon = Icons.Rounded.DirectionsCar,
-            label = "TRIPS",
-            value = state.todayStats.tripsCount.toString(),
-            // Real shift-scoped open-trip count; silent (not "0 active") when there genuinely is
-            // none, and silent while it hasn't loaded.
-            sub = extras.tripsActiveThisShift?.takeIf { it > 0 }?.let { "today · $it active" } ?: "today",
-            subColor = if ((extras.tripsActiveThisShift ?: 0) > 0) CaptainPalette.success else CaptainPalette.textSecondary,
-        )
-        HeaderStatDivider()
-        HeaderStat(
-            icon = Icons.Rounded.AttachMoney,
-            label = "EARNINGS",
-            value = "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString(),
-            // Real day-over-day trend; `null` (not loaded, or no yesterday baseline server-side)
-            // falls back to the plain "today" caption rather than a fabricated 0%.
-            sub = extras.earningsPctChange
-                ?.let { "${if (it >= 0) "↑" else "↓"} ${"%.0f".format(Locale.ENGLISH, kotlin.math.abs(it))}% vs yest." }
-                ?: "today",
-            subColor = extras.earningsPctChange?.let { if (it >= 0) CaptainPalette.success else CaptainPalette.danger }
-                ?: CaptainPalette.textSecondary,
-        )
-        HeaderStatDivider()
-        HeaderBreakRing(
-            remaining = remaining,
-            fatigueAlertCount = extras.fatigueAlertCount,
-            onTakeBreak = onTakeBreak,
-        )
-        Spacer(Modifier.weight(1f))
-        MeterReadyChip(ready = state.tariff != null, running = hasActiveTrip)
-    }
-}
-
-@Composable
-private fun HeaderStat(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-    sub: String,
-    subColor: Color = CaptainPalette.textSecondary,
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(20.dp))
-        Column(modifier = Modifier.padding(start = 8.dp)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-            Text(value, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 25.sp, color = CaptainPalette.textPrimary, maxLines = 1)
-            Text(sub, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, color = subColor, maxLines = 1)
+        // Real bug fixed 2026-08-29: with all four columns at equal weight(1f), the ShiftLimitRing
+        // column (ring + text side-by-side) was left with only ~57dp for its text after the ring
+        // itself — "SHIFT LIMIT" wrapped one character per line on-device. SHIFT TIME/TRIPS/
+        // EARNINGS only ever show a few digits and had width to spare, so weight is redistributed
+        // 0.85/0.85/0.85/1.45 (still sums to 4, same total row width) rather than shrinking the
+        // ring or its text back down.
+        Column(modifier = Modifier.weight(0.85f)) {
+            StatLabel(Icons.Rounded.Schedule, "SHIFT TIME")
+            Text(elapsedLabel ?: "—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
+            Text(
+                state.session?.shiftStartAt?.let { "Started ${formatClockTime(it)}" } ?: "No active shift",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(top = 5.dp),
+            )
+            val animatedFraction by animateFloatAsState(elapsedFraction, animationSpec = tween(600), label = "shift-progress")
+            Box(
+                modifier = Modifier.padding(top = 12.dp).fillMaxWidth().height(9.dp).clip(RoundedCornerShape(5.dp)).background(CaptainPalette.inset),
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(animatedFraction).fillMaxHeight().clip(RoundedCornerShape(5.dp)).background(CaptainPalette.primary),
+                )
+            }
         }
+        VerticalDivider()
+        Column(modifier = Modifier.weight(0.85f).padding(start = 24.dp)) {
+            StatLabel(Icons.Rounded.DirectionsCar, "TRIPS")
+            Text(state.todayStats.tripsCount.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
+            Text("Completed today", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(top = 5.dp))
+            // Real shift-scoped open-trip count (2026-08-29 contract Part 2.4/4.2:
+            // GET /v1/trips?...&status=open), replacing the Figma mock's fabricated "3 Active".
+            // Shown only once loaded and non-zero — a `0` here is genuinely "no active trip",
+            // worth just staying quiet about rather than printing "0 Active" under a stat row.
+            extras.tripsActiveThisShift?.takeIf { it > 0 }?.let { active ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 7.dp)) {
+                    PulsingDot(color = CaptainPalette.success, animated = true, size = 12.dp)
+                    Text("$active Active", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 7.dp))
+                }
+            }
+        }
+        VerticalDivider()
+        Column(modifier = Modifier.weight(0.85f).padding(start = 24.dp)) {
+            StatLabel(Icons.Rounded.AttachMoney, "EARNINGS")
+            Text(
+                "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString(),
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 40.sp,
+                color = CaptainPalette.textPrimary,
+            )
+            Text("Today", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(top = 5.dp))
+            // Real day-over-day trend (2026-08-29 contract Part 4.3: GET /v1/trips/earnings/today,
+            // Sydney-local calendar day). `null` means either not loaded yet or the backend had no
+            // yesterday baseline — both render nothing, never a fabricated "0%" or the old
+            // placeholder "12% vs yesterday".
+            extras.earningsPctChange?.let { pct ->
+                val up = pct >= 0
+                Text(
+                    "${if (up) "↑" else "↓"} ${"%.0f".format(Locale.ENGLISH, kotlin.math.abs(pct))}% vs yesterday",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = if (up) CaptainPalette.success else CaptainPalette.danger,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+            }
+        }
+        VerticalDivider()
+        ShiftLimitRing(
+            remaining = remaining,
+            session = state.session,
+            fatigueAlertCount = extras.fatigueAlertCount,
+            latestFatigueKind = extras.latestFatigueKind,
+            onTakeBreak = onTakeBreak,
+            modifier = Modifier.weight(1.45f).padding(start = 24.dp),
+        )
     }
 }
 
 @Composable
-private fun HeaderStatDivider() {
-    Box(modifier = Modifier.padding(horizontal = 20.dp).height(46.dp).width(1.dp).background(CaptainPalette.panelBorder))
+private fun VerticalDivider() {
+    Box(modifier = Modifier.padding(horizontal = 6.dp).fillMaxHeight().width(1.dp).background(CaptainPalette.panelBorder))
 }
 
 /**
- * The footer's shift-limit ring, shrunk to header scale (104dp -> 46dp) with the same real inputs
- * and the same honest framing it always had: the countdown is [ShiftDurationLimit.remaining], a
- * real 12h fatigue-limit clock, NOT an invented break schedule (no break-tracking API exists —
- * see the deleted `ShiftLimitRing`'s original doc, preserved in git history). The fatigue-alert
- * count is the real `GET /v1/fatigue-alerts` total, shown only once loaded and non-zero, and
- * "Take break now" is the same real [onTakeBreak] -> `setAvailable(false)` action as before.
+ * Fills the Figma frame's "NEXT BREAK" ring slot with something this app can actually back — see
+ * this file's class doc for why a scheduled-break countdown/return-time is not shown: no
+ * break-tracking API exists anywhere (`ShiftDto` has no break fields, no start/stop-break
+ * endpoint). Built instead as an honest fatigue/shift-limit awareness card:
+ * - The ring/countdown is [ShiftDurationLimit.remaining] — a REAL 12h shift-duration-limit clock,
+ *   not an invented break schedule — framed as "SHIFT LIMIT", never "next break".
+ * - [fatigueAlertCount]/[latestFatigueKind] come from `GET /v1/fatigue-alerts` (2026-09-02) — a
+ *   real, already-defined backend endpoint nothing in this app called before this pass (see
+ *   [rememberHomeExtras]). Only shown once loaded and non-zero.
+ * - "Take break now" is a real local action ([onTakeBreak] — wired to the real
+ *   `setAvailable(false)` call): it honestly does the one thing this app can actually do (stop
+ *   receiving job offers) and claims nothing about a return time it doesn't know.
  */
 @Composable
-private fun HeaderBreakRing(
+private fun ShiftLimitRing(
     remaining: Duration?,
+    session: au.com.threesixty.cabdispatch.domain.DriverSession?,
     fatigueAlertCount: Int?,
+    latestFatigueKind: String?,
     onTakeBreak: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val targetFraction = remaining?.let { r ->
-        (r.seconds.toDouble() / (ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0)).toFloat().coerceIn(0f, 1f)
-    } ?: 0f
-    val fraction by animateFloatAsState(targetFraction, animationSpec = tween(600), label = "header-shift-limit-ring")
-    val urgent = remaining != null && targetFraction < 0.15f
-    val urgentPulse by rememberInfiniteFloat(enabled = urgent, from = 0.5f, to = 1f, durationMs = 900)
-    val ringTint = if (urgent) CaptainPalette.danger else CaptainPalette.accent
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(46.dp), contentAlignment = Alignment.Center) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(104.dp), contentAlignment = Alignment.Center) {
+            val targetFraction = remaining?.let { r ->
+                (r.seconds.toDouble() / (ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0)).toFloat().coerceIn(0f, 1f)
+            } ?: 0f
+            val fraction by animateFloatAsState(targetFraction, animationSpec = tween(600), label = "shift-limit-ring")
+            val urgent = targetFraction < 0.15f
+            val ringTint = if (urgent) CaptainPalette.danger else CaptainPalette.accent
+            // Prominence pass (2026-09-02): the ring now breathes once it's genuinely close to the
+            // limit — an ambient glow behind an otherwise-static progress ring reads as "pay
+            // attention" without resorting to a jarring flash.
+            val urgentPulse by rememberInfiniteFloat(enabled = urgent, from = 0.5f, to = 1f, durationMs = 900)
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeW = 5.dp.toPx()
+                val strokeW = 10.dp.toPx()
                 drawArc(color = CaptainPalette.inset, startAngle = -90f, sweepAngle = 360f, useCenter = false, style = Stroke(strokeW))
                 drawArc(
                     color = ringTint.copy(alpha = if (urgent) urgentPulse else 1f),
@@ -1306,63 +1497,99 @@ private fun HeaderBreakRing(
                     style = Stroke(strokeW, cap = androidx.compose.ui.graphics.StrokeCap.Round),
                 )
             }
-            Icon(Icons.Rounded.Coffee, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(18.dp))
-        }
-        Column(modifier = Modifier.padding(start = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("SHIFT LIMIT", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-                if (fatigueAlertCount != null && fatigueAlertCount > 0) {
-                    Text(
-                        "  ⚠ $fatigueAlertCount",
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
-                        color = CaptainPalette.warning,
-                    )
-                }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Rounded.Coffee, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(18.dp))
+                Text(
+                    remaining?.let { formatDurationHm(it) } ?: "—",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    color = CaptainPalette.textPrimary,
+                )
+                Text("LEFT", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = CaptainPalette.textSecondary)
             }
+        }
+        Column(modifier = Modifier.padding(start = 16.dp)) {
+            Text("SHIFT LIMIT", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textSecondary)
             Text(
-                remaining?.let { "${formatDurationHm(it)} left" } ?: "—",
+                shiftEndsLabel(session?.shiftStartAt) ?: "No active shift",
                 fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                color = if (urgent) CaptainPalette.danger else CaptainPalette.textPrimary,
-                maxLines = 1,
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(top = 7.dp),
             )
+            // Real signal, finally consumed (2026-09-02): GET /v1/fatigue-alerts. Only shown once
+            // loaded and non-zero — silence here is a genuine "no alerts", not "not checked".
+            if (fatigueAlertCount != null && fatigueAlertCount > 0) {
+                Text(
+                    "⚠ $fatigueAlertCount fatigue alert${if (fatigueAlertCount == 1) "" else "s"}" +
+                        (latestFatigueKind?.let { " · ${it.replace('_', ' ')}" } ?: ""),
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = CaptainPalette.warning,
+                    modifier = Modifier.padding(top = 5.dp),
+                )
+            }
+            // Honest local action, not a fabricated break schedule — see this composable's own
+            // doc. Sets real availability false; claims no return time this app doesn't know.
             Text(
                 "☕ Take break now",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 11.sp,
+                fontSize = 12.sp,
                 color = CaptainPalette.accent,
-                maxLines = 1,
-                modifier = Modifier.clickable(onClick = onTakeBreak).padding(top = 2.dp),
+                modifier = Modifier.padding(top = 5.dp).clickable(onClick = onTakeBreak),
             )
         }
     }
 }
 
-/** The deleted `SystemStatusCard`'s one non-duplicated cell (MTR READY/WAIT), rehomed here as a
- * small chip. `running` upgrades it to the live-fare state so the chip never reads a bland
- * "READY" while a fare is actually ticking — same real active-trip Room read the METER tile uses. */
 @Composable
-private fun MeterReadyChip(ready: Boolean, running: Boolean) {
-    val (text, tint) = when {
-        running -> "RUNNING" to CaptainPalette.success
-        ready -> "READY" to CaptainPalette.success
-        else -> "WAIT" to CaptainPalette.warning
-    }
+private fun SystemStatusCard(state: WheelDashboardUiState, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(CaptainPalette.inset)
-            .border(1.dp, tint.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+            .padding(vertical = 20.dp, horizontal = 14.dp),
     ) {
-        PulsingDot(color = tint, animated = running, size = 10.dp)
-        Text("METER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(start = 9.dp))
-        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = tint, modifier = Modifier.padding(start = 7.dp))
+        Column(modifier = Modifier.fillMaxHeight()) {
+            StatLabel(Icons.Rounded.Shield, "SYSTEM STATUS")
+            Spacer(Modifier.weight(1f))
+            // A genuine 2x2 grid (2026-09-02) — was 3 cells in a single row (GPS/PRN/MTR); NET
+            // added (DeviceTelemetry.readNetworkType, same real flag the header's network dot now
+            // uses) so all four are real, backed flags, matching the mockup's 2x2 layout.
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    SystemStatusCell("GPS", if (state.status.gpsOk) "ON" else "OFF", state.status.gpsOk)
+                    SystemStatusCell("NET", networkStatusLabelCompact(state.status.networkType), state.status.networkOk)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    SystemStatusCell("PRN", if (state.status.printerOk) "ON" else "OFF", state.status.printerOk)
+                    SystemStatusCell("MTR", if (state.tariff != null) "READY" else "WAIT", state.tariff != null)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemStatusCell(label: String, value: String, ok: Boolean) {
+    // 58dp -> 70dp (2026-09-02): the 2x2 grid has room for it now that each row holds only 2
+    // cells instead of 3, and "READY"/"OFFLINE"-length values need it to avoid wrapping.
+    Column(modifier = Modifier.width(70.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = CaptainPalette.textSecondary)
+        Text(
+            value,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = if (ok) CaptainPalette.success else CaptainPalette.danger,
+            modifier = Modifier.padding(top = 5.dp),
+            maxLines = 1,
+        )
     }
 }
 
@@ -1400,8 +1627,208 @@ private fun parseInstantOrOffset(iso: String): Instant? =
     runCatching { Instant.parse(iso) }.recoverCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
 
 // ============================================================================================
+// Nav rail (Figma `01·HOME` collapsed / `02·HOME` expanded flyout) — see class doc for the exact
+// item mapping, additions (Messages, Live Map), and omissions (Help & Support, Navigate, More).
+// ============================================================================================
+
+/**
+ * [number] `null` only for Dashboard — the reference renders it as a house icon with no numeral,
+ * every other rail row as a numbered circular badge (1-10). [icon] backs the flyout row (which
+ * shows an icon, not a number, per the reference's expanded-menu style) and the Dashboard badge.
+ */
+private data class RailItem(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val number: Int?,
+    val label: String,
+    val flyoutLabel: String,
+    val action: RailAction,
+)
+private sealed interface RailAction {
+    data class ToPane(val pane: CaptainPane) : RailAction
+    data object OpenVouchers : RailAction
+    data object OpenProfile : RailAction
+    data object OpenSettings : RailAction
+    data object LogOff : RailAction
+}
+
+/**
+ * [hasActiveTrip] decides what the METER row actually points at (Phase A shell-integration,
+ * 2026-09-03): the old hardcoded alias to [CaptainPane.DASHBOARD] ("meter lives on Dashboard") is
+ * now only the fallback for "no fare is open right now" — tapping METER while [DeckHomeScreen]'s
+ * own [DeckHomeScreen]'s active-trip read is true instead jumps straight to the real, live
+ * [CaptainPane.METER] pane, matching this file's class doc ("decide whether that alias should now
+ * point at the real active-fare pane when a trip is active"). A plain function (not a `val`) since
+ * this now genuinely varies per composition rather than being a fixed table.
+ */
+private fun railItems(hasActiveTrip: Boolean) = listOf(
+    RailItem(Icons.Rounded.Home, null, "DASHBOARD", "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)),
+    RailItem(Icons.Rounded.Receipt, 1, "TRIPS", "TRIP HISTORY", RailAction.ToPane(CaptainPane.TRIPS)),
+    RailItem(Icons.Rounded.SwapHoriz, 2, "DISPATCH", "AVAILABLE TRIPS", RailAction.ToPane(CaptainPane.DISPATCH)),
+    RailItem(Icons.Rounded.AttachMoney, 3, "METER", "METER", RailAction.ToPane(if (hasActiveTrip) CaptainPane.METER else CaptainPane.DASHBOARD)),
+    RailItem(Icons.Rounded.SsidChart, 4, "EARNINGS", "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
+    RailItem(Icons.Rounded.History, 5, "HISTORY", "SHIFT SUMMARY", RailAction.ToPane(CaptainPane.SHIFT)),
+    RailItem(Icons.Rounded.LocationOn, 6, "ZONES", "PLOT ZONES", RailAction.ToPane(CaptainPane.ZONES)),
+    RailItem(Icons.Rounded.Sell, 7, "PRICING", "FARE STRUCTURE", RailAction.ToPane(CaptainPane.PRICING)),
+    RailItem(Icons.Rounded.ConfirmationNumber, 8, "VOUCHERS", "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)),
+    RailItem(Icons.Rounded.Person, 9, "DRIVER", "DRIVER PORTAL", RailAction.OpenProfile),
+    RailItem(Icons.Rounded.SettingsSuggest, 10, "SETTINGS", "SETTINGS", RailAction.OpenSettings),
+    // Messages, Live map and Log off used to live only in the flyout this pass deleted. The one
+    // rail now carries every real destination (it scrolls), so nothing working is stranded.
+
+    RailItem(Icons.Rounded.Mail, null, "MESSAGES", "MESSAGES", RailAction.ToPane(CaptainPane.MESSAGES)),
+    RailItem(Icons.Rounded.Map, null, "MAP", "LIVE MAP", RailAction.ToPane(CaptainPane.MAP)),
+    RailItem(Icons.AutoMirrored.Rounded.Logout, null, "LOG OUT", "LOG OUT", RailAction.LogOff),
+)
+
+@Composable
+private fun CaptainNavRail(
+    pane: CaptainPane,
+    hasActiveTrip: Boolean,
+    onSelectPane: (CaptainPane) -> Unit,
+    onOpenVouchers: () -> Unit,
+    onOpenProfile: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onLogOff: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    fun dispatch(action: RailAction) {
+        when (action) {
+            is RailAction.ToPane -> onSelectPane(action.pane)
+            RailAction.OpenVouchers -> onOpenVouchers()
+            RailAction.OpenProfile -> onOpenProfile()
+            RailAction.OpenSettings -> onOpenSettings()
+            RailAction.LogOff -> onLogOff()
+        }
+    }
+
+    Box(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .width(RAIL_WIDTH)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(20.dp))
+                .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
+                .padding(vertical = 18.dp, horizontal = 14.dp),
+        ) {
+            // Scrollable — with 11 real destinations at a legible touch-target size the list can
+            // run taller than the rail's real available height on some sessions (measured live on
+            // the SM-T575: an un-scrollable Column here silently clipped everything from HISTORY
+            // down). verticalScroll keeps every item reachable from the collapsed rail too.
+            // DASHBOARD and METER both alias CaptainPane.DASHBOARD while no fare is open (see
+            // railItems' own comment) — matching on `pane` alone would light up BOTH
+            // simultaneously, which is not what the reference shows (exactly one item highlighted
+            // at a time). Picking only the FIRST item whose target matches resolves the alias in
+            // DASHBOARD's favour, matching the reference exactly without needing separate
+            // click-tracked selection state. Once a fare IS open, METER's own action target
+            // becomes CaptainPane.METER (distinct from DASHBOARD's), so both light up correctly on
+            // their own pane with no alias ambiguity left to resolve.
+            val items = railItems(hasActiveTrip)
+            val activeIndex = items.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
+            Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                items.forEachIndexed { index, item ->
+                    RailRow(item = item, selected = index == activeIndex, onClick = { dispatch(item.action) })
+                }
+            }
+        }
+    }
+}
+
+
+/** One collapsed-rail row — Dashboard renders its icon directly (no numeral, matching the
+ * reference); every other destination renders a numbered circular badge with the icon shown only
+ * in the flyout. [selected]'s background/text colour animates rather than snapping, so switching
+ * panes reads as a deliberate transition. */
+@Composable
+private fun RailRow(item: RailItem, selected: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (selected) CaptainPalette.primary.copy(alpha = 0.18f) else Color.Transparent, label = "rail-bg")
+    val fg by animateColorAsState(if (selected) CaptainPalette.accent else CaptainPalette.textPrimary, label = "rail-fg")
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    // Game-feel upgrade (2026-08-29): press squash is now a bouncy spring (visible overshoot on
+    // release), and the selected row's border BREATHES via the shared infinite-pulse helper
+    // instead of sitting static — the active destination reads as "live", arcade-HUD style.
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.94f else 1f,
+        animationSpec = spring(dampingRatio = 0.4f, stiffness = 900f),
+        label = "rail-row-press",
+    )
+    val selGlow by rememberInfiniteFloat(enabled = selected, from = 0.45f, to = 1f, durationMs = 1300)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        // Bumped 2026-08-29: badge 28dp -> 44dp, row vertical padding 10dp -> 16dp, label 12sp ->
+        // 16sp — every rail row is now a full-width, ~64dp-tall touch target with large, legible
+        // text, not a slim strip that demands a precise tap.
+        modifier = Modifier
+            .padding(bottom = 8.dp)
+            .fillMaxWidth()
+            .scale(scale)
+            .clip(RoundedCornerShape(14.dp))
+            .background(bg)
+            .then(if (selected) Modifier.border(1.5.dp, CaptainPalette.accent.copy(alpha = selGlow), RoundedCornerShape(14.dp)) else Modifier)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .padding(vertical = 16.dp, horizontal = 12.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(44.dp).clip(CircleShape)
+                .background(if (selected) CaptainPalette.primary else CaptainPalette.raised)
+                .border(1.5.dp, if (selected) CaptainPalette.accent else CaptainPalette.panelBorder, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (item.number == null) {
+                Icon(item.icon, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
+            } else {
+                Text(item.number.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = fg)
+            }
+        }
+        Text(
+            item.label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp,
+            color = fg,
+            modifier = Modifier.padding(start = 14.dp),
+        )
+    }
+}
+
+// ============================================================================================
 // Small shared pieces
 // ============================================================================================
+
+@Composable
+private fun VoucherInfoDialog(onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f)).clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .width(480.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(CaptainPalette.panel)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+                .clickable(enabled = false) {}
+                .padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Vouchers", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
+            // Updated for Phase G (`squishy-herding-iverson.md`): a real voucher-ledger browse
+            // screen now exists (the nav rail's VOUCHERS item -> VouchersPaneContent), so this
+            // quick-action tile's copy no longer claims "no voucher wallet at all" — it still
+            // correctly says redemption itself only ever happens at Close & Pay, against the trip
+            // being paid for, never from a standalone "apply" action anywhere in this app.
+            Text(
+                "Browse available/used/expired vouchers from the VOUCHERS tab in the side menu. A " +
+                    "voucher code is redeemed at the end of the trip, during payment.",
+                fontFamily = InterFamily,
+                fontSize = 17.sp,
+                color = CaptainPalette.textSecondary,
+            )
+            CaptainButton(text = "Got it", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
 
 /**
  * Large passenger-facing driver ID card (2026-08-29 premium pass) — opened by tapping the header
