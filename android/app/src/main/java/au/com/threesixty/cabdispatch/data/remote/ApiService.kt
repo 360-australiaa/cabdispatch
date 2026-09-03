@@ -291,11 +291,13 @@ interface ApiService {
     // added by the SaaS-platform Phase 3 voucher-ledger workstream, commit 1f93840) ----
 
     /**
-     * Backs the Close & Pay VOUCHER button's real "N Available" count — mirrors
-     * `GET /v1/vouchers?redeemed=false` (`backend/app/api/v1/vouchers.py`). Only [redeemed]/
-     * [limit] are used on-device today (a small count query, not a full listing UI); [skip]
-     * defaults match the backend's own. A failed/loading call must never fabricate a count — see
-     * the call site in [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel].
+     * Mirrors `GET /v1/vouchers` (`backend/app/api/v1/vouchers.py`); [skip]/[limit] defaults match
+     * the backend's own. Two call sites: [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]
+     * uses `redeemed = false, limit = 1` for the Close & Pay VOUCHER button's real "N Available"
+     * count, and [au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent] (Phase G)
+     * calls it unfiltered (`redeemed = null, limit = 200`) for the real Available/Used/Expired
+     * browse screen, bucketing client-side since this endpoint has no expiry filter. A failed/
+     * loading call must never fabricate a count or a voucher list at either call site.
      */
     @GET("/v1/vouchers")
     suspend fun listVouchers(
@@ -1130,9 +1132,10 @@ data class TripSyncResultItemDto(
 @Serializable
 data class TripSyncResponseDto(val results: List<TripSyncResultItemDto>)
 
-/** Mirrors the backend's `VoucherRead` (`backend/app/api/v1/vouchers.py`) — only the fields the
- * Close & Pay payment grid actually reads are declared; money/dates as decimal-as-string/ISO
- * strings per this file's header convention. */
+/** Mirrors the backend's `VoucherRead` (`backend/app/api/v1/vouchers.py`) — money/dates as
+ * decimal-as-string/ISO strings per this file's header convention. [redeemedByTripId] added for
+ * the Vouchers pane's USED tab (Phase G, `squishy-herding-iverson.md`) — the Close & Pay payment
+ * grid that first declared this DTO never needed it, only the redeemed/expiry fields. */
 @Serializable
 data class VoucherDto(
     val id: String,
@@ -1140,6 +1143,7 @@ data class VoucherDto(
     @SerialName("value_aud") val valueAud: String,
     @SerialName("expires_at") val expiresAt: String? = null,
     @SerialName("redeemed_at") val redeemedAt: String? = null,
+    @SerialName("redeemed_by_trip_id") val redeemedByTripId: String? = null,
 )
 
 @Serializable

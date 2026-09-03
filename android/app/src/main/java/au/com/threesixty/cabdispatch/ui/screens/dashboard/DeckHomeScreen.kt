@@ -130,6 +130,7 @@ import au.com.threesixty.cabdispatch.ui.screens.pricing.PricingPaneContent
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsPaneVariant
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
+import au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -484,6 +485,14 @@ fun DeckHomeScreen(
                         CaptainPane.PRICING -> PaneShell("Pricing", onBack = { pane = CaptainPane.DASHBOARD }) {
                             PricingPaneContent()
                         }
+                        // Real Available/Used/Expired voucher-ledger browse screen (Phase G) —
+                        // replaces the old mislabelled alias where VOUCHERS silently opened
+                        // VoucherInfoDialog (see RAIL_ITEMS' own comment and VouchersPaneContent's
+                        // class doc for why). That dialog is unaffected and still reachable from
+                        // the Dashboard's own MeterCard VOUCHERS quick-action tile.
+                        CaptainPane.VOUCHERS -> PaneShell("Vouchers", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            VouchersPaneContent()
+                        }
                         CaptainPane.MESSAGES -> PaneShell("Messages", onBack = { pane = CaptainPane.DASHBOARD }) {
                             MessagesWheelContent(onOpenThread = { navController.navigate(CabDispatchRoutes.MESSAGES_THREAD) })
                         }
@@ -632,7 +641,7 @@ private sealed interface MeterStartPhase {
 
 /** The rail's fixed destinations (`01 · HOME — Collapsed Rail` / `02 · HOME — Expanded Menu`) —
  * see this file's class doc for exactly which Figma items are aliased, dropped, or added and why. */
-private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, PRICING, MESSAGES, MAP, METER }
+private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, PRICING, VOUCHERS, MESSAGES, MAP, METER }
 
 /** `rememberCoroutineScope()`, spelled out under a distinct name only so this file's own
  * [kotlinx.coroutines.launch] call above reads unambiguously next to the unrelated
@@ -1695,7 +1704,7 @@ private fun railItems(hasActiveTrip: Boolean) = listOf(
     RailItem(Icons.Rounded.History, 5, "HISTORY", "SHIFT SUMMARY", RailAction.ToPane(CaptainPane.SHIFT)),
     RailItem(Icons.Rounded.LocationOn, 6, "ZONES", "PLOT ZONES", RailAction.ToPane(CaptainPane.ZONES)),
     RailItem(Icons.Rounded.Sell, 7, "PRICING", "FARE STRUCTURE", RailAction.ToPane(CaptainPane.PRICING)),
-    RailItem(Icons.Rounded.ConfirmationNumber, 8, "VOUCHERS", "VOUCHERS", RailAction.OpenVouchers),
+    RailItem(Icons.Rounded.ConfirmationNumber, 8, "VOUCHERS", "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)),
     RailItem(Icons.Rounded.Person, 9, "DRIVER", "DRIVER PORTAL", RailAction.OpenProfile),
     RailItem(Icons.Rounded.SettingsSuggest, 10, "SETTINGS", "SETTINGS", RailAction.OpenSettings),
 )
@@ -1992,11 +2001,14 @@ private fun VoucherInfoDialog(onDismiss: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Vouchers", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
-            // Honest — see this file's class doc: no voucher-wallet/listing feature exists in this
-            // app today, only a free-text code entered at payment time on an already-open trip.
+            // Updated for Phase G (`squishy-herding-iverson.md`): a real voucher-ledger browse
+            // screen now exists (the nav rail's VOUCHERS item -> VouchersPaneContent), so this
+            // quick-action tile's copy no longer claims "no voucher wallet at all" — it still
+            // correctly says redemption itself only ever happens at Close & Pay, against the trip
+            // being paid for, never from a standalone "apply" action anywhere in this app.
             Text(
-                "There's no voucher wallet in this app yet. A passenger's voucher code is entered at " +
-                    "the end of the trip, during payment.",
+                "Browse available/used/expired vouchers from the VOUCHERS tab in the side menu. A " +
+                    "voucher code is redeemed at the end of the trip, during payment.",
                 fontFamily = InterFamily,
                 fontSize = 17.sp,
                 color = CaptainPalette.textSecondary,
