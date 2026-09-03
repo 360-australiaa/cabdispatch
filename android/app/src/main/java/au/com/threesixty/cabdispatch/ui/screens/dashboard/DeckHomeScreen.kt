@@ -131,6 +131,7 @@ import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsPaneVariant
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent
+import au.com.threesixty.cabdispatch.ui.screens.zones.ZonesPaneContent
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -476,8 +477,12 @@ fun DeckHomeScreen(
                                 },
                             )
                         }
+                        // Real tabbed Heat Map/Zone List/Surge Areas/Airport Queue screen (Phase F)
+                        // — replaces the old two-button "Plot into a zone"/"Zone statistics"
+                        // launcher (see ZonesPaneContent's own class doc for why those two
+                        // standalone routes are kept, unchanged, rather than deleted).
                         CaptainPane.ZONES -> PaneShell("Zones", onBack = { pane = CaptainPane.DASHBOARD }) {
-                            ZonesPaneContent(navController)
+                            ZonesPaneContent()
                         }
                         // Real, standalone, view-only tariff display (Phase E) — replaces the old
                         // mislabelled alias where PRICING silently opened the Set Price dialog
@@ -1970,19 +1975,6 @@ private fun RailRow(item: RailItem, selected: Boolean, onClick: () -> Unit) {
 // ============================================================================================
 // Small shared pieces
 // ============================================================================================
-
-@Composable
-private fun ZonesPaneContent(navController: NavHostController) {
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        CaptainButton(text = "📍  Plot into a zone", widthDp = 420, onClick = { navController.navigate(CabDispatchRoutes.PLOT_ZONE) })
-        CaptainButton(
-            text = "📊  Zone statistics — live supply & demand",
-            widthDp = 420,
-            outline = true,
-            onClick = { navController.navigate(CabDispatchRoutes.ZONE_STATISTICS) },
-        )
-    }
-}
 
 @Composable
 private fun VoucherInfoDialog(onDismiss: () -> Unit) {

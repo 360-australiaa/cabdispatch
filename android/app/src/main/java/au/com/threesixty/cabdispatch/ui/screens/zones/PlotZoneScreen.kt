@@ -226,6 +226,89 @@ private fun BackRow(navController: NavHostController) {
 }
 
 /**
+ * Zone List tab content (`squishy-herding-iverson.md` Phase F) — embeds this screen's real
+ * zone-grid + plot/unplot flow inside the new tabbed Zones pane
+ * ([au.com.threesixty.cabdispatch.ui.screens.zones.ZonesPaneContent]) rather than re-implementing
+ * it: reuses [PlotZoneViewModel] and the same [ZoneCard]/[EmptyStateCard] composables
+ * [PlotZoneScreen] itself uses, minus that standalone route's own title/back-row chrome (the tab
+ * shell supplies its own). [PlotZoneScreen] and this route it lives on are otherwise untouched and
+ * still reachable exactly as before.
+ */
+@Composable
+fun PlotZoneTabContent(viewModel: PlotZoneViewModel = viewModel()) {
+    val state by viewModel.uiState.collectAsState()
+
+    when (val s = state) {
+        is PlotZoneUiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = CaptainPalette.accent)
+        }
+        is PlotZoneUiState.Error -> EmptyStateCard(
+            modifier = Modifier.fillMaxSize(),
+            title = "Couldn't load zones",
+            body = s.message,
+            buttonText = "RETRY",
+            onButtonClick = viewModel::refresh,
+        )
+        is PlotZoneUiState.Loaded -> if (s.zones.isEmpty()) {
+            EmptyStateCard(
+                modifier = Modifier.fillMaxSize(),
+                title = "No zones published for this region yet",
+                body = "Your operator has not defined dispatch zones for the area you are in, or the " +
+                    "zone list is still syncing. You can still receive direct job offers and street " +
+                    "hails while unplotted.",
+                buttonText = "REFRESH ZONES",
+                onButtonClick = viewModel::refresh,
+            )
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                val plottedZone = s.zones.firstOrNull { it.id == s.plottedZoneId }
+                if (plottedZone != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 14.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CaptainPalette.success.copy(alpha = 0.12f))
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(16.dp))
+                            Text(
+                                "Plotted: ${plottedZone.number} — ${plottedZone.name}",
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = CaptainPalette.success,
+                            )
+                        }
+                    }
+                }
+                if (s.error != null) {
+                    Text(s.error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
+                    Spacer(Modifier.height(10.dp))
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    items(s.zones, key = { it.id }) { zone ->
+                        ZoneCard(
+                            zone = zone,
+                            plotted = zone.id == s.plottedZoneId,
+                            busy = s.busy,
+                            onPlot = { viewModel.plotInto(zone) },
+                            onUnplot = viewModel::unplot,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 220dp zone card: 52dp Chakra number badge + name, pinned bottom CTA. Plotted card flips to the
  * success-bordered variant with the danger-outline "PLOTTED · UNPLOT".
  */

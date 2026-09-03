@@ -11,11 +11,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Instant
 
 data class ZoneStatisticsUiState(
     val loading: Boolean = true,
     val stats: List<ZoneStatsDto> = emptyList(),
     val error: String? = null,
+    /** Wall-clock time of the last successful poll — real, not fabricated: set only when
+     * [ZonesRepository.getZoneStats] actually succeeds, left at its previous value on a failed
+     * poll (the Heat Map tab's "Last updated" chip should keep showing the last real success, not
+     * silently jump to "now" on a failure). Null until the first successful poll completes. Added
+     * for Phase F's Heat Map tab (`squishy-herding-iverson.md`) — this ViewModel's 20s poll loop
+     * itself is unchanged. */
+    val lastUpdatedAt: Instant? = null,
 )
 
 /**
@@ -48,7 +56,7 @@ class ZoneStatisticsViewModel : ViewModel() {
     private suspend fun refreshOnce() {
         _uiState.update { it.copy(loading = it.stats.isEmpty(), error = null) }
         zonesRepository.getZoneStats()
-            .onSuccess { stats -> _uiState.update { it.copy(loading = false, error = null, stats = stats) } }
+            .onSuccess { stats -> _uiState.update { it.copy(loading = false, error = null, stats = stats, lastUpdatedAt = Instant.now()) } }
             .onFailure { e ->
                 _uiState.update { it.copy(loading = false, error = e.message ?: "Could not load zone stats") }
             }
