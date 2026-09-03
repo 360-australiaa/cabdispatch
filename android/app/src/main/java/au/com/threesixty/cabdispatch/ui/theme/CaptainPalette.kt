@@ -73,4 +73,34 @@ object CaptainPalette {
 
     /** Low-alpha red wash for "danger/SOS" backgrounds — [danger] at ~14% alpha. */
     val glowDangerSoft = Color(0x24EF4444)
+
+    // --- HUD kit tokens (2026-09-03, `ui/theme/Hud.kt`) --------------------------------------
+    // The automotive-cockpit / game-HUD visual standard's palette, supplied as an exact technical
+    // blueprint. Named here (rather than as literals in Hud.kt) so a screen rebuilt on the HUD kit
+    // and the kit itself agree on one source of truth. Additive only — nothing above changes.
+
+    /** HUD page background — `#0B0B10`. A hair bluer/lighter than [bg]; the HUD kit's previews and
+     * any screen built on it paint this, not [bg]. */
+    val hudBg = Color(0xFF0B0B10)
+
+    /** HUD neon accent — `#6E3FF3`. Glow arcs, lit speedometer ticks, the Mapbox glow line. */
+    val hudAccent = Color(0xFF6E3FF3)
+
+    /** Gauge foreground sweep gradient, start → mid → end: `#5B3FD6 → #9E77FF → #6E3FF3`. */
+    val hudSweepStart = Color(0xFF5B3FD6)
+    val hudSweepMid = Color(0xFF9E77FF)
+    val hudSweepEnd = Color(0xFF6E3FF3)
+
+    /** The three sweep stops as one list, for `Brush.sweepGradient` call sites. */
+    val hudSweep: List<Color> = listOf(hudSweepStart, hudSweepMid, hudSweepEnd)
+
+    /** Gauge dark track arc — `#1E1A2D`. */
+    val hudTrack = Color(0xFF1E1A2D)
+
+    /** Glass surface fill — `0xCC0D0D12` (80% alpha over the map). */
+    val hudGlass = Color(0xCC0D0D12)
+
+    /** Glass card 1dp border gradient — purple (top-left) → white (bottom-right), both low alpha. */
+    val hudGlassBorderPurple = Color(0x669E77FF)
+    val hudGlassBorderWhite = Color(0x33FFFFFF)
 }
