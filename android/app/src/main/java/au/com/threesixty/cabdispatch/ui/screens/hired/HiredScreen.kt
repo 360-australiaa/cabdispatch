@@ -252,8 +252,6 @@ fun HiredScreen(
                 // --- col 1: NIGHT/DAY FARE tile + compact status ---
                 Column(modifier = Modifier.width(LEFT_COL_W).fillMaxHeight()) {
                     NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
-                    Spacer(Modifier.height(10.dp))
-                    MeterStatusTile(fareState = fareState, gpsOk = liveFix != null, modifier = Modifier.weight(1f))
                 }
 
                 Spacer(Modifier.width(COL_GAP))
@@ -567,7 +565,7 @@ private fun NightFareTile(timeClass: TimeClass, tariff: TariffDto?) {
 /** The band/time-class/SIGNED + GPS readout the old top status row carried, folded into the left
  * column so the dial gets the pane's full height. Same reads as before. */
 @Composable
-private fun MeterStatusTile(fareState: FareState, gpsOk: Boolean, modifier: Modifier = Modifier) {
+private fun MeterStatusTile(fareState: FareState, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(18.dp)
     Column(
         modifier = modifier
@@ -579,10 +577,11 @@ private fun MeterStatusTile(fareState: FareState, gpsOk: Boolean, modifier: Modi
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("STATUS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-        StatusLine("TARIFF", fareState.band.label.uppercase().removePrefix("TARIFF ").trim(), CaptainPalette.warning)
-        StatusLine("RATE", fareState.timeClass.label.uppercase(), if (fareState.timeClass == TimeClass.NIGHT) CaptainPalette.accent else CaptainPalette.textPrimary)
-        StatusLine("SIGNED", "✓", CaptainPalette.success)
-        StatusLine("GPS", if (gpsOk) "FIX" else "NO FIX", if (gpsOk) CaptainPalette.success else CaptainPalette.danger)
+        // Dedupe pass (2026-09-03): TARIFF, RATE, SIGNED and GPS all used to be repeated here.
+        // Each now has exactly one home — TARIFF in the dial's own "TARIFF n + EXTRAS" subtext,
+        // RATE in the DAY/NIGHT FARE tile directly above this one, SIGNED at shift start (where
+        // the tariff signature is actually confirmed), and GPS in the header's status dots. This
+        // tile keeps only what nothing else shows.
         Spacer(Modifier.weight(1f))
         val waitMin = fareState.waitingSeconds / 60
         val waitSec = fareState.waitingSeconds % 60
@@ -735,6 +734,15 @@ private fun ActiveMeterDial(fareState: FareState, isPaused: Boolean, onEndFare: 
                 val movingSec = fareState.movingSeconds % 60
                 DialMiniBox("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM")
                 DialMiniBox("TIME", "%d:%02d".format(movingMin, movingSec))
+                // WAITING joined the dial in the dedupe pass: it was the one unique value left in
+                // the STATUS tile once TARIFF/RATE/SIGNED/GPS moved to their single homes, and a
+                // tall tile holding one number read as broken. The dial owns the live trip
+                // numbers, so it owns this one too — amber while actually accruing.
+                DialMiniBox(
+                    "WAITING",
+                    "%d:%02d".format(fareState.waitingSeconds / 60, fareState.waitingSeconds % 60),
+                    valueColor = if (isPaused) CaptainPalette.warning else CaptainPalette.textPrimary,
+                )
             }
             // END FARE — inside the dial, per the mockup. Same endTrip { navigate(CLOSE_PAY) }
             // call the old full-width END TRIP bar made (see the caller).
@@ -764,7 +772,7 @@ private fun ActiveMeterDial(fareState: FareState, isPaused: Boolean, onEndFare: 
 }
 
 @Composable
-private fun DialMiniBox(label: String, value: String) {
+private fun DialMiniBox(label: String, value: String, valueColor: Color = CaptainPalette.warning) {
     Column(
         modifier = Modifier
             .width(88.dp)
@@ -775,7 +783,7 @@ private fun DialMiniBox(label: String, value: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 8.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.warning)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = valueColor)
     }
 }
 
@@ -1301,30 +1309,9 @@ private fun FareBreakdownCard(
                 }
             }
         }
-        // Total row — always visible (HIDE collapses the line items, never the total), neon
-        // accent border + glow, figure in glowing accent.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp)
-                .neonGlow(CaptainPalette.accent, 12.dp, strength = 0.7f, spread = 3.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(CaptainPalette.primary.copy(alpha = 0.16f))
-                .border(1.5.dp, CaptainPalette.accent.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("TOTAL", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 1.sp, color = CaptainPalette.textPrimary)
-            Text(
-                breakdown.total.toMoneyString(),
-                fontFamily = ChakraPetch,
-                fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
-                color = CaptainPalette.accent,
-                style = glowStyle(CaptainPalette.accent, 22f),
-            )
-        }
+        // The TOTAL row that used to sit here was the dial's own ACTIVE FARE figure repeated a
+        // few hundred pixels away — the single worst duplicate on this screen. The dial owns the
+        // total; this card owns the itemisation that makes it up.
     }
 }
 
@@ -1408,15 +1395,14 @@ private fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, sta
         Spacer(Modifier.height(10.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
         Spacer(Modifier.height(10.dp))
-        val totalSeconds = fareState.movingSeconds + fareState.waitingSeconds
         val avgSpeedKmh = if (fareState.movingSeconds > 0) {
             (fareState.distanceKm.toDouble() / (fareState.movingSeconds / 3600.0)).roundToInt()
         } else {
             0
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            MiniStat("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " km", modifier = Modifier.weight(1f))
-            MiniStat("DURATION", "%d:%02d".format(totalSeconds / 60, totalSeconds % 60), modifier = Modifier.weight(1f))
+            // DISTANCE and DURATION live on the dial (its own two readouts) — repeating them here
+            // was the second duplicate this pass removed. AVG SPEED is genuinely only shown here.
             MiniStat("AVG SPEED", "$avgSpeedKmh km/h", modifier = Modifier.weight(1f))
         }
     }

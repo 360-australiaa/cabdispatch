@@ -125,6 +125,7 @@ import au.com.threesixty.cabdispatch.ui.theme.rememberInfiniteFloat
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel
 import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material.icons.rounded.Apps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.math.RoundingMode
@@ -367,6 +368,14 @@ fun DeckHomeScreen(
         // strip (the user's own call) — see HeaderStatsStrip's doc. Hidden on the Meter pane for
         // exactly the reason the footer was already hidden there: metering is a header-only focus
         // mode, and this strip is the footer's content, not the header's own.
+        // Metering is header-only, which removed every route back to the menu: METER is the one
+        // pane with no PaneShell back-arrow (leaving mid-fare must never read as "go back"), and
+        // the rail is hidden. Without this, checking Messages or Dispatch mid-fare would mean
+        // pressing END FARE — which closes the trip. This returns to the menu with the fare still
+        // running; the METER tile (lit while a fare is live) comes straight back.
+        if (pane == CaptainPane.METER) {
+            MeteringMenuButton(onClick = { pane = CaptainPane.DASHBOARD })
+        }
         if (pane != CaptainPane.METER) {
             HeaderStatsStrip(
                 state = state,
@@ -1129,6 +1138,60 @@ private fun MeterStartingOverlay(onCancel: () -> Unit) {
  * and `state.tariff != null` for meter readiness. "Take break now" is unchanged — the same real
  * `setAvailable(false)` call, claiming no return time this app doesn't know.
  */
+/**
+ * "Back to menu" affordance shown only while a fare is accruing.
+ *
+ * Metering deliberately hides the footer and the nav rail (the user's "header only" call), and the
+ * Meter pane deliberately has no [PaneShell] back-arrow — a back-arrow on a revenue-accruing fare
+ * reads as "abandon this trip". Those two together left the driver with no way to reach Messages,
+ * Dispatch or Zones mid-fare except END FARE, which actually closes the trip and moves to Close &
+ * Pay. This is the escape hatch: it changes pane only. The fare, the trip, the duress state and
+ * every subscription keep running untouched, and the lit METER tile returns here.
+ */
+@Composable
+private fun MeteringMenuButton(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(99.dp))
+                .background(CaptainPalette.panel)
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(99.dp))
+                .gameClick(onClick = onClick, shape = RoundedCornerShape(99.dp), glowColor = CaptainPalette.accent)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.Apps,
+                contentDescription = null,
+                tint = CaptainPalette.textSecondary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                "MENU",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                letterSpacing = 1.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+            Text(
+                "· fare keeps running",
+                fontFamily = InterFamily,
+                fontSize = 11.sp,
+                color = CaptainPalette.textMuted,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun HeaderStatsStrip(
     state: WheelDashboardUiState,
