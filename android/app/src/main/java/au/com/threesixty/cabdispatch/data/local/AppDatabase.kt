@@ -33,6 +33,9 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * false) feeding the fare engine's maxi-rate eligibility check — same no-Migration shortcut again.
  * Version bumped 6 -> 7 (Close & Pay "tips" pass) adding one new nullable [TripEntity] column
  * (`tip`) — same no-Migration shortcut again, for the same still-pre-release reason.
+ * Version bumped 7 -> 8 (History/Earnings real-data pass, Phase C 2026-09-03) adding two new
+ * nullable [TripEntity] columns (`pickupAddress`, `dropoffAddress`) — same no-Migration shortcut
+ * again, for the same still-pre-release reason.
  * No Migration
  * object is supplied for any bump so far because this project has never shipped v1 (no installed
  * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
@@ -61,7 +64,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

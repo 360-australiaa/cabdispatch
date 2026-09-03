@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -83,6 +84,21 @@ class TripRepository(
         negotiatedTotal: String? = null,
     ): TripEntity {
         val now = System.currentTimeMillis()
+        // Real address plumbing (History pane columns, Phase C 2026-09-03): reads the same
+        // hand-off object au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen's Trip
+        // Details card already reads addresses from (SessionHolder.pendingTrip — see
+        // au.com.threesixty.cabdispatch.domain.TripContext.originAddress/.destAddress's doc)
+        // rather than adding new parameters here, since this method's sole call site
+        // (HiredViewModel.openTripInRoom) was out of this pass's edit scope and already captures
+        // that exact TripContext instance as a local before calling here — re-reading the global
+        // hand-off at this point yields the identical object, not a race, because nothing clears
+        // it between HiredViewModel's init reading it and this suspend call running (the only
+        // clear-before-navigation path is the dashboard's Start Meter CANCEL, which never reaches
+        // this screen at all). `null` on both exactly when TripContext carried no address (street
+        // hail/rank job, a Start Meter/Set Price trip, or the Dispatch wheel-content pane's own
+        // accept path — see that doc's known gap) — the History pane must render "—", never a
+        // fabricated address, for that case.
+        val pendingContext = SessionHolder.pendingTrip.value
         val trip = TripEntity(
             clientUuid = UUID.randomUUID().toString(),
             vehicleId = vehicleId,
@@ -101,6 +117,8 @@ class TripRepository(
             startLng = startLng,
             paymentMethod = paymentMethod,
             negotiatedTotal = negotiatedTotal,
+            pickupAddress = pendingContext?.originAddress,
+            dropoffAddress = pendingContext?.destAddress,
             createdAt = now,
             updatedAt = now,
         )

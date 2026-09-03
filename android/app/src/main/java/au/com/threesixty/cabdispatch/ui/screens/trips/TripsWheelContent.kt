@@ -19,17 +19,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import au.com.threesixty.cabdispatch.data.local.dao.TripPeriod
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.domain.format.asPaymentMethodLabel
@@ -39,6 +40,8 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import java.math.BigDecimal
+import java.math.RoundingMode
 
 /**
  * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.TRIPS] wheel-slot content, per design spec
@@ -84,8 +87,9 @@ fun TripsWheelContent(
     val state by viewModel.uiState.collectAsState()
 
     when {
-        state.loading -> Text("Loading trips…", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
-        state.trips.isEmpty() && state.activeTrip == null ->
+        variant == TripsPaneVariant.MY_TRIPS && state.loading ->
+            Text("Loading trips…", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
+        variant == TripsPaneVariant.MY_TRIPS && state.trips.isEmpty() && state.activeTrip == null ->
             Text("No trips yet.", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
         variant == TripsPaneVariant.MY_TRIPS -> MyTripsBody(
             modifier = modifier,
@@ -94,9 +98,12 @@ fun TripsWheelContent(
             onTripClick = onTripClick,
             onOpenActiveTrip = onOpenActiveTrip,
         )
+        state.historyLoading -> Text("Loading trips…", fontFamily = InterFamily, color = CaptainPalette.textSecondary, fontSize = 16.sp)
         else -> TripHistoryBody(
             modifier = modifier,
-            trips = state.trips,
+            trips = state.historyTrips,
+            period = state.historyPeriod,
+            onPeriodChange = viewModel::setHistoryPeriod,
             onTripClick = onTripClick,
             onShiftReportClick = onShiftReportClick,
         )
@@ -204,43 +211,60 @@ private fun TripStatusPill(status: TripPillStatus) {
 
 // ---------------------------------------------------------------------------------------------
 // Trip History variant — Figma node 35:170: filter pills + flat rows + shift-report footer.
-// Filters are presentational only ([TripEntity] carries no client-side date field cheaper than
-// parsing [TripEntity.startAt], and this app has no server-side date-range trip query yet — see
-// [au.com.threesixty.cabdispatch.data.local.dao.TripDao] — so WEEK/MONTH/ALL currently show the
-// same on-device recent-trips list as TODAY rather than silently fabricating a filtered result).
+//
+// Filter pills are now real (Phase C, 2026-09-03): [TripPeriod] (shared with the Earnings pane's
+// period tabs, see [au.com.threesixty.cabdispatch.data.local.dao.TripDao]) drives a genuine
+// [au.com.threesixty.cabdispatch.data.local.dao.TripDao.observeTripsInRange] query per pill —
+// WEEK/MONTH/ALL now return real, different result sets instead of all four silently rendering
+// the same on-device recent-trips list (this file's own prior doc comment for why that used to be
+// the honest, deliberate placeholder).
+//
+// Columns now also include PICKUP/DROPOFF/DISTANCE/DURATION/STATUS to match the mockup's table.
+// Distance/duration/status are plain arithmetic over [TripEntity.distanceM]/`.movingS`+`.waitingS`/
+// `.status` — already-persisted fields, no new plumbing. Pickup/dropoff read
+// [TripEntity.pickupAddress]/`.dropoffAddress` (new columns, Phase C) — "—" for a `null` value
+// (a trip with no dispatch-offer address to carry), never a fabricated address.
 // ---------------------------------------------------------------------------------------------
-
-private enum class HistoryFilter(val label: String) { TODAY("TODAY"), WEEK("WEEK"), MONTH("MONTH"), ALL("ALL") }
 
 @Composable
 private fun TripHistoryBody(
     trips: List<TripEntity>,
+    period: TripPeriod,
+    onPeriodChange: (TripPeriod) -> Unit,
     onTripClick: (String) -> Unit,
     onShiftReportClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var filter by remember { mutableStateOf(HistoryFilter.TODAY) }
-
     Column(modifier = modifier.fillMaxWidth()) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            HistoryFilter.entries.forEach { f ->
-                HistoryFilterPill(label = f.label, selected = f == filter, onClick = { filter = f })
+            TripPeriod.entries.forEach { p ->
+                HistoryFilterPill(label = p.label, selected = p == period, onClick = { onPeriodChange(p) })
             }
         }
         Spacer(Modifier.height(14.dp))
-        LazyColumn(
-            modifier = Modifier.heightIn(max = 320.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(trips, key = { it.clientUuid }) { trip ->
-                TripHistoryRow(trip) { onTripClick(trip.clientUuid) }
+        if (trips.isEmpty()) {
+            Text(
+                "No trips in this period.",
+                fontFamily = InterFamily,
+                color = CaptainPalette.textSecondary,
+                fontSize = 15.sp,
+                modifier = Modifier.padding(vertical = 24.dp),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(trips, key = { it.clientUuid }) { trip ->
+                    TripHistoryRow(trip) { onTripClick(trip.clientUuid) }
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
-        val total = trips.fold(java.math.BigDecimal.ZERO) { acc, t -> acc + t.deviceTotal.toBigDecimalOrZero() }
+        val total = trips.fold(BigDecimal.ZERO) { acc, t -> acc + t.deviceTotal.toBigDecimalOrZero() }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                "Showing last ${trips.size} · shift total ${total.asMoney()} · ${trips.size} trips",
+                "${period.label} · total ${total.asMoney()} · ${trips.size} trips",
                 fontFamily = InterFamily,
                 color = CaptainPalette.textSecondary,
                 fontSize = 14.sp,
@@ -282,58 +306,133 @@ private fun HistoryFilterPill(label: String, selected: Boolean, onClick: () -> U
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = textColor, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(label.uppercase(), color = textColor, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
+}
+
+/** "3.2 km" from [TripEntity.distanceM]. */
+private fun Int.asKm(): String =
+    BigDecimal(this).divide(BigDecimal(1000), 1, RoundingMode.HALF_UP).toPlainString() + " km"
+
+/** "12 min" from cumulative [TripEntity.movingS] + [TripEntity.waitingS]. */
+private fun asDuration(movingS: Int, waitingS: Int): String {
+    val totalMin = (movingS + waitingS) / 60
+    return if (totalMin < 1) "<1 min" else "$totalMin min"
+}
+
+/** [TripEntity.status] -> display label ("open"/"closed"/"synced", see [TripStatus]). */
+private fun String.asTripStatusLabel(): String = when (this) {
+    TripStatus.OPEN -> "In Progress"
+    TripStatus.CLOSED -> "Completed"
+    TripStatus.SYNCED -> "Synced"
+    else -> this.replaceFirstChar { it.uppercase() }
 }
 
 @Composable
 private fun TripHistoryRow(trip: TripEntity, onClick: () -> Unit) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
             .background(CaptainPalette.raised, RoundedCornerShape(14.dp))
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
-        Text(
-            trip.startAt.asLocalTime(),
-            color = CaptainPalette.textPrimary,
-            fontWeight = FontWeight.Bold,
-            fontFamily = ChakraPetch,
-            fontSize = 15.sp,
-        )
-        Text(
-            trip.type.asTripTypeLabel(),
-            color = CaptainPalette.textPrimary,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 15.sp,
-            modifier = Modifier.weight(1f),
-        )
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(CaptainPalette.inset)
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                trip.paymentMethod.asPaymentMethodLabel().uppercase(),
-                color = CaptainPalette.textSecondary,
-                fontFamily = InterFamily,
+                trip.startAt.asLocalTime(),
+                color = CaptainPalette.textPrimary,
                 fontWeight = FontWeight.Bold,
-                fontSize = 11.sp,
+                fontFamily = ChakraPetch,
+                fontSize = 15.sp,
+            )
+            Text(
+                trip.type.asTripTypeLabel(),
+                color = CaptainPalette.textPrimary,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(statusPillColor(trip.status).copy(alpha = 0.16f))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    trip.status.asTripStatusLabel().uppercase(),
+                    color = statusPillColor(trip.status),
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                )
+            }
+            Text(
+                trip.deviceTotal.toBigDecimalOrZero().asMoney(),
+                color = CaptainPalette.textPrimary,
+                fontWeight = FontWeight.Bold,
+                fontFamily = ChakraPetch,
+                fontSize = 15.sp,
             )
         }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HistoryColumn(label = "PICKUP", value = trip.pickupAddress ?: "—", modifier = Modifier.weight(1.4f))
+            HistoryColumn(label = "DROPOFF", value = trip.dropoffAddress ?: "—", modifier = Modifier.weight(1.4f))
+            HistoryColumn(label = "DISTANCE", value = trip.distanceM.asKm(), modifier = Modifier.weight(0.8f))
+            HistoryColumn(label = "DURATION", value = asDuration(trip.movingS, trip.waitingS), modifier = Modifier.weight(0.8f))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(CaptainPalette.inset)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    trip.paymentMethod.asPaymentMethodLabel().uppercase(),
+                    color = CaptainPalette.textSecondary,
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryColumn(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
         Text(
-            trip.deviceTotal.toBigDecimalOrZero().asMoney(),
-            color = CaptainPalette.textPrimary,
-            fontWeight = FontWeight.Bold,
-            fontFamily = ChakraPetch,
-            fontSize = 15.sp,
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 10.sp,
+            letterSpacing = 0.4.sp,
+            color = CaptainPalette.textMuted,
+        )
+        Text(
+            value,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            color = CaptainPalette.textSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
+}
+
+private fun statusPillColor(status: String): Color = when (status) {
+    TripStatus.OPEN -> CaptainPalette.warning
+    TripStatus.CLOSED -> CaptainPalette.success
+    TripStatus.SYNCED -> CaptainPalette.accent
+    else -> CaptainPalette.textSecondary
 }

@@ -127,6 +127,7 @@ import au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessagesWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftWheelContent
+import au.com.threesixty.cabdispatch.ui.screens.trips.TripsPaneVariant
 import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
@@ -445,7 +446,15 @@ fun DeckHomeScreen(
                             AvailableTripsWheelContent(navController = navController)
                         }
                         CaptainPane.TRIPS -> PaneShell("Trip history", onBack = { pane = CaptainPane.DASHBOARD }) {
+                            // variant = HISTORY (2026-09-03): the rail item's own flyout label
+                            // ("TRIP HISTORY", see RAIL_ITEMS below) already committed to this
+                            // being the history table, not the MY_TRIPS default — this call was
+                            // the one place still rendering the wrong variant, leaving the real
+                            // history table (filters, pickup/dropoff/distance/duration/status
+                            // columns) genuinely unreachable from the live app. See
+                            // TripsWheelContent's own doc for what each variant shows.
                             TripsWheelContent(
+                                variant = TripsPaneVariant.HISTORY,
                                 onTripClick = { clientUuid ->
                                     TripDetailHandoff.set(clientUuid)
                                     navController.navigate(CabDispatchRoutes.TRIP_DETAIL)

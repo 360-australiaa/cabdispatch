@@ -323,6 +323,16 @@ private class FakeTripDao : TripDao {
     // interface must implement every member regardless of whether the test under scope reaches it.
     override fun observeRecentTrips(openStatus: String, limit: Int): Flow<List<TripEntity>> =
         flowOf(rows.values.filter { it.status != openStatus }.sortedByDescending { it.startAt }.take(limit))
+
+    // Added Phase C (2026-09-03, History/Earnings real-data pass) alongside the new
+    // TripDao.observeTripsInRange query — same "not exercised by this test, but a fake must
+    // implement every interface member" note as observeRecentTrips above.
+    override fun observeTripsInRange(sinceEpochMillis: Long, beforeEpochMillis: Long?, openStatus: String): Flow<List<TripEntity>> =
+        flowOf(
+            rows.values.filter {
+                it.status != openStatus && it.createdAt >= sinceEpochMillis && (beforeEpochMillis == null || it.createdAt < beforeEpochMillis)
+            }.sortedByDescending { it.startAt },
+        )
 }
 
 /**

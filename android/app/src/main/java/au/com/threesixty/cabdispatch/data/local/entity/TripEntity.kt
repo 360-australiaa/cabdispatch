@@ -137,6 +137,19 @@ data class TripEntity(
      */
     val tip: String? = null,
 
+    /**
+     * Human-readable pickup/drop-off addresses (History pane columns, Phase C 2026-09-03) — mirror
+     * of [au.com.threesixty.cabdispatch.domain.TripContext.originAddress]/`.destAddress`,
+     * captured once at [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]
+     * time (see that method's doc for exactly how, given its sole call site was out of this pass's
+     * edit scope). `null` for a trip with no dispatch-offer address to carry — a street-hail/rank
+     * job, a Start Meter/Set Price trip, or one accepted via the Dispatch wheel-content pane's own
+     * accept path (a real, already-flagged gap — see [au.com.threesixty.cabdispatch.domain.TripContext]'s
+     * own doc). History must render "—" for a `null` value here, never fabricate an address.
+     */
+    val pickupAddress: String? = null,
+    val dropoffAddress: String? = null,
+
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",
 
