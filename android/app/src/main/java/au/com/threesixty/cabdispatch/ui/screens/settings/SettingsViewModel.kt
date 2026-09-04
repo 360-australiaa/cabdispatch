@@ -278,7 +278,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * "tell me where you are" request either way, not a bug.
      *
      * Best-effort and silent-on-failure (beyond [LocateResponseState] diagnostics), matching every
-     * other background call in this file: [SessionHolder.session]'s [vehicleId] being unset or
+     * other background call in this file: [SessionHolder.session]'s [vehicleUuid] being unset or
      * [AppContainer.speedSource]'s [locationFix][au.com.threesixty.cabdispatch.domain.SpeedSource.locationFix]
      * not having a fix yet (no permission, cold start, no signal) both mean there's nothing honest
      * to publish yet, so this skips rather than sending a fabricated position.
@@ -291,10 +291,25 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * [au.com.threesixty.cabdispatch.sync.SyncWorker]'s pattern) — a materially bigger change than
      * "wire the existing heartbeat flow", left as a real, open follow-up rather than silently
      * implied to already work continuously.
+     *
+     * BUGFIX (2026-09-04, found live on a real tablet once the [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]
+     * poll loop was actually started): this used to key the publish off [SessionHolder.session]'s
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleId] — the driver-entered/QR'd rego
+     * string (e.g. `"KHI-01"`) — which is exactly the identifier
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]'s own doc already documents
+     * `POST /v1/fleet/positions` as 404ing "Vehicle not found" on, live-confirmed:
+     * `backend/app/services/live_ops.py::get_vehicle_or_404` looks `vehicle_id` up against
+     * `Vehicle.id`, not `Vehicle.rego`. [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat]
+     * and [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat.respondToLocateRequest] were
+     * both already switched to the UUID for this same reason — this method, an un-migrated
+     * duplicate left behind when the latter was written, was the one call site still on the rego,
+     * and the one this screen's tile actually renders (nothing here reads
+     * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat.state]'s own, already-correct
+     * [au.com.threesixty.cabdispatch.domain.LocateOutcome]). Now uses the same UUID.
      */
     private suspend fun respondToLocateRequest() {
-        val vehicleId = SessionHolder.session.value?.vehicleId
-        if (vehicleId == null) {
+        val vehicleUuid = SessionHolder.session.value?.vehicleUuid
+        if (vehicleUuid == null) {
             _uiState.update { it.copy(locateResponse = LocateResponseState.NoVehicleBound) }
             return
         }
@@ -306,7 +321,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         runCatching {
             AppContainer.apiService.publishPosition(
                 PositionPublishRequestDto(
-                    vehicleId = vehicleId,
+                    vehicleId = vehicleUuid,
                     lat = fix.lat,
                     lng = fix.lng,
                     // Deliberately a fixed placeholder, not a guess: this call site only knows "an

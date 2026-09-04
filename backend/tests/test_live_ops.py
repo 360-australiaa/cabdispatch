@@ -353,6 +353,39 @@ async def test_publish_position_updates_cache_and_vehicle_list(client, session):
     assert len(resp.json()) == 1
 
 
+async def test_publish_position_404s_on_the_rego_not_just_a_random_id(client, session):
+    """Locks in the exact identifier `POST /v1/fleet/positions` requires:
+    `Vehicle.id` (the real fleet-vehicle UUID), not `Vehicle.rego`.
+
+    This is the live-confirmed 404 behind a real client bug (Android
+    `SettingsViewModel.respondToLocateRequest`, found 2026-09-04 on a real
+    tablet): it published `DriverSession.vehicleId` -- the driver-entered/
+    QR'd rego string -- as `vehicle_id`, which `get_vehicle_or_404` (this
+    endpoint) rejects with 404 "Vehicle not found" because it looks
+    `vehicle_id` up against `Vehicle.id` only. The route/method/payload shape
+    itself was never wrong; the client was sending the wrong kind of
+    identifier. See `au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid`'s
+    doc and `LivePositionHeartbeat`/`DeviceCommandHeartbeat`, which already used the
+    UUID for this same reason."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Rego")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="KHI-01")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.rego, "lat": -33.86, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Vehicle not found"
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+
 async def test_publish_position_with_battery_and_network_reaches_vehicle_list(client, session):
     """battery/network are optional on PositionPublishRequest -- when given,
     they show up on the live cache (GET /v1/fleet/positions/{id}) AND on the
