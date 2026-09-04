@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
+import au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
@@ -360,6 +361,11 @@ object AppContainer {
     // MapboxDirections' own doc for the full constraint).
     val mapboxGeocoding: MapboxGeocoding by lazy { MapboxGeocoding(okHttpClient) }
     val mapboxDirections: MapboxDirections by lazy { MapboxDirections(okHttpClient) }
+
+    // Reverse-geocoding gateway (real pickup/drop-off addresses pass, 2026-09-05) — same REST-only
+    // reasoning as the two above, just coordinates -> address instead of the other way around. See
+    // MapboxReverseGeocoding's own doc; called once per trip at close time, not on every tick.
+    val mapboxReverseGeocoding: MapboxReverseGeocoding by lazy { MapboxReverseGeocoding(okHttpClient) }
     val jobsRepository: JobsRepository by lazy {
         RemoteBackedJobsRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
     }

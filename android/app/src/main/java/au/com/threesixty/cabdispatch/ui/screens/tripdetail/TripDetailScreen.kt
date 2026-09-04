@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.TripOrigin
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -44,12 +45,17 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
+import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.format.asMoney
 import au.com.threesixty.cabdispatch.domain.format.asPaymentMethodLabel
@@ -61,6 +67,9 @@ import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -125,6 +134,7 @@ private fun TripDetailBody(state: TripDetailUiState.Loaded, vm: TripDetailViewMo
             }
 
             TimelineCard(trip)
+            RouteMapCard(trip, state.gpsTracePoints)
             EvidencePackCard(trip)
         }
 
@@ -175,6 +185,123 @@ private fun TimelineEntry(icon: androidx.compose.ui.graphics.vector.ImageVector,
             Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CaptainPalette.textMuted)
             Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = CaptainPalette.textPrimary)
             Text(caption, fontFamily = RobotoMonoFamily, fontSize = 14.sp, color = CaptainPalette.textMuted)
+        }
+    }
+}
+
+/**
+ * The "real point-to-point map image" pass (2026-09-05): a genuine Mapbox Static Images API
+ * picture — not an interactive `MapView`, matching [MapboxStaticImage]'s own established pattern
+ * for "a picture of a map" (same class the dashboard's background already uses; see that class's
+ * doc for why this app can't use the interactive SDK) — showing the trip's real pickup
+ * ([TripEntity.startLat]/`.startLng`, always drawn) and, only when real, the real drop-off
+ * ([TripEntity.endLat]/`.endLng`).
+ *
+ * **Honest "no real drop-off" case.** This app's documented convention is to never treat a
+ * `0.0,0.0` coordinate as a real fix (same rule [TripDetailViewModel]'s fare reconstruction and
+ * `MeterBackdropMap`'s destination pin already follow). Plenty of historical trips genuinely have
+ * no end coordinate on record — closed before this app tracked one, or closed fully offline with
+ * no live GPS fix and no prior `updateDropoff` call. For those this card shows a plain "No route
+ * recorded for this trip" message instead of a map with a missing/fabricated second pin.
+ *
+ * **Driven-path decision: markers only, no path line, by default.** [gpsTracePoints] is the
+ * trip's real recorded GPS trace — when it genuinely carries 2+ points, this card draws the ACTUAL
+ * driven path as a real Static Images API `path-` overlay (see [MapboxStaticImage.tripOverlayUrl]).
+ * But as of this pass that trace is `"[]"` for effectively every trip on this branch: the live
+ * meter's persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.doPersistTick])
+ * calls `TripRepository.tick(newPoints = emptyList())` on every tick, so `TripEntity.gpsTraceJson`
+ * never actually accumulates real points during a live trip today (verified against this branch,
+ * not assumed — see that method's own doc, and `MeterBackdropMap`'s class doc, which independently
+ * confirms the same gap). Rather than fabricate a straight line between pickup and drop-off and
+ * risk it reading as "the route driven" (it would very often NOT be the road the vehicle actually
+ * took), this card draws just the two pins with no line in that case — the honest option per this
+ * pass's hard rule against fabricating data, with a small caption saying exactly that. The
+ * `path-` branch is real, tested, and ready for the day `gpsTraceJson` actually gets fed live
+ * points; it simply never fires yet.
+ */
+@Composable
+private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDto>) {
+    // Same never-fake-a-0,0-fix convention this app already applies elsewhere (see this
+    // function's own doc) — a real end coordinate is non-null AND not the (0.0, 0.0) sentinel.
+    val endLat = trip.endLat
+    val endLng = trip.endLng
+    val hasRealDropoff = endLat != null && endLng != null && !(endLat == 0.0 && endLng == 0.0)
+
+    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Rounded.Map, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
+                Text(
+                    "ROUTE",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.accent,
+                )
+            }
+            if (!hasRealDropoff) {
+                Text(
+                    "No route recorded for this trip — no real drop-off coordinate on record.",
+                    fontFamily = InterFamily,
+                    fontSize = 14.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            } else {
+                var sizePx by remember { mutableStateOf(IntSize.Zero) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CaptainPalette.inset)
+                        .onGloballyPositioned { sizePx = it.size },
+                ) {
+                    if (sizePx.width > 0 && sizePx.height > 0) {
+                        // remember() keyed on the trip id + real size: this trip's coordinates
+                        // never change once closed, so the URL only needs to be rebuilt if the
+                        // card's on-screen pixel size changes (e.g. rotation) — same
+                        // "fresh image per size/center" reasoning as MapboxStaticImage's own doc.
+                        val drivenPath = remember(trip.clientUuid, gpsTracePoints) {
+                            gpsTracePoints.map { it.lat to it.lng }
+                        }
+                        val mapUrl = remember(trip.clientUuid, sizePx) {
+                            MapboxStaticImage.tripOverlayUrl(
+                                pickupLat = trip.startLat,
+                                pickupLng = trip.startLng,
+                                dropoffLat = endLat,
+                                dropoffLng = endLng,
+                                drivenPathPoints = drivenPath,
+                                widthPx = sizePx.width,
+                                heightPx = sizePx.height,
+                            )
+                        }
+                        SubcomposeAsyncImage(
+                            model = mapUrl,
+                            contentDescription = "Map showing pickup and drop-off for this trip",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        ) {
+                            when (painter.state) {
+                                is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+                                is AsyncImagePainter.State.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(color = CaptainPalette.accent, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                                }
+                                else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("Map unavailable", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                                }
+                            }
+                        }
+                    }
+                }
+                if (gpsTracePoints.size < 2) {
+                    Text(
+                        "Pickup and drop-off shown — no GPS trace was recorded for this trip, so the actual driven route isn't drawn.",
+                        fontFamily = InterFamily,
+                        fontSize = 12.sp,
+                        color = CaptainPalette.textMuted,
+                    )
+                }
+            }
         }
     }
 }

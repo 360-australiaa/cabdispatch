@@ -322,6 +322,37 @@ class TripRepository(
         return updated
     }
 
+    /**
+     * Best-effort reverse-geocode fill for [TripEntity.pickupAddress], called once from
+     * [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]'s `finalizeClose`
+     * right after [closeTrip] returns, using the just-closed trip's real
+     * [TripEntity.startLat]/[TripEntity.startLng] against
+     * [au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding.reverseGeocode].
+     * [TripEntity.pickupAddress]'s own doc explains why this column is often `null` at close time:
+     * it's only populated at [openTrip] from a dispatch offer's `originAddress`, so a
+     * street-hail/rank job or a Start Meter/Set Price trip opens with nothing to carry — History
+     * renders an honest "—" for that until now.
+     *
+     * Deliberately only fills a currently-`null`/blank [TripEntity.pickupAddress] — a trip that
+     * already carries a real dispatch-offer address is left untouched, never overwritten by a
+     * coarser reverse-geocoded guess. The caller is responsible for never invoking this with a
+     * fabricated [address]: [au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding]
+     * only ever hands back a real Mapbox result or `null`, and a `null`/failed lookup must leave
+     * this column exactly as it was, not call this method at all.
+     *
+     * Unlike every other write in this class, this one deliberately does NOT touch the outbox row:
+     * [pickupAddress]/[TripEntity.dropoffAddress] are local-only, History/Trip-Detail-only fields
+     * that were never part of [TripSyncItemDto]/[toSyncItemDto] (see that method's own field list)
+     * — there is nothing for [au.com.threesixty.cabdispatch.sync.SyncWorker] to re-send here.
+     */
+    suspend fun fillPickupAddressIfMissing(clientUuid: String, address: String): TripEntity? {
+        val existing = tripDao.getByClientUuid(clientUuid) ?: return null
+        if (!existing.pickupAddress.isNullOrBlank()) return existing
+        val updated = existing.copy(pickupAddress = address, updatedAt = System.currentTimeMillis())
+        tripDao.update(updated)
+        return updated
+    }
+
     private suspend fun upsertOutboxRow(trip: TripEntity, ready: Boolean) {
         val entityJson = if (ready) {
             cabDispatchJson.encodeToString(TripSyncItemDto.serializer(), toSyncItemDto(trip))

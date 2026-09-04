@@ -558,6 +558,34 @@ class CloseAndPayViewModel : ViewModel() {
                 tip = state.tip.takeIf { it.signum() > 0 }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString(),
             )
             _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
+            fillPickupAddressBestEffort(closed)
+        }
+    }
+
+    /**
+     * Real pickup/drop-off addresses pass (2026-09-05): a one-time, best-effort reverse-geocode
+     * of the just-closed trip's real [TripEntity.startLat]/[TripEntity.startLng] into
+     * [TripEntity.pickupAddress], for a trip that opened with no dispatch-offer address to carry
+     * (see that column's own doc). Fired AFTER the [CloseAndPayUiState.ReceiptStep] transition
+     * above already committed — this is metadata for the trip *record* (History/Trip Detail), not
+     * something the close flow or the fare total waits on, and it never touches
+     * [state.breakdown]/[TripRepository.closeTrip]'s already-persisted fare fields.
+     *
+     * Skips the network call entirely when [TripEntity.pickupAddress] is already real (a booked
+     * job's dispatch-offer address) — [TripRepository.fillPickupAddressIfMissing] would no-op
+     * anyway, but checking here avoids burning a Mapbox request for nothing. A failed/offline
+     * lookup, or a coordinate with no address on record, leaves the column exactly as it was — the
+     * honest "—" History already renders for a `null` value — never a fabricated address.
+     */
+    private fun fillPickupAddressBestEffort(trip: TripEntity) {
+        if (!trip.pickupAddress.isNullOrBlank()) return
+        viewModelScope.launch {
+            val address = AppContainer.mapboxReverseGeocoding
+                .reverseGeocode(trip.startLat, trip.startLng)
+                .getOrNull()
+            if (!address.isNullOrBlank()) {
+                runCatching { tripRepository.fillPickupAddressIfMissing(trip.clientUuid, address) }
+            }
         }
     }
 

@@ -78,10 +78,126 @@ object MapboxStaticImage {
         return "$BASE_URL/$STYLE/static/$lon,$lat,$z/${w}x$h$density?access_token=$accessToken"
     }
 
+    /**
+     * A real point-to-point trip map (Trip Detail "real map image" pass, 2026-09-05): a pin at the
+     * real pickup coordinate, a pin at the real drop-off coordinate (only when the caller passes
+     * one — see below), and, only when [drivenPathPoints] genuinely carries 2+ real recorded
+     * fixes, the actual driven path as a Static Images API `path-` overlay. Same REST-only
+     * approach as [url] above (see that function's doc for why this project can't use the
+     * interactive SDK) — just with the Static Images API's marker/path overlay syntax instead of a
+     * bare center/zoom.
+     *
+     * @param pickupLat/[pickupLng] the trip's real [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.startLat]/`.startLng`. Always drawn — every trip has a real start fix.
+     * @param dropoffLat/[dropoffLng] the trip's real `endLat`/`endLng`, or `null` when the trip
+     *   has no real end coordinate on record (plenty of historical trips predate this — see
+     *   [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.endLat]'s doc). This app's
+     *   documented convention of never treating `0.0,0.0` as a real fix applies here too — the
+     *   caller is expected to have already screened that out (see
+     *   [au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailScreen]'s own map-card
+     *   doc), so this function draws whatever non-null pair it's given.
+     * @param drivenPathPoints the real accumulated GPS trace for this trip
+     *   ([au.com.threesixty.cabdispatch.data.local.entity.TripEntity.gpsTraceJson], decoded), as
+     *   (lat, lng) pairs in this app's own coordinate order. **Not** a straight line between
+     *   pickup and drop-off — see [au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailScreen]'s
+     *   map-card doc for why this function never fabricates one when the trace is empty (which,
+     *   as of this pass, is every trip — the live meter's persister doesn't feed real points into
+     *   `TripEntity.gpsTraceJson` yet, see [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]'s
+     *   own doc). Fewer than 2 points draws no path at all, just the marker(s).
+     * @param widthPx/[heightPx] the on-screen pixel size to request — same clamping/no-blurry-upscale
+     *   reasoning as [url].
+     *
+     * Centering/zoom is Mapbox's own `auto` viewport (fits every marker + the path in frame with a
+     * fixed pixel [OVERLAY_PADDING_PX] margin) rather than a center/zoom this app would otherwise
+     * have to compute itself from the two coordinates.
+     */
+    fun tripOverlayUrl(
+        pickupLat: Double,
+        pickupLng: Double,
+        dropoffLat: Double?,
+        dropoffLng: Double?,
+        drivenPathPoints: List<Pair<Double, Double>> = emptyList(),
+        widthPx: Int,
+        heightPx: Int,
+        retina: Boolean = true,
+        accessToken: String = BuildConfig.MAPBOX_ACCESS_TOKEN,
+    ): String {
+        val w = widthPx.coerceIn(1, MAX_DIMENSION_PX)
+        val h = heightPx.coerceIn(1, MAX_DIMENSION_PX)
+        val density = if (retina) "@2x" else ""
+        val overlays = buildList {
+            // Path drawn first so the pickup/drop-off pins layer on top of it, not under it.
+            if (drivenPathPoints.size >= 2) {
+                add("path-3+${PATH_COLOR_HEX}-0.85(${encodePolyline(drivenPathPoints)})")
+            }
+            add(pinOverlay(PICKUP_PIN_COLOR_HEX, pickupLat, pickupLng))
+            if (dropoffLat != null && dropoffLng != null) {
+                add(pinOverlay(DROPOFF_PIN_COLOR_HEX, dropoffLat, dropoffLng))
+            }
+        }
+        val overlayPath = overlays.joinToString(",")
+        return "$BASE_URL/$STYLE/static/$overlayPath/auto/${w}x$h$density" +
+            "?padding=$OVERLAY_PADDING_PX&access_token=$accessToken"
+    }
+
+    private fun pinOverlay(colorHex: String, lat: Double, lng: Double): String {
+        val lon = lng.roundTo(5)
+        val la = lat.roundTo(5)
+        return "pin-s+$colorHex($lon,$la)"
+    }
+
+    // Small pixel margin so a fitted marker/path never touches the requested image's edge.
+    private const val OVERLAY_PADDING_PX = 32
+
+    // Hex colors (no leading '#', per the Static Images API's overlay syntax) — the exact
+    // success/danger/hudAccent hues from CaptainPalette.kt's private DarkTokens set, so this map
+    // card reads as one system with the rest of the HUD kit and the dark-v11 STYLE this file
+    // always requests (see STYLE's own doc — every static image this class builds is the dark
+    // style regardless of the app's light/dark theme setting, so the dark token set's hues are the
+    // correct fixed pick here, not a light/dark mismatch). Hand-copied rather than imported since
+    // this is a plain data/remote URL builder with no Compose/theme dependency, and DarkTokens
+    // itself is private to CaptainPalette.
+    private const val PICKUP_PIN_COLOR_HEX = "39E27A" // CaptainPalette's DarkTokens.success
+    private const val DROPOFF_PIN_COLOR_HEX = "EF4444" // CaptainPalette's DarkTokens.danger
+    private const val PATH_COLOR_HEX = "6E3FF3" // CaptainPalette's DarkTokens.hudAccent
+
     private fun Double.roundTo(decimals: Int): Double {
         val factor = Math.pow(10.0, decimals.toDouble())
         return (this * factor).roundToInt() / factor
     }
+}
+
+/**
+ * Encodes real (lat, lng) points into the Google/Mapbox [encoded polyline
+ * algorithm][https://developers.google.com/maps/documentation/utilities/polylinealgorithm]
+ * (precision 5) that the Static Images API's `path-` overlay expects — the exact inverse of
+ * [decodePolyline] in `MapboxDirections.kt` (see that function's doc for why this is hand-rolled
+ * rather than pulled from the Mapbox SDK utils: same unusable authenticated-Maven-repo
+ * constraint). `internal` so [MapboxOverlayEncodeTest] can pin it directly against the same
+ * canonical Google reference fixture [PolylineDecodeTest] already uses for the decoder.
+ */
+internal fun encodePolyline(points: List<Pair<Double, Double>>): String {
+    val sb = StringBuilder()
+    var prevLatE5 = 0
+    var prevLngE5 = 0
+    for ((lat, lng) in points) {
+        val latE5 = Math.round(lat * 1e5).toInt()
+        val lngE5 = Math.round(lng * 1e5).toInt()
+        encodePolylineValue(latE5 - prevLatE5, sb)
+        encodePolylineValue(lngE5 - prevLngE5, sb)
+        prevLatE5 = latE5
+        prevLngE5 = lngE5
+    }
+    return sb.toString()
+}
+
+private fun encodePolylineValue(value: Int, sb: StringBuilder) {
+    var v = value shl 1
+    if (value < 0) v = v.inv()
+    while (v >= 0x20) {
+        sb.append(((0x20 or (v and 0x1f)) + 63).toChar())
+        v = v shr 5
+    }
+    sb.append((v + 63).toChar())
 }
 
 /**

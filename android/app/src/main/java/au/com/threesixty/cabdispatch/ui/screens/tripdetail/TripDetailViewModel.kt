@@ -6,6 +6,7 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripFlagRequestDto
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
@@ -35,6 +36,16 @@ sealed interface TripDetailUiState {
          * maxi-multiplier display (see [au.com.threesixty.cabdispatch.ui.screens.tripdetail.FareCard]),
          * which must read [Tariff.maxiMultiplier] rather than hardcode "×1.5". */
         val tariff: Tariff,
+        /**
+         * The trip's real recorded GPS trace ([TripEntity.gpsTraceJson], decoded once here rather
+         * than in the screen) — for the "real point-to-point map image" pass (2026-09-05), see
+         * [au.com.threesixty.cabdispatch.ui.screens.tripdetail.RouteMapCard]'s own doc for how
+         * this feeds the driven-path overlay. Empty whenever the trace is `"[]"` — which, as of
+         * this pass, is every trip (the live meter's persister doesn't feed real points into this
+         * column yet, see [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]'s
+         * own doc) — never backfilled with a fabricated straight line here.
+         */
+        val gpsTracePoints: List<TelemetryPointDto> = emptyList(),
         val disputeReason: String = "",
         val disputeState: DisputeSubmitState = DisputeSubmitState.IDLE,
         val disputeError: String? = null,
@@ -99,7 +110,13 @@ class TripDetailViewModel : ViewModel() {
             cleaningFee = trip.cleaningFee.toBigDecimalOrZero(),
             includePsl = trip.includePsl,
         )
-        _uiState.value = TripDetailUiState.Loaded(trip, breakdown, tariff)
+        // Real GPS trace, decoded once here (see TripDetailUiState.Loaded.gpsTracePoints's own
+        // doc) — never crashes the screen on a corrupt/legacy blob, just falls back to "no trace".
+        val gpsTrace = runCatching {
+            cabDispatchJson.decodeFromString<List<TelemetryPointDto>>(trip.gpsTraceJson)
+        }.getOrDefault(emptyList())
+
+        _uiState.value = TripDetailUiState.Loaded(trip, breakdown, tariff, gpsTracePoints = gpsTrace)
     }
 
     fun setDisputeReason(value: String) {
