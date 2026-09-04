@@ -123,11 +123,19 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 /**
- * 18/18b · Hired — Meter, rebuilt on the shared HUD kit ([au.com.threesixty.cabdispatch.ui.theme]'s
- * `Hud.kt`, 2026-09-03) with the navigator fully wired (2026-09-04). Phase A embedded this as
+ * 18/18b · Hired — Meter, on the shared HUD kit ([au.com.threesixty.cabdispatch.ui.theme]'s
+ * `Hud.kt`, 2026-09-03), navigator fully wired (2026-09-04), then re-laid-out to a passenger-facing
+ * two-panel shape (2026-09-04b) per a direct, verbatim user correction over the previous
+ * three-column build: *"when the meter is running, i dont want this tray on the right side, only
+ * meter speedometer and map should show in this screen, and make it big, and prominent, so from
+ * behind passenger can see the fare easily, and speedometer position should be left side, and
+ * mapbox map position should be on right side."* Phase A embedded this as
  * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `CaptainPane.METER` pane
  * (shared header / ONE right rail / bottom stats bar — see that file); this composable owns only
- * the content slot DeckHomeScreen hands it (~992×420dp on the shell's fixed 1280×800 canvas).
+ * the content slot DeckHomeScreen hands it, and — because that file collapses its footer stats bar
+ * + status tray for the whole `hasActiveTrip` duration this pane is ever shown for (see its own
+ * "Meter-focus collapse" comment; that gate is untouched by this pass) — the slot this Row fills is
+ * already the full freed height, which is exactly why the dial and map below can be sized so large.
  *
  * All metering logic is untouched [HiredViewModel]: live [FareState] ticks, pause/resume,
  * addToll persistence, endTrip → Close & Pay, duress state machine (hidden gesture + overlays) —
@@ -138,6 +146,12 @@ import kotlin.math.roundToInt
  * point on it; nothing here recomputes routing/ETA/off-route logic that already lives in
  * [MeterNavViewModel]/[NavProgress].
  *
+ * - **Only two things are ever visible by default: the dial (LEFT) and the real map (RIGHT).**
+ *   [MeterPaneLayout] is now a plain two-column `Row` — no permanent third column, no action-tile
+ *   tray, no FARE BREAKDOWN/TRIP DETAILS/NIGHT-DAY card sitting beside the dial. Both columns are
+ *   equal-weight (`DIAL_COL_WEIGHT == MAP_COL_WEIGHT`) so each roughly fills its half of the width
+ *   the old right column used to occupy — a bigger [GlowingSpeedometer]/[RollingMoneyText] fare
+ *   figure a back-seat passenger can actually read, and a bigger, more legible [MeterBackdropMap].
  * - **Nothing here hand-rolls an arc, a glow, a digit or a card.** The dial is
  *   [GlowingSpeedometer] (real 0–120 km/h scale driven by `fareState.currentSpeedKmh`, the
  *   engine's own speed) with its `content` slot holding a circular [GlassCard] disc carrying the
@@ -145,15 +159,28 @@ import kotlin.math.roundToInt
  *   WAITING readouts (the dial OWNS these — they appear nowhere else) and END FARE. Every tile and
  *   card is a [GlassCard]; the nav variant's status/reroute pills are [HudStatusPill]; the map's
  *   routes are the kit's two-layer `createGlowLine` (see [MeterBackdropMap]).
- * - **Two layouts, one real trigger.** Mockup #3 ([MeterLayout]: NIGHT FARE tile · dial over the
- *   map · action tiles · FARE BREAKDOWN + TRIP DETAILS) is the ordinary metered trip. Mockup #4
- *   ([NavLayout]: dial LEFT · "TRIP IN PROGRESS" map pane with PICK UP / DESTINATION cards, a
- *   route/ETA panel and OPEN NAVIGATION · FARE DETAILS + actions RIGHT) is used **when
- *   `meterNavViewModel.uiState.value.destination != null`** — a real Mapbox-geocoded place the
- *   driver picked via the destination search dialog (reached from the MORE sheet on mockup #3;
- *   the tight ~380×400dp map/dial column has no free space for a persistent search bar, so the
- *   dialog — the same idiom every other action on this screen already uses — is where the search
- *   field, live suggestion dropdown, spinner and honest empty/error state actually live).
+ * - **Every real control still exists — nothing is deleted, only relocated.** SET PRICE, ADD TOLL,
+ *   PAUSE FARE, MORE (destination/extras/passengers), FARE BREAKDOWN/DETAILS, TRIP DETAILS and the
+ *   NIGHT/DAY FARE tile all move into [ControlsDrawer], a single on-demand sheet opened by
+ *   [ControlsHandle] — a small, low-profile handle docked in the dial panel's empty corner (a
+ *   circle inscribed in a rect never reaches the rect's corners, so the handle never sits over the
+ *   ring, the fare figure or END FARE). This is the production taxi-meter/kiosk convention this
+ *   pass was explicitly asked to follow: one big always-on passenger-facing readout, plus a small
+ *   secondary-actions affordance the driver deliberately opens — not a shopping list of buttons
+ *   fighting the passenger display for attention. One tap opens it, the drawer's own Close (or
+ *   tapping the scrim) collapses it, and opening any one-shot action inside it (SET PRICE/ADD
+ *   TOLL/MORE) also closes it first — see the `actions` callbacks built in [HiredScreen] — so the
+ *   driver lands back on the plain dial+map view rather than two stacked scrims.
+ * - **Two map-panel shapes, one real trigger, unchanged since the last pass — just re-homed to the
+ *   right side and bigger.** Mockup #3 (no destination) is the plain driven-route + pickup-pin
+ *   backdrop. Mockup #4 (destination set) is used **when `meterNavViewModel.uiState.value
+ *   .destination != null`** — a real Mapbox-geocoded place the driver picked via the destination
+ *   search dialog (reached from [ControlsDrawer]'s MORE tile) — and adds the real planned route,
+ *   destination pin, PICK UP/DESTINATION cards, the route/ETA strip, OPEN NAVIGATION and the voice
+ *   toggle directly onto the (now right-hand, now bigger) map panel — exactly the same content and
+ *   the same `onOpenNavigation`/`onToggleVoice`/`onChangeDestination`/`onClearDestination`/
+ *   `onRetryRoute` callbacks as before, just literally swapped from the left/centre side to the
+ *   right.
  * - **Every control is wired to a real call.** SET PRICE/ADD TOLL/PAUSE FARE/MORE call the same
  *   `viewModel.*` entry points as before; destination search/select/clear/retry call
  *   `meterNavViewModel.onQueryChange`/`.selectDestination`/`.clearDestination`/`.retryRoute`; the
@@ -161,16 +188,19 @@ import kotlin.math.roundToInt
  *   announcers — a `LaunchedEffect` mirrors it into `meterNavViewModel.setVoiceEnabled` so muting
  *   either control mutes both, per [MeterNavViewModel.setVoiceEnabled]'s doc); OPEN NAVIGATION
  *   calls the real [openInMaps] with the destination's real coordinates; END FARE calls the
- *   identical `viewModel.endTrip { navigate(CLOSE_PAY) }` in both layouts.
- * - **[MeterBackdropMap]** — real map. Mockup #3: real route (every vertex a real GPS fix), real
- *   pickup pin, no destination pin. Mockup #4: adds the real planned route
+ *   identical `viewModel.endTrip { navigate(CLOSE_PAY) }` in both map-panel shapes, and stays
+ *   inside the dial exactly where it was — the one control this pass does NOT tuck away.
+ * - **[MeterBackdropMap]** — real map, untouched by this pass. Mockup #3: real route (every vertex
+ *   a real GPS fix), real pickup pin, no destination pin. Mockup #4: adds the real planned route
  *   ([au.com.threesixty.cabdispatch.data.remote.DirectionsRoute.points]) and a real destination
  *   pin, and switches the camera from vehicle-follow to a bounds-fit framing the whole trip — see
  *   that file's doc.
- * - **[FareBreakdownCard]** keeps [HiredViewModel.breakdownExpanded]/`.toggleBreakdown()` as the
- *   HIDE/SHOW toggle (no total row — the dial's ACTIVE FARE figure IS the total). **[TripDetailsCard]**
- *   is the vertical pickup→drop-off timeline + AVG SPEED, mockup-#3 only per the reference layout.
- *   Every card renders an honest "—" wherever data is missing, never fabricates one.
+ * - **[FareBreakdownCard]** (inside [ControlsDrawer]) keeps [HiredViewModel.breakdownExpanded]/
+ *   `.toggleBreakdown()` as the HIDE/SHOW toggle (no total row — the dial's ACTIVE FARE figure IS
+ *   the total). **[TripDetailsCard]** (also inside [ControlsDrawer]) is the vertical
+ *   pickup→drop-off timeline + AVG SPEED, mockup-#3 only — dropped once the map panel's PICK
+ *   UP/DESTINATION cards already carry the same pair. Every card renders an honest "—" wherever
+ *   data is missing, never fabricates one.
  * - SET PRICE remains **read-only/informational** ([SetPriceInfoDialog]'s doc explains why); ADD
  *   TOLL/MORE open the same dialogs; PAUSE FARE calls `togglePause()` exactly.
  *
@@ -227,6 +257,10 @@ fun HiredScreen(
     var showSetPriceInfo by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
     var showDestinationSearch by remember { mutableStateOf(false) }
+    // The collapsed control surface (2026-09-04b redesign) — SET PRICE/ADD TOLL/PAUSE FARE/MORE +
+    // FARE BREAKDOWN/TRIP DETAILS/NIGHT-DAY FARE, all moved off the permanent right column into
+    // this single on-demand sheet. See ControlsDrawer's/ControlsHandle's own docs.
+    var showControls by remember { mutableStateOf(false) }
     // Point to Point Transport (Fares) Order 2026 UI-wiring pass: mid-trip passenger-count
     // correction — see HiredViewModel.updatePassengerCount's doc. Reached from the MORE sheet.
     var showPassengerEdit by remember { mutableStateOf(false) }
@@ -248,10 +282,13 @@ fun HiredScreen(
         negotiatedTotal = tripContext?.negotiatedTotal,
         tollsTotal = fareState.breakdown.tolls,
         tollCount = fareState.tollsApplied.size,
-        onSetPrice = { showSetPriceInfo = true },
-        onAddToll = { showTollMenu = true },
+        // Every one-shot action also closes ControlsDrawer first — the driver lands on the plain
+        // dial+map view under the dialog it opened, rather than two stacked scrims. PAUSE FARE
+        // stays in-place (togglePause() has no dialog of its own), leaving the drawer open.
+        onSetPrice = { showControls = false; showSetPriceInfo = true },
+        onAddToll = { showControls = false; showTollMenu = true },
         onTogglePause = viewModel::togglePause,
-        onMore = { showMore = true },
+        onMore = { showControls = false; showMore = true },
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -307,15 +344,13 @@ fun HiredScreen(
                     navState = navState,
                     hasDestination = hasDestination,
                     speechEnabled = speechEnabled,
-                    breakdownExpanded = breakdownExpanded,
-                    onToggleBreakdown = viewModel::toggleBreakdown,
-                    actions = actions,
                     onEndFare = onEndFare,
                     onOpenNavigation = { target -> openInMaps(context, target) },
                     onToggleVoice = { viewModel.toggleSpeech(!speechEnabled) },
                     onRetryRoute = meterNavViewModel::retryRoute,
                     onChangeDestination = { showDestinationSearch = true },
                     onClearDestination = meterNavViewModel::clearDestination,
+                    onOpenControls = { showControls = true },
                 )
             }
         }
@@ -425,6 +460,18 @@ fun HiredScreen(
                 onDismiss = { showMore = false },
             )
         }
+        CaptainDialogScrim(visible = showControls, onDismissRequest = { showControls = false }) {
+            ControlsDrawer(
+                fareState = fareState,
+                tripContext = tripContext,
+                startAtIso = activeTrip?.startAt,
+                hasDestination = hasDestination,
+                breakdownExpanded = breakdownExpanded,
+                onToggleBreakdown = viewModel::toggleBreakdown,
+                actions = actions,
+                onDismiss = { showControls = false },
+            )
+        }
         CaptainDialogScrim(visible = showDestinationSearch, onDismissRequest = { showDestinationSearch = false }) {
             DestinationSearchDialog(
                 nav = navState,
@@ -469,17 +516,14 @@ private class MeterActions(
     val onMore: () -> Unit,
 )
 
-// Column proportions for the one three-column shape every state of this pane uses — MAP (real,
-// bounded, legible) | DIAL (its own glass surface, never stacked on the map) | BREAKDOWN/DETAILS/
-// CONTROLS (2026-09-04 rework: the map no longer sits behind the dial as a backdrop — see
-// MeterPaneLayout's doc). Weights, not fixed dp, because this Row's actual height (and therefore
-// how big the dial's own min(width,height) sizing lets it get) now varies with whether
-// DeckHomeScreen's footer bar is hidden for a live fare — fixed widths tuned for one height would
-// look wrong at the other. DIAL_COL_WEIGHT > 1 makes the dial the visually dominant column, per the
-// "Start Meter is the focus screen" brief.
+// Column proportions for the two-column shape every state of this pane uses (2026-09-04b redesign:
+// DIAL LEFT | MAP RIGHT, no third column — see MeterPaneLayout's doc). Equal weights, not fixed dp,
+// so each panel genuinely fills half of whatever width/height DeckHomeScreen's slot gives this Row
+// (which is already the full footer-collapsed height for the whole time this pane is shown) — per
+// the direct correction that both the dial and the map should grow to fill their half, not just one
+// of them.
+private const val DIAL_COL_WEIGHT = 1f
 private const val MAP_COL_WEIGHT = 1f
-private const val DIAL_COL_WEIGHT = 1.15f
-private const val RIGHT_COL_WEIGHT = 1f
 private val COL_GAP = 16.dp
 
 /** The circular glass disc inside the speedometer ring, as a fraction of the ring's diameter —
@@ -537,27 +581,37 @@ private fun SectionLabel(text: String, color: Color = CaptainPalette.textPrimary
 }
 
 // ============================================================================================
-// The pane — one three-column shape (MAP | DIAL | BREAKDOWN/DETAILS/CONTROLS) for every state
+// The pane — two columns (DIAL LEFT | MAP RIGHT), plus one on-demand ControlsDrawer, for every
+// state (2026-09-04b redesign)
 // ============================================================================================
 
 /**
- * The whole content Row for this pane, in every state (2026-09-04 rework, replacing the previous
- * two-full-layout split). The map is a real, clearly bounded panel on the LEFT the driver can
- * actually read — never a backdrop the dial sits on top of, in any state, per direct user
- * correction ("speedometer is overlapping on the map, please fix it properly"). The dial gets its
- * own [GlassCard] beside it. The right column carries NIGHT/DAY FARE, the four action tiles, and
- * FARE BREAKDOWN/DETAILS — genuinely taller now than before because [DeckHomeScreen] hides its
- * footer stats bar + system-status tray for the live-fare duration (see that file's own comment on
- * the call site that does it), so this whole Row inherits that freed vertical space and the dial's
- * own `min(width, height)` sizing (see [MeterDial]) makes it visibly bigger, not just padded.
+ * The whole content Row for this pane, in every state — a plain two-column shape (2026-09-04b
+ * redesign, replacing the previous three-column build), per the direct user correction quoted on
+ * [HiredScreen]'s own class doc: dial LEFT, map RIGHT, both big, nothing else on-screen by default.
+ * The dial gets its own [GlassCard] on the LEFT, with [ControlsHandle] docked in its otherwise-empty
+ * corner. The map is a real, clearly bounded panel on the RIGHT the driver (and a back-seat
+ * passenger) can actually read — never a backdrop the dial sits on top of. Both columns are
+ * equal-weight, so removing the old third column lets each one grow into roughly half the freed
+ * width, and both inherit the full footer-collapsed height [DeckHomeScreen] already gives this pane
+ * for the entire time it is shown (see that file's own "Meter-focus collapse" comment) — so the
+ * dial's own `min(width, height)` sizing (see [MeterDial]) and the map panel both end up visibly
+ * bigger, not just padded.
+ *
+ * Everything that used to sit in the permanent third column — NIGHT/DAY FARE, SET PRICE/ADD
+ * TOLL/PAUSE FARE/MORE, FARE BREAKDOWN/DETAILS, TRIP DETAILS — is unchanged in substance but moved
+ * into [ControlsDrawer], opened on demand via [onOpenControls] (wired to [ControlsHandle] below).
+ * Nothing is deleted; every one of those controls still calls the identical `viewModel.*`/
+ * `actions.*` entry point it always did.
  *
  * [hasDestination] (a real [MeterNavViewModel.uiState] destination, never `TripContext.destAddress`
- * — see [HiredScreen]'s class doc) changes only what the map panel additionally shows: the driven
- * route + pickup pin are always there; once a destination is picked, the same panel gains the real
- * planned route, a destination pin, the PICK UP/DESTINATION cards, the route/ETA strip, OPEN
- * NAVIGATION and the voice toggle — mockup #4's content, reached by growing this one layout rather
- * than swapping in a separate one. [TripDetailsCard] in the right column drops out once the map
- * panel already carries the same pickup/destination pair, so the two never duplicate each other.
+ * — see [HiredScreen]'s class doc) changes only what the (now right-hand) map panel additionally
+ * shows: the driven route + pickup pin are always there; once a destination is picked, the same
+ * panel gains the real planned route, a destination pin, the PICK UP/DESTINATION cards, the
+ * route/ETA strip, OPEN NAVIGATION and the voice toggle — mockup #4's content, reached by growing
+ * this one panel rather than swapping in a separate one. [TripDetailsCard] (inside [ControlsDrawer])
+ * drops out once the map panel already carries the same pickup/destination pair, so the two never
+ * duplicate each other.
  */
 @Composable
 private fun RowScope.MeterPaneLayout(
@@ -571,19 +625,34 @@ private fun RowScope.MeterPaneLayout(
     navState: MeterNavUiState,
     hasDestination: Boolean,
     speechEnabled: Boolean,
-    breakdownExpanded: Boolean,
-    onToggleBreakdown: () -> Unit,
-    actions: MeterActions,
     onEndFare: () -> Unit,
     onOpenNavigation: (NavigationTarget) -> Unit,
     onToggleVoice: () -> Unit,
     onRetryRoute: () -> Unit,
     onChangeDestination: () -> Unit,
     onClearDestination: () -> Unit,
+    onOpenControls: () -> Unit,
 ) {
     val destination = navState.destination
 
-    // --- col 1: the map — a real bounded panel, never behind the dial ---
+    // --- col 1: the dial, LEFT — its own glass surface, big, with the ControlsHandle docked in
+    // its empty corner (a circle inscribed in a rect never reaches the rect's corners, whichever
+    // way this panel's aspect ratio runs, so the handle never overlaps the ring/fare/END FARE). ---
+    Box(modifier = Modifier.weight(DIAL_COL_WEIGHT).fillMaxHeight()) {
+        GlassCard(modifier = Modifier.fillMaxSize(), cornerRadiusDp = 24) {
+            MeterDial(
+                fareState = fareState,
+                isPaused = isPaused,
+                onEndFare = onEndFare,
+                modifier = Modifier.fillMaxSize().padding(6.dp),
+            )
+        }
+        ControlsHandle(onClick = onOpenControls, modifier = Modifier.align(Alignment.TopEnd).padding(14.dp))
+    }
+
+    Spacer(Modifier.width(COL_GAP))
+
+    // --- col 2: the map, RIGHT — a real bounded panel, big and legible, never behind the dial ---
     Box(
         modifier = Modifier
             .weight(MAP_COL_WEIGHT)
@@ -653,55 +722,116 @@ private fun RowScope.MeterPaneLayout(
             }
         }
     }
-
-    Spacer(Modifier.width(COL_GAP))
-
-    // --- col 2: the dial, on its own glass surface beside the map — never on top of it ---
-    GlassCard(modifier = Modifier.weight(DIAL_COL_WEIGHT).fillMaxHeight(), cornerRadiusDp = 24) {
-        MeterDial(
-            fareState = fareState,
-            isPaused = isPaused,
-            onEndFare = onEndFare,
-            modifier = Modifier.fillMaxSize().padding(6.dp),
-        )
-    }
-
-    Spacer(Modifier.width(COL_GAP))
-
-    // --- col 3: NIGHT/DAY FARE + the four action tiles + FARE BREAKDOWN/DETAILS (scrolls) ---
-    Column(modifier = Modifier.weight(RIGHT_COL_WEIGHT).fillMaxHeight().verticalScroll(rememberScrollState())) {
-        NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SetPriceTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
-            AddTollTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PauseFareTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
-            MoreTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
-        }
-        Spacer(Modifier.height(10.dp))
-        FareBreakdownCard(
-            title = if (hasDestination) "FARE DETAILS" else "FARE BREAKDOWN",
-            breakdown = fareState.breakdown,
-            timeClass = fareState.timeClass,
-            nightMultiplierLabel = nightMultiplierLabel(tripContext?.tariff),
-            expanded = breakdownExpanded,
-            onToggle = onToggleBreakdown,
-        )
-        // Dropped once the map panel already carries the same PICK UP/DESTINATION pair (above) —
-        // the two must never show the same address/time twice.
-        if (!hasDestination) {
-            Spacer(Modifier.height(10.dp))
-            TripDetailsCard(tripContext = tripContext, fareState = fareState, startAtIso = startAtIso)
-        }
-        Spacer(Modifier.height(8.dp))
-        AccrualNote()
-    }
 }
 
 private val NAV_TILE_H = 92.dp
+
+/**
+ * The small, low-profile affordance that opens [ControlsDrawer] — docked in the dial panel's
+ * otherwise-empty corner (see [MeterPaneLayout]'s doc for why a corner is always safe there). One
+ * tap opens the drawer; the drawer's own Close (or tapping the scrim) collapses it again — this is
+ * the "small secondary-actions affordance the driver deliberately opens" half of the production
+ * taxi-meter/kiosk convention this redesign follows, paired with the big always-on dial+map readout
+ * a back-seat passenger can actually read.
+ */
+@Composable
+private fun ControlsHandle(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(99.dp))
+            .background(CaptainPalette.raised.copy(alpha = 0.92f))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(99.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.MoreHoriz, contentDescription = "Open controls", tint = CaptainPalette.textSecondary, modifier = Modifier.size(18.dp))
+        Text(
+            "CONTROLS",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 10.sp,
+            letterSpacing = 1.sp,
+            color = CaptainPalette.textSecondary,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+    }
+}
+
+/**
+ * The collapsed control surface itself (2026-09-04b redesign) — everything that used to sit in the
+ * permanent third column (NIGHT/DAY FARE, the four action tiles, FARE BREAKDOWN/DETAILS, TRIP
+ * DETAILS), unchanged in substance, moved here behind [ControlsHandle]. Same dialog shell as every
+ * other action on this screen ([TollPresetDialog], [SetPriceInfoDialog], [MoreActionsSheet] etc.) —
+ * a fixed-width [GlassCard]-style panel via [CaptainDialogScrim], scrollable so it never clips on
+ * the pane's real height. [actions] is the identical [MeterActions] bundle [HiredScreen] already
+ * builds — SET PRICE/ADD TOLL/MORE close this drawer first (see those callbacks' own doc at the
+ * `actions` call site) so the driver lands back on the plain dial+map view under whichever dialog it
+ * opened; PAUSE FARE has no dialog of its own and leaves the drawer open.
+ */
+@Composable
+private fun ControlsDrawer(
+    fareState: FareState,
+    tripContext: TripContext?,
+    startAtIso: String?,
+    hasDestination: Boolean,
+    breakdownExpanded: Boolean,
+    onToggleBreakdown: () -> Unit,
+    actions: MeterActions,
+    onDismiss: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(440.dp)
+            .heightIn(max = 600.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+            .padding(24.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Controls", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            Icon(
+                Icons.Rounded.Close,
+                contentDescription = "Close controls",
+                tint = CaptainPalette.textMuted,
+                modifier = Modifier.size(22.dp).clickable(onClick = onDismiss),
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SetPriceTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
+                AddTollTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PauseFareTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
+                MoreTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
+            }
+            Spacer(Modifier.height(10.dp))
+            FareBreakdownCard(
+                title = if (hasDestination) "FARE DETAILS" else "FARE BREAKDOWN",
+                breakdown = fareState.breakdown,
+                timeClass = fareState.timeClass,
+                nightMultiplierLabel = nightMultiplierLabel(tripContext?.tariff),
+                expanded = breakdownExpanded,
+                onToggle = onToggleBreakdown,
+            )
+            // Dropped once the map panel already carries the same PICK UP/DESTINATION pair — the
+            // two must never show the same address/time twice.
+            if (!hasDestination) {
+                Spacer(Modifier.height(10.dp))
+                TripDetailsCard(tripContext = tripContext, fareState = fareState, startAtIso = startAtIso)
+            }
+            Spacer(Modifier.height(8.dp))
+            AccrualNote()
+        }
+    }
+}
 
 /** PICK UP card on the nav pane — icon in a tinted square, label, address, detail. Shared shell
  * ([IconSquare]) with [NavDestinationCard]; PICK UP has no actions (the pickup is fixed once a
