@@ -29,6 +29,28 @@ object TripDetailHandoff {
 }
 
 /**
+ * Rate Passenger screen (new, 2026-09-04): set by [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen]'s
+ * receipt step just before navigating to [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.RATE_PASSENGER],
+ * read by `RatePassengerViewModel` — same no-nav-graph-argument convention [TripDetailHandoff]
+ * above already established for this app's route constants. Carries the just-closed trip's
+ * [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.clientUuid] (not its server id —
+ * the rating screen itself resolves [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.serverId]
+ * from Room, same "may not have synced yet" gate [TripDetailHandoff]'s own dispute-flow caller uses).
+ */
+object RatePassengerHandoff {
+    private val _pendingClientUuid = MutableStateFlow<String?>(null)
+    val pendingClientUuid: StateFlow<String?> = _pendingClientUuid.asStateFlow()
+
+    fun set(clientUuid: String) {
+        _pendingClientUuid.value = clientUuid
+    }
+
+    fun clear() {
+        _pendingClientUuid.value = null
+    }
+}
+
+/**
  * Snapshot of the totals shown on the "Submit shift confirmation" screen
  * (row 19) — captured at the moment Submit Shift succeeds so that screen
  * doesn't need to re-run [au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftReportViewModel.submitShift]

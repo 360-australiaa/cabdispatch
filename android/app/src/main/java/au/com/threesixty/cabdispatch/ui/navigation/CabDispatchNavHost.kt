@@ -17,6 +17,7 @@ import au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScre
 import au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncScreen
 import au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen
 import au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen
+import au.com.threesixty.cabdispatch.ui.screens.rating.RatePassengerScreen
 import au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftReportScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftstart.ShiftStartScreen
@@ -49,6 +50,14 @@ object CabDispatchRoutes {
     const val CLOSE_PAY = "close_pay" // S4
     const val SHIFT_REPORT = "shift_report" // S5
     const val SETTINGS = "settings" // S6
+
+    /** New post-trip "Rate Passenger" screen (2026-09-04, ratings backend pass) — reached from
+     * [CLOSE_PAY]'s receipt step ("Done — back to For Hire") instead of going straight to [IDLE],
+     * per [au.com.threesixty.cabdispatch.ui.screens.rating.RatePassengerScreen]'s own doc for the
+     * exact hand-off. Same no-nav-graph-argument convention as [TRIP_DETAIL]/[MESSAGES_THREAD]
+     * below — the trip to rate travels via
+     * [au.com.threesixty.cabdispatch.domain.RatePassengerHandoff], not a route argument. */
+    const val RATE_PASSENGER = "rate_passenger"
 
     /** S14 — Messages thread detail/quick-reply (wheel redesign, spec §8 row 13-14). Verified
      * (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]'s
@@ -188,6 +197,22 @@ fun CabDispatchNavHost(
         composable(CabDispatchRoutes.CLOSE_PAY) {
             CloseAndPayScreen(
                 navController = navController,
+                // Rate Passenger pass (2026-09-04): the receipt step's "Done — back to For Hire"
+                // now routes through RATE_PASSENGER first (CloseAndPayScreen itself sets
+                // au.com.threesixty.cabdispatch.domain.RatePassengerHandoff with the just-closed
+                // trip's clientUuid immediately before calling this), then on to IDLE from there —
+                // see RATE_PASSENGER's own composable below. popUpTo(CLOSE_PAY) clears this whole
+                // S4 flow (method picker + receipt) off the back stack, same as the old direct
+                // popUpTo(IDLE) did, so back from the rating screen can't return to a closed trip.
+                onDone = {
+                    navController.navigate(CabDispatchRoutes.RATE_PASSENGER) {
+                        popUpTo(CabDispatchRoutes.CLOSE_PAY) { inclusive = true }
+                    }
+                },
+            )
+        }
+        composable(CabDispatchRoutes.RATE_PASSENGER) {
+            RatePassengerScreen(
                 onDone = {
                     navController.navigate(CabDispatchRoutes.IDLE) {
                         popUpTo(CabDispatchRoutes.IDLE) { inclusive = true }

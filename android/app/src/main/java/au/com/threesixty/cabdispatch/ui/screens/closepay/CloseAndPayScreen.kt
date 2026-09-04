@@ -36,8 +36,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -65,19 +63,22 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.RatePassengerHandoff
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
-import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
+import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlinx.coroutines.launch
@@ -98,11 +99,26 @@ fun CloseAndPayScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    // Rate Passenger hand-off (2026-09-04): CloseAndPayUiState.Done carries no fields of its own
+    // (see that state's doc), so the just-closed trip's clientUuid is captured here — off the
+    // ReceiptStep this screen is already rendering — the moment it's known, then handed to the
+    // new post-trip screen via RatePassengerHandoff (same no-nav-graph-argument convention
+    // TripDetailHandoff already established) right before this screen's existing onDone() fires.
+    // Purely additive wiring: onDone()'s own contract/call site (CabDispatchNavHost) is unchanged
+    // here — only what it now navigates *to* changed, in the nav host itself.
+    var closedTripClientUuid by remember { mutableStateOf<String?>(null) }
+    val receiptTripId = (state as? CloseAndPayUiState.ReceiptStep)?.receipt?.tripId
+    LaunchedEffect(receiptTripId) {
+        if (receiptTripId != null) closedTripClientUuid = receiptTripId
+    }
     LaunchedEffect(state) {
-        if (state is CloseAndPayUiState.Done) onDone()
+        if (state is CloseAndPayUiState.Done) {
+            closedTripClientUuid?.let { RatePassengerHandoff.set(it) }
+            onDone()
+        }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
         when (val s = state) {
             CloseAndPayUiState.Loading -> CenterMessage("Loading trip…")
             CloseAndPayUiState.NoActiveTrip -> CenterMessage("No active trip to close.")
@@ -168,12 +184,12 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
     }
 }
 
-/** The status strip with a "HIRED — CLOSING" pill — this route has no drive-panel/live GPS source
- * of its own, so only the fields this screen genuinely knows (clock) render. */
+/** HUD-kit status strip with a "HIRED — CLOSING" [HudStatusPill] — this route has no drive-panel/
+ * live GPS source of its own, so only the fields this screen genuinely knows (clock) render. */
 @Composable
 private fun ClosingStatusStrip() {
     Box(
-        modifier = Modifier.fillMaxWidth().height(44.dp).background(CaptainPalette.panel).padding(horizontal = 16.dp),
+        modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
         Text(
             rememberDeckClock(),
@@ -183,15 +199,12 @@ private fun ClosingStatusStrip() {
             color = CaptainPalette.textSecondary,
             modifier = Modifier.align(Alignment.CenterStart),
         )
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(99.dp))
-                .background(CaptainPalette.danger)
-                .padding(horizontal = 18.dp, vertical = 6.dp),
-        ) {
-            Text("HIRED — CLOSING", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = Color.White)
-        }
+        HudStatusPill(
+            label = "Trip",
+            value = "CLOSING",
+            tone = HudTone.Danger,
+            modifier = Modifier.align(Alignment.Center),
+        )
     }
 }
 
@@ -244,54 +257,34 @@ private fun TotalCol(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Close & Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(CaptainPalette.inset)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                .padding(horizontal = 26.dp, vertical = 20.dp),
-        ) {
-            Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
-            // Count-up entrance (premium pass): rolls 0 -> total over ~650ms once on entry, then
-            // renders the EXACT BigDecimal `.money()` string from that point on — the animated
-            // frames are presentation only; the settled figure is always [state.totalDue] (fare +
-            // tip, see that property's doc — never the fare-engine's own `breakdown.grandTotal`
-            // alone once a tip is added).
-            val target = remember(state.totalDue) { state.totalDue.toFloat() }
-            var countStarted by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { countStarted = true }
-            val counted by animateFloatAsState(
-                targetValue = if (countStarted) target else 0f,
-                animationSpec = tween(650, easing = FastOutSlowInEasing),
-                label = "total-countup",
-            )
-            Text(
-                if (counted >= target) state.totalDue.money() else "$%.2f".format(counted),
-                fontFamily = ChakraPetch,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 84.sp,
-                color = CaptainPalette.success,
-            )
-            if (state.tip.signum() > 0) {
-                Text(
-                    "Includes ${state.tip.money()} tip",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textMuted,
+        // HUD kit rebuild: the FARE SUMMARY is two GlassCards — the total (RollingMoneyText, per
+        // the kit's own "digits roll" standard, see Hud.kt's header doc) and the itemized
+        // breakdown — replacing this pass's previous hand-rolled inset/panel Columns and manual
+        // `animateFloatAsState` count-up. Same fields, same order, nothing recomputed differently.
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
+            Column(modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp)) {
+                Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                RollingMoneyText(
+                    amount = state.totalDue.money(),
+                    fontSize = 84.sp,
+                    color = CaptainPalette.success,
                 )
+                if (state.tip.signum() > 0) {
+                    Text(
+                        "Includes ${state.tip.money()} tip",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textMuted,
+                    )
+                }
             }
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(CaptainPalette.panel)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-                .padding(horizontal = 22.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
+            Column(
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
             if (breakdown.negotiatedTotal != null) {
                 BreakdownRow("Agreed price (Set Price)", breakdown.negotiatedTotal.money())
             } else {
@@ -348,6 +341,7 @@ private fun TotalCol(
             // .ReadyToClose.tip/.totalDue's own doc and the backend Trip.tip_amount column doc.
             if (state.tip.signum() > 0) {
                 BreakdownRow("Tip", state.tip.money())
+            }
             }
         }
         if (breakdown.negotiatedTotal != null) {
@@ -437,39 +431,35 @@ private fun PslToggleRow(pslAmount: BigDecimal, currentPsl: BigDecimal, includeP
  * can charge more even though the engine would clamp it anyway. */
 @Composable
 private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.raised)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column {
+    GlassCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), cornerRadiusDp = 14) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text(
+                    if (currentFee.signum() > 0) "Cleaning fee reported" else "Report vehicle soiling",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = CaptainPalette.textPrimary,
+                )
+                Text(
+                    "Up to ${cap.money()} — the legal maximum, enforced by the engine",
+                    fontFamily = InterFamily,
+                    fontSize = 12.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            }
             Text(
-                if (currentFee.signum() > 0) "Cleaning fee reported" else "Report vehicle soiling",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = CaptainPalette.textPrimary,
-            )
-            Text(
-                "Up to ${cap.money()} — the legal maximum, enforced by the engine",
-                fontFamily = InterFamily,
-                fontSize = 12.sp,
-                color = CaptainPalette.textMuted,
+                if (currentFee.signum() > 0) currentFee.money() else "+",
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 20.sp,
+                color = CaptainPalette.hudAccent,
             )
         }
-        Text(
-            if (currentFee.signum() > 0) currentFee.money() else "+",
-            fontFamily = ChakraPetch,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 20.sp,
-            color = CaptainPalette.accent,
-        )
     }
 }
 
@@ -478,39 +468,35 @@ private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick
  * to add an extra amount" rows on this screen. */
 @Composable
 private fun TipEntryRow(currentTip: BigDecimal, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.raised)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column {
+    GlassCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), cornerRadiusDp = 14) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text(
+                    if (currentTip.signum() > 0) "Tip added" else "Add a tip",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = CaptainPalette.textPrimary,
+                )
+                Text(
+                    "Collected on top of the fare — never part of the metered total or GST",
+                    fontFamily = InterFamily,
+                    fontSize = 12.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            }
             Text(
-                if (currentTip.signum() > 0) "Tip added" else "Add a tip",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = CaptainPalette.textPrimary,
-            )
-            Text(
-                "Collected on top of the fare — never part of the metered total or GST",
-                fontFamily = InterFamily,
-                fontSize = 12.sp,
-                color = CaptainPalette.textMuted,
+                if (currentTip.signum() > 0) currentTip.money() else "+",
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 20.sp,
+                color = CaptainPalette.hudAccent,
             )
         }
-        Text(
-            if (currentTip.signum() > 0) currentTip.money() else "+",
-            fontFamily = ChakraPetch,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 20.sp,
-            color = CaptainPalette.accent,
-        )
     }
 }
 
@@ -527,13 +513,9 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
     val amount = if (cents.isEmpty()) BigDecimal.ZERO else BigDecimal(cents).movePointLeft(2)
     val overCap = amount > cap
 
+    GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
     Column(
-        modifier = Modifier
-            .width(480.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(30.dp),
+        modifier = Modifier.padding(30.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -545,21 +527,16 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
             color = CaptainPalette.textSecondary,
             textAlign = TextAlign.Center,
         )
-        Box(
-            modifier = Modifier
-                .width(320.dp)
-                .height(72.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(CaptainPalette.inset),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                amount.money(),
-                fontFamily = ChakraPetch,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 34.sp,
-                color = if (overCap) CaptainPalette.warning else CaptainPalette.success,
-            )
+        GlassCard(modifier = Modifier.width(320.dp).height(72.dp), cornerRadiusDp = 14) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    amount.money(),
+                    fontFamily = ChakraPetch,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 34.sp,
+                    color = if (overCap) CaptainPalette.warning else CaptainPalette.success,
+                )
+            }
         }
         if (overCap) {
             Text("Will be capped to ${cap.money()} — that's the legal maximum.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.warning)
@@ -577,6 +554,7 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
             CaptainButton(text = "Remove cleaning fee", outline = true, modifier = Modifier.fillMaxWidth()) { onConfirm(BigDecimal.ZERO) }
         }
     }
+    }
 }
 
 /**
@@ -592,32 +570,57 @@ private fun TipPresetDialog(
     onSelectPreset: (BigDecimal) -> Unit,
     onCustom: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .width(480.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(28.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
-        Text(
-            if (currentTip.signum() > 0) "Current tip: ${currentTip.money()}" else "Collected on top of the fare — never part of the metered total or GST.",
-            fontFamily = InterFamily,
-            fontSize = 14.sp,
-            color = CaptainPalette.textSecondary,
-        )
-        listOf(BigDecimal("2.00"), BigDecimal("5.00"), BigDecimal("10.00")).forEach { preset ->
-            CaptainChip("TIP", preset.money(), modifier = Modifier.fillMaxWidth()) {
-                onSelectPreset(preset)
+    GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
+        Column(
+            modifier = Modifier.padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            Text(
+                if (currentTip.signum() > 0) "Current tip: ${currentTip.money()}" else "Collected on top of the fare — never part of the metered total or GST.",
+                fontFamily = InterFamily,
+                fontSize = 14.sp,
+                color = CaptainPalette.textSecondary,
+            )
+            // GlassCard tip-preset row ($2/$5/$10/Custom) — the kit's payment-grid tile shape at
+            // dialog scale, replacing this pass's previous stacked CaptainChip column.
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf(BigDecimal("2.00"), BigDecimal("5.00"), BigDecimal("10.00")).forEach { preset ->
+                    TipPresetTile(
+                        label = "$${preset.toBigInteger()}",
+                        selected = currentTip.compareTo(preset) == 0,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onSelectPreset(preset) },
+                    )
+                }
+                TipPresetTile(label = "Custom", selected = false, modifier = Modifier.weight(1f), onClick = onCustom)
             }
+            if (currentTip.signum() > 0) {
+                CaptainButton(text = "Remove tip", outline = true, modifier = Modifier.fillMaxWidth()) { onSelectPreset(BigDecimal.ZERO) }
+            }
+            CaptainButton(text = "Close", outline = true, modifier = Modifier.fillMaxWidth()) { onDismiss() }
         }
-        CaptainButton(text = "Custom amount…", outline = true, modifier = Modifier.fillMaxWidth()) { onCustom() }
-        if (currentTip.signum() > 0) {
-            CaptainButton(text = "Remove tip", outline = true, modifier = Modifier.fillMaxWidth()) { onSelectPreset(BigDecimal.ZERO) }
+    }
+}
+
+/** One tile of the [TipPresetDialog]'s GlassCard row — accent glow when [selected] (the currently
+ * set tip amount matches this preset), mirrors the payment-grid tile's selected-state treatment. */
+@Composable
+private fun TipPresetTile(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    GlassCard(
+        modifier = modifier.height(64.dp).clickable(onClick = onClick),
+        cornerRadiusDp = 14,
+        glow = if (selected) CaptainPalette.hudAccent else null,
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 17.sp,
+                color = if (selected) CaptainPalette.hudAccent else CaptainPalette.textPrimary,
+            )
         }
-        CaptainButton(text = "Close", outline = true, modifier = Modifier.fillMaxWidth()) { onDismiss() }
     }
 }
 
@@ -628,32 +631,23 @@ private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Un
     var cents by remember { mutableStateOf("") }
     val amount = if (cents.isEmpty()) BigDecimal.ZERO else BigDecimal(cents).movePointLeft(2)
 
+    GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
     Column(
-        modifier = Modifier
-            .width(480.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(30.dp),
+        modifier = Modifier.padding(30.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Custom tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
-        Box(
-            modifier = Modifier
-                .width(448.dp)
-                .height(72.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(CaptainPalette.inset),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                amount.money(),
-                fontFamily = ChakraPetch,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 38.sp,
-                color = CaptainPalette.success,
-            )
+        GlassCard(modifier = Modifier.width(448.dp).height(72.dp), cornerRadiusDp = 14) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    amount.money(),
+                    fontFamily = ChakraPetch,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 38.sp,
+                    color = CaptainPalette.success,
+                )
+            }
         }
         CaptainKeypad(
             onDigit = { d -> if (cents.length < 6) cents += d },
@@ -668,6 +662,7 @@ private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Un
                 modifier = Modifier.weight(1.4f),
             ) { onConfirm(amount) }
         }
+    }
     }
 }
 
@@ -702,12 +697,28 @@ private fun MethodPickerScreen(
                         CaptainPalette.success,
                         subtitle = if (!allowCash) "Disabled in Settings" else null,
                         enabled = allowCash,
+                        selected = state.paymentMethod == PaymentMethodOption.CASH,
                     ) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
-                    PayCard(Icons.Rounded.CreditCard, "CARD · TAP", CaptainPalette.accent) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
+                    PayCard(
+                        Icons.Rounded.CreditCard,
+                        "CARD · TAP",
+                        CaptainPalette.accent,
+                        selected = state.paymentMethod == PaymentMethodOption.TAP_TO_PAY,
+                    ) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard(Icons.Rounded.LocalTaxi, "CABCHARGE", CaptainPalette.warning) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
-                    PayCard(Icons.Rounded.AccessibleForward, "TTSS", CaptainPalette.accent) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
+                    PayCard(
+                        Icons.Rounded.LocalTaxi,
+                        "CABCHARGE",
+                        CaptainPalette.warning,
+                        selected = state.paymentMethod == PaymentMethodOption.CABCHARGE,
+                    ) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
+                    PayCard(
+                        Icons.Rounded.AccessibleForward,
+                        "TTSS",
+                        CaptainPalette.accent,
+                        selected = state.paymentMethod == PaymentMethodOption.CABCHARGE,
+                    ) { onSelect(PaymentMethodOption.CABCHARGE, PaymentSubScreen.CABCHARGE_ENTRY) }
                 }
                 Text(
                     "TTSS/CabCharge trips remain fare-regulated and metered even when arranged as a booking.",
@@ -723,16 +734,23 @@ private fun MethodPickerScreen(
                         // Never fabricate a count while loading/on failure — null renders no
                         // subtitle at all, matching this app's zero-fake-affordance rule.
                         subtitle = state.voucherAvailableCount?.let { "$it Available" },
+                        selected = state.paymentMethod == PaymentMethodOption.VOUCHER,
                     ) { onSelect(PaymentMethodOption.VOUCHER, PaymentSubScreen.VOUCHER_ENTRY) }
                     PayCard(
                         Icons.Rounded.Business,
                         "ACCOUNT",
                         CaptainPalette.textSecondary,
                         subtitle = state.corporateAccountActiveCount?.let { "$it Active" },
+                        selected = state.paymentMethod == PaymentMethodOption.ACCOUNT,
                     ) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PayCard(Icons.Rounded.CallSplit, "SPLIT FARE", CaptainPalette.textSecondary) { onSelect(PaymentMethodOption.SPLIT_FARE, PaymentSubScreen.SPLIT_FARE_ENTRY) }
+                    PayCard(
+                        Icons.Rounded.CallSplit,
+                        "SPLIT FARE",
+                        CaptainPalette.textSecondary,
+                        selected = state.paymentMethod == PaymentMethodOption.SPLIT_FARE,
+                    ) { onSelect(PaymentMethodOption.SPLIT_FARE, PaymentSubScreen.SPLIT_FARE_ENTRY) }
                     PayCard(Icons.Rounded.Flag, "DISPUTE / FLAG", CaptainPalette.danger, onClick = onDispute)
                 }
             }
@@ -783,6 +801,14 @@ private fun MethodPickerScreen(
     }
 }
 
+/**
+ * HUD kit payment-grid tile: a [GlassCard] (previously a plain raised panel) with the same icon/label/subtitle
+ * content, plus a real [selected] state — an accent-coloured [neonGlow] halo when this tile is the
+ * trip's current [CloseAndPayUiState.ReadyToClose.paymentMethod] (see
+ * [MethodPickerScreen]'s call sites for exactly which [PaymentMethodOption] each tile maps to).
+ * Never a decorative glow: it always reflects the real selected method the "CLOSE TRIP" button
+ * will actually charge.
+ */
 @Composable
 private fun PayCard(
     icon: ImageVector,
@@ -790,14 +816,15 @@ private fun PayCard(
     accent: Color,
     subtitle: String? = null,
     enabled: Boolean = true,
+    selected: Boolean = false,
     onClick: () -> Unit,
 ) {
-    CaptainPanel(
+    GlassCard(
         modifier = Modifier.width(357.dp).height(118.dp)
             .alpha(if (enabled) 1f else 0.4f)
             .clickable(enabled = enabled, onClick = onClick),
-        raised = true,
         cornerRadiusDp = 18,
+        glow = if (selected) accent else null,
     ) {
         Row(
             modifier = Modifier.fillMaxSize().padding(start = 24.dp),
@@ -808,14 +835,14 @@ private fun PayCard(
                 modifier = Modifier
                     .size(56.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(accent.copy(alpha = 0.16f)),
+                    .background(accent.copy(alpha = if (selected) 0.28f else 0.16f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(30.dp))
             }
             Column {
                 Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)
-                // Real backend-derived count only — never shown while null (loading/failed), see
+                // Real backend-derived count only — never shown while loading/failed, see
                 // this parameter's call sites in MethodPickerScreen. [enabled]==false's own
                 // "Disabled in Settings" subtitle (Allow Cash toggle) overrides that at the call
                 // site instead of being invented here.
@@ -851,23 +878,15 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 fontSize = 17.sp,
                 color = CaptainPalette.textSecondary,
             )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(80.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(CaptainPalette.inset)
-                    .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(
-                    tendered.money(),
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 34.sp,
-                    color = CaptainPalette.success,
-                    modifier = Modifier.padding(start = 24.dp),
-                )
+            GlassCard(modifier = Modifier.fillMaxWidth().height(80.dp), cornerRadiusDp = 14, glow = CaptainPalette.hudAccent) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                    RollingMoneyText(
+                        amount = tendered.money(),
+                        fontSize = 34.sp,
+                        color = CaptainPalette.success,
+                        modifier = Modifier.padding(start = 24.dp),
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 listOf("Exact", "$20", "$50", "$100").forEach { preset ->
@@ -944,48 +963,39 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
             Text("Voucher payment", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("VOUCHER CODE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(CaptainPalette.raised)
-                        .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    Text(
-                        state.voucherCode,
-                        fontFamily = RobotoMonoFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 32.sp,
-                        color = CaptainPalette.textPrimary,
-                        modifier = Modifier.padding(start = 24.dp),
-                    )
+                GlassCard(modifier = Modifier.fillMaxWidth().height(80.dp), cornerRadiusDp = 14, glow = CaptainPalette.hudAccent) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                        Text(
+                            state.voucherCode,
+                            fontFamily = RobotoMonoFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 32.sp,
+                            color = CaptainPalette.textPrimary,
+                            modifier = Modifier.padding(start = 24.dp),
+                        )
+                    }
                 }
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(CaptainPalette.panel)
-                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    "Total due ${state.breakdown.grandTotal.money()} — voucher redeemed against the full amount." +
-                        tipSeparateSuffix(state.tip),
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
-                    color = CaptainPalette.textPrimary,
-                )
-                Text(
-                    "The fleet backend validates the code at close; invalid codes fall back to cash/card.",
-                    fontFamily = InterFamily,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textMuted,
-                )
+            GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        "Total due ${state.breakdown.grandTotal.money()} — voucher redeemed against the full amount." +
+                            tipSeparateSuffix(state.tip),
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = CaptainPalette.textPrimary,
+                    )
+                    Text(
+                        "The fleet backend validates the code at close; invalid codes fall back to cash/card.",
+                        fontFamily = InterFamily,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textMuted,
+                    )
+                }
             }
             state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
         }
@@ -1054,23 +1064,17 @@ private fun LabeledEntryScreen(
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 32.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(80.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(CaptainPalette.raised)
-                    .border(2.dp, CaptainPalette.accent, RoundedCornerShape(14.dp)),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(
-                    value,
-                    fontFamily = RobotoMonoFamily,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 30.sp,
-                    color = CaptainPalette.textPrimary,
-                    modifier = Modifier.padding(start = 24.dp),
-                )
+            GlassCard(modifier = Modifier.fillMaxWidth().height(80.dp), cornerRadiusDp = 14, glow = CaptainPalette.hudAccent) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                    Text(
+                        value,
+                        fontFamily = RobotoMonoFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 30.sp,
+                        color = CaptainPalette.textPrimary,
+                        modifier = Modifier.padding(start = 24.dp),
+                    )
+                }
             }
             Text(totalLine, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
             error?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }
@@ -1146,18 +1150,15 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 24.dp)) {
         Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(CaptainPalette.inset)
-                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 22.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
-                Text(state.breakdown.grandTotal.money(), fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 44.sp, color = CaptainPalette.success)
+            GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14, glow = CaptainPalette.hudAccent) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                    RollingMoneyText(amount = state.breakdown.grandTotal.money(), fontSize = 44.sp, color = CaptainPalette.success)
+                }
             }
             // Split legs must sum exactly to the fare-only grand total (the backend's
             // `SplitPaymentMismatchError` check, app.services.trips.close_trip/sync_trips) — a tip
@@ -1257,28 +1258,27 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
 
 @Composable
 private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(86.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(CaptainPalette.panel)
-            .border(if (selected) 2.dp else 1.dp, if (selected) CaptainPalette.accent else CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    GlassCard(
+        modifier = Modifier.fillMaxWidth().height(86.dp).clickable(onClick = onClick),
+        cornerRadiusDp = 16,
+        glow = if (selected) CaptainPalette.hudAccent else null,
     ) {
-        Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(26.dp))
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-        Spacer(Modifier.weight(1f))
-        Text(
-            "$" + amountText.ifEmpty { "0.00" },
-            fontFamily = ChakraPetch,
-            fontWeight = FontWeight.Medium,
-            fontSize = 30.sp,
-            color = if (highlight) CaptainPalette.accent else CaptainPalette.textPrimary,
-        )
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(26.dp))
+            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "$" + amountText.ifEmpty { "0.00" },
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.Medium,
+                fontSize = 30.sp,
+                color = if (highlight) CaptainPalette.hudAccent else CaptainPalette.textPrimary,
+            )
+        }
     }
 }
 
@@ -1290,18 +1290,16 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
     var apiNote by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(44.dp).background(CaptainPalette.panel).padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(rememberDeckClock(), fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary)
-            Spacer(Modifier.weight(1f))
-            Box(
-                modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(CaptainPalette.success).padding(horizontal = 18.dp, vertical = 6.dp),
-            ) {
-                Text("TRIP CLOSED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 1.sp, color = CaptainPalette.bg)
-            }
-            Spacer(Modifier.weight(1f))
+        Box(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Text(
+                rememberDeckClock(),
+                fontFamily = RobotoMonoFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+            HudStatusPill(label = "Trip", value = "CLOSED", tone = HudTone.Success, modifier = Modifier.align(Alignment.Center))
         }
         Row(modifier = Modifier.weight(1f).padding(horizontal = 96.dp, vertical = 24.dp)) {
             // Receipt paper — deliberately kept cream/monospace regardless of app theme; it mimics
@@ -1392,23 +1390,18 @@ private fun ReceiptMono(text: String, bold: Boolean = false, size: Int = 13, col
 
 @Composable
 private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .width(480.dp)
-            .height(72.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.raised)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-            .clickable(enabled = !busy, onClick = onClick)
-            .padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        if (busy) {
-            CircularProgressIndicator(modifier = Modifier.height(22.dp), color = CaptainPalette.textSecondary)
-        } else {
-            Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(22.dp))
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 12.dp))
+    GlassCard(modifier = Modifier.width(480.dp).height(72.dp).clickable(enabled = !busy, onClick = onClick), cornerRadiusDp = 14) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.height(22.dp), color = CaptainPalette.textSecondary)
+            } else {
+                Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(22.dp))
+                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 12.dp))
+            }
         }
     }
 }

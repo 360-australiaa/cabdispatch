@@ -259,6 +259,24 @@ interface ApiService {
         @Body body: TripFlagRequestDto,
     ): TripDto
 
+    /**
+     * Post-close passenger rating (new Rate Passenger screen, 2026-09-04) — mirrors
+     * `POST /v1/trips/{trip_id}/rating` (`backend/app/api/v1/ratings.py::rate_trip`). Called
+     * *after* [closeTrip] has already returned, same "settle payment first, then hand the tablet
+     * to the passenger" sequencing the backend route's own doc describes. [tripId] is the trip's
+     * real server id ([au.com.threesixty.cabdispatch.data.local.entity.TripEntity.serverId]), not
+     * its [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.clientUuid] — same
+     * "needs a real server id" gate [flagTrip]'s own callers (`TripDetailViewModel.submitDispute`)
+     * already enforce. Response is [TripRatingDto] (backend's `TripRatingRead`), 201 on success;
+     * a 409 means either the trip isn't closed yet or (per that route's own docstring) it has
+     * *already* been rated — one rating per trip, enforced server-side.
+     */
+    @POST("/v1/trips/{tripId}/rating")
+    suspend fun rateTrip(
+        @Path("tripId") tripId: String,
+        @Body body: TripRatingCreateDto,
+    ): TripRatingDto
+
     /** Emails the trip's PDF receipt (Command Deck v2 Receipt screen, `22`). Mirrors
      * `POST /v1/trips/{trip_id}/receipt/email` — mock-aware response (`mock=true` when no
      * SendGrid key is configured server-side; still generates/returns the PDF path). */

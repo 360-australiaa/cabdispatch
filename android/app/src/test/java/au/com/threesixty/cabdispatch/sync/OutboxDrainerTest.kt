@@ -58,6 +58,8 @@ import au.com.threesixty.cabdispatch.data.remote.TripCreateDto
 import au.com.threesixty.cabdispatch.data.remote.TripDto
 import au.com.threesixty.cabdispatch.data.remote.TripFlagRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TripListResponseDto
+import au.com.threesixty.cabdispatch.data.remote.TripRatingCreateDto
+import au.com.threesixty.cabdispatch.data.remote.TripRatingDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResponseDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResultItemDto
@@ -480,6 +482,7 @@ private class FakeApiService : ApiService {
     override suspend fun listVehicles(skip: Int, limit: Int): VehiclePageDto = notUsed()
     override suspend fun getShift(shiftId: String): ShiftDto = notUsed()
     override suspend fun flagTrip(tripId: String, body: TripFlagRequestDto): TripDto = notUsed()
+    override suspend fun rateTrip(tripId: String, body: TripRatingCreateDto): TripRatingDto = notUsed()
     override suspend fun emailReceipt(tripId: String, body: ReceiptEmailRequestDto): ReceiptEmailResponseDto = notUsed()
     override suspend fun smsReceipt(tripId: String, body: ReceiptSmsRequestDto): ReceiptSmsResponseDto = notUsed()
     override suspend fun suggestTariff(lat: Double, lng: Double, vehicleClass: String?): TariffSuggestionDto = notUsed()

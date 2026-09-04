@@ -4,6 +4,8 @@ import au.com.threesixty.cabdispatch.data.remote.AnnouncementDto
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.IncentiveProgressDto
 import au.com.threesixty.cabdispatch.data.remote.RatingDto
+import au.com.threesixty.cabdispatch.data.remote.TripRatingCreateDto
+import au.com.threesixty.cabdispatch.data.remote.TripRatingDto
 import au.com.threesixty.cabdispatch.data.remote.WalletDto
 
 /**
@@ -24,6 +26,14 @@ interface DriverEngagementRepository {
     suspend fun rating(recentLimit: Int = 10): Result<RatingDto>
     suspend fun announcements(): Result<List<AnnouncementDto>>
     suspend fun incentives(): Result<List<IncentiveProgressDto>>
+
+    /**
+     * Rate Passenger screen's Submit action — the one write this otherwise read-only repository
+     * has, added for the ratings backend that just landed (`POST /v1/trips/{trip_id}/rating`, see
+     * [au.com.threesixty.cabdispatch.data.remote.ApiService.rateTrip]'s own doc). [tripId] must be
+     * the trip's real server id, not its offline client UUID.
+     */
+    suspend fun submitRating(tripId: String, stars: Int, comment: String?): Result<TripRatingDto>
 }
 
 class RemoteBackedDriverEngagementRepository(private val apiService: ApiService) : DriverEngagementRepository {
@@ -38,4 +48,7 @@ class RemoteBackedDriverEngagementRepository(private val apiService: ApiService)
 
     override suspend fun incentives(): Result<List<IncentiveProgressDto>> =
         runCatching { apiService.myIncentives().items }
+
+    override suspend fun submitRating(tripId: String, stars: Int, comment: String?): Result<TripRatingDto> =
+        runCatching { apiService.rateTrip(tripId, TripRatingCreateDto(stars = stars, comment = comment?.takeIf { it.isNotBlank() })) }
 }

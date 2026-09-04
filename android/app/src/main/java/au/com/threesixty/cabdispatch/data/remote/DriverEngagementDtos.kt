@@ -45,6 +45,17 @@ data class WalletDto(
 
 // --- ratings --------------------------------------------------------------------------------
 
+/**
+ * Mirrors `TripRatingCreate` (`POST /v1/trips/{trip_id}/rating` request body, Rate Passenger
+ * screen, `ui/screens/rating/RatePassengerScreen.kt`). [stars] must be 1-5
+ * (`RATING_MIN_STARS`/`RATING_MAX_STARS` server-side, checked client-side too — see
+ * [au.com.threesixty.cabdispatch.ui.screens.rating.RatePassengerViewModel]); [comment] is optional,
+ * max 1000 chars server-side (not independently re-validated here — an over-length comment is a
+ * 422 the submit error surfaces honestly rather than silently truncating).
+ */
+@Serializable
+data class TripRatingCreateDto(val stars: Int, val comment: String? = null)
+
 /** Mirrors `TripRatingRead`. */
 @Serializable
 data class TripRatingDto(
