@@ -182,4 +182,38 @@ class Settings(BaseSettings):
         return self.ENV == "production"
 
 
+# The literal default from JWT_SECRET above. Kept as a separate constant
+# (rather than re-declaring the string at each check site) so the guard
+# below and its test can compare against the exact same value the field
+# default uses.
+DEFAULT_JWT_SECRET = "dev-only-insecure-secret-change-me"
+
+
+class InsecureProductionConfigError(RuntimeError):
+    """Raised at startup when ENV=production but a required secret is still
+    at its insecure development default -- see `assert_production_secrets_safe`."""
+
+
+def assert_production_secrets_safe(settings_obj: "Settings") -> None:
+    """Startup guard: refuses to let the app boot in production with the
+    default, publicly-known JWT_SECRET still active.
+
+    Deliberately narrow (JWT_SECRET only) -- this closes the specific gap an
+    audit found (`is_production` was defined but never referenced anywhere),
+    not a general secret-scanning pass. Call this as early as possible
+    (import time of `app.main`, before the FastAPI app is constructed) so a
+    misconfigured production deployment fails loudly before serving any
+    request, rather than silently running with a secret anyone can read out
+    of this source file.
+    """
+    if settings_obj.is_production and settings_obj.JWT_SECRET == DEFAULT_JWT_SECRET:
+        raise InsecureProductionConfigError(
+            "Refusing to start: ENV=production but JWT_SECRET is still the "
+            "insecure development default. Set the JWT_SECRET environment "
+            "variable to a real, random secret before starting the app in "
+            "production (e.g. `openssl rand -hex 32`)."
+        )
+
+
 settings = Settings()
+assert_production_secrets_safe(settings)

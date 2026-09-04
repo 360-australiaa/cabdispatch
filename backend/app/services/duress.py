@@ -586,8 +586,23 @@ def verify_twilio_signature(url: str, params: dict, signature: str | None) -> bo
     nothing to verify a signature against, so this returns True
     unconditionally, matching the mock-fallback spirit used throughout this
     module.
+
+    Production fail-closed exception: that mock-fallback skip is only safe
+    in dev/test. If `settings.is_production` is true and TWILIO_AUTH_TOKEN
+    is still unset, an operator has stood up a production deployment but
+    forgotten this one var -- silently accepting every unsigned request to
+    this public webhook would let anyone forge a Twilio status callback for
+    any duress event. Raise (403) instead of returning True in that case.
     """
     if not settings.TWILIO_AUTH_TOKEN:
+        if settings.is_production:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Twilio webhook signature cannot be verified: "
+                    "TWILIO_AUTH_TOKEN is not configured in production"
+                ),
+            )
         return True
     if not signature:
         return False

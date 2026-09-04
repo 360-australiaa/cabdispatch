@@ -9,10 +9,14 @@ import hashlib
 import hmac
 import uuid
 
+import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.tenant import Tenant
+from app.services.duress import verify_twilio_signature
 from tests.conftest import auth_headers
 
 SECRET = "test-device-shared-secret-0123456789"
@@ -373,3 +377,26 @@ async def test_twilio_status_webhook_accepts_unsigned_requests_when_unconfigured
         data={"CallSid": "CAnonexistent", "CallStatus": "completed"},
     )
     assert resp.status_code == 200
+
+
+def test_verify_twilio_signature_fails_closed_in_production_when_unconfigured(monkeypatch):
+    """TWILIO_AUTH_TOKEN unset is only a safe "skip the check" in dev/test.
+    If ENV=production and the token is still unset, an operator forgot to
+    configure it -- verify_twilio_signature must reject (raise), not
+    silently accept every unsigned webhook request."""
+    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setattr(settings, "ENV", "production")
+
+    with pytest.raises(HTTPException) as exc_info:
+        verify_twilio_signature("https://example.com/v1/duress/twilio/status", {}, "some-signature")
+
+    assert exc_info.value.status_code == 403
+
+
+def test_verify_twilio_signature_still_skips_when_unconfigured_outside_production(monkeypatch):
+    """Same unset-token state, but ENV left at its non-production default --
+    must keep the documented dev/mock behavior (return True)."""
+    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "")
+    monkeypatch.setattr(settings, "ENV", "test")
+
+    assert verify_twilio_signature("https://example.com/v1/duress/twilio/status", {}, None) is True
