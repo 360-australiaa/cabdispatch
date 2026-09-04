@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Send } from "lucide-react";
 import { Badge, Button, Card, CardContent, PageHeader, Select, Table } from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
+import { useDriverOptionsQuery } from "@/pages/driver-engagement/hooks";
 import { listJobs } from "./api";
 import { CreateJobModal } from "./CreateJobModal";
 import { JobDetailPanel } from "./JobDetailPanel";
@@ -48,6 +49,13 @@ export default function DispatchPage() {
   const total = jobsQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const driversQuery = useDriverOptionsQuery();
+  const driverNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of driversQuery.data ?? []) map.set(d.id, d.name);
+    return map;
+  }, [driversQuery.data]);
+
   const columns: TableColumn<Job>[] = [
     {
       key: "id",
@@ -67,6 +75,16 @@ export default function DispatchPage() {
       render: (row) => <Badge variant={jobStatusBadgeVariant(row.status)}>{row.status}</Badge>,
       sortable: true,
       sortAccessor: (row) => row.status,
+    },
+    {
+      key: "accepted_by_driver_id",
+      header: "Driver",
+      render: (row) =>
+        row.accepted_by_driver_id ? (
+          driverNameById.get(row.accepted_by_driver_id) ?? `${row.accepted_by_driver_id.slice(0, 8)}…`
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
     },
     {
       key: "requested_at",

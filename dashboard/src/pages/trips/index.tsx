@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AlertTriangle, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
 import {
   Badge,
@@ -55,6 +55,13 @@ const FLAGGED_OPTIONS = [
 ];
 
 export default function TripsPage() {
+  // A trip id/receipt/vehicle/driver deep link (e.g. from the new Ratings
+  // page's "View trip" link) lands here as /trips?search=<value> -- read it
+  // once on mount so the link actually pre-filters instead of dumping the
+  // dispatcher on the unfiltered list. Same query-param-on-mount convention
+  // as the Duress Desk's `?event=` link.
+  const [searchParams] = useSearchParams();
+
   const [statusFilter, setStatusFilter] = useState<TripStatus | "">("");
   const [typeFilter, setTypeFilter] = useState<TripType | "">("");
   const [vehicleFilter, setVehicleFilter] = useState("");
@@ -62,7 +69,7 @@ export default function TripsPage() {
   const [flaggedFilter, setFlaggedFilter] = useState<"" | "true" | "false">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingTrip, setEditingTrip] = useState<Trip | null>(null);

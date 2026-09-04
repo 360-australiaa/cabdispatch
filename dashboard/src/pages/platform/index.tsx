@@ -262,10 +262,21 @@ export default function PlatformConsolePage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  // Suspend/reactivate used to fire straight from the row button with no
+  // confirmation step at all -- every other destructive-ish action in this
+  // app (voucher delete, corp-account delete, MFA disable, branding reset)
+  // goes through a confirm Modal first, and this one arguably has a bigger
+  // blast radius than any of those (it locks every user at a real paying
+  // tenant out of the whole platform).
+  const [confirmingTenant, setConfirmingTenant] = useState<PlatformTenant | null>(null);
 
-  function toggleTenantStatus(tenant: PlatformTenant) {
-    const nextStatus: TenantStatus = tenant.status === "suspended" ? "active" : "suspended";
-    updateTenantStatus.mutate({ tenantId: tenant.id, status: nextStatus });
+  function confirmToggleTenantStatus() {
+    if (!confirmingTenant) return;
+    const nextStatus: TenantStatus = confirmingTenant.status === "suspended" ? "active" : "suspended";
+    updateTenantStatus.mutate(
+      { tenantId: confirmingTenant.id, status: nextStatus },
+      { onSuccess: () => setConfirmingTenant(null) },
+    );
   }
 
   function openCreate() {
@@ -324,7 +335,7 @@ export default function PlatformConsolePage() {
           disabled={updateTenantStatus.isPending}
           onClick={(e) => {
             e.stopPropagation();
-            toggleTenantStatus(t);
+            setConfirmingTenant(t);
           }}
         >
           {t.status === "suspended" ? (
@@ -482,6 +493,39 @@ export default function PlatformConsolePage() {
         tenantName={tenantsQuery.data?.items.find((t) => t.id === selectedTenantId)?.name}
         onClose={() => setSelectedTenantId(null)}
       />
+
+      <Modal
+        open={confirmingTenant != null}
+        onClose={() => setConfirmingTenant(null)}
+        title={confirmingTenant?.status === "suspended" ? "Reactivate tenant?" : "Suspend tenant?"}
+        description={
+          confirmingTenant?.status === "suspended"
+            ? `${confirmingTenant?.name} regains access immediately.`
+            : `Every user at ${confirmingTenant?.name} loses access immediately — this is not reversible from their side, only from here.`
+        }
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setConfirmingTenant(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirmingTenant?.status === "suspended" ? "primary" : "destructive"}
+              disabled={updateTenantStatus.isPending}
+              onClick={confirmToggleTenantStatus}
+            >
+              {updateTenantStatus.isPending
+                ? "Working…"
+                : confirmingTenant?.status === "suspended"
+                  ? "Reactivate"
+                  : "Suspend"}
+            </Button>
+          </>
+        }
+      >
+        {updateTenantStatus.isError && (
+          <p className="text-sm text-destructive">This action failed. Refresh and try again.</p>
+        )}
+      </Modal>
     </div>
   );
 }

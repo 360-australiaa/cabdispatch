@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import axios from "axios";
 import { Button, Input, Modal, Select } from "@/components/ui";
 import { useStartShiftMutation } from "./api";
-import { fromDatetimeLocalValue } from "./format";
+import { fromDatetimeLocalValue, formatDateTime } from "./format";
 import type { DriverLite, ShiftConflictDetail, VehicleLite } from "./types";
 
 function conflictDetail(err: unknown): ShiftConflictDetail | null {
@@ -125,7 +125,7 @@ export function StartShiftModal({
         {conflict ? (
           <p className="text-sm text-amber-600">
             This vehicle already has an open shift for <strong>{conflict.conflicting_driver_name}</strong>,
-            started {new Date(conflict.conflicting_shift_start_at).toLocaleString()}. Ending their shift
+            started {formatDateTime(conflict.conflicting_shift_start_at)}. Ending their shift
             and starting this one is the real shift-changeover action — only do this once they've
             actually handed the vehicle over.
           </p>

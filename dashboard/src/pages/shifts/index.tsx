@@ -334,6 +334,17 @@ export default function ShiftsPage() {
       <ShiftReportModal
         shiftId={reportShiftId}
         onClose={() => setReportShiftId(null)}
+        onEdit={
+          canManage
+            ? () => {
+                const shift = shiftsQuery.data?.items.find((s) => s.id === reportShiftId);
+                if (shift) {
+                  setEditingShift(shift);
+                  setReportShiftId(null);
+                }
+              }
+            : undefined
+        }
         driverLabelById={driverLabelById}
         vehicleLabelById={vehicleLabelById}
       />

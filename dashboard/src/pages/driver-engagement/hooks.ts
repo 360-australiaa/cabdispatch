@@ -262,6 +262,56 @@ export function useCreateWalletTransactionMutation() {
   });
 }
 
+// --- Ratings (GET /v1/ratings, POST /v1/trips/{id}/rating) --------------------
+//
+// The passenger's 1-5 star rating of the driver for one closed trip
+// (backend/app/api/v1/ratings.py, backend/app/models/driver_engagement.py's
+// TripRating). Captured on the driver tablet at the end of Close & Pay;
+// `GET /v1/ratings` is the owner/admin dashboard-facing list this page reads
+// (a driver reads only their own aggregate via the separate `GET /v1/me/rating`,
+// not used here). No fleet-wide average-per-driver endpoint exists server-side
+// (only a per-driver one, `app.services.driver_engagement.driver_rating`,
+// wired to `/v1/me/rating` and not exposed for arbitrary driver ids) — so the
+// per-driver averages this page shows are computed client-side over whatever
+// page of ratings is currently loaded, same "compute the rollup from the list
+// you already have" convention as `pages/psl/RemittanceReport.tsx`.
+
+export type RatingStars = 1 | 2 | 3 | 4 | 5;
+
+export interface TripRating {
+  id: string;
+  tenant_id: string;
+  trip_id: string;
+  driver_id: string;
+  stars: RatingStars;
+  comment: string | null;
+  created_at: string;
+}
+
+export interface RatingListFilters {
+  driver_id?: string;
+  skip?: number;
+  limit?: number;
+}
+
+const RATINGS_KEY = "ratings";
+
+export function useRatingsQuery(filters: RatingListFilters) {
+  return useQuery({
+    queryKey: [RATINGS_KEY, filters],
+    queryFn: async () => {
+      const params: Record<string, string | number> = {
+        skip: filters.skip ?? 0,
+        limit: filters.limit ?? 50,
+      };
+      if (filters.driver_id) params.driver_id = filters.driver_id;
+      const res = await apiClient.get<Page<TripRating>>("/v1/ratings", { params });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
 // --- Driver lookup (GET /v1/users?role=driver) --------------------------------
 
 export interface DriverOption {

@@ -1,6 +1,13 @@
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { History } from "lucide-react";
 import { Badge, Modal } from "@/components/ui";
 import { useTariffChangeLogQuery, type Tariff } from "@/hooks/useTariffStudio";
+// Cross-page reuse of the actor lookup Audit Log already built (same
+// "first 100 users" cap as GET /v1/users itself) -- this modal used to show
+// `entry.actor_user_id` as a raw truncated UUID even though Audit Log
+// already solved resolving this exact field to a human name.
+import { listActorOptions } from "@/pages/audit-log/api";
 import { formatDateTime, RATE_FIELD_META } from "./format";
 
 export interface ChangeLogModalProps {
@@ -54,6 +61,17 @@ export function ChangeLogModal({ open, onClose, tariff }: ChangeLogModalProps) {
   const logQuery = useTariffChangeLogQuery(tariff?.id ?? null, { limit: 100 });
   const entries = logQuery.data?.items ?? [];
 
+  const actorOptionsQuery = useQuery({
+    queryKey: ["audit-log-actor-options"],
+    queryFn: listActorOptions,
+    staleTime: 5 * 60_000,
+  });
+  const actorNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const actor of actorOptionsQuery.data ?? []) map.set(actor.id, actor.name);
+    return map;
+  }, [actorOptionsQuery.data]);
+
   return (
     <Modal
       open={open}
@@ -85,8 +103,8 @@ export function ChangeLogModal({ open, onClose, tariff }: ChangeLogModalProps) {
                     <Badge variant={isCreate ? "success" : "default"}>{isCreate ? "Created" : "Updated"}</Badge>
                     <span className="text-xs text-muted-foreground">{formatDateTime(entry.at)}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">
-                    Actor: {entry.actor_user_id.slice(0, 8)}
+                  <span className="text-xs text-muted-foreground" title={entry.actor_user_id}>
+                    Actor: {actorNameById.get(entry.actor_user_id) ?? `${entry.actor_user_id.slice(0, 8)}…`}
                   </span>
                 </div>
                 <table className="w-full text-xs">

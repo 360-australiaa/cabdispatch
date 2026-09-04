@@ -24,7 +24,11 @@ export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  // Explicit "en-AU" -- every other page module's formatDateTime hardcodes
+  // this locale; this one used to fall back to the browser's default locale,
+  // which meant this page alone could render dates in a different order
+  // (e.g. MM/DD/YYYY) from the rest of the app.
+  return d.toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" });
 }
 
 /** Human "3m ago" / "Never" for last-seen style timestamps. */

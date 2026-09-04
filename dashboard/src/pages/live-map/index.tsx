@@ -19,8 +19,17 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { useFleetLiveSocket } from "@/hooks/useLiveMap";
+// Cross-page import, same established convention as `pages/fleet/api.ts`
+// importing live-map's own types -- reuses the Fleet & Drivers compliance-
+// expiry rollup and banner rather than duplicating the fetch/rendering
+// logic. Live Map is the app's actual landing page (`router.tsx`'s
+// `index: true` redirect), so this is where a dispatcher who never opens
+// Fleet & Drivers will otherwise never see an expiring licence/rego/
+// insurance date at all.
+import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
 import { FleetMapCanvas } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
+import { ResolveDuressModal } from "./ResolveDuressModal";
 import { VehicleDetailModal } from "./VehicleDetailModal";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
 import {
@@ -61,6 +70,7 @@ export default function LiveMapPage() {
 
   const [publishOpen, setPublishOpen] = useState(false);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [resolvingEvent, setResolvingEvent] = useState<DuressEventRead | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
   const [regoInput, setRegoInput] = useState("");
@@ -140,6 +150,28 @@ export default function LiveMapPage() {
 
   const total = vehiclesTableQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / TABLE_PAGE_SIZE));
+
+  // Fleet-health rollup computed from the same up-to-100-vehicle snapshot
+  // already fetched for the map (mapVehicles), not the filtered/paginated
+  // table -- this is the "how many are actually online right now" answer
+  // that used to be missing (the page only ever said "N vehicles in fleet",
+  // a raw roster size with no live-status breakdown at all).
+  const fleetHealth = useMemo(() => {
+    let onlineNow = 0;
+    let available = 0;
+    let onTrip = 0;
+    let onBreak = 0;
+    let offline = 0;
+    for (const v of mapVehicles) {
+      if (v.position_updated_at && !isStale(v.position_updated_at)) onlineNow++;
+      const status = v.live_status.toLowerCase();
+      if (status === "available") available++;
+      else if (status === "break") onBreak++;
+      else if (status === "offline") offline++;
+      else onTrip++; // on_trip/hired/busy/trip -- anything else counts as actively working
+    }
+    return { fleetTotal: mapVehicles.length, onlineNow, available, onTrip, onBreak, offline };
+  }, [mapVehicles]);
 
   const columns: TableColumn<VehicleLiveRead>[] = [
     {
@@ -232,11 +264,18 @@ export default function LiveMapPage() {
       key: "actions",
       header: "",
       render: (e) => (
-        <Link to={`/duress?event=${e.id}`}>
-          <Button size="sm" variant="destructive">
-            View
-          </Button>
-        </Link>
+        <div className="flex justify-end gap-2">
+          {user && CAN_PUBLISH_ROLES.has(user.role) && (
+            <Button size="sm" variant="secondary" onClick={() => setResolvingEvent(e)}>
+              Resolve
+            </Button>
+          )}
+          <Link to={`/duress?event=${e.id}`}>
+            <Button size="sm" variant="destructive">
+              View
+            </Button>
+          </Link>
+        </div>
       ),
     },
   ];
@@ -278,6 +317,30 @@ export default function LiveMapPage() {
           </>
         }
       />
+
+      <ComplianceExpiryBanner />
+
+      {/* At-a-glance fleet health -- previously the only rollup on this page
+          was the "N vehicles in fleet" line in the Vehicles card below,
+          a raw roster size with no live-status breakdown. This answers the
+          question a dispatcher actually opens Live Map to ask: how many
+          vehicles are on right now, and doing what. */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <FleetStatTile label="In fleet" value={fleetHealth.fleetTotal} />
+        <FleetStatTile
+          label="Reporting now"
+          value={fleetHealth.onlineNow}
+          hint="Sent a position update in the last 90s"
+          tone="success"
+        />
+        <FleetStatTile label="Available" value={fleetHealth.available} tone="success" />
+        <FleetStatTile label="On trip / break" value={fleetHealth.onTrip + fleetHealth.onBreak} tone="accent" />
+        <FleetStatTile
+          label="Marked offline"
+          value={fleetHealth.offline}
+          tone={fleetHealth.offline > 0 ? "destructive" : undefined}
+        />
+      </div>
 
       <Card className="mb-6">
         <CardHeader>
@@ -399,6 +462,38 @@ export default function LiveMapPage() {
         open={selectedVehicleId != null}
         onClose={() => setSelectedVehicleId(null)}
       />
+      <ResolveDuressModal event={resolvingEvent} onClose={() => setResolvingEvent(null)} />
     </div>
+  );
+}
+
+/** One tile in the fleet-health strip at the top of the page. */
+function FleetStatTile({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+  tone?: "success" | "accent" | "destructive";
+}) {
+  const toneClass =
+    tone === "success"
+      ? "text-success"
+      : tone === "accent"
+        ? "text-brand-accent"
+        : tone === "destructive"
+          ? "text-destructive"
+          : "text-foreground";
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>{value}</p>
+        {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+      </CardContent>
+    </Card>
   );
 }
