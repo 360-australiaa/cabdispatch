@@ -92,3 +92,16 @@ data class FareState(
 /** Formats a decimal-as-string-contract money value for display. Never use
  * Float/Double for the underlying value — see ApiService.kt header comment. */
 fun BigDecimal.toMoneyString(): String = "$" + this.setScale(2, RoundingMode.HALF_UP).toPlainString()
+
+/**
+ * Display-only "classic meter tick" rounding for the live fare ticker (driver request,
+ * 2026-09-05): floors down to the nearest 10 cents so the cents digit always reads "0" and only
+ * the dimes digit visibly rolls — the mechanical-meter feel of a fare that ticks over in whole
+ * dimes rather than jittering on every cent. **Never** touches the real fare — this is a
+ * formatting choice for [au.com.threesixty.cabdispatch.ui.screens.hired.MeterDial]'s ticker only;
+ * billing, Close & Pay, receipts, and sync all keep reading [toMoneyString]'s exact-cent value.
+ * Floors rather than rounds so the display can never show more than what is actually being
+ * charged at that instant.
+ */
+fun BigDecimal.toMeterDisplayString(): String =
+    "$" + this.setScale(1, RoundingMode.FLOOR).setScale(2).toPlainString()

@@ -76,7 +76,7 @@ class MapboxGeocoding(private val client: OkHttpClient) {
         val url = buildString {
             append(BASE_URL)
             append(encoded)
-            append(".json?country=AU&limit=")
+            append(".json?country=$COUNTRY_FILTER&limit=")
             append(limit.coerceIn(1, 10))
             if (proximityLat != null && proximityLng != null) {
                 append("&proximity=")
@@ -122,6 +122,15 @@ class MapboxGeocoding(private val client: OkHttpClient) {
 
     private companion object {
         const val BASE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places/"
+
+        /**
+         * The doc above promised this on 2026-09-04 but the query string itself never actually
+         * carried it — every field-test search from the Karachi tablet was silently filtered down
+         * to zero AU-only results, which is exactly why "destination search does nothing" on that
+         * device. Drop back to just `"AU"` once field testing wraps and a real AU-based device
+         * takes over verification.
+         */
+        const val COUNTRY_FILTER = "AU,PK"
 
         /** Below this, a query is too short to rank usefully — don't burn a request on it. */
         const val MIN_QUERY_LENGTH = 3

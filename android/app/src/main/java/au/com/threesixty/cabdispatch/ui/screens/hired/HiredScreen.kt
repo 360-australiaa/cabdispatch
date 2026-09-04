@@ -3,7 +3,12 @@ package au.com.threesixty.cabdispatch.ui.screens.hired
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -76,6 +81,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -106,6 +112,7 @@ import au.com.threesixty.cabdispatch.domain.TollPresets
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
+import au.com.threesixty.cabdispatch.domain.toMeterDisplayString
 import au.com.threesixty.cabdispatch.domain.toMoneyString
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.overlays.DuressActiveBanner
@@ -1499,10 +1506,37 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                         color = CaptainPalette.textSecondary,
                         modifier = Modifier.padding(top = 2.dp),
                     )
-                    val totalText = fareState.total.toMoneyString()
+                    // Display-only "classic meter" rounding (driver request, 2026-09-05): floors
+                    // to the nearest dime so the cents digit always reads "0" and only the dimes
+                    // digit visibly rolls, instead of every-cent jitter. See toMeterDisplayString's
+                    // own doc — this never touches the real fare fareState carries; Close & Pay,
+                    // receipts, and sync all keep reading fareState.total/.toMoneyString() exactly.
+                    val totalText = fareState.total.toMeterDisplayString()
+                    // A quick spring "pop" every time the displayed fare actually ticks over, on
+                    // top of RollingMoneyText's own per-digit roll — the "high level animation"
+                    // request: the whole figure punches out a touch, then springs back to size.
+                    val tickScale = remember { Animatable(1f) }
+                    LaunchedEffect(totalText) {
+                        tickScale.snapTo(1.16f)
+                        tickScale.animateTo(1f, animationSpec = hudSpring())
+                    }
                     RollingMoneyText(
                         amount = totalText,
-                        fontSize = if (totalText.length > 8) 36.sp else 44.sp,
+                        fontSize = if (totalText.length > 8) 46.sp else 60.sp,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .scale(tickScale.value),
+                    )
+                    // Slow "breathing" glow while actually ticking (RUNNING only, real amber-
+                    // static when PAUSED — a paused meter shouldn't look alive) — the second half
+                    // of the "high level animation" request, distinct from the fare figure's own
+                    // per-tick pop above.
+                    val glowPulse = rememberInfiniteTransition(label = "running-glow")
+                    val pulseBlur by glowPulse.animateFloat(
+                        initialValue = 12f,
+                        targetValue = 28f,
+                        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+                        label = "running-glow-blur",
                     )
                     Text(
                         if (isPaused) "PAUSED" else "RUNNING",
@@ -1511,7 +1545,7 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                         fontSize = 12.sp,
                         letterSpacing = 3.sp,
                         color = stateColor,
-                        style = glowStyle(stateColor, 20f),
+                        style = glowStyle(stateColor, if (isPaused) 20f else pulseBlur),
                     )
                     Text(
                         "${fareState.band.label.uppercase()} + EXTRAS",

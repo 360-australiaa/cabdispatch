@@ -2,6 +2,8 @@ package au.com.threesixty.cabdispatch.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import au.com.threesixty.cabdispatch.data.local.dao.ShiftDao
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
@@ -40,13 +42,17 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * defaulted [TripEntity] column (`airportRankRequestedMaxi` Boolean = false) — the third input to
  * the fare engine's maxi-rate eligibility check (alongside `passengerCount`/`wheelchairHiring`,
  * added in the 5 -> 6 bump above) was already read correctly on-device but was never persisted or
- * sent to the server; same no-Migration shortcut again, for the same still-pre-release reason.
- * No Migration
- * object is supplied for any bump so far because this project has never shipped v1 (no installed
- * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
- * MUST come with a real `Migration` — do NOT reach for
- * `fallbackToDestructiveMigration()`, offline trip data is financial/
- * compliance evidence per B6 ("immutable trip log").
+ * sent to the server.
+ *
+ * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
+ * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
+ * installed base to migrate)" — that assumption held only as long as every test device got a
+ * fresh uninstall between builds. It doesn't: a real tablet field-tested at v8 crashed hard
+ * (`IllegalStateException: A migration from 8 to 9 was required but not found`) the moment a v9
+ * build was installed over it (confirmed live, 2026-09-05). Do NOT reach for
+ * `fallbackToDestructiveMigration()` to paper over a future bump instead of writing a real
+ * `Migration` — offline trip data is financial/compliance evidence per B6 ("immutable trip log"),
+ * and it turns out real devices really do carry it across a version bump now.
  *
  * Local DB encryption (SQLCipher, per B6 anti-tamper: "local DB encrypted")
  * is left to a future pass — this class stays plain Room for now so the
@@ -78,4 +84,15 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tariffDao(): TariffDao
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
+}
+
+/**
+ * Real migration for the 8 -> 9 bump — see [AppDatabase]'s doc for why this one (unlike every
+ * earlier bump) actually needs one. A single defaulted-`false` column add; `trips` is the only
+ * table [TripEntity] backs (see its `@Entity(tableName = "trips")`).
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN airportRankRequestedMaxi INTEGER NOT NULL DEFAULT 0")
+    }
 }

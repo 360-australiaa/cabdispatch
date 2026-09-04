@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.local.AppDatabase
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_8_9
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -176,7 +177,12 @@ object AppContainer {
             appContext,
             AppDatabase::class.java,
             "cabdispatch.db",
-        ).build()
+        )
+            // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
+            // Migration, because a real field-test device carrying v8 data crashed hard without
+            // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
+            .addMigrations(MIGRATION_8_9)
+            .build()
 
         val loggingInterceptor = HttpLoggingInterceptor().apply {
             level = if (BuildConfig.DEBUG) {
