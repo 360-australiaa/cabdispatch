@@ -22,6 +22,7 @@ import au.com.threesixty.cabdispatch.domain.KioskLockController
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchNavHost
 import au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner
 import au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner
+import au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner
 import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
 
 /**
@@ -37,10 +38,13 @@ import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
  *    full pinning-vs-device-owner write-up and its decision table, in particular the rule that a
  *    `LOCK_TASK_MODE_LOCKED` state (a DPC/Knox lock this app did not start) is never released from
  *    here — only a pin this app itself put in `PINNED` mode ever is.
- * 2. **The two fleet-command banners** — [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner]
- *    and [au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner] are composed once
- *    here, `Box`-stacked over [CabDispatchNavHost], so they follow the driver across every screen
- *    instead of living inside whichever screen happens to be open — see that file's own doc.
+ * 2. **The fleet-command/connectivity banners** — [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner],
+ *    [au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner], and
+ *    [au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner] are composed once here, `Box`-stacked
+ *    over [CabDispatchNavHost], so they follow the driver across every screen instead of living
+ *    inside whichever screen happens to be open — see that file's own doc. Unlike the other two,
+ *    [OfflineBanner] is unconditional (not gated behind an `if` here) — it reads live connectivity
+ *    state itself and renders nothing when online with nothing queued, see its own doc.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,7 +109,7 @@ private fun CabDispatchScreenRoot() {
             FixedDesignCanvas {
                 Box(modifier = Modifier.fillMaxSize()) {
                     CabDispatchNavHost()
-                    // Both non-hit-testable full-size overlays (see FleetCommandOverlays.kt's own
+                    // All non-hit-testable full-size overlays (see FleetCommandOverlays.kt's own
                     // doc) — stacked above the nav host so they follow the driver across every
                     // screen rather than being wired into each screen individually.
                     if (commandState.kioskLocked) {
@@ -114,6 +118,9 @@ private fun CabDispatchScreenRoot() {
                     if (commandState.forceUpdatePending) {
                         ForceUpdatePendingBanner()
                     }
+                    // Unconditional: OfflineBanner reads live connectivity + outbox state itself
+                    // and renders nothing when there's nothing honest to say — see its own doc.
+                    OfflineBanner()
                 }
             }
         }
