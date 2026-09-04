@@ -280,6 +280,38 @@ class TripRepository(
         return updated
     }
 
+    /**
+     * Records the drop-off the driver picked in the meter screen's navigator
+     * ([au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel.selectDestination]) on
+     * the open trip: [TripEntity.dropoffAddress] (a real geocoded `place_name`, never a guess —
+     * the column that History/Trip Details render and that was never populated before this
+     * pass except from a dispatch offer's `destAddress`) plus [TripEntity.endLat]/[endLng] as
+     * the *intended* end point. [closeTrip] overwrites the two coordinates with the real end fix
+     * at close time (today S4 still passes the start point there — its own standing TODO), so
+     * they are only ever "where we're heading" while the trip is open.
+     *
+     * Pure metadata: none of the fare-reconstruction inputs (`distanceM`/`movingS`/`waitingS`/
+     * `tolls`/...) are touched, so this can never move the fare. Same read-copy-write shape as
+     * [updatePassengerCount]; the outbox draft is refreshed (not marked ready) for the same
+     * crash-recovery reason [tick] does it.
+     */
+    suspend fun updateDropoff(clientUuid: String, address: String, lat: Double, lng: Double): TripEntity {
+        val existing = tripDao.getByClientUuid(clientUuid)
+            ?: error("updateDropoff() called for unknown trip clientUuid=$clientUuid")
+        check(existing.status == TripStatus.OPEN) {
+            "updateDropoff() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
+        }
+        val updated = existing.copy(
+            dropoffAddress = address,
+            endLat = lat,
+            endLng = lng,
+            updatedAt = System.currentTimeMillis(),
+        )
+        tripDao.update(updated)
+        upsertOutboxRow(updated, ready = false)
+        return updated
+    }
+
     private suspend fun upsertOutboxRow(trip: TripEntity, ready: Boolean) {
         val entityJson = if (ready) {
             cabDispatchJson.encodeToString(TripSyncItemDto.serializer(), toSyncItemDto(trip))
