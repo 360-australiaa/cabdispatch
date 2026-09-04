@@ -22,6 +22,7 @@ import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
 import au.com.threesixty.cabdispatch.domain.DevicePairingStore
 import au.com.threesixty.cabdispatch.domain.MaxiVehicleStore
+import au.com.threesixty.cabdispatch.domain.SessionStore
 import au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore
 import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
@@ -126,6 +127,12 @@ object AppContainer {
     lateinit var devicePairingStore: DevicePairingStore
         private set
 
+    /** See [SessionStore]'s own doc — durable half of [SessionHolder]'s driver identity/vehicle
+     * binding/shift id, restored in [init] below so a process restart resumes mid-shift instead of
+     * bouncing to the login screen. */
+    lateinit var sessionStore: SessionStore
+        private set
+
     /** See [MaxiVehicleStore]'s own doc — a local, honestly-labelled driver self-declaration
      * ("this vehicle has 5+ seats"), not real fleet-registry data. Read by the Home dashboard's
      * Start Meter card (to prefill/edit the declaration) and Settings → Fare schedule (to view/
@@ -146,6 +153,20 @@ object AppContainer {
         // and heartbeat silently went back to a no-op even after a real pairing had succeeded.
         devicePairingStore = DevicePairingStore(appContext)
         SessionHolder.deviceId = devicePairingStore.getDeviceId()
+
+        // Restore the driver's session across process death (2026-09-04 session-persistence
+        // pass) — see SessionStore's own doc for exactly what is/isn't restored and how shift
+        // staleness is decided. attachStore() must run before the restoring set() call below (so
+        // that call's own write-through isn't silently dropped) and this whole block must run
+        // before anything reads SessionHolder.session — in particular before SplashScreen's
+        // postAuthDestination() branches on it to pick the start destination, which is what turns
+        // a restored session into "resume mid-shift" instead of "bounce to login" from the driver's
+        // point of view. No code change was needed in the nav host itself: postAuthDestination()
+        // already branched on SessionHolder.session.value being non-null, it simply had nothing
+        // but `null` to ever read before this.
+        sessionStore = SessionStore(appContext)
+        SessionHolder.attachStore(sessionStore)
+        sessionStore.restore()?.let { SessionHolder.set(it) }
 
         maxiVehicleStore = MaxiVehicleStore(appContext)
         settingsPreferencesStore = SettingsPreferencesStore(appContext)

@@ -11,9 +11,16 @@ import kotlinx.coroutines.flow.asStateFlow
  * carries the auth bearer token. Set once at the end of S1 (Login/Vehicle
  * bind), read by S2 (Idle) and S3 (Hired).
  *
- * TODO(integration agent): fold this into a proper SessionRepository backed
- * by Room/DataStore once the auth/session sibling agent's schema lands, so a
- * process restart doesn't silently drop the driver back to S1 mid-shift.
+ * RESOLVED (process-restart session-persistence pass, 2026-09-04): the standing TODO that used to
+ * sit here ("fold this into a proper SessionRepository backed by Room/DataStore ... so a process
+ * restart doesn't silently drop the driver back to S1 mid-shift") is closed — see [SessionStore]
+ * and [SessionHolder.attachStore]. Every field on this class is now durably persisted (a small
+ * dedicated `SharedPreferences` store, [DevicePairingStore]'s own precedent, not Room/DataStore —
+ * see [SessionStore]'s doc for why), and restored by
+ * [au.com.threesixty.cabdispatch.data.AppContainer.init] before anything reads
+ * [SessionHolder.session]. Deliberately NOT part of this: [au.com.threesixty.cabdispatch.data.AppContainer.accessToken]
+ * (the bearer token) and [SessionHolder.pendingTrip] — neither is a "who/what shift" fact, and
+ * [SessionStore]'s own doc explains why each is excluded on purpose rather than merely forgotten.
  */
 data class DriverSession(
     val driverId: String,
@@ -130,15 +137,43 @@ data class TripContext(
 )
 
 /**
- * Minimal in-memory session/hand-off holder for the S1->S2->S3 flow. Not a
- * substitute for real persisted session state — see [DriverSession] doc.
+ * In-memory session/hand-off holder for the S1->S2->S3 flow. [session] itself is durable — see
+ * [DriverSession]'s doc and [attachStore] below — but [pendingTrip] is deliberately not: it is a
+ * same-process hand-off point (see that property's own doc), not session state to survive a
+ * restart, and [au.com.threesixty.cabdispatch.data.repository.TripRepository]/`TripEntity` is
+ * already the durable record of an in-progress trip's own data.
  */
 object SessionHolder {
     private val _session = MutableStateFlow<DriverSession?>(null)
     val session: StateFlow<DriverSession?> = _session.asStateFlow()
 
+    /**
+     * Durable half of [session] — `null` until
+     * [au.com.threesixty.cabdispatch.data.AppContainer.init] calls [attachStore], so this object
+     * keeps behaving exactly as it always did (in-memory only) for any test or preview that never
+     * goes through [au.com.threesixty.cabdispatch.data.AppContainer] — same reasoning as
+     * [DeviceCommandHeartbeat] taking [DevicePairingStore] as a constructor param rather than
+     * reaching for a global.
+     */
+    private var store: SessionStore? = null
+
+    /**
+     * Wires up durable persistence for [session]. Call exactly once, from
+     * [au.com.threesixty.cabdispatch.data.AppContainer.init], before that method restores any
+     * persisted session — [set] below writes straight through to [store] once attached, so
+     * attaching late would silently drop whatever [set] calls happened before it.
+     */
+    fun attachStore(sessionStore: SessionStore) {
+        store = sessionStore
+    }
+
     fun set(session: DriverSession) {
         _session.value = session
+        // Write-through, not write-behind: this is the ONLY call site of `set` in the app (S1's
+        // shift-start success), so persisting here — rather than asking every future call site to
+        // remember a second call, the way DevicePairingStore's callers currently have to for
+        // SessionHolder.deviceId — means a new call site can never forget it.
+        store?.save(session)
     }
 
     private val _pendingTrip = MutableStateFlow<TripContext?>(null)
@@ -227,9 +262,17 @@ object SessionHolder {
      * ([au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.attemptFactoryReset]:
      * `SessionHolder.deviceId = null` plus [DevicePairingStore.clear]), rather than relying on a
      * side effect of a method that also runs at the end of every shift.
+     *
+     * Also drops the durable copy in [store] (see [attachStore]) — both callers of this method
+     * (end-of-shift log-off, factory reset) are cases where a next cold start must NOT resume the
+     * driver back into the session being cleared here; the ordinary end-of-shift case in
+     * particular is the same "common case: every shift ends here" this method's own opening line
+     * already documents, so leaving stale prefs behind after every normal log-off would have
+     * defeated the point of persisting in the first place.
      */
     fun clear() {
         _session.value = null
         _pendingTrip.value = null
+        store?.clear()
     }
 }

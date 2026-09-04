@@ -41,8 +41,11 @@ import au.com.threesixty.cabdispatch.ui.screens.zones.ZoneStatisticsScreen
 object CabDispatchRoutes {
     /** Row 1 — Splash (spec §8): brand mark + brief loading state, routes to [LOGIN_VEHICLE_BIND]
      * or [IDLE] depending on cached session (see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]'s
-     * doc for the current honest limits of "cached" given [au.com.threesixty.cabdispatch.domain.SessionHolder]
-     * is in-memory only). This is now the app's actual start destination, ahead of S1. */
+     * doc — [au.com.threesixty.cabdispatch.domain.SessionHolder]'s driver/vehicle/shift identity is
+     * durable across a process restart as of the 2026-09-04 session-persistence pass, restored by
+     * [au.com.threesixty.cabdispatch.data.AppContainer.init] before this screen's gate ever runs;
+     * see [au.com.threesixty.cabdispatch.domain.SessionStore]'s doc for exactly what that does and
+     * does not cover). This is now the app's actual start destination, ahead of S1. */
     const val SPLASH = "splash"
     const val LOGIN_VEHICLE_BIND = "login_vehicle_bind" // S1
     const val IDLE = "idle" // S2
@@ -316,6 +319,14 @@ fun CabDispatchNavHost(
  * is ever opened) -- both need to answer the exact same question, "is there already a session, or
  * does this driver need to sign in", so this is factored out once here rather than duplicated in
  * both screens (which would risk them silently drifting apart over time).
+ *
+ * No change was needed here for the 2026-09-04 session-persistence pass: this already read
+ * [au.com.threesixty.cabdispatch.domain.SessionHolder.session] rather than caching its own
+ * true/false at some earlier point, so now that
+ * [au.com.threesixty.cabdispatch.data.AppContainer.init] restores that session from
+ * [au.com.threesixty.cabdispatch.domain.SessionStore] before either caller above ever runs, this
+ * function starts correctly resolving to [CabDispatchRoutes.IDLE] on a cold start that has a
+ * durable, not-stale session to resume — with zero changes to the branch itself.
  */
 fun postAuthDestination(): String =
     if (au.com.threesixty.cabdispatch.domain.SessionHolder.session.value != null) {
