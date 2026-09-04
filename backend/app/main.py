@@ -73,10 +73,23 @@ platform tenant could already act cross-tenant via get_current_tenant_id
 tenant_id override (see app.core.security) but had no dedicated
 management surface. Path prefix platform does not collide with any
 existing domain routes.
+
+driver engagement (me / wallet / ratings / announcements / incentives) is
+new in this pass: the real backing for the four driver-tablet dashboard
+tiles (Wallet Balance, Driver Rating, Announcements, Incentive Progress).
+`/v1/me/*` is the driver-facing read surface (scoped to the caller's own
+user id, never a query param); `/v1/wallet`, `/v1/ratings`,
+`/v1/announcements`, `/v1/incentives` are the operator CRUD surfaces
+(owner/admin writes, same gate as vouchers). ratings additionally owns one
+literal `/v1/trips/{id}/rating` path (Close & Pay's post-close rating hook)
+verified not to collide with any route in the trips router itself -- same
+"literal path owned by a sibling router" precedent as live_ops. See
+app/models/driver_engagement.py for the "derived, never stored" rule.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.announcements import router as announcements_router
 from app.api.v1.audit_log import router as audit_log_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
@@ -87,13 +100,16 @@ from app.api.v1.duress_device import router as duress_device_router
 from app.api.v1.fatigue_alerts import router as fatigue_alerts_router
 from app.api.v1.fleet import router as fleet_router
 from app.api.v1.geofences import router as geofences_router
+from app.api.v1.incentives import router as incentives_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.live_ops import router as live_ops_router
+from app.api.v1.me import router as me_router
 from app.api.v1.messages import router as messages_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.payments import webhook_router as payments_webhook_router
 from app.api.v1.platform import router as platform_router
 from app.api.v1.psl_ledger import router as psl_ledger_router
+from app.api.v1.ratings import router as ratings_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
 from app.api.v1.tariffs import fares_order_router
@@ -102,6 +118,7 @@ from app.api.v1.tenants import router as tenants_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
 from app.api.v1.vouchers import router as vouchers_router
+from app.api.v1.wallet import router as wallet_router
 from app.api.v1.zones import router as zones_router
 from app.core.config import settings
 
@@ -147,3 +164,8 @@ app.include_router(zones_router)
 app.include_router(platform_router)
 app.include_router(vouchers_router)
 app.include_router(corporate_accounts_router)
+app.include_router(me_router)
+app.include_router(wallet_router)
+app.include_router(ratings_router)
+app.include_router(announcements_router)
+app.include_router(incentives_router)

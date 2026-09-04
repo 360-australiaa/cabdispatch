@@ -17,6 +17,9 @@ import FleetPage from "@/pages/fleet";
 import CompliancePage from "@/pages/compliance";
 import BillingPage from "@/pages/billing";
 import VouchersPage from "@/pages/vouchers";
+import AnnouncementsPage from "@/pages/driver-engagement/AnnouncementsPage";
+import IncentivesPage from "@/pages/driver-engagement/IncentivesPage";
+import WalletPage from "@/pages/driver-engagement/WalletPage";
 import WhiteLabelPage from "@/pages/settings/white-label";
 import SecuritySettingsPage from "@/pages/settings/security";
 import PlatformConsolePage from "@/pages/platform";
@@ -54,6 +57,9 @@ export const router = createBrowserRouter([
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
       { path: "vouchers", element: <VouchersPage /> },
+      { path: "announcements", element: <AnnouncementsPage /> },
+      { path: "incentives", element: <IncentivesPage /> },
+      { path: "wallet", element: <WalletPage /> },
       { path: "audit-log", element: <AuditLogPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
       { path: "settings/security", element: <SecuritySettingsPage /> },

@@ -18,6 +18,9 @@ import {
   MapPinned,
   ScrollText,
   Ticket,
+  Megaphone,
+  Trophy,
+  Coins,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -45,6 +48,14 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
   { to: "/vouchers", label: "Vouchers & Accounts", icon: Ticket },
+  // Driver-engagement content (the tablet's Announcements / Incentive
+  // Progress / Wallet tiles). Announcement/incentive list+get are open to
+  // any tenant user server-side, writes are owner/admin gated in-page
+  // (`canWrite`), same as Vouchers. /wallet is owner/admin server-side and
+  // renders a notice for other roles (see pages/driver-engagement/WalletPage.tsx).
+  { to: "/announcements", label: "Announcements", icon: Megaphone },
+  { to: "/incentives", label: "Incentives", icon: Trophy },
+  { to: "/wallet", label: "Driver Wallets", icon: Coins },
   // GET /v1/audit-log has no role gate server-side (any authenticated tenant
   // user may read the trail) -- so this nav item stays visible to every
   // role, same as every other item above. Only the in-page "Verify chain"

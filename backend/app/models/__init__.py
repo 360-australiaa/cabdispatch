@@ -14,6 +14,7 @@ from app.core.database import Base
 from app.models.audit_log import AuditLog
 from app.models.billing import Subscription
 from app.models.compliance import ComplianceDocument
+from app.models.driver_engagement import Announcement, Incentive, TripRating, WalletTransaction
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
 from app.models.duress_snapshot import DuressSnapshot
@@ -36,6 +37,7 @@ from app.models.zones import Zone
 # to import here for that domain.
 
 __all__ = [
+    "Announcement",
     "AuditLog",
     "Base",
     "ComplianceDocument",
@@ -50,6 +52,7 @@ __all__ = [
     "Extra",
     "FatigueAlert",
     "Geofence",
+    "Incentive",
     "Job",
     "JobOffer",
     "Message",
@@ -62,8 +65,10 @@ __all__ = [
     "TariffChangeLog",
     "Tenant",
     "Trip",
+    "TripRating",
     "User",
     "Vehicle",
     "Voucher",
+    "WalletTransaction",
     "Zone",
 ]
