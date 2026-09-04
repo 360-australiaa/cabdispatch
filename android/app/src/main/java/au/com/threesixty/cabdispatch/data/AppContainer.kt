@@ -10,8 +10,10 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.DriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
+import au.com.threesixty.cabdispatch.domain.RemoteBackedDriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
@@ -382,6 +384,13 @@ object AppContainer {
     // Thin network-only, same reasoning as [jobsRepository] above (see [ZonesRepository]'s own
     // doc) — no Room/offline-queue story needed, just [apiService].
     val zonesRepository: ZonesRepository by lazy { RemoteBackedZonesRepository(apiService) }
+
+    // --- Driver engagement (dashboard WALLET / RATING / ANNOUNCEMENTS / INCENTIVE tiles, backend
+    // commit 58ccfcf's `/v1/me/{wallet,rating,announcements,incentives}` reads) --- thin network-only, same reasoning as [zonesRepository]
+    // (see [DriverEngagementRepository]'s own doc).
+    val driverEngagementRepository: DriverEngagementRepository by lazy {
+        RemoteBackedDriverEngagementRepository(apiService)
+    }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:
     // val fooDao: FooDao by lazy { database.fooDao() }

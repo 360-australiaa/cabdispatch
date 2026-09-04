@@ -574,6 +574,32 @@ interface ApiService {
     @Streaming
     @GET("/v1/users/{userId}/photo")
     suspend fun getUserPhoto(@Path("userId") userId: String): ResponseBody
+
+    // ---- Driver engagement (`backend/app/api/v1/me.py`, commit 58ccfcf) — the dashboard's
+    // WALLET BALANCE / RATING / ANNOUNCEMENTS / INCENTIVE PROGRESS tiles. All four are scoped to
+    // the calling driver by the bearer token (no driver_id parameter — the backend resolves it),
+    // and all four are read-only from this app: a DRIVER cannot post wallet lines (that's the
+    // owner/admin-gated `POST /v1/wallet/transactions`), so nothing here ever writes. DTOs in
+    // DriverEngagementDtos.kt; called only through
+    // [au.com.threesixty.cabdispatch.domain.DriverEngagementRepository]. ----
+
+    /** `GET /v1/me/wallet` — derived balance + the [limit] most recent ledger lines (backend
+     * default 20, max 100). */
+    @GET("/v1/me/wallet")
+    suspend fun myWallet(@Query("limit") limit: Int = 20): WalletDto
+
+    /** `GET /v1/me/rating` — average/count + the [limit] most recent ratings (backend default 10,
+     * max 100). `average_stars` is null until the first rating exists. */
+    @GET("/v1/me/rating")
+    suspend fun myRating(@Query("limit") limit: Int = 10): RatingDto
+
+    /** `GET /v1/me/announcements` — only currently-live announcements, newest first. */
+    @GET("/v1/me/announcements")
+    suspend fun myAnnouncements(): AnnouncementListDto
+
+    /** `GET /v1/me/incentives` — live incentives with this driver's derived progress. */
+    @GET("/v1/me/incentives")
+    suspend fun myIncentives(): IncentiveProgressListDto
 }
 
 // ============================================================================

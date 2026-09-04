@@ -453,12 +453,30 @@ fun DeckHomeScreen(
                                 modifier = Modifier.width(660.dp).fillMaxHeight(),
                             )
                             Spacer(Modifier.width(16.dp))
-                            LiveDispatchCard(
-                                dispatchState = dispatchState,
-                                onAccept = dispatchViewModel::acceptOffer,
-                                onViewAll = { pane = CaptainPane.DISPATCH },
-                                modifier = Modifier.weight(1f).fillMaxHeight(),
-                            )
+                            // Driver-engagement tiles (2026-09-04, backend commit 58ccfcf): the
+                            // mockup's WALLET BALANCE / RATING / ANNOUNCEMENTS / INCENTIVE PROGRESS
+                            // now sit under the live-dispatch card in this right-hand column. On the
+                            // fixed 1280dp canvas this column is only ~316dp wide beside the 660dp
+                            // meter card, so the tiles stack vertically and the column scrolls
+                            // rather than shrinking any of them; the dispatch card keeps a fixed
+                            // height (its own LazyColumn needs bounded height inside a scroller) and
+                            // still has VIEW ALL for the full list. See EngagementTiles.kt for the
+                            // real-data / honest "Add funds" rules.
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .verticalScroll(rememberScrollState()),
+                            ) {
+                                LiveDispatchCard(
+                                    dispatchState = dispatchState,
+                                    onAccept = dispatchViewModel::acceptOffer,
+                                    onViewAll = { pane = CaptainPane.DISPATCH },
+                                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                DriverEngagementTiles(modifier = Modifier.fillMaxWidth())
+                            }
                         }
                         CaptainPane.DISPATCH -> PaneShell("Live dispatch", onBack = { pane = CaptainPane.DASHBOARD }) {
                             AvailableTripsWheelContent(navController = navController)

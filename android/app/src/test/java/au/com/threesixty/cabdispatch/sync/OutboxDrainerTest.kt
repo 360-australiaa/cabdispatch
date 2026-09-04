@@ -506,5 +506,12 @@ private class FakeApiService : ApiService {
     override suspend fun unplotZone(): ZonePlotReadDto = notUsed()
     override suspend fun zoneStats(): List<ZoneStatsDto> = notUsed()
 
+    // Driver engagement (`/v1/me/wallet|rating|announcements|incentives`, 2026-09-04) — read by
+    // DriverEngagementRepository only, never by the outbox drainer under test here.
+    override suspend fun myWallet(limit: Int): au.com.threesixty.cabdispatch.data.remote.WalletDto = notUsed()
+    override suspend fun myRating(limit: Int): au.com.threesixty.cabdispatch.data.remote.RatingDto = notUsed()
+    override suspend fun myAnnouncements(): au.com.threesixty.cabdispatch.data.remote.AnnouncementListDto = notUsed()
+    override suspend fun myIncentives(): au.com.threesixty.cabdispatch.data.remote.IncentiveProgressListDto = notUsed()
+
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }
