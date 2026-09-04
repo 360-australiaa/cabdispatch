@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -596,6 +597,13 @@ fun HudStatusPill(
  * icon + muted upper-case [label] on top, a large [value], an optional [sub] line, and — when
  * [ring] (0..1) is given — a small spring-animated full-circle HUD ring on the right (the NEXT
  * BREAK countdown), drawn with the same track → blur glow → sweep passes as the big gauge.
+ *
+ * Chrome pass (2026-09-04), additive: [valueFontSize] (default unchanged, 24sp — the dashboard's
+ * bottom bar reads at arm's length and asks for 32sp) and an optional [footer] slot laid out under
+ * the sub line inside the text column, for the one extra element a bar cell carries (SHIFT TIME's
+ * thin elapsed-vs-limit bar, TRIPS' "N Active" pill, EARNINGS' day-over-day delta). The inner row
+ * also now fills the host's bounds so a tile given a fixed height centres its content instead of
+ * hugging the top edge; with no height given it still wraps exactly as before.
  */
 @Composable
 fun HudStatTile(
@@ -606,11 +614,13 @@ fun HudStatTile(
     ring: Float? = null,
     tone: HudTone = HudTone.Accent,
     modifier: Modifier = Modifier,
+    valueFontSize: TextUnit = 24.sp,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val toneColor = tone.color()
     GlassCard(modifier = modifier, cornerRadiusDp = 18) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -630,7 +640,7 @@ fun HudStatTile(
                     value,
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 24.sp,
+                    fontSize = valueFontSize,
                     color = CaptainPalette.textPrimary,
                     maxLines = 1,
                     modifier = Modifier.padding(top = 4.dp),
@@ -646,6 +656,7 @@ fun HudStatTile(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
+                if (footer != null) footer()
             }
             if (ring != null) {
                 Spacer(Modifier.width(12.dp))

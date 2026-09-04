@@ -68,8 +68,11 @@ import androidx.compose.material.icons.rounded.Sell
 import androidx.compose.material.icons.rounded.SettingsSuggest
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.SignalCellularAlt
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SsidChart
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -95,10 +98,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -111,6 +116,9 @@ import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.ShiftDurationLimit
+import au.com.threesixty.cabdispatch.domain.DriverSession
+import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
@@ -135,6 +143,14 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudRing
+import au.com.threesixty.cabdispatch.ui.theme.HudStatTile
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
+import au.com.threesixty.cabdispatch.ui.theme.color
+import au.com.threesixty.cabdispatch.ui.theme.hudSpring
+import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import au.com.threesixty.cabdispatch.ui.theme.DriverAvatar
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -142,7 +158,6 @@ import au.com.threesixty.cabdispatch.ui.theme.PaneShell
 import au.com.threesixty.cabdispatch.ui.theme.PulsingDot
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 import au.com.threesixty.cabdispatch.ui.theme.SosControl
-import au.com.threesixty.cabdispatch.ui.theme.StatLabel
 import au.com.threesixty.cabdispatch.ui.theme.rememberInfiniteFloat
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripCard
 import au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent
@@ -254,7 +269,9 @@ import kotlin.math.sin
  *    label/value font size grew, at the cost of some of the reference's density. See each
  *    composable below for its own before/after.
  */
-private val RAIL_WIDTH = 232.dp
+/** The rail is a narrow icon-over-label column now (mockup #3/#4), not a 232dp icon+text list:
+ * 96dp tiles + 10dp side padding. Every tile is still a full 96x72dp touch target. */
+private val RAIL_WIDTH = 116.dp
 private val RAIL_GUTTER = 16.dp
 private val CONTENT_END_PADDING = 12.dp
 private val FLYOUT_WIDTH = 280.dp
@@ -380,6 +397,9 @@ fun DeckHomeScreen(
         CaptainHeader(
             state = state,
             verified = homeExtras.verified,
+            // Same Room open-trip read that gates the rail's METER item — drives the header
+            // pill's HIRED state (see HeaderStatus' own doc for what is NOT derivable here).
+            hasActiveTrip = hasActiveTrip,
             onShowDriverId = { showDriverId = true },
             onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
             onToggleAvailability = { viewModel.setAvailable(!state.isAvailable) },
@@ -510,7 +530,10 @@ fun DeckHomeScreen(
                 }
                 if (pane == CaptainPane.DASHBOARD || pane == CaptainPane.METER) {
                     Spacer(Modifier.height(18.dp))
-                    Row(modifier = Modifier.height(136.dp).fillMaxWidth()) {
+                    // 136dp -> 152dp (2026-09-04 HUD chrome pass): the NEXT BREAK cell now carries
+                    // the ring + "Break in" + "Working until" + the TAKE BREAK button at
+                    // arm's-length sizes, which needs the extra 16dp.
+                    Row(modifier = Modifier.height(152.dp).fillMaxWidth()) {
                         ShiftStatsBar(
                             state = state,
                             extras = homeExtras,
@@ -520,7 +543,9 @@ fun DeckHomeScreen(
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                         Spacer(Modifier.width(16.dp))
-                        SystemStatusCard(state = state, modifier = Modifier.width(230.dp).fillMaxHeight())
+                        // 230dp -> 268dp so the 2x2 GPS / 4G-or-WIFI / PRINTER / METER cells
+                        // fit their tone dot + label + value without wrapping.
+                        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
                     }
                 }
             }
@@ -528,6 +553,9 @@ fun DeckHomeScreen(
             CaptainNavRail(
                 pane = pane,
                 hasActiveTrip = hasActiveTrip,
+                // The live pending-offer list AvailableTripsWheelViewModel already collects for
+                // LiveDispatchCard — the DISPATCH badge is its size, never a static number.
+                dispatchOfferCount = dispatchState.cards.size,
                 onSelectPane = { pane = it },
                 onOpenVouchers = { showVoucherInfo = true },
                 onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
@@ -682,38 +710,65 @@ private fun rememberHomeExtras(driverId: String?, shiftId: String?): HomeExtras 
 }
 
 // ============================================================================================
-// Header (Figma `01·HOME` — avatar/wordmark, driver identity, VERIFIED, AVAILABLE, status, SOS)
+// Header (mockup: avatar/wordmark, driver identity, VERIFIED, status pill, system strip, SOS) —
+// rebuilt on the HUD kit (2026-09-04): GlassCard pills with neon halos, PulsingDot, the same real
+// data sources and callbacks as before, SosControl's press-and-hold untouched.
 // ============================================================================================
+
+/**
+ * The header status pill's three REAL states, derived in [headerStatus] from two signals this
+ * screen already holds: [DeckHomeScreen]'s Room `observeActiveTrip()` read (an OPEN `TripEntity` —
+ * the same signal that gates the rail's METER item) and [WheelDashboardUiState.isAvailable].
+ *
+ * The mockup also draws ON TRIP / PAUSED / COMPLETED pills. None of those is honestly reachable
+ * from this file, so none is faked: PAUSED is `FareState.status == STOPPED` on the live
+ * [au.com.threesixty.cabdispatch.domain.FareEngine], which is instantiated privately per nav
+ * entry inside `HiredViewModel` (see that engine's own "hoist to AppContainer" TODO) — the
+ * dashboard cannot observe it; COMPLETED has no persisted signal a dashboard can watch (a closed
+ * trip simply stops being the active one, and the pill falls back to AVAILABLE/OFF DUTY); ON TRIP
+ * is indistinguishable from HIRED with the data here, so the one open-fare state is shown as the
+ * mockup's HIRED / "Trip in progress".
+ */
+private enum class HeaderStatus(val title: String, val sub: String, val tone: HudTone) {
+    HIRED("HIRED", "Trip in progress", HudTone.Success),
+    AVAILABLE("AVAILABLE", "Ready to receive jobs", HudTone.Success),
+    OFF_DUTY("OFF DUTY", "Tap to go available", HudTone.Neutral),
+}
+
+private fun headerStatus(isAvailable: Boolean, hasActiveTrip: Boolean): HeaderStatus = when {
+    hasActiveTrip -> HeaderStatus.HIRED
+    isAvailable -> HeaderStatus.AVAILABLE
+    else -> HeaderStatus.OFF_DUTY
+}
 
 @Composable
 private fun CaptainHeader(
     state: WheelDashboardUiState,
     verified: Boolean?,
+    hasActiveTrip: Boolean,
     onShowDriverId: () -> Unit,
     onOpenProfile: () -> Unit,
     onToggleAvailability: () -> Unit,
     onSos: () -> Unit,
 ) {
-    // Prominence pass (2026-08-29): every size below grew from its Figma-matched original — see
-    // this file's class doc, "legibility/prominence for an older driver population". Header
-    // vertical padding 20dp -> 26dp to give the now-larger avatar/text room to breathe.
-    //
-    // 2026-09-02 visual pass: a soft top-down purple wash behind the whole header bar, one of the
-    // "lots of shades/colours, prominent" gradients this pass adds throughout — the header reads
-    // as a genuinely lit HUD strip rather than a flat bar sitting on the page background.
+    val status = headerStatus(isAvailable = state.isAvailable, hasActiveTrip = hasActiveTrip)
+    val statusColor = status.tone.color()
+    val statusNeutral = status.tone == HudTone.Neutral
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(CaptainPalette.glowPurpleSoft, Color.Transparent)))
-            .padding(horizontal = 32.dp, vertical = 26.dp),
+            .padding(horizontal = 32.dp, vertical = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 72dp -> 88dp + tap now opens the large Driver ID card (passenger face-matching); the
-        // Profile route stays reachable via the card's own "View profile" button and the name tap.
-        DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 88)
-        Column(modifier = Modifier.padding(start = 14.dp)) {
-            Text("CAPTAIN", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
-            Text("TAXIS", fontFamily = InterFamily, fontSize = 12.sp, letterSpacing = 1.sp, color = CaptainPalette.textSecondary)
+        // Avatar in a soft accent halo. Tap opens the large Driver ID card (passenger face-
+        // matching); the Profile route stays reachable via that card and the name tap below.
+        Box(modifier = Modifier.neonGlow(CaptainPalette.hudAccent, 44.dp, strength = 0.7f)) {
+            DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 88)
+        }
+        Column(modifier = Modifier.padding(start = 16.dp)) {
+            Text("CAPTAIN", fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, letterSpacing = 1.sp, color = CaptainPalette.textPrimary)
+            Text("TAXIS", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, letterSpacing = 3.sp, color = CaptainPalette.hudSweepMid)
         }
         Column(
             modifier = Modifier.padding(start = 26.dp).clickable(onClick = onOpenProfile),
@@ -736,7 +791,7 @@ private fun CaptainHeader(
                 state.session?.vehicleId ?: "—",
                 fontFamily = RobotoMonoFamily,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 color = CaptainPalette.textSecondary,
             )
         }
@@ -745,39 +800,50 @@ private fun CaptainHeader(
         // rememberHomeExtras below), not merely "a session exists". `null` (still loading, or the
         // field came back something other than "clear") shows nothing — never a false claim.
         if (verified == true) {
-            Box(
-                modifier = Modifier.padding(start = 18.dp).clip(RoundedCornerShape(16.dp))
-                    .background(CaptainPalette.primary).padding(horizontal = 18.dp, vertical = 9.dp),
-            ) {
-                Text("VERIFIED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = CaptainPalette.textPrimary)
+            GlassCard(modifier = Modifier.padding(start = 18.dp).height(40.dp), cornerRadiusDp = 20, glow = CaptainPalette.success) {
+                Row(modifier = Modifier.fillMaxHeight().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Verified, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(18.dp))
+                    Text(
+                        "VERIFIED",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.success,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
             }
         }
-        // Availability pill — real toggle (WheelDashboardViewModel.setAvailable), tap-to-flip.
-        // Figma's frames show only the AVAILABLE state; the OFF-DUTY visual below is this pass's
-        // own extrapolation of the same pill for the real boolean's other value.
-        Box(
-            modifier = Modifier.padding(start = 18.dp).clip(RoundedCornerShape(20.dp))
-                .background(CaptainPalette.panel)
-                .border(1.5.dp, if (state.isAvailable) CaptainPalette.success.copy(alpha = 0.5f) else CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
+        // Status pill — the same real toggle as before (WheelDashboardViewModel.setAvailable,
+        // tap-to-flip), now a glass pill whose halo/dot/title take the HeaderStatus tone. Tapping
+        // while HIRED still does exactly what it always did (flip availability); this pass changes
+        // no control's behaviour.
+        GlassCard(
+            modifier = Modifier
+                .padding(start = 18.dp)
+                .height(64.dp)
                 .gameClick(
                     onClick = onToggleAvailability,
-                    shape = RoundedCornerShape(20.dp),
-                    glowColor = if (state.isAvailable) CaptainPalette.success else CaptainPalette.accent,
-                )
-                .padding(horizontal = 22.dp, vertical = 12.dp),
+                    shape = RoundedCornerShape(32.dp),
+                    glowColor = if (statusNeutral) CaptainPalette.accent else statusColor,
+                ),
+            cornerRadiusDp = 32,
+            glow = if (statusNeutral) null else statusColor,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PulsingDot(color = if (state.isAvailable) CaptainPalette.success else CaptainPalette.textMuted, animated = state.isAvailable, size = 14.dp)
+            Row(modifier = Modifier.fillMaxHeight().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                PulsingDot(color = if (statusNeutral) CaptainPalette.textMuted else statusColor, animated = !statusNeutral, size = 14.dp)
                 Column(modifier = Modifier.padding(start = 12.dp)) {
                     Text(
-                        if (state.isAvailable) "AVAILABLE" else "OFF DUTY",
+                        status.title,
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 21.sp,
-                        color = if (state.isAvailable) CaptainPalette.success else CaptainPalette.textSecondary,
+                        letterSpacing = 1.sp,
+                        color = if (statusNeutral) CaptainPalette.textSecondary else statusColor,
                     )
                     Text(
-                        if (state.isAvailable) "Ready to receive jobs" else "Tap to go available",
+                        status.sub,
                         fontFamily = InterFamily,
                         fontSize = 13.sp,
                         color = CaptainPalette.textSecondary,
@@ -787,32 +853,36 @@ private fun CaptainHeader(
         }
         Spacer(Modifier.weight(1f))
         // Real GPS/network/printer/battery — same DashboardStatusStrip WheelDashboardViewModel
-        // already polls every 4s for the old status strip, just restyled inline here.
-        // GPS now reflects a real fix-quality tier (GpsQualityClassifier), not just "permission
-        // granted" — see WheelDashboardViewModel.pollStatus's own doc. Network label is the real
-        // transport type (DeviceTelemetry.readNetworkType — "wifi"/"4g"/"offline"), not a
-        // hardcoded "4G" string, and deliberately carries no signal-strength adjective ("STRONG")
-        // since no TelephonyManager/SignalStrength reading exists anywhere in this app to back one.
-        StatusDot(Icons.Rounded.LocationOn, "GPS", state.status.gpsOk)
-        StatusDot(Icons.Rounded.SignalCellularAlt, networkStatusLabel(state.status.networkType), state.status.networkOk, spacingStart = 24.dp)
-        StatusDot(Icons.Rounded.Print, "PRINTER", state.status.printerOk, spacingStart = 24.dp)
-        Row(modifier = Modifier.padding(start = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Rounded.BatteryFull,
-                contentDescription = null,
-                tint = if (state.status.batteryOk) CaptainPalette.textPrimary else CaptainPalette.danger,
-                modifier = Modifier.size(22.dp),
-            )
-            Text(
-                state.status.batteryPercent?.let { "$it%" } ?: "—",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                color = if (state.status.batteryOk) CaptainPalette.textPrimary else CaptainPalette.danger,
-                modifier = Modifier.padding(start = 5.dp),
-            )
+        // already polls every 4s, grouped into one glass strip. GPS shows the real fix-quality
+        // tier's tone (GpsQualityClassifier: GOOD/FAIR green, POOR amber, no fix/denied red) — the
+        // same mapping the SYSTEM STATUS card below uses, so the two never disagree. Network label
+        // is the real transport type (DeviceTelemetry.readNetworkType — "wifi"/"4g"/"offline") and
+        // deliberately carries no signal-strength adjective ("STRONG"), since no TelephonyManager/
+        // SignalStrength reading exists anywhere in this app to back one.
+        GlassCard(modifier = Modifier.height(56.dp), cornerRadiusDp = 28) {
+            Row(
+                modifier = Modifier.fillMaxHeight().padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                StatusDot(Icons.Rounded.LocationOn, "GPS", gpsTone(state.status.gpsQuality))
+                StatusDot(networkIcon(state.status.networkType), networkStatusLabel(state.status.networkType), networkTone(state.status.networkType))
+                StatusDot(Icons.Rounded.Print, "PRINTER", if (state.status.printerOk) HudTone.Success else HudTone.Danger)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val batteryColor = if (state.status.batteryOk) CaptainPalette.success else CaptainPalette.danger
+                    Icon(Icons.Rounded.BatteryFull, contentDescription = null, tint = batteryColor, modifier = Modifier.size(20.dp))
+                    Text(
+                        state.status.batteryPercent?.let { "$it%" } ?: "—",
+                        fontFamily = ChakraPetch,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = if (state.status.batteryOk) CaptainPalette.textPrimary else CaptainPalette.danger,
+                        modifier = Modifier.padding(start = 5.dp),
+                    )
+                }
+            }
         }
-        SosControl(onTrigger = onSos, modifier = Modifier.padding(start = 26.dp))
+        SosControl(onTrigger = onSos, modifier = Modifier.padding(start = 22.dp))
     }
 }
 
@@ -837,24 +907,58 @@ private fun networkStatusLabel(networkType: String?): String = when (networkType
     else -> "NETWORK"
 }
 
-/** Same real signal as [networkStatusLabel], shortened for [SystemStatusCell]'s narrow fixed
- * width — "OFFLINE"/"NETWORK" would wrap or clip there. */
-private fun networkStatusLabelCompact(networkType: String?): String = when (networkType) {
-    "wifi" -> "WIFI"
-    "4g" -> "4G"
-    "offline" -> "NONE"
+/** Tone for the same real signal: a known transport is green, a confirmed "offline" is red, and
+ * `null` (DeviceTelemetry itself couldn't check) is amber — unknown, not a claimed failure. */
+private fun networkTone(networkType: String?): HudTone = when (networkType) {
+    "wifi", "4g" -> HudTone.Success
+    "offline" -> HudTone.Danger
+    else -> HudTone.Warning
+}
+
+private fun networkIcon(networkType: String?): ImageVector =
+    if (networkType == "wifi") Icons.Rounded.Wifi else Icons.Rounded.SignalCellularAlt
+
+/** [SystemStatusCard]'s network cell value for the same real signal ("ONLINE"/"OFFLINE"/"—"). */
+private fun networkCellValue(networkType: String?): String = when (networkType) {
+    "wifi", "4g" -> "ONLINE"
+    "offline" -> "OFFLINE"
     else -> "—"
 }
 
+/** Tone for the real GPS fix-quality tier (`DashboardStatusStrip.gpsQuality`). GOOD/FAIR are
+ * exactly what [au.com.threesixty.cabdispatch.domain.GpsQualityClassifier.isOk] calls ok (green),
+ * POOR is a real-but-degraded fix (amber), no fix / permission denied is red. */
+private fun gpsTone(quality: GpsQuality): HudTone = when (quality) {
+    GpsQuality.GOOD, GpsQuality.FAIR -> HudTone.Success
+    GpsQuality.POOR -> HudTone.Warning
+    GpsQuality.NO_FIX, GpsQuality.PERMISSION_DENIED -> HudTone.Danger
+}
+
+private fun gpsValueLabel(quality: GpsQuality): String = when (quality) {
+    GpsQuality.GOOD -> "GOOD"
+    GpsQuality.FAIR -> "FAIR"
+    GpsQuality.POOR -> "POOR"
+    GpsQuality.NO_FIX -> "NO FIX"
+    GpsQuality.PERMISSION_DENIED -> "DENIED"
+}
+
+/** One header system-strip entry: tone-tinted icon, label, and a [PulsingDot] that breathes only
+ * for a red (failed) state — a healthy dot sits still. */
 @Composable
-private fun StatusDot(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, ok: Boolean, spacingStart: androidx.compose.ui.unit.Dp = 0.dp) {
-    Row(modifier = Modifier.padding(start = spacingStart), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(20.dp))
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 5.dp))
-        Box(
-            modifier = Modifier.padding(start = 7.dp).size(10.dp).clip(CircleShape)
-                .background(if (ok) CaptainPalette.success else CaptainPalette.danger),
+private fun StatusDot(icon: ImageVector, label: String, tone: HudTone) {
+    val toneColor = tone.color()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = toneColor, modifier = Modifier.size(18.dp))
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            letterSpacing = 0.5.sp,
+            color = CaptainPalette.textPrimary,
+            modifier = Modifier.padding(start = 6.dp),
         )
+        PulsingDot(color = toneColor, animated = tone == HudTone.Danger, size = 9.dp, modifier = Modifier.padding(start = 7.dp))
     }
 }
 
@@ -1343,6 +1447,17 @@ private fun splitAddress(address: String): Pair<String, String?> {
     return address.substring(0, idx).trim() to address.substring(idx + 1).trim()
 }
 
+// ============================================================================================
+// Bottom stats bar (mockup: SHIFT TIME / TRIPS / EARNINGS / NEXT BREAK, plus SYSTEM STATUS) —
+// rebuilt on the HUD kit (2026-09-04). Every cell is a HudStatTile or a GlassCard; every figure is
+// the same real source as before (session.shiftStartAt, todayStats, HomeExtras, ShiftDurationLimit,
+// DashboardStatusStrip). Nothing renders a placeholder number.
+// ============================================================================================
+
+/** Bar-cell value size: 32sp (the kit's 24sp default is a card size; this bar is read at arm's
+ * length by an older driver population — see this file's class doc). */
+private val STATS_VALUE_SIZE = 32.sp
+
 @Composable
 private fun ShiftStatsBar(
     state: WheelDashboardUiState,
@@ -1357,239 +1472,285 @@ private fun ShiftStatsBar(
         ((limit - remainingSec) / limit).toFloat().coerceIn(0f, 1f)
     } ?: 0f
     val elapsedLabel = shiftElapsedLabel(state.session?.shiftStartAt)
+    // Real shift-scoped open-trip count (2026-08-29 contract Part 2.4/4.2: GET /v1/trips?...
+    // &status=open). Shown only once loaded and non-zero — a `0` here is genuinely "no active
+    // trip", worth just staying quiet about rather than printing "0 Active" under a stat row.
+    val activeTrips = extras.tripsActiveThisShift?.takeIf { it > 0 }
+    // Real day-over-day trend (2026-08-29 contract Part 4.3: GET /v1/trips/earnings/today,
+    // Sydney-local calendar day). `null` means either not loaded yet or the backend had no
+    // yesterday baseline — both render nothing, never a fabricated "0%" or "+12%".
+    val pctChange = extras.earningsPctChange
 
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-            .padding(20.dp),
-    ) {
-        // Real bug fixed 2026-08-29: with all four columns at equal weight(1f), the ShiftLimitRing
-        // column (ring + text side-by-side) was left with only ~57dp for its text after the ring
-        // itself — "SHIFT LIMIT" wrapped one character per line on-device. SHIFT TIME/TRIPS/
-        // EARNINGS only ever show a few digits and had width to spare, so weight is redistributed
-        // 0.85/0.85/0.85/1.45 (still sums to 4, same total row width) rather than shrinking the
-        // ring or its text back down.
-        Column(modifier = Modifier.weight(0.85f)) {
-            StatLabel(Icons.Rounded.Schedule, "SHIFT TIME")
-            Text(elapsedLabel ?: "—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
-            Text(
-                state.session?.shiftStartAt?.let { "Started ${formatClockTime(it)}" } ?: "No active shift",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-                color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(top = 5.dp),
-            )
-            val animatedFraction by animateFloatAsState(elapsedFraction, animationSpec = tween(600), label = "shift-progress")
-            Box(
-                modifier = Modifier.padding(top = 12.dp).fillMaxWidth().height(9.dp).clip(RoundedCornerShape(5.dp)).background(CaptainPalette.inset),
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(animatedFraction).fillMaxHeight().clip(RoundedCornerShape(5.dp)).background(CaptainPalette.primary),
-                )
-            }
-        }
-        VerticalDivider()
-        Column(modifier = Modifier.weight(0.85f).padding(start = 24.dp)) {
-            StatLabel(Icons.Rounded.DirectionsCar, "TRIPS")
-            Text(state.todayStats.tripsCount.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
-            Text("Completed today", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(top = 5.dp))
-            // Real shift-scoped open-trip count (2026-08-29 contract Part 2.4/4.2:
-            // GET /v1/trips?...&status=open), replacing the Figma mock's fabricated "3 Active".
-            // Shown only once loaded and non-zero — a `0` here is genuinely "no active trip",
-            // worth just staying quiet about rather than printing "0 Active" under a stat row.
-            extras.tripsActiveThisShift?.takeIf { it > 0 }?.let { active ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 7.dp)) {
-                    PulsingDot(color = CaptainPalette.success, animated = true, size = 12.dp)
-                    Text("$active Active", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 7.dp))
-                }
-            }
-        }
-        VerticalDivider()
-        Column(modifier = Modifier.weight(0.85f).padding(start = 24.dp)) {
-            StatLabel(Icons.Rounded.AttachMoney, "EARNINGS")
-            Text(
-                "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString(),
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 40.sp,
-                color = CaptainPalette.textPrimary,
-            )
-            Text("Today", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(top = 5.dp))
-            // Real day-over-day trend (2026-08-29 contract Part 4.3: GET /v1/trips/earnings/today,
-            // Sydney-local calendar day). `null` means either not loaded yet or the backend had no
-            // yesterday baseline — both render nothing, never a fabricated "0%" or the old
-            // placeholder "12% vs yesterday".
-            extras.earningsPctChange?.let { pct ->
-                val up = pct >= 0
-                Text(
-                    "${if (up) "↑" else "↓"} ${"%.0f".format(Locale.ENGLISH, kotlin.math.abs(pct))}% vs yesterday",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    color = if (up) CaptainPalette.success else CaptainPalette.danger,
-                    modifier = Modifier.padding(top = 5.dp),
-                )
-            }
-        }
-        VerticalDivider()
-        ShiftLimitRing(
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        HudStatTile(
+            icon = Icons.Rounded.Schedule,
+            label = "Shift time",
+            value = elapsedLabel ?: "—",
+            sub = state.session?.shiftStartAt?.let { "Started ${formatClockTime(it)}" } ?: "No active shift",
+            valueFontSize = STATS_VALUE_SIZE,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            footer = { ShiftProgressBar(fraction = elapsedFraction) },
+        )
+        HudStatTile(
+            icon = Icons.Rounded.DirectionsCar,
+            label = "Trips",
+            value = state.todayStats.tripsCount.toString(),
+            sub = "Completed",
+            tone = HudTone.Success,
+            valueFontSize = STATS_VALUE_SIZE,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            footer = if (activeTrips != null) { { ActiveTripsPill(active = activeTrips) } } else null,
+        )
+        HudStatTile(
+            icon = Icons.Rounded.AttachMoney,
+            label = "Earnings",
+            value = "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString(),
+            sub = "Today",
+            tone = HudTone.Success,
+            valueFontSize = STATS_VALUE_SIZE,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            footer = if (pctChange != null) { { EarningsDelta(pct = pctChange) } } else null,
+        )
+        NextBreakTile(
             remaining = remaining,
             session = state.session,
             fatigueAlertCount = extras.fatigueAlertCount,
             latestFatigueKind = extras.latestFatigueKind,
             onTakeBreak = onTakeBreak,
-            modifier = Modifier.weight(1.45f).padding(start = 24.dp),
+            modifier = Modifier.weight(1.55f).fillMaxHeight(),
         )
     }
 }
 
+/** SHIFT TIME's thin elapsed-vs-limit bar: [CaptainPalette.hudTrack] track, the HUD sweep gradient
+ * as fill, settling on [hudSpring] like every other gauge in the kit. */
 @Composable
-private fun VerticalDivider() {
-    Box(modifier = Modifier.padding(horizontal = 6.dp).fillMaxHeight().width(1.dp).background(CaptainPalette.panelBorder))
+private fun ShiftProgressBar(fraction: Float) {
+    val animated by animateFloatAsState(fraction.coerceIn(0f, 1f), animationSpec = hudSpring(), label = "shift-progress")
+    Box(
+        modifier = Modifier.padding(top = 8.dp).fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)).background(CaptainPalette.hudTrack),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(animated.coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(3.dp))
+                .background(Brush.horizontalGradient(CaptainPalette.hudSweep)),
+        )
+    }
+}
+
+/** TRIPS' green "N Active" pill — only ever composed for a real, loaded, non-zero count. */
+@Composable
+private fun ActiveTripsPill(active: Int) {
+    Row(
+        modifier = Modifier
+            .padding(top = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(CaptainPalette.glowSuccessSoft)
+            .border(1.dp, CaptainPalette.success.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PulsingDot(color = CaptainPalette.success, animated = true, size = 8.dp)
+        Text(
+            "$active Active",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            color = CaptainPalette.success,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+    }
+}
+
+/** EARNINGS' day-over-day delta — green when up, red when down; only composed when the backend
+ * returned a real yesterday baseline. */
+@Composable
+private fun EarningsDelta(pct: Double) {
+    val up = pct >= 0
+    Text(
+        "${if (up) "+" else "−"}${"%.0f".format(Locale.ENGLISH, kotlin.math.abs(pct))}% vs yesterday",
+        fontFamily = InterFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp,
+        color = if (up) CaptainPalette.success else CaptainPalette.danger,
+        modifier = Modifier.padding(top = 6.dp),
+    )
 }
 
 /**
- * Fills the Figma frame's "NEXT BREAK" ring slot with something this app can actually back — see
- * this file's class doc for why a scheduled-break countdown/return-time is not shown: no
- * break-tracking API exists anywhere (`ShiftDto` has no break fields, no start/stop-break
- * endpoint). Built instead as an honest fatigue/shift-limit awareness card:
- * - The ring/countdown is [ShiftDurationLimit.remaining] — a REAL 12h shift-duration-limit clock,
- *   not an invented break schedule — framed as "SHIFT LIMIT", never "next break".
- * - [fatigueAlertCount]/[latestFatigueKind] come from `GET /v1/fatigue-alerts` (2026-09-02) — a
- *   real, already-defined backend endpoint nothing in this app called before this pass (see
- *   [rememberHomeExtras]). Only shown once loaded and non-zero.
- * - "Take break now" is a real local action ([onTakeBreak] — wired to the real
- *   `setAvailable(false)` call): it honestly does the one thing this app can actually do (stop
- *   receiving job offers) and claims nothing about a return time it doesn't know.
+ * The mockup's NEXT BREAK cell, on [GlassCard] + [HudRing]. Every figure is the REAL 12h shift-
+ * duration clock ([ShiftDurationLimit.remaining], the documented client-side mirror of the
+ * backend's fatigue limit) — there is still no break-schedule / break-taken API anywhere in this
+ * app (see this file's class doc, "NEXT BREAK ring"), so "Break in h:mm" here means "time until
+ * the fatigue limit says you must stop", and "Working until" is that limit's wall-clock time.
+ * Neither is an invented schedule. The ring's progress is the remaining fraction of the limit and
+ * the card gains a red halo once genuinely close to it (<15% left).
+ *
+ * [fatigueAlertCount]/[latestFatigueKind] stay as the real `GET /v1/fatigue-alerts` signal
+ * (see [rememberHomeExtras]), shown only once loaded and non-zero. TAKE BREAK is the pre-existing
+ * real action — [onTakeBreak] is wired to `setAvailable(false)`: it honestly does the one thing
+ * this app can do (stop receiving offers) and claims no return time it doesn't know.
  */
 @Composable
-private fun ShiftLimitRing(
+private fun NextBreakTile(
     remaining: Duration?,
-    session: au.com.threesixty.cabdispatch.domain.DriverSession?,
+    session: DriverSession?,
     fatigueAlertCount: Int?,
     latestFatigueKind: String?,
     onTakeBreak: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(104.dp), contentAlignment = Alignment.Center) {
-            val targetFraction = remaining?.let { r ->
-                (r.seconds.toDouble() / (ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0)).toFloat().coerceIn(0f, 1f)
-            } ?: 0f
-            val fraction by animateFloatAsState(targetFraction, animationSpec = tween(600), label = "shift-limit-ring")
-            val urgent = targetFraction < 0.15f
-            val ringTint = if (urgent) CaptainPalette.danger else CaptainPalette.accent
-            // Prominence pass (2026-09-02): the ring now breathes once it's genuinely close to the
-            // limit — an ambient glow behind an otherwise-static progress ring reads as "pay
-            // attention" without resorting to a jarring flash.
-            val urgentPulse by rememberInfiniteFloat(enabled = urgent, from = 0.5f, to = 1f, durationMs = 900)
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val strokeW = 10.dp.toPx()
-                drawArc(color = CaptainPalette.inset, startAngle = -90f, sweepAngle = 360f, useCenter = false, style = Stroke(strokeW))
-                drawArc(
-                    color = ringTint.copy(alpha = if (urgent) urgentPulse else 1f),
-                    startAngle = -90f,
-                    sweepAngle = 360f * fraction,
-                    useCenter = false,
-                    style = Stroke(strokeW, cap = androidx.compose.ui.graphics.StrokeCap.Round),
-                )
+    val fraction = remaining?.let { r ->
+        (r.seconds.toDouble() / (ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0)).toFloat().coerceIn(0f, 1f)
+    } ?: 0f
+    val urgent = remaining != null && fraction < 0.15f
+    val labelTint = if (urgent) CaptainPalette.danger else CaptainPalette.hudAccent
+    GlassCard(modifier = modifier, cornerRadiusDp = 18, glow = if (urgent) CaptainPalette.danger else null) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                HudRing(progress = fraction, modifier = Modifier.fillMaxSize(), strokeWidthDp = 6)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Rounded.Coffee, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(16.dp))
+                    Text(
+                        remaining?.let { formatDurationHm(it) } ?: "—",
+                        fontFamily = ChakraPetch,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = CaptainPalette.textPrimary,
+                    )
+                }
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Rounded.Coffee, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(18.dp))
+            Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Coffee, contentDescription = null, tint = labelTint, modifier = Modifier.size(16.dp))
+                    Text(
+                        "NEXT BREAK",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.textMuted,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
                 Text(
-                    remaining?.let { formatDurationHm(it) } ?: "—",
-                    fontFamily = InterFamily,
+                    remaining?.let { "Break in ${formatDurationHmm(it)}" } ?: "No active shift",
+                    fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp,
-                    color = CaptainPalette.textPrimary,
+                    fontSize = 22.sp,
+                    color = if (urgent) CaptainPalette.danger else CaptainPalette.textPrimary,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
-                Text("LEFT", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, color = CaptainPalette.textSecondary)
-            }
-        }
-        Column(modifier = Modifier.padding(start = 16.dp)) {
-            Text("SHIFT LIMIT", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textSecondary)
-            Text(
-                shiftEndsLabel(session?.shiftStartAt) ?: "No active shift",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 15.sp,
-                color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(top = 7.dp),
-            )
-            // Real signal, finally consumed (2026-09-02): GET /v1/fatigue-alerts. Only shown once
-            // loaded and non-zero — silence here is a genuine "no alerts", not "not checked".
-            if (fatigueAlertCount != null && fatigueAlertCount > 0) {
                 Text(
-                    "⚠ $fatigueAlertCount fatigue alert${if (fatigueAlertCount == 1) "" else "s"}" +
-                        (latestFatigueKind?.let { " · ${it.replace('_', ' ')}" } ?: ""),
+                    workingUntilLabel(session?.shiftStartAt) ?: "Start a shift to see your limit",
                     fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     fontSize = 12.sp,
-                    color = CaptainPalette.warning,
-                    modifier = Modifier.padding(top = 5.dp),
+                    color = CaptainPalette.textSecondary,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 2.dp),
                 )
+                // Real signal, finally consumed (2026-09-02): GET /v1/fatigue-alerts. Only shown once
+                // loaded and non-zero — silence here is a genuine "no alerts", not "not checked".
+                if (fatigueAlertCount != null && fatigueAlertCount > 0) {
+                    Text(
+                        "⚠ $fatigueAlertCount fatigue alert${if (fatigueAlertCount == 1) "" else "s"}" +
+                            (latestFatigueKind?.let { " · ${it.replace('_', ' ')}" } ?: ""),
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                        color = CaptainPalette.warning,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                // Honest local action, not a fabricated break schedule — see this composable's own
+                // doc. Sets real availability false; claims no return time this app doesn't know.
+                Box(
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CaptainPalette.hudAccent.copy(alpha = 0.22f))
+                        .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                        .gameClick(onClick = onTakeBreak, shape = RoundedCornerShape(12.dp), glowColor = CaptainPalette.hudSweepMid)
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        "☕ TAKE BREAK",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.hudSweepMid,
+                    )
+                }
             }
-            // Honest local action, not a fabricated break schedule — see this composable's own
-            // doc. Sets real availability false; claims no return time this app doesn't know.
-            Text(
-                "☕ Take break now",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp,
-                color = CaptainPalette.accent,
-                modifier = Modifier.padding(top = 5.dp).clickable(onClick = onTakeBreak),
-            )
         }
     }
 }
 
+/**
+ * SYSTEM STATUS on a [GlassCard]: a 2x2 grid of small tone-tinted cells — GPS (real fix-quality
+ * tier), the real transport type (4G / WI-FI, or NETWORK when offline/unknown), PRINTER and METER
+ * (tariff signed and cached = READY; otherwise WAIT, amber — waiting for a tariff is not a fault).
+ * Green / amber / red come from [gpsTone]/[networkTone] — the same mapping the header strip uses.
+ */
 @Composable
 private fun SystemStatusCard(state: WheelDashboardUiState, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-            .padding(vertical = 20.dp, horizontal = 14.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxHeight()) {
-            StatLabel(Icons.Rounded.Shield, "SYSTEM STATUS")
+    val meterReady = state.tariff != null
+    GlassCard(modifier = modifier, cornerRadiusDp = 18) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Shield, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(16.dp))
+                Text(
+                    "SYSTEM STATUS",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                    color = CaptainPalette.textMuted,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
             Spacer(Modifier.weight(1f))
-            // A genuine 2x2 grid (2026-09-02) — was 3 cells in a single row (GPS/PRN/MTR); NET
-            // added (DeviceTelemetry.readNetworkType, same real flag the header's network dot now
-            // uses) so all four are real, backed flags, matching the mockup's 2x2 layout.
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SystemStatusCell("GPS", if (state.status.gpsOk) "ON" else "OFF", state.status.gpsOk)
-                    SystemStatusCell("NET", networkStatusLabelCompact(state.status.networkType), state.status.networkOk)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SystemStatusCell("GPS", gpsValueLabel(state.status.gpsQuality), gpsTone(state.status.gpsQuality), Modifier.weight(1f))
+                    SystemStatusCell(networkStatusLabel(state.status.networkType), networkCellValue(state.status.networkType), networkTone(state.status.networkType), Modifier.weight(1f))
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SystemStatusCell("PRN", if (state.status.printerOk) "ON" else "OFF", state.status.printerOk)
-                    SystemStatusCell("MTR", if (state.tariff != null) "READY" else "WAIT", state.tariff != null)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SystemStatusCell("PRINTER", if (state.status.printerOk) "ON" else "OFF", if (state.status.printerOk) HudTone.Success else HudTone.Danger, Modifier.weight(1f))
+                    SystemStatusCell("METER", if (meterReady) "READY" else "WAIT", if (meterReady) HudTone.Success else HudTone.Warning, Modifier.weight(1f))
                 }
             }
         }
     }
 }
 
+/** One SYSTEM STATUS cell: tone-tinted fill/border, a [PulsingDot] that breathes only when
+ * something needs attention (amber/red), muted label, tone-coloured value. */
 @Composable
-private fun SystemStatusCell(label: String, value: String, ok: Boolean) {
-    // 58dp -> 70dp (2026-09-02): the 2x2 grid has room for it now that each row holds only 2
-    // cells instead of 3, and "READY"/"OFFLINE"-length values need it to avoid wrapping.
-    Column(modifier = Modifier.width(70.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = CaptainPalette.textSecondary)
-        Text(
-            value,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
-            color = if (ok) CaptainPalette.success else CaptainPalette.danger,
-            modifier = Modifier.padding(top = 5.dp),
-            maxLines = 1,
-        )
+private fun SystemStatusCell(label: String, value: String, tone: HudTone, modifier: Modifier = Modifier) {
+    val toneColor = tone.color()
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(toneColor.copy(alpha = 0.10f))
+            .border(1.dp, toneColor.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PulsingDot(color = toneColor, animated = tone == HudTone.Danger || tone == HudTone.Warning, size = 8.dp)
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 0.5.sp, color = CaptainPalette.textMuted, maxLines = 1)
+            Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = toneColor, maxLines = 1)
+        }
     }
 }
 
@@ -1601,12 +1762,13 @@ private fun shiftElapsedLabel(shiftStartAtIso: String?): String? {
     return formatDurationHm(elapsed)
 }
 
-private fun shiftEndsLabel(shiftStartAtIso: String?): String? {
+/** "Working until 6:12 PM" — the wall-clock time the real 12h shift-duration limit is reached. */
+private fun workingUntilLabel(shiftStartAtIso: String?): String? {
     val start = shiftStartAtIso?.let { parseInstantOrOffset(it) } ?: return null
     val end = start.plusSeconds((ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0).toLong())
     val zoned = end.atZone(java.time.ZoneId.systemDefault())
     val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
-    return "Shift limit at ${fmt.format(zoned)}"
+    return "Working until ${fmt.format(zoned)}"
 }
 
 private fun formatClockTime(iso: String): String {
@@ -1623,24 +1785,30 @@ private fun formatDurationHm(d: Duration): String {
     return "$sign${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
 }
 
+/** "7:48" — [formatDurationHm] without the zero-padded hour, for the "Break in h:mm" line. */
+private fun formatDurationHmm(d: Duration): String {
+    val abs = d.abs()
+    val h = abs.toHours()
+    val m = abs.minusHours(h).toMinutes()
+    val sign = if (d.isNegative) "-" else ""
+    return "$sign$h:${m.toString().padStart(2, '0')}"
+}
+
 private fun parseInstantOrOffset(iso: String): Instant? =
     runCatching { Instant.parse(iso) }.recoverCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
 
 // ============================================================================================
-// Nav rail (Figma `01·HOME` collapsed / `02·HOME` expanded flyout) — see class doc for the exact
-// item mapping, additions (Messages, Live Map), and omissions (Help & Support, Navigate, More).
+// Nav rail — the ONE menu (mockup #3/#4): a single vertical icon rail, icon + short uppercase label
+// per item, the active item lit by an accent glow pill. Rebuilt on the HUD kit (2026-09-04): the
+// numbered "1 2 3…" circles are gone (not in the mockup), DISPATCH carries a live red offer-count
+// badge, METER glows green while a fare is open. No hamburger, flyout or chevron — those were
+// three duplicate menus and were deleted on 2026-09-03; see the class doc for the item mapping,
+// additions (Messages, Live Map) and omissions (Help & Support, Navigate, More).
 // ============================================================================================
 
-/**
- * [number] `null` only for Dashboard — the reference renders it as a house icon with no numeral,
- * every other rail row as a numbered circular badge (1-10). [icon] backs the flyout row (which
- * shows an icon, not a number, per the reference's expanded-menu style) and the Dashboard badge.
- */
 private data class RailItem(
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val number: Int?,
+    val icon: ImageVector,
     val label: String,
-    val flyoutLabel: String,
     val action: RailAction,
 )
 private sealed interface RailAction {
@@ -1655,35 +1823,41 @@ private sealed interface RailAction {
  * [hasActiveTrip] decides what the METER row actually points at (Phase A shell-integration,
  * 2026-09-03): the old hardcoded alias to [CaptainPane.DASHBOARD] ("meter lives on Dashboard") is
  * now only the fallback for "no fare is open right now" — tapping METER while [DeckHomeScreen]'s
- * own [DeckHomeScreen]'s active-trip read is true instead jumps straight to the real, live
- * [CaptainPane.METER] pane, matching this file's class doc ("decide whether that alias should now
- * point at the real active-fare pane when a trip is active"). A plain function (not a `val`) since
- * this now genuinely varies per composition rather than being a fixed table.
+ * own active-trip read is true instead jumps straight to the real, live [CaptainPane.METER] pane,
+ * matching this file's class doc ("decide whether that alias should now point at the real
+ * active-fare pane when a trip is active"). A plain function (not a `val`) since this genuinely
+ * varies per composition rather than being a fixed table.
  */
 private fun railItems(hasActiveTrip: Boolean) = listOf(
-    RailItem(Icons.Rounded.Home, null, "DASHBOARD", "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)),
-    RailItem(Icons.Rounded.Receipt, 1, "TRIPS", "TRIP HISTORY", RailAction.ToPane(CaptainPane.TRIPS)),
-    RailItem(Icons.Rounded.SwapHoriz, 2, "DISPATCH", "AVAILABLE TRIPS", RailAction.ToPane(CaptainPane.DISPATCH)),
-    RailItem(Icons.Rounded.AttachMoney, 3, "METER", "METER", RailAction.ToPane(if (hasActiveTrip) CaptainPane.METER else CaptainPane.DASHBOARD)),
-    RailItem(Icons.Rounded.SsidChart, 4, "EARNINGS", "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
-    RailItem(Icons.Rounded.History, 5, "HISTORY", "SHIFT SUMMARY", RailAction.ToPane(CaptainPane.SHIFT)),
-    RailItem(Icons.Rounded.LocationOn, 6, "ZONES", "PLOT ZONES", RailAction.ToPane(CaptainPane.ZONES)),
-    RailItem(Icons.Rounded.Sell, 7, "PRICING", "FARE STRUCTURE", RailAction.ToPane(CaptainPane.PRICING)),
-    RailItem(Icons.Rounded.ConfirmationNumber, 8, "VOUCHERS", "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)),
-    RailItem(Icons.Rounded.Person, 9, "DRIVER", "DRIVER PORTAL", RailAction.OpenProfile),
-    RailItem(Icons.Rounded.SettingsSuggest, 10, "SETTINGS", "SETTINGS", RailAction.OpenSettings),
-    // Messages, Live map and Log off used to live only in the flyout this pass deleted. The one
+    RailItem(Icons.Rounded.Home, "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)),
+    RailItem(Icons.Rounded.Receipt, "TRIPS", RailAction.ToPane(CaptainPane.TRIPS)),
+    RailItem(Icons.Rounded.SwapHoriz, "DISPATCH", RailAction.ToPane(CaptainPane.DISPATCH)),
+    RailItem(Icons.Rounded.Speed, "METER", RailAction.ToPane(if (hasActiveTrip) CaptainPane.METER else CaptainPane.DASHBOARD)),
+    RailItem(Icons.Rounded.SsidChart, "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
+    RailItem(Icons.Rounded.History, "HISTORY", RailAction.ToPane(CaptainPane.SHIFT)),
+    RailItem(Icons.Rounded.LocationOn, "ZONES", RailAction.ToPane(CaptainPane.ZONES)),
+    RailItem(Icons.Rounded.Sell, "PRICING", RailAction.ToPane(CaptainPane.PRICING)),
+    RailItem(Icons.Rounded.ConfirmationNumber, "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)),
+    RailItem(Icons.Rounded.Person, "DRIVER", RailAction.OpenProfile),
+    RailItem(Icons.Rounded.SettingsSuggest, "SETTINGS", RailAction.OpenSettings),
+    // Messages, Live map and Log off used to live only in the flyout that was deleted. The one
     // rail now carries every real destination (it scrolls), so nothing working is stranded.
-
-    RailItem(Icons.Rounded.Mail, null, "MESSAGES", "MESSAGES", RailAction.ToPane(CaptainPane.MESSAGES)),
-    RailItem(Icons.Rounded.Map, null, "MAP", "LIVE MAP", RailAction.ToPane(CaptainPane.MAP)),
-    RailItem(Icons.AutoMirrored.Rounded.Logout, null, "LOG OUT", "LOG OUT", RailAction.LogOff),
+    RailItem(Icons.Rounded.Mail, "MESSAGES", RailAction.ToPane(CaptainPane.MESSAGES)),
+    RailItem(Icons.Rounded.Map, "MAP", RailAction.ToPane(CaptainPane.MAP)),
+    RailItem(Icons.AutoMirrored.Rounded.Logout, "LOG OUT", RailAction.LogOff),
 )
 
+/**
+ * [dispatchOfferCount] is the size of the live pending-offer list
+ * ([au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsUiState.cards]) the caller already
+ * collects for the Dashboard's LiveDispatchCard — the DISPATCH badge shows it while non-zero and
+ * nothing otherwise. Never a static number.
+ */
 @Composable
 private fun CaptainNavRail(
     pane: CaptainPane,
     hasActiveTrip: Boolean,
+    dispatchOfferCount: Int,
     onSelectPane: (CaptainPane) -> Unit,
     onOpenVouchers: () -> Unit,
     onOpenProfile: () -> Unit,
@@ -1701,94 +1875,205 @@ private fun CaptainNavRail(
         }
     }
 
-    Box(modifier = modifier) {
+    // DASHBOARD and METER both alias CaptainPane.DASHBOARD while no fare is open (see railItems'
+    // own comment) — matching on `pane` alone would light up BOTH simultaneously, which is not
+    // what the mockup shows (exactly one item highlighted at a time). Picking only the FIRST
+    // item whose target matches resolves the alias in DASHBOARD's favour without separate
+    // click-tracked selection state. Once a fare IS open, METER's own target becomes
+    // CaptainPane.METER (distinct from DASHBOARD's), so both light up correctly on their own pane.
+    val items = railItems(hasActiveTrip)
+    val activeIndex = items.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
+    GlassCard(modifier = modifier.width(RAIL_WIDTH), cornerRadiusDp = 22) {
+        // Scrollable — with 14 real destinations at a legible touch-target size the list runs
+        // taller than the rail's real available height (measured live on the SM-T575: an
+        // un-scrollable Column here silently clipped everything from HISTORY down).
         Column(
             modifier = Modifier
-                .width(RAIL_WIDTH)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(20.dp))
-                .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-                .padding(vertical = 18.dp, horizontal = 14.dp),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 12.dp, horizontal = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Scrollable — with 11 real destinations at a legible touch-target size the list can
-            // run taller than the rail's real available height on some sessions (measured live on
-            // the SM-T575: an un-scrollable Column here silently clipped everything from HISTORY
-            // down). verticalScroll keeps every item reachable from the collapsed rail too.
-            // DASHBOARD and METER both alias CaptainPane.DASHBOARD while no fare is open (see
-            // railItems' own comment) — matching on `pane` alone would light up BOTH
-            // simultaneously, which is not what the reference shows (exactly one item highlighted
-            // at a time). Picking only the FIRST item whose target matches resolves the alias in
-            // DASHBOARD's favour, matching the reference exactly without needing separate
-            // click-tracked selection state. Once a fare IS open, METER's own action target
-            // becomes CaptainPane.METER (distinct from DASHBOARD's), so both light up correctly on
-            // their own pane with no alias ambiguity left to resolve.
-            val items = railItems(hasActiveTrip)
-            val activeIndex = items.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
-            Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                items.forEachIndexed { index, item ->
-                    RailRow(item = item, selected = index == activeIndex, onClick = { dispatch(item.action) })
-                }
+            items.forEachIndexed { index, item ->
+                val target = (item.action as? RailAction.ToPane)?.pane
+                RailTile(
+                    item = item,
+                    selected = index == activeIndex,
+                    badge = if (target == CaptainPane.DISPATCH && dispatchOfferCount > 0) dispatchOfferCount else null,
+                    // METER's target is CaptainPane.METER only while a fare is actually open.
+                    live = hasActiveTrip && target == CaptainPane.METER,
+                    onClick = { dispatch(item.action) },
+                )
             }
         }
     }
 }
 
-
-/** One collapsed-rail row — Dashboard renders its icon directly (no numeral, matching the
- * reference); every other destination renders a numbered circular badge with the icon shown only
- * in the flyout. [selected]'s background/text colour animates rather than snapping, so switching
- * panes reads as a deliberate transition. */
+/**
+ * One rail tile — icon over a short uppercase label, a full 96x72dp touch target. [selected] lights
+ * an accent fill + a breathing [neonGlow] halo (the mockup's active pill); [live] (METER while a
+ * fare is open) breathes a green halo instead so the driver can see at a glance that a meter is
+ * running from any pane; [badge] is the red offer-count dot on DISPATCH. Press feedback is the
+ * same bouncy spring squash every tappable surface in this app uses.
+ */
 @Composable
-private fun RailRow(item: RailItem, selected: Boolean, onClick: () -> Unit) {
-    val bg by animateColorAsState(if (selected) CaptainPalette.primary.copy(alpha = 0.18f) else Color.Transparent, label = "rail-bg")
-    val fg by animateColorAsState(if (selected) CaptainPalette.accent else CaptainPalette.textPrimary, label = "rail-fg")
+private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boolean, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    // Game-feel upgrade (2026-08-29): press squash is now a bouncy spring (visible overshoot on
-    // release), and the selected row's border BREATHES via the shared infinite-pulse helper
-    // instead of sitting static — the active destination reads as "live", arcade-HUD style.
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.94f else 1f,
+        targetValue = if (pressed) 0.93f else 1f,
         animationSpec = spring(dampingRatio = 0.4f, stiffness = 900f),
-        label = "rail-row-press",
+        label = "rail-tile-press",
     )
-    val selGlow by rememberInfiniteFloat(enabled = selected, from = 0.45f, to = 1f, durationMs = 1300)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        // Bumped 2026-08-29: badge 28dp -> 44dp, row vertical padding 10dp -> 16dp, label 12sp ->
-        // 16sp — every rail row is now a full-width, ~64dp-tall touch target with large, legible
-        // text, not a slim strip that demands a precise tap.
+    val fg by animateColorAsState(
+        when {
+            selected -> CaptainPalette.hudSweepMid
+            live -> CaptainPalette.success
+            else -> CaptainPalette.textSecondary
+        },
+        label = "rail-fg",
+    )
+    val fill by animateColorAsState(if (selected) CaptainPalette.hudAccent.copy(alpha = 0.24f) else Color.Transparent, label = "rail-fill")
+    val breathe by rememberInfiniteFloat(enabled = selected || live, from = 0.45f, to = 1f, durationMs = 1300)
+    val halo = when {
+        selected -> CaptainPalette.hudAccent
+        live -> CaptainPalette.success
+        else -> null
+    }
+    val shape = RoundedCornerShape(16.dp)
+    Box(
         modifier = Modifier
-            .padding(bottom = 8.dp)
-            .fillMaxWidth()
+            .width(96.dp)
+            .height(72.dp)
             .scale(scale)
-            .clip(RoundedCornerShape(14.dp))
-            .background(bg)
-            .then(if (selected) Modifier.border(1.5.dp, CaptainPalette.accent.copy(alpha = selGlow), RoundedCornerShape(14.dp)) else Modifier)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(vertical = 16.dp, horizontal = 12.dp),
+            .then(if (halo != null) Modifier.neonGlow(halo, 16.dp, strength = breathe) else Modifier)
+            .clip(shape)
+            .background(fill)
+            .then(if (halo != null) Modifier.border(1.5.dp, halo.copy(alpha = 0.35f + 0.55f * breathe), shape) else Modifier)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            modifier = Modifier.size(44.dp).clip(CircleShape)
-                .background(if (selected) CaptainPalette.primary else CaptainPalette.raised)
-                .border(1.5.dp, if (selected) CaptainPalette.accent else CaptainPalette.panelBorder, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (item.number == null) {
-                Icon(item.icon, contentDescription = null, tint = fg, modifier = Modifier.size(22.dp))
-            } else {
-                Text(item.number.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = fg)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box {
+                Icon(item.icon, contentDescription = null, tint = fg, modifier = Modifier.size(26.dp))
+                if (badge != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 11.dp, y = (-9).dp)
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(CaptainPalette.danger)
+                            .border(1.5.dp, CaptainPalette.hudBg, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (badge > 9) "9+" else badge.toString(),
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = CaptainPalette.textPrimary,
+                        )
+                    }
+                }
             }
+            Text(
+                item.label,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                letterSpacing = 1.sp,
+                color = fg,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
-        Text(
-            item.label,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 16.sp,
-            color = fg,
-            modifier = Modifier.padding(start = 14.dp),
+    }
+}
+
+// ============================================================================================
+// Chrome previews (2026-09-04) — the header, the rail and the bottom bar on the HUD background at
+// tablet width (SM-T575 landscape ≈ 1280dp), so the chrome can be reviewed without a device.
+// Fixture data lives only in these previews; nothing below is reachable from the live screen.
+// ============================================================================================
+
+private fun previewState(available: Boolean = true) = WheelDashboardUiState(
+    session = DriverSession(
+        driverId = "d-4f2a9c17",
+        driverName = "Ben Farid",
+        vehicleId = "CAP-5517",
+        shiftId = "s-1",
+        shiftStartAt = Instant.now().minus(Duration.ofMinutes(252)).toString(),
+    ),
+    isAvailable = available,
+    todayStats = TodayStats(tripsCount = 9, kmTotal = java.math.BigDecimal("84.2"), earningsTotal = java.math.BigDecimal("212.40")),
+    status = DashboardStatusStrip(
+        gpsOk = true,
+        networkOk = true,
+        printerOk = false,
+        batteryOk = true,
+        batteryPercent = 82,
+        gpsQuality = GpsQuality.GOOD,
+        networkType = "4g",
+    ),
+)
+
+@Preview(name = "Header — available", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewCaptainHeaderAvailable() {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
+        CaptainHeader(state = previewState(), verified = true, hasActiveTrip = false, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
+    }
+}
+
+@Preview(name = "Header — hired", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewCaptainHeaderHired() {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
+        CaptainHeader(state = previewState(), verified = true, hasActiveTrip = true, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
+    }
+}
+
+@Preview(name = "Header — off duty", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewCaptainHeaderOffDuty() {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
+        CaptainHeader(state = previewState(available = false), verified = null, hasActiveTrip = false, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
+    }
+}
+
+@Preview(name = "Rail — dispatch selected, 3 offers, meter live", widthDp = 160, heightDp = 760, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewCaptainNavRail() {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp)) {
+        CaptainNavRail(
+            pane = CaptainPane.DISPATCH,
+            hasActiveTrip = true,
+            dispatchOfferCount = 3,
+            onSelectPane = {},
+            onOpenVouchers = {},
+            onOpenProfile = {},
+            onOpenSettings = {},
+            onLogOff = {},
+            modifier = Modifier.fillMaxHeight(),
         )
+    }
+}
+
+@Preview(name = "Bottom bar", widthDp = 1280, heightDp = 176, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewShiftStatsBar() {
+    val state = previewState()
+    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(152.dp)) {
+        ShiftStatsBar(
+            state = state,
+            extras = HomeExtras(verified = true, earningsPctChange = 12.0, tripsActiveThisShift = 1, fatigueAlertCount = 1, latestFatigueKind = "shift_duration"),
+            onTakeBreak = {},
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        )
+        Spacer(Modifier.width(16.dp))
+        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
     }
 }
 
