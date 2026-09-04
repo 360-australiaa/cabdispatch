@@ -10,6 +10,7 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
 import au.com.threesixty.cabdispatch.domain.DriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
@@ -198,6 +199,15 @@ object AppContainer {
         // other `by lazy` singleton above) nothing else in this app ever needs to reference this
         // property by name for it to do its job.
         livePositionHeartbeat.start()
+
+        // Begins supervising SessionHolder.deviceIdFlow for the fleet-command heartbeat (kiosk
+        // lock / force-update / locate) — see [deviceCommandHeartbeat]'s own doc. Same "must start
+        // unconditionally here" reasoning as [livePositionHeartbeat] immediately above: this was
+        // the actual production gap (real device `1c9211b61ae15c68`) — the class existed and its
+        // polling/auth logic was already correct, but nothing ever constructed or started an
+        // instance of it, so an admin's dashboard toggle changed a server-side flag no running
+        // code anywhere ever polled.
+        deviceCommandHeartbeat.start()
     }
 
     /** Fire-and-forget process-lifetime scope for one-shot startup tasks that must kick off
@@ -375,6 +385,26 @@ object AppContainer {
     // open/closed) for the rest of the process lifetime with zero wiring in any screen/ViewModel.
     val livePositionHeartbeat: LivePositionHeartbeat by lazy {
         LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default), appContext)
+    }
+
+    /**
+     * Process-lifetime fleet-command heartbeat (kiosk lock / force-update / locate) — see
+     * [DeviceCommandHeartbeat]'s own class doc for the full write-up. Own `SupervisorJob`-backed
+     * `CoroutineScope`, same reasoning as [livePositionHeartbeat] immediately above: it must keep
+     * polling across screen navigation and even while logged off, not be tied to any one screen's
+     * ViewModel scope. [init] calls [DeviceCommandHeartbeat.start] on this unconditionally, and
+     * [au.com.threesixty.cabdispatch.MainActivity] collects [DeviceCommandHeartbeat.state] to
+     * drive screen pinning ([au.com.threesixty.cabdispatch.domain.KioskLockController]) and the
+     * two [au.com.threesixty.cabdispatch.ui.overlays.FleetCommandOverlays] banners.
+     */
+    val deviceCommandHeartbeat: DeviceCommandHeartbeat by lazy {
+        DeviceCommandHeartbeat(
+            apiService,
+            speedSource,
+            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            appContext,
+            devicePairingStore,
+        )
     }
 
     // --- Zones (Plot / Statistics screens — named dispatch zones, "plot into a zone", live
