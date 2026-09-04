@@ -226,6 +226,73 @@ class OutboxDrainerTest {
     }
 
     /**
+     * Regression test for the "drop-off silently overwritten with the start point at close"
+     * bug: [TripRepository.closeTrip] used to take non-null `endLat`/`endLng` and the only
+     * caller ([au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]) had no
+     * real end fix to pass, so it fell back to `trip.startLat`/`startLng` — clobbering whatever
+     * real destination [TripRepository.updateDropoff] had already written. Proves the fix:
+     * `closeTrip(endLat = null, endLng = null, ...)` must leave the coordinates
+     * [updateDropoff] wrote untouched, never fall back to the start point, and a real fix passed
+     * to [TripRepository.closeTrip] must still win over both.
+     */
+    @Test
+    fun `closeTrip with no live fix preserves the navigator's drop-off, never the start point`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val repository = TripRepository(tripDao, outboxDao, FakeApiService())
+
+        val opened = repository.openTrip(
+            vehicleId = "vehicle-1",
+            driverId = "driver-1",
+            shiftId = "shift-1",
+            tariffId = "tariff-1",
+            type = "rank_hail",
+            startLat = -33.8688,
+            startLng = 151.2093,
+        )
+
+        // Navigator picks a real destination mid-trip.
+        repository.updateDropoff(
+            clientUuid = opened.clientUuid,
+            address = "1 Example St, Sydney",
+            lat = -33.9,
+            lng = 151.25,
+        )
+
+        // Close with no live GPS fix available (the honest case at this call site today).
+        val closedNoFix = repository.closeTrip(
+            clientUuid = opened.clientUuid,
+            endLat = null,
+            endLng = null,
+            deviceTotal = "20.00",
+        )
+        assertEquals("must keep the navigator's drop-off latitude, not the start point", -33.9, closedNoFix.endLat!!, 0.0)
+        assertEquals("must keep the navigator's drop-off longitude, not the start point", 151.25, closedNoFix.endLng!!, 0.0)
+        assertFalse("must not silently equal the start point", closedNoFix.endLat == opened.startLat && closedNoFix.endLng == opened.startLng)
+
+        // A second trip proves a REAL live fix at close time still wins over the navigator's
+        // intended destination — closeTrip's whole point is "where the fare actually ended".
+        val opened2 = repository.openTrip(
+            vehicleId = "vehicle-1",
+            driverId = "driver-1",
+            shiftId = "shift-1",
+            tariffId = "tariff-1",
+            type = "rank_hail",
+            startLat = -33.8688,
+            startLng = 151.2093,
+        )
+        repository.updateDropoff(clientUuid = opened2.clientUuid, address = "Intended dest", lat = -33.9, lng = 151.25)
+        val closedWithFix = repository.closeTrip(
+            clientUuid = opened2.clientUuid,
+            endLat = -33.95,
+            endLng = 151.30,
+            deviceTotal = "25.00",
+        )
+        assertEquals(-33.95, closedWithFix.endLat!!, 0.0)
+        assertEquals(151.30, closedWithFix.endLng!!, 0.0)
+    }
+
+    /**
      * Note the parameter types here are the DAO interfaces/base class
      * ([TripDao]/[SyncOutboxDao]), not the concrete fakes — exactly the
      * types [SyncWorker] gets from [au.com.threesixty.cabdispatch.data.AppContainer]

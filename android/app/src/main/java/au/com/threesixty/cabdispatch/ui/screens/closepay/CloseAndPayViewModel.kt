@@ -523,14 +523,18 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val receiptRef = "RCPT-${state.trip.clientUuid.take(8).uppercase()}"
+            // The real GPS fix at the moment the fare ended — "where the vehicle physically
+            // was", per TripRepository.closeTrip's doc. Deliberately NOT state.trip.startLat/Lng
+            // (that silently clobbered the drop-off with the pick-up point on every closed trip)
+            // and not the navigator's chosen destination either: if there's no live fix right
+            // now, closeTrip(endLat = null, endLng = null) leaves whatever MeterNavViewModel's
+            // selectDestination()/TripRepository.updateDropoff already wrote in place, rather
+            // than us fabricating a value here.
+            val liveFix = AppContainer.speedSource.locationFix.value
             val closed = tripRepository.closeTrip(
                 clientUuid = state.trip.clientUuid,
-                // TODO: reconcile with S3/GPS sibling — S4 has no live
-                // location fix of its own; ideally S3 hands off the trip's
-                // last known fix (e.g. via SessionHolder.pendingTrip-style
-                // hand-off) instead of this falling back to the start point.
-                endLat = state.trip.startLat,
-                endLng = state.trip.startLng,
+                endLat = liveFix?.lat,
+                endLng = liveFix?.lng,
                 deviceTotal = state.breakdown.grandTotal.setScale(2, RoundingMode.HALF_UP).toPlainString(),
                 paymentMethod = state.paymentMethod.persistedValue,
                 surchargePct = state.surchargePct.toPlainString(),

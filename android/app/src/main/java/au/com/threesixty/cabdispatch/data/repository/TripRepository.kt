@@ -205,11 +205,19 @@ class TripRepository(
      * the point at which the outbox row for this trip becomes
      * [SyncOutboxEntity.readyToSync] — see that class's doc for why not
      * sooner.
+     *
+     * [endLat]/[endLng] are the real GPS fix at the moment the fare ended
+     * (e.g. `AppContainer.speedSource.locationFix.value` — "where the vehicle
+     * physically was", not the navigator's chosen destination). Deliberately
+     * `Double?`: when no live fix is available at close time, `null` leaves
+     * the coordinate already on the row untouched (typically the *intended*
+     * drop-off [updateDropoff] wrote while the trip was open) rather than
+     * writing a fabricated/wrong-but-plausible value.
      */
     suspend fun closeTrip(
         clientUuid: String,
-        endLat: Double,
-        endLng: Double,
+        endLat: Double?,
+        endLng: Double?,
         deviceTotal: String,
         paymentMethod: String? = null,
         surchargePct: String? = null,
@@ -238,8 +246,8 @@ class TripRepository(
         val updated = existing.copy(
             status = TripStatus.CLOSED,
             endAt = Instant.ofEpochMilli(now).toString(),
-            endLat = endLat,
-            endLng = endLng,
+            endLat = endLat ?: existing.endLat,
+            endLng = endLng ?: existing.endLng,
             paymentMethod = paymentMethod ?: existing.paymentMethod,
             surchargePct = surchargePct,
             cleaningFee = cleaningFee,
@@ -286,9 +294,11 @@ class TripRepository(
      * the open trip: [TripEntity.dropoffAddress] (a real geocoded `place_name`, never a guess —
      * the column that History/Trip Details render and that was never populated before this
      * pass except from a dispatch offer's `destAddress`) plus [TripEntity.endLat]/[endLng] as
-     * the *intended* end point. [closeTrip] overwrites the two coordinates with the real end fix
-     * at close time (today S4 still passes the start point there — its own standing TODO), so
-     * they are only ever "where we're heading" while the trip is open.
+     * the *intended* end point. [closeTrip] overwrites the two coordinates with the real GPS fix
+     * at close time when one is available; if not, it leaves whatever this method wrote in place
+     * rather than fabricating a value (see [closeTrip]'s own doc) — so they are only reliably
+     * "where we're heading" while the trip is open, and become "where the fare actually ended"
+     * once closed (falling back to the intended destination only when no live fix exists).
      *
      * Pure metadata: none of the fare-reconstruction inputs (`distanceM`/`movingS`/`waitingS`/
      * `tolls`/...) are touched, so this can never move the fare. Same read-copy-write shape as

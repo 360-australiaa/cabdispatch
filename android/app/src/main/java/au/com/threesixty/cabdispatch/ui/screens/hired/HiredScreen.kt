@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.ui.screens.hired
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -221,6 +222,25 @@ fun HiredScreen(
     val breakdownExpanded by viewModel.breakdownExpanded.collectAsState()
     val isPaused = fareState.status == TripStatus.STOPPED
     val context = LocalContext.current
+
+    // Real correctness fix (fare-reset-on-renavigation bug): this pane is reached only while
+    // CabDispatchRoutes.HIRED is on the back stack (DeckHomeScreen's `when (pane)` — see that
+    // file's own comment on CaptainPane.METER: deliberately no PaneShell/back-arrow here, "never a
+    // literal back out of the meter", since every other rail item is reachable via a same-entry
+    // pane swap that leaves this composable's NavBackStackEntry — and therefore [viewModel]'s
+    // ViewModelStore — untouched). The one path that comment never actually closed off is the
+    // system/gesture back button: with no BackHandler, it popped the HIRED entry, destroying this
+    // [HiredViewModel] instance (cancelling its live-ticking FareEngineImpl) mid-fare. Because
+    // [au.com.threesixty.cabdispatch.domain.SessionHolder.pendingTrip] is never cleared once a
+    // trip starts, the next "METER" tap (the nav rail's `hasActiveTrip` alias, reachable from
+    // wherever back landed) then created a BRAND NEW HiredViewModel that re-ran startTrip()/
+    // openTripInRoom() against that same stale pending context — resetting the on-screen fare to
+    // $0/0:00 and opening a second, orphaned TripEntity row in Room alongside the still-OPEN
+    // original. Swallowing back here (matching the design this screen already documents) closes
+    // that path: every other way to leave this pane (a rail tap, or any `navController.navigate`
+    // to a screen layered on top, e.g. Profile/Messages/Trip Detail) already pushes/pops without
+    // ever popping the HIRED entry itself, so this is the only gap.
+    BackHandler(enabled = true) {}
 
     // Best-effort read of the same hand-off payload HiredViewModel.init already reads once — see
     // TripContext.originAddress/.destAddress/.negotiatedTotal's docs. A screen-local read (same
