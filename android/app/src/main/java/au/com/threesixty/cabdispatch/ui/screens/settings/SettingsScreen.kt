@@ -509,7 +509,7 @@ private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewMod
                             heightDp = 56,
                             fontSize = 18.sp,
                             widthDp = 130,
-                        ) { viewModel.pairPrinter(device.id) }
+                        ) { viewModel.pairPrinter(device) }
                     }
                 }
             }

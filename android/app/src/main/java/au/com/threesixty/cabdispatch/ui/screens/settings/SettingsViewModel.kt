@@ -375,9 +375,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun pairPrinter(deviceId: String) {
+    fun pairPrinter(device: PrinterDevice) {
         viewModelScope.launch {
-            AppContainer.receiptPrinterGateway.pair(deviceId)
+            AppContainer.receiptPrinterGateway.pair(device)
             _uiState.update { it.copy(pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice) }
         }
     }

@@ -36,7 +36,18 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
-private const val PIN_LENGTH = 6
+// BUGFIX (2026-09-04, Settings & Diagnostics audit): this was a single fixed `PIN_LENGTH = 6` —
+// the VERIFY button only ever enabled at exactly 6 digits, and the keypad refused a 7th digit —
+// but the server-side admin PIN this screen exists to check
+// (`POST /v1/fleet/devices/{id}/verify-admin-pin`, backing
+// au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.attemptFactoryReset) accepts
+// any 4-8 digit PIN (`backend/app/schemas/tenant.py::AdminPinSetRequest`, `_PIN_PATTERN =
+// r"^\d{4,8}$"`, set via the owner-only `POST /v1/tenants/{id}/admin-pin`). Any tenant who set a
+// PIN of a length other than 6 could never pass this gate at all: a shorter PIN left VERIFY
+// permanently disabled, a longer one couldn't even be fully typed. Now matches the server's real
+// bounds instead of an arbitrary UI guess.
+private const val PIN_MIN_LENGTH = 4
+private const val PIN_MAX_LENGTH = 8
 
 /**
  * 32 · Admin PIN Gate — Captain Taxis purple redesign (2026-08-29 pass), migrated off the old
@@ -106,8 +117,12 @@ fun AdminPinGateScreen(
                     color = CaptainPalette.textSecondary,
                     modifier = Modifier.width(420.dp),
                 )
+                // PIN_MAX_LENGTH dots shown regardless of the tenant's actual configured PIN
+                // length (unknown to this device — only the hash is server-side, never the
+                // length): filled progressively as digits are typed, same shape as before this
+                // fix's fixed-6 version, just no longer implying a PIN must be exactly 6 long.
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    repeat(PIN_LENGTH) { index ->
+                    repeat(PIN_MAX_LENGTH) { index ->
                         val filled = index < pin.length
                         Box(
                             modifier = Modifier
@@ -147,7 +162,7 @@ fun AdminPinGateScreen(
             // --- Right column: shared keypad + VERIFY ---
             Column {
                 CaptainKeypad(
-                    onDigit = { d -> if (!verifying && pin.length < PIN_LENGTH) pin += d },
+                    onDigit = { d -> if (!verifying && pin.length < PIN_MAX_LENGTH) pin += d },
                     onBackspace = { if (!verifying) pin = pin.dropLast(1) },
                     onClear = { if (!verifying) pin = "" },
                 )
@@ -156,7 +171,7 @@ fun AdminPinGateScreen(
                     text = "VERIFY",
                     heightDp = 72,
                     fontSize = 20.sp,
-                    enabled = pin.length == PIN_LENGTH && !verifying,
+                    enabled = pin.length in PIN_MIN_LENGTH..PIN_MAX_LENGTH && !verifying,
                     widthDp = 448,
                 ) { onVerify(pin) }
             }
