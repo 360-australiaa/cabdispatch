@@ -48,6 +48,14 @@ class MapboxGeocoding(private val client: OkHttpClient) {
      * Restricted to `country=AU`: this is an NSW-regulated taxi meter, a drop-off outside
      * Australia is not a real destination for it, and the narrower search materially improves
      * ranking quality.
+     *
+     * **Field-testing default (2026-09-04): `PK` added too.** This build is being verified on a
+     * physical tablet whose real GPS fix is in Karachi — an AU-only search can never return a
+     * result the Directions API can actually route to from there (any AU match is a whole
+     * continent away; see [MapboxDirections]'s "Route exceeds maximum distance limitation"
+     * doc). Drop `,PK` once field testing wraps and this goes back to AU-only, matching the
+     * dashboard's own temporary Karachi swaps (`FleetMapCanvas.DEFAULT_CENTER`, this file's
+     * sibling [SydneyCbdFallback]).
      */
     suspend fun search(
         query: String,

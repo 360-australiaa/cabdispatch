@@ -85,17 +85,19 @@ object MapboxStaticImage {
 }
 
 /**
- * Fixed fallback center — Sydney CBD (Town Hall) — used when no real driver position is
- * available. [au.com.threesixty.cabdispatch.domain.SpeedSource] (the only location-adjacent data
- * source actually wired in this app, see `AppContainer.speedSource`) exposes speed only, no
- * lat/lng — GPS position is a documented, still-open gap (`HANDOFF.md`: "GPS is stubbed, not
- * real"). Rather than fabricate a position source that doesn't exist, the dashboard map centers
- * here until a real `FusedLocationProviderClient`-backed position lands (see that same doc's
- * "Medium priority" section) — at which point this constant should be replaced by the live fix,
- * not deleted (keep it as the offline/no-fix fallback).
+ * Fallback center used only when no real GPS fix is available yet (`fix == null` at the call
+ * site) — every caller re-centers on the live fix the moment one lands, this is purely the
+ * before-first-fix / GPS-denied placeholder.
+ *
+ * **Field-testing default (2026-09-04): Karachi, Pakistan** — matches the dashboard's own
+ * `FleetMapCanvas.DEFAULT_CENTER` field-testing swap (`dashboard/src/pages/live-map/
+ * FleetMapCanvas.tsx`), which this constant's name now lags — swap the two `LAT`/`LNG` values
+ * back to Sydney CBD, Town Hall (`-33.8708`, `151.2073`), once Karachi field testing wraps. Only
+ * matters before any fix has ever been read; it never affects a route, fare, or anything the
+ * driver is actually charged for.
  */
 object SydneyCbdFallback {
-    const val LAT: Double = -33.8708
-    const val LNG: Double = 151.2073
+    const val LAT: Double = 24.8607
+    const val LNG: Double = 67.0011
     const val ZOOM: Double = 14.5
 }
