@@ -356,8 +356,16 @@ fun DeckHomeScreen(
                 airportRankRequestedMaxi = airportRankRequestedMaxi,
             )
         ) {
+            // Three distinct preconditions gate WheelDashboardViewModel.startMeter() (session,
+            // tariff, and — 2026-09-04, real-GPS-fix-at-hire-start fix — a live location fix);
+            // report whichever one is actually missing rather than defaulting to a session
+            // message when the real cause is "no GPS lock yet".
             meterPhase = MeterStartPhase.Failed(
-                if (state.tariff == null) "No signed tariff yet — try again shortly" else "No active session",
+                when {
+                    state.tariff == null -> "No signed tariff yet — try again shortly"
+                    AppContainer.speedSource.locationFix.value == null -> "Waiting for GPS fix — try again shortly"
+                    else -> "No active session"
+                },
             )
             return
         }

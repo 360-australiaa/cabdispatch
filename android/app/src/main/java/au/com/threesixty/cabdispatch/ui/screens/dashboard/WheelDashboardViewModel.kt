@@ -188,8 +188,9 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
      * Off Duty/Available (i.e. whenever not already Hired), independent of the dispatch
      * availability toggle — a driver picking up a street hail doesn't need to be marked
      * "available for offers" first. Still requires a loaded [TariffDto] (can't compute a fare
-     * without one) and a real [DriverSession]. Returns `false` (no-op) if either is missing so
-     * the caller (the Start Meter button's tap animation) can skip navigating.
+     * without one), a real [DriverSession], and now a real GPS fix (see [TripContext.startLat]/
+     * [TripContext.startLng] below). Returns `false` (no-op) if any of those is missing so the
+     * caller (the Start Meter button's tap animation) can skip navigating.
      */
     fun startMeter(
         negotiatedTotal: String? = null,
@@ -207,14 +208,36 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
     ): Boolean {
         val session = SessionHolder.session.value ?: return false
         val tariff = uiState.value.tariff ?: return false
+        // Real bug fixed (2026-09-04): this used to hardcode startLat=0.0/startLng=0.0 for every
+        // street-hail/rank Start Meter tap (the dispatched-job path,
+        // AvailableTripsWheelViewModel/AvailableTripOfferViewModel, already carries the real
+        // JobDto.originLat/originLng and was never affected) — silently recording every such
+        // trip's start position off the coast of Africa instead of where the vehicle actually
+        // was. Same fix pattern as CloseAndPayViewModel.finalizeClose's endLat/endLng: read the
+        // real live fix off AppContainer.speedSource.locationFix (the same feed
+        // MeterNavViewModel/SettingsViewModel.respondToLocateRequest/CloseAndPayViewModel already
+        // read) instead of fabricating a value.
+        //
+        // Unlike closeTrip's endLat/endLng, TripContext.startLat/startLng (and, downstream,
+        // TripEntity.startLat/startLng, TripCreateDto.start_lat/start_lng) are non-nullable —
+        // there is no already-open trip row to "leave untouched" the way closeTrip degrades, and
+        // the backend's TripCreate contract requires real start_lat/start_lng (422s otherwise), so
+        // `null` is not an option here (see TripRepository.updateDropoff's doc for the general
+        // "leave null rather than guess" precedent, which only applies where the field actually
+        // is nullable). With no fix yet (no GPS lock, permission denied, cold start), this matches
+        // this codebase's other no-fix-yet default — SettingsViewModel.respondToLocateRequest
+        // skips its own action entirely rather than publish a fabricated position — by mirroring
+        // this same method's existing no-op-on-missing-precondition behavior (the session/tariff
+        // checks just above): return false and never open a trip with a made-up coordinate. A
+        // driver whose GPS hasn't locked yet must wait the moment it takes for a fix to arrive
+        // before Start Meter will work, rather than the app recording a silently wrong position.
+        val fix = AppContainer.speedSource.locationFix.value ?: return false
         SessionHolder.setPendingTrip(
             TripContext(
                 clientUuid = UUID.randomUUID().toString(),
                 tariff = tariff,
-                // TODO(location sibling agent): real GPS fix at hire start — pre-existing gap,
-                // not introduced by this pass (see old IdleViewModel.startHire).
-                startLat = 0.0,
-                startLng = 0.0,
+                startLat = fix.lat,
+                startLng = fix.lng,
                 driverId = session.driverId,
                 vehicleId = session.vehicleId,
                 shiftId = session.shiftId,
