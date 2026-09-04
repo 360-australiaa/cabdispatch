@@ -239,7 +239,12 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
                 startLat = fix.lat,
                 startLng = fix.lng,
                 driverId = session.driverId,
-                vehicleId = session.vehicleId,
+                // See AvailableTripOfferViewModel.beginHiredHandoff's doc for the full rationale
+                // (2026-09-04 network-call audit): sending the rego here instead of the real
+                // fleet-vehicle UUID silently breaks vehicle compliance-expiry checks, the
+                // dashboard's Trips vehicle filter/label, and the PtP compliance export's
+                // vehicle-rego join, all of which key off Trip.vehicle_id == Vehicle.id.
+                vehicleId = session.vehicleUuid ?: session.vehicleId,
                 shiftId = session.shiftId,
                 // "Set Price" entry point (2026-08-10 meter-polish pass) — see
                 // TripContext.negotiatedTotal's doc. Null (the default) for every ordinary

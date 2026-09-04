@@ -135,15 +135,29 @@ class ProfileViewModel : ViewModel() {
         }
     }
 
+    /**
+     * BUGFIX (2026-09-04, network-call audit): this used to key `GET
+     * /v1/compliance/vehicles/{vehicleId}/dossier` off [SessionHolder.session]'s
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleId] — the driver-entered/QR'd
+     * rego string — but `app.services.compliance.build_dossier` matches
+     * `ComplianceDocument.vehicle_id == vehicle_id` against the real fleet-vehicle UUID (the
+     * dashboard's compliance upload form sends `v.id`, never the rego — see
+     * `dashboard/src/pages/compliance/index.tsx`). Unlike the `POST /v1/fleet/positions` bug this
+     * doesn't 404 — `build_dossier`'s own doc says a vehicle with zero matching documents just
+     * comes back fully non-compliant — so this silently rendered every vehicle's real compliance
+     * standing as "missing everything" instead of erroring loudly. Now uses the real
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid], same field
+     * [loadVehicleDetail] already prefers.
+     */
     private fun loadCompliance() {
-        val vehicleId = SessionHolder.session.value?.vehicleId
-        if (vehicleId == null) {
+        val vehicleUuid = SessionHolder.session.value?.vehicleUuid
+        if (vehicleUuid == null) {
             _complianceState.value = ComplianceUiState.Error("No vehicle bound to this device yet.")
             return
         }
         _complianceState.value = ComplianceUiState.Loading
         viewModelScope.launch {
-            val result = runCatching { AppContainer.apiService.getComplianceDossier(vehicleId) }
+            val result = runCatching { AppContainer.apiService.getComplianceDossier(vehicleUuid) }
             result.onSuccess { dossier ->
                 _complianceState.value = ComplianceUiState.Loaded(dossier)
             }.onFailure { error ->

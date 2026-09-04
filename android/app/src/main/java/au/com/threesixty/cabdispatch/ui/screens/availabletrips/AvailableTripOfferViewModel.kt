@@ -111,7 +111,22 @@ class AvailableTripOfferViewModel : ViewModel() {
                     startLat = pending.job.originLat,
                     startLng = pending.job.originLng,
                     driverId = session.driverId,
-                    vehicleId = session.vehicleId,
+                    // BUGFIX (2026-09-04, network-call audit): this used to send session.vehicleId
+                    // (the driver-entered/QR'd rego, e.g. "KHI-01") straight through to
+                    // TripEntity.vehicleId -> TripSyncItemDto.vehicleId -> `POST /v1/trips/sync`'s
+                    // Trip.vehicle_id — live-confirmed to break three independent backend/dashboard
+                    // features that all join Trip.vehicle_id against the real Vehicle.id: (1)
+                    // `PATCH /v1/trips/{id}/tick`'s vehicle registration/insurance compliance-expiry
+                    // check (`Vehicle.id == trip.vehicle_id`, backend/app/api/v1/trips.py), which
+                    // silently never fires for a rego; (2) the dashboard's Trips page vehicle
+                    // filter/label (`vehicleLabelById` keyed by `v.id`, dashboard/src/pages/trips/index.tsx),
+                    // which falls back to a truncated raw id string; (3) the NSW PtP compliance/
+                    // GST-BAS export's vehicle-rego join (backend/app/services/reports.py, `Vehicle.id
+                    // == Trip.vehicle_id`), which would report every trip's vehicle as blank. Same
+                    // rego-vs-UUID identifier bug as SettingsViewModel.respondToLocateRequest's
+                    // already-fixed `POST /v1/fleet/positions` 404, and the same fallback shape
+                    // LoginVehicleBindViewModel.startShift already uses for ShiftStartDto.vehicleId.
+                    vehicleId = session.vehicleUuid ?: session.vehicleId,
                     shiftId = session.shiftId,
                     // Real address plumbing (Phase A.4, 2026-09-03): this job already carries both
                     // — see TripContext.originAddress/.destAddress's own doc for why the dashboard's
