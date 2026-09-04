@@ -970,6 +970,10 @@ data class TripCreateDto(
     @SerialName("passenger_count") val passengerCount: Int? = null,
     /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.wheelchairHiring]'s doc. */
     @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.airportRankRequestedMaxi]'s
+     * doc (maxi-at-airport-rank fare-integrity fix, 2026-09-05). Nullable-defaulted per this file's
+     * own convention for a field added after this DTO already had live callers. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("gps_trace_ref") val gpsTraceRef: String? = null,
@@ -994,6 +998,8 @@ data class TripDto(
     @SerialName("passenger_count") val passengerCount: Int? = null,
     /** See [TripCreateDto.wheelchairHiring]'s doc. */
     @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripCreateDto.airportRankRequestedMaxi]'s doc. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     @SerialName("start_at") val startAt: String,
     @SerialName("end_at") val endAt: String?,
     @SerialName("start_lat") val startLat: Double,
@@ -1166,6 +1172,13 @@ data class TripSyncItemDto(
     @SerialName("passenger_count") val passengerCount: Int? = null,
     /** See [TripCreateDto.wheelchairHiring]'s doc. */
     @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripCreateDto.airportRankRequestedMaxi]'s doc. This is the field that actually matters
+     * for the flag to reach the server: `POST /v1/trips/sync` is the ONLY network call this app's
+     * offline-first close flow makes (see this class's own doc above) — without this, a maxi-at-
+     * airport-rank trip's [deviceTotal] (which correctly includes the surcharge on-device) could
+     * diverge from the server's independent recompute (which has no way to know the flag was set)
+     * and get rejected for exceeding the sync variance tolerance. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
@@ -1358,18 +1371,26 @@ data class JobDto(
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
     /**
-     * `job_type`/`distance_km`/`eta_min` (2026-08-29, backend contract Part 4.1/7) — server-computed
-     * at job creation (straight-line haversine + a flat 30km/h heuristic per the backend's own
-     * doc, NOT routed/live-traffic; the backend's own field comment flags this as an
-     * approximation). `null` on a job created before this migration landed — callers must degrade
-     * (e.g. [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s dispatch card
-     * falls back to a live-GPS straight-line distance and omits ETA entirely when this is null,
-     * rather than showing a stale/wrong number). `jobType` defaults `"booked"` server-side
-     * (migration `9a9364f2c706`'s `server_default`).
+     * 2026-09-05 API-audit pass, correcting this doc comment's own prior claims (there was never
+     * a migration `9a9364f2c706`, and the backend never had a `job_type` column or an ETA
+     * service — that earlier text described a backend contract that didn't actually exist):
+     *
+     * - [distanceKm] is now real: `app.schemas.jobs.JobRead` computes it server-side from this
+     *   same job's own origin/dest lat-lng via the exact `haversine_km` helper this codebase
+     *   already uses elsewhere (toll-geofence detection) — a straight-line, NOT routed/live-traffic,
+     *   distance, always present (never null) on any `JobRead` response.
+     * - [jobType] and [etaMin] are deliberately NOT backed by anything server-side and stay
+     *   permanently `null`: every row in the backend's `jobs` table is, by that domain's own
+     *   construction, a dispatch/broadcast job (a rank/hail job never creates one), so there is no
+     *   real per-record classification to expose as `job_type` — hardcoding a constant would add
+     *   no information. A real `eta_min` needs a routing/live-traffic service this codebase does
+     *   not have; a flat-speed guess would be a fabricated arrival-time estimate. Callers must keep
+     *   degrading on `null` (e.g. [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s
+     *   dispatch card falls back to a live-GPS straight-line distance and omits ETA entirely).
      */
-    @SerialName("job_type") val jobType: String? = null, // "booked" | "rank_hail"
+    @SerialName("job_type") val jobType: String? = null, // "booked" | "rank_hail" -- always null, see above
     @SerialName("distance_km") val distanceKm: String? = null,
-    @SerialName("eta_min") val etaMin: Int? = null,
+    @SerialName("eta_min") val etaMin: Int? = null, // always null, see above
 )
 
 @Serializable

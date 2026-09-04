@@ -26,6 +26,7 @@ from app.models.fleet import Vehicle
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
 from app.models.user import User
 from app.schemas.trips import (
+    DriverEarningsTodayRead,
     ReceiptEmailRequest,
     ReceiptEmailResponse,
     ReceiptSmsRequest,
@@ -42,9 +43,10 @@ from app.schemas.trips import (
     TripUpdate,
 )
 from app.services import compliance_expiry as compliance_expiry_service
+from app.services import driver_engagement as driver_engagement_service
 from app.services import fatigue as fatigue_service
-from app.services import receipts as receipts_service
 from app.services import payments as payments_service
+from app.services import receipts as receipts_service
 from app.services.fare_engine import URBAN_TARIFF, resolve_time_class_and_peak, round_half_up
 from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
 from app.services.trips import (
@@ -56,6 +58,7 @@ from app.services.trips import (
     apply_tick,
     close_trip,
     compute_variance_pct,
+    driver_earnings_today,
     flag_trip_for_review,
     recompute_from_trace,
     resolve_is_maxi_vehicle,
@@ -393,6 +396,39 @@ async def list_trips(
     items = list(result.scalars().all())
 
     return TripListResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+# --- Earnings today (dashboard tiles) ------------------------------------
+
+
+@router.get("/earnings/today", response_model=DriverEarningsTodayRead)
+async def earnings_today(
+    tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DriverEarningsTodayRead:
+    """`/earnings/today` is two path segments, so it can never collide with
+    `GET /{trip_id}` below (a single segment) regardless of registration
+    order — kept above it anyway, next to `list_trips`, since both are
+    collection-level reads.
+
+    Caller-scoped, matching `app.api.v1.me`'s convention: always the
+    authenticated caller's own driver id
+    (`app.services.driver_engagement.resolve_driver_id`), never a query
+    param — a driver cannot read another driver's earnings through this
+    route. See `app.services.trips.driver_earnings_today` for the real
+    aggregate this returns and its "today" convention.
+    """
+    driver_id = driver_engagement_service.resolve_driver_id(current_user)
+    result = await driver_earnings_today(session, tenant_id=tenant_id, driver_id=driver_id)
+    return DriverEarningsTodayRead(
+        driver_id=result.driver_id,
+        date=result.today.isoformat(),
+        today_total=result.today_total,
+        yesterday_total=result.yesterday_total,
+        pct_change=result.pct_change,
+        trips_completed_today=result.trips_completed_today,
+    )
 
 
 # --- Get by id ----------------------------------------------------------

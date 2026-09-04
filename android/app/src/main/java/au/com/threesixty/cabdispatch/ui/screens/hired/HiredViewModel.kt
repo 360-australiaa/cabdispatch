@@ -149,6 +149,11 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 maxi = tripContext.isMaxiVehicle,
                 passengerCount = tripContext.passengerCount,
                 wheelchairHiring = tripContext.wheelchairHiring,
+                // Maxi-at-airport-rank fare-integrity fix (2026-09-05): this flag was already
+                // passed to fareEngine.startTrip() above (so the live on-device meter charged the
+                // maxi rate correctly) but was never persisted to Room, so it never reached the
+                // server via toSyncItemDto — see TripEntity.airportRankRequestedMaxi's doc.
+                airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
             )
             persistedTripClientUuid = trip.clientUuid
         }

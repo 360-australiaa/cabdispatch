@@ -73,6 +73,21 @@ data class TripEntity(
      * Defaults false so every existing row/call site keeps decoding and behaving unchanged. */
     val wheelchairHiring: Boolean = false,
 
+    /** True only when the hirer specifically requested a maxi-cab at a Sydney Airport rank —
+     * third input to `FareState.maxiRateApplied`: triggers the 150% maxi rate independent of
+     * [passengerCount] (i.e. even with fewer than 5 passengers), except when [wheelchairHiring] is
+     * also true (Fares Order cl 2(d)(ii) always wins). See
+     * [au.com.threesixty.cabdispatch.domain.fare.FareState.maxiRateApplied]'s doc and the backend's
+     * mirror field `Trip.airport_rank_requested_maxi` (`backend/app/schemas/trips.py`). Defaults
+     * false so every existing row/call site keeps decoding and behaving unchanged. Fare-integrity
+     * fix (2026-09-05): this flag was already correctly used by the on-device fare engine (see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s `fareEngine.startTrip`
+     * call) but was never persisted here or sent over the wire, so a maxi-at-airport-rank trip's
+     * [deviceTotal] (which correctly included the surcharge) could diverge from the server's
+     * independent recompute (which had no way to know the flag was set) and get rejected for
+     * exceeding the sync variance tolerance. */
+    val airportRankRequestedMaxi: Boolean = false,
+
     val startAt: String, // ISO-8601, set at openTrip()
     val endAt: String? = null, // ISO-8601, set at closeTrip()
 

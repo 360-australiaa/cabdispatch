@@ -226,6 +226,56 @@ class OutboxDrainerTest {
     }
 
     /**
+     * Regression test for the maxi-at-airport-rank fare-integrity fix (2026-09-05):
+     * [TripRepository.openTrip]'s `airportRankRequestedMaxi` parameter used to be silently dropped
+     * — it was accepted by [au.com.threesixty.cabdispatch.domain.FareEngine.startTrip] (so the live
+     * on-device meter correctly charged the maxi rate) but never persisted to
+     * [TripEntity.airportRankRequestedMaxi] or threaded into [TripSyncItemDto], so a synced trip's
+     * `device_total` (which correctly included the maxi surcharge) could diverge from the server's
+     * independent recompute (which had no way to know the flag was set) and get rejected for
+     * exceeding the sync variance tolerance. Proves the fix: the flag survives open -> Room ->
+     * close -> the wire payload [TripRepository.closeTrip] queues for `POST /v1/trips/sync`.
+     */
+    @Test
+    fun `airportRankRequestedMaxi survives open, close, and reaches the sync wire payload`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+        val repository = TripRepository(tripDao, outboxDao, fakeServer)
+
+        val opened = repository.openTrip(
+            vehicleId = "vehicle-1",
+            driverId = "driver-1",
+            shiftId = "shift-1",
+            tariffId = "tariff-1",
+            type = "rank_hail",
+            startLat = -33.8688,
+            startLng = 151.2093,
+            maxi = true,
+            passengerCount = 1,
+            airportRankRequestedMaxi = true,
+        )
+        assertTrue("openTrip() must persist the flag onto the Room row", opened.airportRankRequestedMaxi)
+
+        val closed = repository.closeTrip(
+            clientUuid = opened.clientUuid,
+            endLat = -33.875,
+            endLng = 151.21,
+            deviceTotal = "27.40",
+        )
+        assertTrue("closeTrip() must not clear the flag set at open", closed.airportRankRequestedMaxi)
+
+        val readyRow = outboxDao.getByClientUuid(OutboxEntityType.TRIP, opened.clientUuid)!!
+        val syncPayload = cabDispatchJson.decodeFromString<TripSyncItemDto>(readyRow.entityJson)
+        assertEquals(
+            "the flag must reach the exact payload POST /v1/trips/sync sends -- the ONLY " +
+                "network call this app's offline-first close flow makes",
+            true,
+            syncPayload.airportRankRequestedMaxi,
+        )
+    }
+
+    /**
      * Regression test for the "drop-off silently overwritten with the start point at close"
      * bug: [TripRepository.closeTrip] used to take non-null `endLat`/`endLng` and the only
      * caller ([au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]) had no

@@ -195,6 +195,32 @@ async def test_create_job_rejects_inverted_fare_range(client: AsyncClient, sessi
     assert resp.status_code == 422
 
 
+async def test_job_read_carries_a_real_straight_line_distance_km(client: AsyncClient, session: AsyncSession):
+    """Real gap closed (2026-09-05 API-audit pass): Android's JobDto already
+    declared/read `distance_km`, but no backend field ever backed it (always
+    null). Proves it's now a real, non-null value -- and that it's the exact
+    same haversine great-circle distance `app.services.trips.haversine_km`
+    computes elsewhere in this codebase, not a second, independently-defined
+    approximation."""
+    from app.services.trips import haversine_km
+
+    _tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant Distance")
+    resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    expected = haversine_km(-33.8688, 151.2093, -33.8568, 151.2153).quantize(Decimal("0.01"))
+    assert Decimal(str(body["distance_km"])) == expected
+    # Sanity: origin -> dest here is a real, non-trivial distance, not a
+    # degenerate same-point 0.00 that would pass a sloppier assertion.
+    assert expected > Decimal("0.5")
+
+    # GET /v1/jobs/{id} must carry the same computed field, not just create.
+    get_resp = await client.get(f"/v1/jobs/{body['id']}", headers=admin_headers)
+    assert get_resp.status_code == 200
+    assert Decimal(str(get_resp.json()["distance_km"])) == expected
+
+
 # --- accept (first-accept-wins) -----------------------------------------------------
 
 

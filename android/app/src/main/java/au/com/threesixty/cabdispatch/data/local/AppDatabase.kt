@@ -36,6 +36,11 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * Version bumped 7 -> 8 (History/Earnings real-data pass, Phase C 2026-09-03) adding two new
  * nullable [TripEntity] columns (`pickupAddress`, `dropoffAddress`) — same no-Migration shortcut
  * again, for the same still-pre-release reason.
+ * Version bumped 8 -> 9 (maxi-at-airport-rank fare-integrity fix, 2026-09-05) adding one new
+ * defaulted [TripEntity] column (`airportRankRequestedMaxi` Boolean = false) — the third input to
+ * the fare engine's maxi-rate eligibility check (alongside `passengerCount`/`wheelchairHiring`,
+ * added in the 5 -> 6 bump above) was already read correctly on-device but was never persisted or
+ * sent to the server; same no-Migration shortcut again, for the same still-pre-release reason.
  * No Migration
  * object is supplied for any bump so far because this project has never shipped v1 (no installed
  * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
@@ -64,7 +69,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

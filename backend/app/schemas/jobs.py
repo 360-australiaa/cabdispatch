@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.trips import haversine_km
 
 JobStatus = Literal["queued", "offered", "accepted", "expired", "cancelled"]
 JobOfferStatus = Literal["pending", "accepted", "declined", "expired"]
@@ -66,6 +68,30 @@ class JobRead(BaseModel):
     accepted_by_driver_id: str | None
     created_at: datetime
     updated_at: datetime
+    # Real gap closed (2026-09-05 API-audit pass): Android's JobDto already
+    # declared/read `distance_km`, but no backend field ever backed it.
+    # Straight-line (haversine) origin -> destination distance, computed here
+    # from this same response's own origin/dest lat/lng — never a stored
+    # column, never a routed/live-traffic distance. Same approximation
+    # app.services.trips.haversine_km already uses elsewhere in this
+    # codebase (e.g. toll-geofence detection), so this is an existing,
+    # already-trusted approximation, not a new one invented for this field.
+    # Deliberately real and always-present (never null) — no `eta_min`
+    # alongside it, and no `job_type` on this schema at all: unlike a
+    # straight-line distance between two known points, a genuine
+    # arrival-time estimate needs a real routing/traffic service this
+    # codebase does not have, and this domain's `Job` model has no per-record
+    # "type" classification stored to expose (every row here is, by this
+    # domain's own construction, a dispatch/broadcast job) — both are
+    # deliberately left unbuilt rather than fabricated. See this pass's
+    # report for the full reasoning.
+    distance_km: Decimal | None = None
+
+    @model_validator(mode="after")
+    def _derive_distance_km(self) -> "JobRead":
+        raw = haversine_km(self.origin_lat, self.origin_lng, self.dest_lat, self.dest_lng)
+        self.distance_km = raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return self
 
 
 # --- JobOffer -------------------------------------------------------------------

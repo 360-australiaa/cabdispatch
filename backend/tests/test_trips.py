@@ -22,7 +22,7 @@ point, tariff rows needed as fixtures here are inserted directly via the
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import Trip  # noqa: F401 — see module docstring
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip
 from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
 from app.services.fare_engine import round_down, round_half_up
@@ -1503,3 +1503,187 @@ async def test_tip_amount_is_tenant_isolated(client: AsyncClient, session: Async
     headers_b = await auth_headers(client, session, role="driver", tenant_name="Tenant B Tips")
     resp = await client.get(f"/v1/trips/{trip['id']}", headers=headers_b)
     assert resp.status_code == 404
+
+
+# --- earnings today (dashboard tiles, GET /v1/trips/earnings/today) ---------
+
+
+def _seed_closed_trip(
+    *, tenant_id: str, driver_id: str, start_at: datetime, total: Decimal, status: str = TRIP_STATUS_CLOSED
+) -> Trip:
+    """Inserts a trip row directly (bypassing the fare engine/create+close
+    API) — only the columns `driver_earnings_today` reads matter here, same
+    "seed the aggregate's own inputs directly" approach test_reports.py's
+    `_make_trip` and test_driver_engagement.py's `_trip` already use for
+    testing a SQL aggregate rather than the fare engine itself."""
+    return Trip(
+        tenant_id=tenant_id,
+        client_uuid=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        driver_id=driver_id,
+        tariff_id=str(uuid.uuid4()),
+        type="rank_hail",
+        status=status,
+        start_at=start_at,
+        end_at=start_at if status == TRIP_STATUS_CLOSED else None,
+        start_lat=-33.8688,
+        start_lng=151.2093,
+        total=total,
+    )
+
+
+async def test_earnings_today_requires_auth(client: AsyncClient):
+    resp = await client.get("/v1/trips/earnings/today")
+    assert resp.status_code in (401, 403)
+
+
+async def test_earnings_today_sums_only_the_callers_own_closed_trips_started_today(
+    client: AsyncClient, session: AsyncSession
+):
+    """Real, honest aggregate: sums `total` for CLOSED trips whose `start_at`
+    falls in today's UTC calendar day for the CALLING driver only — an open
+    trip today, a closed trip today for a different driver, and a closed
+    trip from yesterday must all be excluded from `today_total`."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today = datetime.now(UTC).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
+    today_evening = datetime.combine(today, time(18, 0), tzinfo=UTC)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+
+    other_driver_id = str(uuid.uuid4())
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("25.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_evening, total=Decimal("40.50")),
+            # Excluded: still open (no final total yet).
+            _seed_closed_trip(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                start_at=today_morning,
+                total=Decimal("999.00"),
+                status=TRIP_STATUS_OPEN,
+            ),
+            # Excluded: a different driver's closed trip, same tenant, same day.
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=other_driver_id, start_at=today_morning, total=Decimal("500.00")),
+            # Excluded from today_total (but feeds yesterday_total below): started yesterday.
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=yesterday_morning, total=Decimal("30.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["date"] == today.isoformat()
+    assert Decimal(body["today_total"]) == Decimal("65.50")
+    assert body["trips_completed_today"] == 2
+    assert Decimal(body["yesterday_total"]) == Decimal("30.00")
+
+
+async def test_earnings_today_pct_change_is_null_without_a_yesterday_baseline(
+    client: AsyncClient, session: AsyncSession
+):
+    """No yesterday trips at all -- and separately, a yesterday total of
+    exactly zero -- must both render as "no comparison available" (`null`),
+    never a fabricated 0% or 100%."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    session.add(_seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("20.00")))
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert Decimal(body["yesterday_total"]) == Decimal("0.00")
+    assert body["pct_change"] is None
+
+
+async def test_earnings_today_pct_change_is_computed_against_yesterday(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today = datetime.now(UTC).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("150.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=yesterday_morning, total=Decimal("100.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert Decimal(body["today_total"]) == Decimal("150.00")
+    assert Decimal(body["yesterday_total"]) == Decimal("100.00")
+    assert body["pct_change"] == pytest.approx(50.0)
+
+
+async def test_earnings_today_never_reads_another_drivers_trips_even_via_query_param(
+    client: AsyncClient, session: AsyncSession
+):
+    """Caller-scoped like app.api.v1.me: the endpoint must resolve `driver_id`
+    from the authenticated caller, never trust a client-supplied one — the
+    real-world motivation being Android's `ApiService.earningsToday` call
+    sends `?driver_id=...` as a query param (its own driver's id, in
+    practice) that this route must NOT treat as authoritative, exactly the
+    way `app.api.v1.me`'s routes never take a driver id from the caller."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    other_driver_id = str(uuid.uuid4())
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("10.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=other_driver_id, start_at=today_morning, total=Decimal("999.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get(
+        "/v1/trips/earnings/today", params={"driver_id": other_driver_id}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert Decimal(body["today_total"]) == Decimal("10.00")
+
+
+async def test_earnings_today_only_counts_closed_trips_status_and_tenant(client: AsyncClient, session: AsyncSession):
+    """A closed trip belonging to a different tenant (even with the same
+    driver_id string, which is possible since ids are unconstrained
+    cross-domain refs — see app.models.trips.Trip's module docstring) must
+    never bleed into this tenant's total."""
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Earnings Tenant A")
+    tenant_a = await _tenant_of(client, headers_a)
+    driver_id = _user_id_of(headers_a)
+
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Earnings Tenant B")
+    tenant_b = await _tenant_of(client, headers_b)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_a, driver_id=driver_id, start_at=today_morning, total=Decimal("15.00")),
+            # Same driver_id string, but a different tenant -- must not be counted.
+            _seed_closed_trip(tenant_id=tenant_b, driver_id=driver_id, start_at=today_morning, total=Decimal("777.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers_a)
+    assert resp.status_code == 200
+    assert Decimal(resp.json()["today_total"]) == Decimal("15.00")

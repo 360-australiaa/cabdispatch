@@ -164,6 +164,113 @@ async def test_create_driver_without_expiry_fields_defaults_to_null(client: Asyn
     assert body["driver_authority_expiry"] is None
 
 
+
+# --- suitability_status (2026-09-05 API-audit pass) --------------------------
+# Real gap closed: Android's UserDto already declared/read `suitability_status`
+# ("clear" is the field a VERIFIED badge maps to), but no backend field ever
+# backed it (always null). Derived here from the SAME driver_license_expiry/
+# driver_authority_expiry columns these tests already exercise above -- see
+# app.services.compliance_expiry.suitability_status_for's own doc for the
+# exact "worse of the two, null unless both are known" derivation.
+
+
+async def test_suitability_status_is_clear_when_both_expiries_are_comfortably_future(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="admin")
+    future = (datetime.now(UTC).date() + timedelta(days=365)).isoformat()
+    resp = await client.post(
+        "/v1/users",
+        json={
+            "name": "Clear Driver",
+            "email": _unique_email(),
+            "password": _PASSWORD,
+            "role": "driver",
+            "driver_license_expiry": future,
+            "driver_authority_expiry": future,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["suitability_status"] == "clear"
+
+
+async def test_suitability_status_is_null_when_either_expiry_is_missing(client: AsyncClient, session: AsyncSession):
+    """Fail-closed on the POSITIVE claim: missing data must never render as
+    "clear" -- see suitability_status_for's own doc. Only one of the two
+    dates set is exactly as "unknown" as neither being set."""
+    headers = await auth_headers(client, session, role="admin")
+    future = (datetime.now(UTC).date() + timedelta(days=365)).isoformat()
+
+    only_license = await client.post(
+        "/v1/users",
+        json={
+            "name": "Only License Driver",
+            "email": _unique_email(),
+            "password": _PASSWORD,
+            "role": "driver",
+            "driver_license_expiry": future,
+        },
+        headers=headers,
+    )
+    assert only_license.status_code == 201, only_license.text
+    assert only_license.json()["suitability_status"] is None
+
+    neither = await client.post(
+        "/v1/users",
+        json={"name": "No Expiry Driver 2", "email": _unique_email(), "password": _PASSWORD, "role": "driver"},
+        headers=headers,
+    )
+    assert neither.status_code == 201
+    assert neither.json()["suitability_status"] is None
+
+
+async def test_suitability_status_is_expired_when_either_date_has_actually_lapsed(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="admin")
+    future = (datetime.now(UTC).date() + timedelta(days=365)).isoformat()
+    past = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+
+    resp = await client.post(
+        "/v1/users",
+        json={
+            "name": "Expired Authority Driver",
+            "email": _unique_email(),
+            "password": _PASSWORD,
+            "role": "driver",
+            "driver_license_expiry": future,
+            "driver_authority_expiry": past,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["suitability_status"] == "expired"
+
+
+async def test_suitability_status_is_expiring_soon_when_within_the_warning_window(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="admin")
+    far_future = (datetime.now(UTC).date() + timedelta(days=365)).isoformat()
+    soon = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+
+    resp = await client.post(
+        "/v1/users",
+        json={
+            "name": "Expiring Soon Driver",
+            "email": _unique_email(),
+            "password": _PASSWORD,
+            "role": "driver",
+            "driver_license_expiry": soon,
+            "driver_authority_expiry": far_future,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["suitability_status"] == "expiring_soon"
+
+
 async def test_create_and_update_vehicle_with_expiry_fields(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
     registration_expiry = (datetime.now(UTC).date() + timedelta(days=45)).isoformat()

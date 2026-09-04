@@ -159,11 +159,11 @@ object CaptainPalette {
 
     // --- Fallback "illustrative map" tokens (2026-09-04 day-mode pass) -----------------------
     // [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `IllustrativeStreetGrid`
-    // and [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s duplicate
-    // of it drew a fixed dark-navy fake map (`Color(0xFF0D1420)` etc.) regardless of theme — a real
-    // bug this pass fixes (see this pass's report): a hardcoded night-map illustration behind a
-    // light-themed dashboard would look broken. Named here, referenced from both screens, so they
-    // no longer duplicate the same four literals.
+    // (and, until it was deleted as confirmed-dead code 2026-09-05, a duplicate of it in the
+    // Navigate placeholder screen) drew a fixed dark-navy fake map (`Color(0xFF0D1420)` etc.)
+    // regardless of theme — a real bug this pass fixes (see this pass's report): a hardcoded
+    // night-map illustration behind a light-themed dashboard would look broken. Named here so any
+    // future screen needing the same illustrative map doesn't duplicate these literals.
     var mapBg: Color by mutableStateOf(DarkTokens.mapBg); private set
     var mapStreet: Color by mutableStateOf(DarkTokens.mapStreet); private set
     var mapArterial: Color by mutableStateOf(DarkTokens.mapArterial); private set

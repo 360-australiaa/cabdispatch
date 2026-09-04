@@ -9,11 +9,11 @@ endpoints and the offline sync recompute path.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Vehicle
@@ -462,3 +462,84 @@ def flag_trip_for_review(*, trip: Trip, flagged: bool, reason: str | None) -> Tr
     else:
         trip.flagged_for_review = False
     return trip
+
+
+# --- Driver earnings today (dashboard tiles, GET /v1/trips/earnings/today) --
+
+
+@dataclass
+class DriverEarningsToday:
+    driver_id: str
+    today: date
+    today_total: Decimal
+    yesterday_total: Decimal
+    trips_completed_today: int
+
+    @property
+    def pct_change(self) -> float | None:
+        """`None` whenever there's no non-zero yesterday baseline to compare
+        against — callers must render "no comparison available", never a
+        fabricated 0%/100%."""
+        if self.yesterday_total == 0:
+            return None
+        return round(float((self.today_total - self.yesterday_total) / self.yesterday_total) * 100, 1)
+
+
+async def driver_earnings_today(
+    session: AsyncSession, *, tenant_id: str, driver_id: str, now: datetime | None = None
+) -> DriverEarningsToday:
+    """The calling driver's real completed-trip earnings for "today".
+
+    "Today" is the UTC calendar day — this codebase's one existing "today"
+    convention (see app.services.platform.get_platform_health's own
+    `start_of_today = datetime.now(UTC).replace(hour=0, ...)`, docstringed
+    there as "UTC calendar day"), not a Sydney-local day: there is no
+    Sydney-timezone helper anywhere in this codebase to reuse, and inventing
+    one for a single dashboard tile would be exactly the kind of
+    unreviewed new convention this pass was told not to introduce.
+
+    Bucketed by `Trip.start_at`, like every other date-bucketed money
+    aggregate in this codebase (app.services.reports.revenue_report,
+    app.services.platform.get_platform_health) — deliberately NOT
+    `Trip.end_at`. Only `status == "closed"` trips are counted (an open
+    trip has no final `total` yet, same rule `revenue_report` already
+    applies). All aggregation (SUM/COUNT) runs in SQL, never summed
+    Python-side over a fetched trip list, matching app.services.reports'
+    own "no float for money" rule; `today_total`/`yesterday_total` stay
+    `Decimal` all the way out.
+    """
+    now = now or datetime.now(UTC)
+    today = now.date()
+    start_of_today = datetime.combine(today, time.min, tzinfo=UTC)
+    start_of_tomorrow = start_of_today + timedelta(days=1)
+    start_of_yesterday = start_of_today - timedelta(days=1)
+
+    base_filters = (
+        Trip.tenant_id == tenant_id,
+        Trip.driver_id == driver_id,
+        Trip.status == TRIP_STATUS_CLOSED,
+    )
+
+    today_total, trips_completed_today = (
+        await session.execute(
+            select(func.sum(Trip.total), func.count(Trip.id)).where(
+                *base_filters, Trip.start_at >= start_of_today, Trip.start_at < start_of_tomorrow
+            )
+        )
+    ).one()
+
+    (yesterday_total,) = (
+        await session.execute(
+            select(func.sum(Trip.total)).where(
+                *base_filters, Trip.start_at >= start_of_yesterday, Trip.start_at < start_of_today
+            )
+        )
+    ).one()
+
+    return DriverEarningsToday(
+        driver_id=driver_id,
+        today=today,
+        today_total=today_total or Decimal("0.00"),
+        yesterday_total=yesterday_total or Decimal("0.00"),
+        trips_completed_today=trips_completed_today or 0,
+    )

@@ -508,12 +508,12 @@ private fun DockBar(
 }
 
 /**
- * The 7 dock tiles, mapped to real navigation targets. This app's wheel has only 6 fixed
+ * The 6 dock tiles, mapped to real navigation targets. This app's wheel has only 6 fixed
  * [WheelSlot]s (a hardcoded `SLOT_COUNT = 6`, see [au.com.threesixty.cabdispatch.ui.wheel.WheelState])
  * plus one further "demoted off the wheel" entry point (Plot/Zones, `CabDispatchRoutes.PLOT_ZONE`
- * — see that route constant's own doc). There is no distinct "History" or "Navigate" screen
- * anywhere in this codebase (confirmed: no such route in CabDispatchRoutes, no such composable
- * under ui/screens). Matched as closely as the real app structure allows:
+ * — see that route constant's own doc). There is no distinct "History" screen anywhere in this
+ * codebase (confirmed: no such route in CabDispatchRoutes, no such composable under ui/screens).
+ * Matched as closely as the real app structure allows:
  * - My Trips -> [WheelSlot.TRIPS] (trip history/detail — the closest existing match to "History")
  * - Plot -> the existing Zones/Plot entry point ([CabDispatchRoutes.PLOT_ZONE])
  * - Avail. Trips -> [WheelSlot.AVAILABLE_TRIPS]
@@ -523,20 +523,17 @@ private fun DockBar(
  *   have two distinct trips data sources; presented with a different layout via the
  *   `isHistoryVariant` flag on [onSelectWheelSlot] — see [TripsWheelContent]'s `variant` doc — so
  *   the two dock tiles at least render Figma's two different screens, not literally the same pane)
- * - Navigate -> [CabDispatchRoutes.NAVIGATE_PLACEHOLDER] (2026-08-26 dock-menu v2 pass: this is a
- *   genuinely new destination, not a WheelSlot — Figma node `35:356` has no dock/chrome at all, a
- *   full-screen in-trip turn-by-turn overlay mockup, confirming it isn't meant to live inside
- *   [WheelSlotContentSheet] alongside the other 6.
- *   2026-09-04 audit note: the "no real turn-by-turn navigation feature anywhere in this codebase"
- *   claim this comment used to make is now FALSE — [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel]
- *   (real Mapbox search/route/ETA/voice/reroute) shipped and is wired into the meter screen
- *   ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen]) the same day. It is deliberately
- *   not plugged into this tile — see [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s
- *   own doc for why that's a product-scope question, not a wiring gap. Separately, this whole tile
- *   is unreachable in the live app: this composable ([HomeDashboardV2ChromeOverlay]) only renders
- *   from [WheelDashboardScreen], which itself has no call site anywhere — the live dashboard is
- *   [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen], which has no Navigate rail
- *   item at all.
+ *
+ * 2026-09-05 audit: the "Navigate" tile (Figma node `35:356`, a full-screen in-trip turn-by-turn
+ * overlay mockup) and its `NavigatePlaceholderScreen` destination were deleted — re-confirmed
+ * dead: this composable ([HomeDashboardV2ChromeOverlay]) only renders from [WheelDashboardScreen],
+ * which itself has no call site anywhere — the live dashboard is
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen], which has no Navigate rail
+ * item at all. A real turn-by-turn feature does exist elsewhere in this app
+ * ([au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel], wired into
+ * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen]) but plugging it into a dock tile
+ * with zero reachable callers isn't a real fix — that remains a product-scope question, not a
+ * wiring gap, should this dashboard variant ever go live.
  *
  * [WheelDashboardScreen] still tracks which slot is "displayed" (`displayedSlotIndex`, unchanged
  * from v1 — the wheel-gesture code used to drive it, dock taps drive it now) and opens
@@ -561,7 +558,6 @@ private fun dockTiles(
         onClick = { onSelectWheelSlot(WheelSlot.MESSAGES.index, false) },
     ),
     DockTileSpec("History", "🕘", onClick = { onSelectWheelSlot(WheelSlot.TRIPS.index, true) }),
-    DockTileSpec("Navigate", "🧭", onClick = { navController.navigate(CabDispatchRoutes.NAVIGATE_PLACEHOLDER) }),
 )
 
 private data class DockTileSpec(

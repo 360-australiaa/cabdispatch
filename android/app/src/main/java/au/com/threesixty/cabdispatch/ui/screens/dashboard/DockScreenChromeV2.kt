@@ -170,8 +170,9 @@ class DockChromeViewModel(application: Application) : AndroidViewModel(applicati
 
 data class DockChromeStatus(val gpsOk: Boolean = false, val networkOk: Boolean = false)
 
-/** Which of the 7 dock tiles is "active" (highlighted gold) on the current screen. */
-enum class DockDestination { MY_TRIPS, PLOT, AVAILABLE_TRIPS, STATISTICS, MESSAGES, HISTORY, NAVIGATE }
+/** Which of the 6 dock tiles is "active" (highlighted gold) on the current screen. The 7th
+ * ("Navigate") was deleted 2026-09-05 — see [dockTilesV2]'s doc. */
+enum class DockDestination { MY_TRIPS, PLOT, AVAILABLE_TRIPS, STATISTICS, MESSAGES, HISTORY }
 
 /**
  * Full-bleed v2 chrome: page-gradient background ([WheelColorsV2.pageBackgroundBrush] — these 3
@@ -179,7 +180,7 @@ enum class DockDestination { MY_TRIPS, PLOT, AVAILABLE_TRIPS, STATISTICS, MESSAG
  * doc), top status/earnings/clock chips, the "Panel / Content" glass card ([content]), and the
  * bottom dock with [active] highlighted. Every dock tap navigates via the exact same routes
  * [HomeDashboardV2ChromeOverlay]'s `dockTiles` already uses — this is the one other place those
- * 7 destinations are wired from, so both call sites are kept in sync by inspection.
+ * 6 destinations are wired from, so both call sites are kept in sync by inspection.
  */
 @Composable
 fun DockScreenScaffoldV2(
@@ -524,19 +525,15 @@ private data class DockTileSpecV2(
 )
 
 /**
- * Same 7 destinations/targets as [HomeDashboardV2ChromeOverlay]'s `dockTiles` — see that
+ * Same 6 destinations/targets as [HomeDashboardV2ChromeOverlay]'s `dockTiles` — see that
  * function's doc for the full "why these route mappings" rationale (this app's wheel only has 6
  * fixed slots; My Trips and History both point at the one real Trips screen). Kept in sync with
- * that function by inspection since both are small and country to the same 7-destination contract;
+ * that function by inspection since both are small and cater to the same 6-destination contract;
  * a future pass could factor this list out to one shared source if a third call site appears.
  *
- * "Navigate" here routes back to [CabDispatchRoutes.IDLE] like the other wheel-slot tiles, not to
- * [CabDispatchRoutes.NAVIGATE_PLACEHOLDER] — this dock only exists inside the 3 satellite screens
- * called out in [DockChromeViewModel]'s class doc (Plot/Statistics/Navigate itself), so tapping
- * "Navigate" while already on the Navigate placeholder is a no-op destination either way. 2026-09-04
- * audit note: a real turn-by-turn feature (real Mapbox search/route/ETA/voice) now exists — see
- * [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s doc for why it
- * isn't plugged in here.
+ * 2026-09-05 audit: the "Navigate" tile (which used to route to [CabDispatchRoutes.IDLE], not the
+ * now-deleted `NavigatePlaceholderScreen` destination) was removed along with that screen — see
+ * [HomeDashboardV2ChromeOverlay]'s `dockTiles` doc for the confirmed-dead-code finding.
  */
 private fun dockTilesV2(
     navController: NavHostController,
@@ -588,14 +585,6 @@ private fun dockTilesV2(
         "History",
         Icons.Filled.Refresh,
         active = active == DockDestination.HISTORY,
-        onClick = {
-            navController.navigate(CabDispatchRoutes.IDLE) { launchSingleTop = true }
-        },
-    ),
-    DockTileSpecV2(
-        "Navigate",
-        Icons.Filled.Place,
-        active = active == DockDestination.NAVIGATE,
         onClick = {
             navController.navigate(CabDispatchRoutes.IDLE) { launchSingleTop = true }
         },

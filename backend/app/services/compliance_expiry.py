@@ -77,6 +77,43 @@ def _status_for(expiry: date, *, today: date) -> str | None:
     return None
 
 
+def suitability_status_for(
+    driver_license_expiry: date | None,
+    driver_authority_expiry: date | None,
+    *,
+    today: date | None = None,
+) -> str | None:
+    """Real, derived per-driver suitability signal backing
+    `app.schemas.user.UserRead.suitability_status` — the field a "VERIFIED"
+    badge maps to on an exact `"clear"` match (see that schema field's own
+    doc). The worse of `User.driver_license_expiry`/`.driver_authority_expiry`
+    (via `_status_for` above, the same function this module's alerting path
+    already uses): `"expired"` if either has actually lapsed, `"expiring_soon"`
+    if neither has lapsed but either is within the warning window, `"clear"`
+    only when BOTH are known and neither.
+
+    Returns `None` ("unknown") whenever EITHER expiry is null — fail-open per
+    this module's own doc (a null expiry means "unknown", never assumed
+    expired) — but the converse also holds: `"clear"` is a positive
+    suitability claim, so this function must never make it without both real
+    dates backing it. A driver missing one of the two dates gets `None`, not
+    a guessed `"clear"`. `None` renders identically to any non-`"clear"`
+    value on the client (no VERIFIED badge) — see `UserRead.suitability_status`'s
+    own doc — so this is never a regression for a driver record that simply
+    hasn't had both dates captured yet.
+    """
+    if driver_license_expiry is None or driver_authority_expiry is None:
+        return None
+    today = today if today is not None else datetime.now(UTC).date()
+    license_status = _status_for(driver_license_expiry, today=today)
+    authority_status = _status_for(driver_authority_expiry, today=today)
+    if "expired" in (license_status, authority_status):
+        return "expired"
+    if "expiring_soon" in (license_status, authority_status):
+        return "expiring_soon"
+    return "clear"
+
+
 async def _unacknowledged_alert_exists(
     session: AsyncSession,
     *,

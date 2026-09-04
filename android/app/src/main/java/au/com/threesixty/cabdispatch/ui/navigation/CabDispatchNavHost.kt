@@ -13,7 +13,6 @@ import au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen
 import au.com.threesixty.cabdispatch.ui.screens.logoff.LogOffScreen
 import au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen
 import au.com.threesixty.cabdispatch.ui.screens.messages.MessageThreadScreen
-import au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen
 import au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncScreen
 import au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen
 import au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen
@@ -108,18 +107,6 @@ object CabDispatchRoutes {
      * plot state); [ZONE_STATISTICS] is reached from a button on that screen and pops back to it. */
     const val PLOT_ZONE = "plot_zone"
     const val ZONE_STATISTICS = "zone_statistics"
-
-    /** Dock-menu v2 pass (2026-08-26): "Navigate" placeholder. Figma node `35:356` ("15 · Navigate",
-     * fileKey `JhEhok3n9bntRNS5Y1u3Yc`) mocks up a full-screen in-trip turn-by-turn banner/ETA
-     * overlay, but this codebase has no turn-by-turn navigation feature anywhere to back it with —
-     * the only real "navigate" affordance that exists is
-     * [au.com.threesixty.cabdispatch.ui.overlays.NavigateOverlay]/`openInMaps`, a one-shot deep
-     * link out to the device's own Maps app (no live route/ETA/speed state this app owns). This
-     * route is a visual-only placeholder screen matching the Figma layout with clearly-labelled
-     * static/mock figures — see [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s
-     * doc. TODO(product decision): a real Navigate feature needs a turn-by-turn/ETA data source
-     * (e.g. Mapbox Navigation SDK) this app does not currently have. */
-    const val NAVIGATE_PLACEHOLDER = "navigate_placeholder"
 
     /** Boot-time Terms and Conditions / Privacy Policy disclaimer (2026-08-10 meter-polish
      * pass), registered ahead of S1 -- see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]
@@ -305,9 +292,6 @@ fun CabDispatchNavHost(
         }
         composable(CabDispatchRoutes.LOG_OFF) {
             LogOffScreen(navController = navController)
-        }
-        composable(CabDispatchRoutes.NAVIGATE_PLACEHOLDER) {
-            NavigatePlaceholderScreen(navController = navController)
         }
     }
 }

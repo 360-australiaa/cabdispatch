@@ -95,6 +95,12 @@ class TripRepository(
         /** See [TripEntity.wheelchairHiring]'s doc — same "no UI call site sets this yet" note as
          * [passengerCount]. */
         wheelchairHiring: Boolean = false,
+        /** See [TripEntity.airportRankRequestedMaxi]'s doc (maxi-at-airport-rank fare-integrity
+         * fix, 2026-09-05). Defaulted false so every existing call site keeps compiling/behaving
+         * exactly as before; [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
+         * `openTripInRoom` is the one real call site that now passes a non-default value through,
+         * mirroring the same flag it already passes to `fareEngine.startTrip`. */
+        airportRankRequestedMaxi: Boolean = false,
         /** See [TripEntity.negotiatedTotal]'s doc — "Set Price" entry point (2026-08-10
          * meter-polish pass). Defaulted null so every existing call site (a normal metered Start
          * Meter tap) keeps compiling/behaving unchanged. */
@@ -129,6 +135,7 @@ class TripRepository(
             maxi = maxi,
             passengerCount = passengerCount,
             wheelchairHiring = wheelchairHiring,
+            airportRankRequestedMaxi = airportRankRequestedMaxi,
             startAt = Instant.ofEpochMilli(now).toString(),
             startLat = startLat,
             startLng = startLng,
@@ -402,11 +409,15 @@ class TripRepository(
             maxi = trip.maxi,
             passengerCount = trip.passengerCount,
             wheelchairHiring = trip.wheelchairHiring,
+            // Maxi-at-airport-rank fare-integrity fix (2026-09-05): the backend's TripSyncItem
+            // schema already declares/validates this field (backend/app/schemas/trips.py) and the
+            // on-device fare engine already reads it correctly (see TripEntity.airportRankRequestedMaxi's
+            // doc) — this line is what actually gets a trip closed with the flag set to carry it to
+            // the server, so device_total (which includes the surcharge) doesn't diverge from the
+            // server's independent recompute and get rejected for exceeding the sync variance
+            // tolerance.
+            airportRankRequestedMaxi = trip.airportRankRequestedMaxi,
             tolls = trip.tolls,
-            // (kept for clarity: passengerCount/wheelchairHiring above round-trip to the wire even
-            // though no UI call site sets them to a non-default value yet, same forward-compatible
-            // "send it anyway" convention this file already uses for voucherCode/accountReference/
-            // splitPayments above.)
             extras = trip.extras,
             cleaningFee = trip.cleaningFee,
             surchargePct = trip.surchargePct,

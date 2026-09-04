@@ -438,3 +438,34 @@ class ReceiptSmsResponse(BaseModel):
     receipt_ref: str | None = None
     pdf_relative_path: str
     pdf_generated_now: bool
+
+
+# --- Driver earnings today (dashboard tiles) ---------------------------------
+
+
+class DriverEarningsTodayRead(BaseModel):
+    """`GET /v1/trips/earnings/today` response — backs the driver-tablet
+    dashboard's earnings tile. Caller-scoped: always the authenticated
+    caller's own `driver_id` (see app.api.v1.trips.earnings_today), same
+    convention as app.api.v1.me.
+
+    `today`/`yesterday` are UTC calendar days (this codebase's one existing
+    "today" convention — see app.services.platform.get_platform_health's
+    `total_trips_today`), bucketed by `Trip.start_at` like every other
+    date-bucketed aggregate in this codebase (app.services.reports,
+    app.services.platform) — NOT `Trip.end_at`. Only `status == "closed"`
+    trips are counted (an open trip has no final `total` yet, same rule
+    app.services.reports.revenue_report already applies).
+
+    `pct_change` is `None` whenever there is no non-zero yesterday total to
+    compare against (no yesterday trips, or yesterday's total was exactly
+    zero) — callers must render "no comparison available", never a
+    fabricated 0%/100%.
+    """
+
+    driver_id: str
+    date: str = Field(description="Today's UTC calendar date, ISO-8601 (YYYY-MM-DD)")
+    today_total: Decimal
+    yesterday_total: Decimal
+    pct_change: float | None = None
+    trips_completed_today: int
