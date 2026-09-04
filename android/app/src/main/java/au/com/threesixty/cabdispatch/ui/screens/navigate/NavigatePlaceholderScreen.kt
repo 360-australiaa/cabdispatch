@@ -43,20 +43,30 @@ import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 
 /**
  * 24b · Navigate — reskinned onto [CaptainPalette] (2026-08-29 purple migration pass), still a
- * VISUAL-ONLY placeholder. Nothing about this screen's honest nature changed: this app has NO
- * turn-by-turn navigation feature anywhere in the codebase (the only real "navigate" affordance is
- * the one-shot `openInMaps` geo: deep link, which lives on the job-offer screen, not here), so
- * every route/instruction/ETA figure on this screen is a fixed illustrative value and is labelled
- * as such on-screen — see the PREVIEW chip and the bottom bar's explicit preview copy, both kept
- * exactly as prominent as before. The single live affordance is EXIT NAV → pop.
+ * VISUAL-ONLY placeholder, and now (2026-09-04 audit pass) confirmed **dead/unreachable**: no live
+ * navigation path calls [CabDispatchRoutes.NAVIGATE_PLACEHOLDER] any more (its only other referrer,
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.HomeDashboardV2]'s `dockTiles`, is itself
+ * unreachable — [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen], the only
+ * composable that ever renders that dock, has no call site anywhere in the app; the live dashboard,
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen], has no Navigate rail item at
+ * all — see that file's "omissions" comment). Left in the tree rather than deleted as this audit
+ * pass's scope is reporting, not dead-code removal; a future pass can delete this file + the
+ * `NAVIGATE_PLACEHOLDER` route + `WheelDashboardScreen` together.
  *
- * The "ARRIVED — START METER" / "NO JOB" CTAs from the old frame are NOT reproduced: they would
- * fabricate a meter-start and a quick-message action this screen has no wiring for (same "do not
- * fabricate turn-by-turn logic" brief as before); the green CTA slot carries the real EXIT NAV
- * instead. No new interactive control is added by this reskin.
- *
- * The map's decorative route/pickup marker are redrawn on [CaptainPalette] tones instead of the
- * old Deck map palette; they remain decorative vectors, not shipped as image assets.
+ * The claim this doc used to make — "this app has NO turn-by-turn navigation feature anywhere in
+ * the codebase" — is no longer true and must not be trusted: [MeterNavViewModel] (destination
+ * search, real Mapbox Directions route, live ETA, off-route reroute, spoken turns) shipped
+ * 2026-09-04 and is wired into [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] (the
+ * meter screen, reached via a real accepted job or the dashboard's METER rail item while a trip is
+ * active) — a real, reachable, non-fabricated turn-by-turn feature. It is intentionally NOT plugged
+ * in here: its whole UI (search dialog, route/ETA panel, map-panel mockup switch) is coupled to the
+ * meter's fare/trip state and in-progress-hire layout, not a standalone destination a driver could
+ * reach with no active job — turning it into one is a product-scope question (does "Navigate"
+ * mean routing to an accepted job's *pickup* before the meter starts, per this screen's original
+ * "ARRIVED — START METER"/"NO JOB" mockup CTAs, which don't match the current accept-job flow that
+ * goes straight to [CabDispatchRoutes.HIRED]? or a general point-to-point tool with no trip tie?),
+ * not a wiring gap. Every other line below (illustrative-only figures, PREVIEW labelling, decorative
+ * map) is unchanged and still accurate for what remains of this now-dead screen.
  */
 @Composable
 fun NavigatePlaceholderScreen(navController: NavHostController) {

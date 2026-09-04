@@ -526,10 +526,17 @@ private data class DockTileSpecV2(
 /**
  * Same 7 destinations/targets as [HomeDashboardV2ChromeOverlay]'s `dockTiles` — see that
  * function's doc for the full "why these route mappings" rationale (this app's wheel only has 6
- * fixed slots; My Trips and History both point at the one real Trips screen; Navigate has no real
- * turn-by-turn feature to route to). Kept in sync with that function by inspection since both are
- * small and country to the same 7-destination contract; a future pass could factor this list out
- * to one shared source if a third call site appears.
+ * fixed slots; My Trips and History both point at the one real Trips screen). Kept in sync with
+ * that function by inspection since both are small and country to the same 7-destination contract;
+ * a future pass could factor this list out to one shared source if a third call site appears.
+ *
+ * "Navigate" here routes back to [CabDispatchRoutes.IDLE] like the other wheel-slot tiles, not to
+ * [CabDispatchRoutes.NAVIGATE_PLACEHOLDER] — this dock only exists inside the 3 satellite screens
+ * called out in [DockChromeViewModel]'s class doc (Plot/Statistics/Navigate itself), so tapping
+ * "Navigate" while already on the Navigate placeholder is a no-op destination either way. 2026-09-04
+ * audit note: a real turn-by-turn feature (real Mapbox search/route/ETA/voice) now exists — see
+ * [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s doc for why it
+ * isn't plugged in here.
  */
 private fun dockTilesV2(
     navController: NavHostController,

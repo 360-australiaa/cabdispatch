@@ -526,12 +526,17 @@ private fun DockBar(
  * - Navigate -> [CabDispatchRoutes.NAVIGATE_PLACEHOLDER] (2026-08-26 dock-menu v2 pass: this is a
  *   genuinely new destination, not a WheelSlot — Figma node `35:356` has no dock/chrome at all, a
  *   full-screen in-trip turn-by-turn overlay mockup, confirming it isn't meant to live inside
- *   [WheelSlotContentSheet] alongside the other 6. There is no real turn-by-turn navigation feature
- *   anywhere in this codebase to route to (confirmed: [au.com.threesixty.cabdispatch.ui.overlays.NavigateOverlay]
- *   is a "deep-link to the device's maps app" convenience card with no live route/ETA state) —
- *   TODO(product decision): a real Navigate feature needs turn-by-turn/ETA data from somewhere
- *   (Mapbox Navigation SDK or similar) that this app does not have; this tile opens a clearly-
- *   flagged placeholder screen instead of fabricating live nav data.
+ *   [WheelSlotContentSheet] alongside the other 6.
+ *   2026-09-04 audit note: the "no real turn-by-turn navigation feature anywhere in this codebase"
+ *   claim this comment used to make is now FALSE — [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel]
+ *   (real Mapbox search/route/ETA/voice/reroute) shipped and is wired into the meter screen
+ *   ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen]) the same day. It is deliberately
+ *   not plugged into this tile — see [au.com.threesixty.cabdispatch.ui.screens.navigate.NavigatePlaceholderScreen]'s
+ *   own doc for why that's a product-scope question, not a wiring gap. Separately, this whole tile
+ *   is unreachable in the live app: this composable ([HomeDashboardV2ChromeOverlay]) only renders
+ *   from [WheelDashboardScreen], which itself has no call site anywhere — the live dashboard is
+ *   [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen], which has no Navigate rail
+ *   item at all.
  *
  * [WheelDashboardScreen] still tracks which slot is "displayed" (`displayedSlotIndex`, unchanged
  * from v1 — the wheel-gesture code used to drive it, dock taps drive it now) and opens
