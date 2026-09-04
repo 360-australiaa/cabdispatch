@@ -32,8 +32,6 @@ import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -220,11 +218,13 @@ private fun ClosingStatusStrip() {
  *   line, derived from the real pre-multiplier component rows plus the tariff's own multiplier
  *   field — never a hardcoded "×1.5". Only shown for a metered (non-negotiated) trip, since a
  *   negotiated total is never itself maxi-multiplied (see [FareEngine.close]'s `effectiveFare`).
- * - PSL is its own line + toggle (wired to [CloseAndPayViewModel.setIncludePsl], previously
- *   reachable only by direct code — see [FARE_ENGINE_2026_CHANGES.md] Fix 6), suppressed entirely
- *   for the Sydney Airport Fixed Fare path (verified: [reconstructFareState] sets `state.fixedFare`
- *   for `trip.type == "airport_fixed"`, and [FareEngine.close]'s `fixedFare` branch hardcodes
- *   `psl = BigDecimal.ZERO` regardless of `includePsl`, so the toggle would be a lie there).
+ * - PSL is a mandatory regulated pass-through, not a driver-optional toggle (2026-09-05 fix —
+ *   the Fares Order levy must be collected whenever it's genuinely due, so there is no on/off
+ *   switch here any more; drivers see it itemized exactly like Flagfall/Distance/Waiting).
+ *   Suppressed entirely for the Sydney Airport Fixed Fare path — the one real, already-coded
+ *   exemption (verified: [reconstructFareState] sets `state.fixedFare` for
+ *   `trip.type == "airport_fixed"`, and [FareEngine.close]'s `fixedFare` branch hardcodes
+ *   `psl = BigDecimal.ZERO` regardless of `includePsl`) — every other trip type always shows it.
  * - Cleaning fee is its own line when non-zero, with an honest cap caption
  *   ([au.com.threesixty.cabdispatch.domain.fare.Tariff.cleaningFeeCap], not a hardcoded "$124.14").
  * - The non-cash surcharge line shows the *actual* live percentage
@@ -236,7 +236,6 @@ private fun ClosingStatusStrip() {
 @Composable
 private fun TotalCol(
     state: CloseAndPayUiState.ReadyToClose,
-    vm: CloseAndPayViewModel,
     onReportSoiling: () -> Unit,
     onAddTip: () -> Unit,
     modifier: Modifier = Modifier,
@@ -244,8 +243,8 @@ private fun TotalCol(
     val breakdown = state.breakdown
     val tariff = state.tariff
     // Verified (not assumed) against FareEngine.close()/reconstructFareState — see this
-    // function's doc — that the Sydney Airport Fixed Fare path never reads includePsl and always
-    // zeroes psl regardless, so a PSL toggle here would be showing a control with no real effect.
+    // function's doc — that the Sydney Airport Fixed Fare path always zeroes psl regardless of
+    // includePsl, so it's the one real exemption where the levy line is genuinely not due.
     val isAirportFixed = state.trip.type == "airport_fixed"
 
     // Scrollable (2026-09-03 tips live pass, real device finding): the added Tip row pushed
@@ -323,13 +322,11 @@ private fun TotalCol(
             BreakdownRow("Tolls", breakdown.tolls.money())
             if (breakdown.extras.signum() > 0) BreakdownRow("Extras", breakdown.extras.money())
             if (breakdown.cleaningFee.signum() > 0) BreakdownRow("Cleaning fee", breakdown.cleaningFee.money())
+            // Mandatory regulated levy — no toggle. Shown as a fixed line item exactly like
+            // Flagfall/Distance/Waiting above; suppressed only for the one real, already-coded
+            // exemption (Sydney Airport Fixed Fare, see isAirportFixed's doc above).
             if (!isAirportFixed) {
-                PslToggleRow(
-                    pslAmount = tariff.pslAmount,
-                    currentPsl = breakdown.psl,
-                    includePsl = state.includePsl,
-                    onToggle = vm::setIncludePsl,
-                )
+                BreakdownRow("Point to Point Transport Levy", breakdown.psl.money())
             }
             if (breakdown.surcharge.signum() > 0) {
                 val pctLabel = state.surchargePct.stripTrailingZeros().toPlainString()
@@ -386,43 +383,6 @@ private fun BreakdownRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
         Text(value, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-    }
-}
-
-/** PSL line + driver-facing toggle — the Fares Order makes pass-through *optional* (capped at
- * [pslAmount]), not mandatory, so a driver can switch it off for a specific trip. Defaults to ON
- * per [CloseAndPayViewModel.loadTariffAndInit]'s `defaultIncludePsl`; this is the first UI call
- * site for [CloseAndPayViewModel.setIncludePsl]. */
-@Composable
-private fun PslToggleRow(pslAmount: BigDecimal, currentPsl: BigDecimal, includePsl: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column {
-            Text("Point to Point Transport Levy", fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
-            Text(
-                if (includePsl) "Optional pass-through, capped at ${pslAmount.money()}" else "Switched off for this trip",
-                fontFamily = InterFamily,
-                fontSize = 12.sp,
-                color = CaptainPalette.textMuted,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                currentPsl.money(),
-                fontFamily = RobotoMonoFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 16.sp,
-                color = CaptainPalette.textPrimary,
-                modifier = Modifier.padding(end = 10.dp),
-            )
-            Switch(
-                checked = includePsl,
-                onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = CaptainPalette.accent,
-                    checkedTrackColor = CaptainPalette.accent.copy(alpha = 0.4f),
-                ),
-            )
-        }
     }
 }
 
@@ -688,7 +648,7 @@ private fun MethodPickerScreen(
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {
-            TotalCol(state = state, vm = vm, onReportSoiling = { showCleaningDialog = true }, onAddTip = { showTipDialog = true })
+            TotalCol(state = state, onReportSoiling = { showCleaningDialog = true }, onAddTip = { showTipDialog = true })
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {

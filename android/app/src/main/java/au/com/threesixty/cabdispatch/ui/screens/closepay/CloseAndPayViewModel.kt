@@ -111,6 +111,15 @@ sealed interface CloseAndPayUiState {
         val paymentMethod: PaymentMethodOption,
         val surchargePct: BigDecimal,
         val cleaningFee: BigDecimal,
+        /**
+         * The Passenger Service Levy is a mandatory Fares Order pass-through, not a driver
+         * choice (2026-09-05 fix — this used to be a driver-facing `Switch` in
+         * `CloseAndPayScreen.kt` wired to a since-removed `setIncludePsl()`). Always `true` here;
+         * [loadTariffAndInit] is the only place that sets it and there is no remaining mutator.
+         * The Sydney Airport Fixed Fare path still correctly bills zero PSL regardless of this
+         * value — [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]'s `fixedFare`
+         * branch never reads it at all — so that one real exemption is unaffected.
+         */
         val includePsl: Boolean,
         val cashTendered: String,
         val docketNumber: String,
@@ -277,20 +286,21 @@ class CloseAndPayViewModel : ViewModel() {
         }
         val tariff = tariffDto.toDomainTariff()
         val method = PaymentMethodOption.CASH
-        // NSW-compliant fleets pass the PSL through by default (Point to Point Transport (Fares)
-        // Order 2026 compliance pass, Fix 6) — still overridable via setIncludePsl() once a UI
-        // toggle for this exists. Structurally a no-op on the Sydney Airport Fixed Fare path
-        // either way: FareEngine.close()'s fixedFare branch never reads includePsl at all, see
-        // that method's doc.
-        val defaultIncludePsl = true
-        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = defaultIncludePsl)
+        // The Passenger Service Levy is a mandatory regulated pass-through (Point to Point
+        // Transport (Fares) Order 2026), not a driver-optional toggle (2026-09-05 fix — this used
+        // to be overridable via a UI Switch/setIncludePsl(); both are gone now, so this is
+        // unconditionally true with no remaining code path to disable it). Structurally a no-op on
+        // the Sydney Airport Fixed Fare path either way — the one real, already-coded exemption:
+        // FareEngine.close()'s fixedFare branch never reads includePsl at all, see that method's doc.
+        val includePsl = true
+        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = includePsl)
         _uiState.value = CloseAndPayUiState.ReadyToClose(
             trip = trip,
             tariff = tariff,
             paymentMethod = method,
             surchargePct = BigDecimal.ZERO,
             cleaningFee = BigDecimal.ZERO,
-            includePsl = defaultIncludePsl,
+            includePsl = includePsl,
             cashTendered = "",
             docketNumber = "",
             docketNotes = "",
@@ -408,12 +418,10 @@ class CloseAndPayViewModel : ViewModel() {
         recomputed(state.copy(cleaningFee = fee.coerceIn(BigDecimal.ZERO, state.tariff.cleaningFeeCap)))
     }
 
-    fun setIncludePsl(include: Boolean) = updateReady { state -> recomputed(state.copy(includePsl = include)) }
-
     /**
      * Sets (or clears, with [BigDecimal.ZERO]) the driver tip — see
      * [CloseAndPayUiState.ReadyToClose.tip]'s doc. Deliberately does NOT call [recomputed]:
-     * unlike [setCleaningFee]/[setIncludePsl]/[setSurchargePct] above, a tip never re-derives
+     * unlike [setCleaningFee]/[setSurchargePct] above, a tip never re-derives
      * [FareBreakdown] (it never reaches [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]
      * at all) — only [CloseAndPayUiState.ReadyToClose.totalDue] (a plain addition) changes.
      */
