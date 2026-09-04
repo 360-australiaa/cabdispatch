@@ -2,7 +2,6 @@ package au.com.threesixty.cabdispatch.ui.screens.vouchers
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,8 +38,14 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.VoucherDto
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
+import au.com.threesixty.cabdispatch.ui.theme.gameClick
+import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -72,6 +77,14 @@ import java.time.format.DateTimeFormatter
  * - **Available**: not redeemed, and `expiresAt` is null or still in the future.
  * - **Used**: `redeemedAt` set (regardless of `expiresAt` — once redeemed, expiry is moot).
  * - **Expired**: not redeemed, but `expiresAt` has passed.
+ *
+ * **HUD kit rebuild (2026-09-04).** Purely visual — same fetch, same client-side bucketing/lookup
+ * logic above, same "look up, don't apply" honesty rule on the right-hand panel; only the surfaces
+ * changed: the tab row is now the kit's glowing pill (same shape/press language as
+ * [au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent]'s `PeriodPill`), each
+ * voucher is a [GlassCard] row with its value as a [RollingMoneyText] and its status as a
+ * [HudStatusPill] (Success/Neutral/Danger for Available/Used/Expired), and the lookup panel is a
+ * [GlassCard] hosting the same real search field, button and result — never an "apply" affordance.
  */
 @Composable
 fun VouchersPaneContent(modifier: Modifier = Modifier) {
@@ -89,7 +102,7 @@ fun VouchersPaneContent(modifier: Modifier = Modifier) {
         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
             when {
                 vouchers == null && !loadError -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = CaptainPalette.accent)
+                    CircularProgressIndicator(color = CaptainPalette.hudAccent)
                 }
                 loadError -> Text(
                     "Couldn't load vouchers — check your connection and try again.",
@@ -159,67 +172,48 @@ private fun bucketVouchers(all: List<VoucherDto>, now: Instant = Instant.now()):
     return VoucherBuckets(available = available, used = used, expired = expired)
 }
 
+/** Same pill shape/press language as `EarningsWheelContent`'s `PeriodPill` — 44dp, fully-round,
+ * HUD accent fill + [neonGlow] when selected, [gameClick] press feedback. */
 @Composable
 private fun VoucherTabPill(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) CaptainPalette.primary else CaptainPalette.raised
+    val shape = RoundedCornerShape(999.dp)
+    val bg = if (selected) CaptainPalette.hudAccent else CaptainPalette.hudGlass
     val textColor = if (selected) CaptainPalette.textPrimary else CaptainPalette.textSecondary
     Box(
         modifier = Modifier
             .height(44.dp)
-            .clip(RoundedCornerShape(999.dp))
+            .then(if (selected) Modifier.neonGlow(CaptainPalette.hudAccent, 999.dp, strength = 0.8f, spread = 4.dp) else Modifier)
+            .clip(shape)
             .background(bg)
-            .border(1.dp, if (selected) CaptainPalette.primary else CaptainPalette.panelBorder, RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
+            .border(1.dp, if (selected) CaptainPalette.hudSweepMid else CaptainPalette.hudGlassBorderPurple, shape)
+            .gameClick(onClick = onClick, shape = shape, glowColor = CaptainPalette.hudSweepMid)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            "${label.uppercase()} ($count)",
-            color = textColor,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
-        )
+        Text("${label.uppercase()} ($count)", color = textColor, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
     }
 }
 
 @Composable
 private fun VoucherCard(voucher: VoucherDto, tab: VoucherTab) {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val (statusLabel, tone) = when (tab) {
+        VoucherTab.AVAILABLE -> (voucher.expiresAt?.let { "Expires ${formatVoucherDate(it)}" } ?: "No expiry") to HudTone.Success
+        VoucherTab.USED -> (voucher.redeemedAt?.let { "Redeemed ${formatVoucherDate(it)}" } ?: "Redeemed") to HudTone.Neutral
+        VoucherTab.EXPIRED -> (voucher.expiresAt?.let { "Expired ${formatVoucherDate(it)}" } ?: "Expired") to HudTone.Danger
+    }
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
+        Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(voucher.code, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
-                Text(formatAud(voucher.valueAud), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.accent)
+                Text(voucher.code, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
+                RollingMoneyText(amount = formatAud(voucher.valueAud), fontSize = 24.sp, color = CaptainPalette.hudAccent)
             }
-            when (tab) {
-                VoucherTab.AVAILABLE -> Text(
-                    voucher.expiresAt?.let { "Expires ${formatVoucherDate(it)}" } ?: "No expiry",
-                    fontFamily = InterFamily,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textSecondary,
-                )
-                VoucherTab.USED -> Text(
-                    voucher.redeemedAt?.let { "Redeemed ${formatVoucherDate(it)}" } ?: "Redeemed",
-                    fontFamily = InterFamily,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textSecondary,
-                )
-                VoucherTab.EXPIRED -> Text(
-                    voucher.expiresAt?.let { "Expired ${formatVoucherDate(it)}" } ?: "Expired",
-                    fontFamily = InterFamily,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.danger,
-                )
-            }
-            // Real field, shown only when present — the backend never fabricates a trip link for a
-            // voucher that wasn't actually redeemed against one.
-            voucher.redeemedByTripId?.let { tripId ->
-                Text(
-                    "Trip #${tripId.take(8)}",
-                    fontFamily = InterFamily,
-                    fontSize = 13.sp,
-                    color = CaptainPalette.textMuted,
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                HudStatusPill(label = tab.name.take(1) + tab.name.drop(1).lowercase(), value = statusLabel, tone = tone, pulsing = false)
+                // Real field, shown only when present — the backend never fabricates a trip link for a
+                // voucher that wasn't actually redeemed against one.
+                voucher.redeemedByTripId?.let { tripId ->
+                    Text("Trip #${tripId.take(8)}", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                }
             }
         }
     }
@@ -243,9 +237,16 @@ private fun CheckVoucherPanel(lookup: (String) -> VoucherDto?, listLoaded: Boole
     var checked by remember { mutableStateOf<VoucherDto?>(null) }
     var notFound by remember { mutableStateOf(false) }
 
-    CaptainPanel(modifier = modifier) {
+    GlassCard(modifier = modifier, cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
         Column(modifier = Modifier.padding(20.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("CHECK A VOUCHER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.accent)
+            Text(
+                "CHECK A VOUCHER",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                letterSpacing = 1.sp,
+                color = CaptainPalette.hudAccent,
+            )
             Text(
                 "Redemption happens at Close & Pay, against the trip being paid for — this only " +
                     "checks whether a code is real and still valid.",
@@ -285,24 +286,24 @@ private fun CheckVoucherPanel(lookup: (String) -> VoucherDto?, listLoaded: Boole
 private fun CheckedVoucherResult(voucher: VoucherDto) {
     val now = Instant.now()
     val expired = voucher.redeemedAt == null && voucher.expiresAt?.let { parseVoucherInstant(it) }?.isBefore(now) == true
-    val (statusText, statusColor) = when {
-        voucher.redeemedAt != null -> "Already redeemed" to CaptainPalette.textSecondary
-        expired -> "Expired" to CaptainPalette.danger
-        else -> "Valid — ready to redeem at Close & Pay" to CaptainPalette.success
+    val (statusText, tone) = when {
+        voucher.redeemedAt != null -> "Already redeemed" to HudTone.Neutral
+        expired -> "Expired" to HudTone.Danger
+        else -> "Valid — ready to redeem at Close & Pay" to HudTone.Success
     }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.raised)
+            .background(CaptainPalette.hudTrack)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(voucher.code, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-            Text(formatAud(voucher.valueAud), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.accent)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(voucher.code, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+            RollingMoneyText(amount = formatAud(voucher.valueAud), fontSize = 20.sp, color = CaptainPalette.hudAccent)
         }
-        Text(statusText, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = statusColor)
+        HudStatusPill(label = "Status", value = statusText, tone = tone, pulsing = false, modifier = Modifier.fillMaxWidth())
         voucher.expiresAt?.let {
             Text("Expires ${formatVoucherDate(it)}", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
         }
@@ -317,20 +318,21 @@ private fun VoucherCodeField(value: String, onValueChange: (String) -> Unit, pla
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp)),
+            .border(1.dp, CaptainPalette.hudGlassBorderPurple, RoundedCornerShape(14.dp)),
         placeholder = { Text(placeholder, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textMuted) },
         textStyle = TextStyle(fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary),
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = CaptainPalette.inset,
-            unfocusedContainerColor = CaptainPalette.inset,
-            disabledContainerColor = CaptainPalette.inset,
+            focusedContainerColor = CaptainPalette.hudTrack,
+            unfocusedContainerColor = CaptainPalette.hudTrack,
+            disabledContainerColor = CaptainPalette.hudTrack,
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
             disabledIndicatorColor = Color.Transparent,
             focusedTextColor = CaptainPalette.textPrimary,
             unfocusedTextColor = CaptainPalette.textPrimary,
+            cursorColor = CaptainPalette.hudAccent,
         ),
     )
 }

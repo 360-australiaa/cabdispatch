@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -54,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -69,11 +71,15 @@ import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.PaneShell
-import au.com.threesixty.cabdispatch.ui.theme.TwoPaneShell
+import au.com.threesixty.cabdispatch.ui.theme.color
+import au.com.threesixty.cabdispatch.ui.theme.gameClick
+import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 
 private enum class SettingsSubScreen { MAIN, FACTORY_RESET_PIN, PAIR_METER }
 
@@ -95,16 +101,18 @@ private enum class SettingsTab(val label: String) {
 }
 
 /**
- * 31 · Settings & Diagnostics — two-pane pass (2026-09-03): replaces the old single-panel
- * [SettingsSubScreen] state-machine's MAIN screen with a persistent left tab rail + right content
- * panel ([au.com.threesixty.cabdispatch.ui.theme.TwoPaneShell], a new sibling to
- * [au.com.threesixty.cabdispatch.ui.theme.PaneShell] built for exactly this screen — see that
- * composable's own doc for why it isn't a rework of [au.com.threesixty.cabdispatch.ui.theme.PaneShell]
- * itself), matching the mockup's General/Notifications/Sound & Voice/Display/Payment Methods/
- * Printer/About layout. Every [SettingsViewModel] read/call already wired before this pass (GPS/
- * network polling, printer discovery/pairing, offline-map download states, fare schedule, force-
- * update + heartbeat, MDM locate response, admin-PIN-gated factory reset) is unchanged — this pass
- * only re-homes each piece of content into a tab, plus adds the three real preference rows below.
+ * 31 · Settings & Diagnostics — two-pane pass (2026-09-03), restyled onto the HUD kit
+ * (2026-09-04): a persistent left tab rail + right content panel, both now [GlassCard]s
+ * ([SettingsTabRail] for the rail, its active tile glowing; a `GlassCard` content panel in
+ * [MainSettingsContent] for the tab body), replacing the old single-panel [SettingsSubScreen]
+ * state-machine's MAIN screen and, in this pass, the flat-panel `TwoPaneShell` that first replaced
+ * it — matching the mockup's General/Notifications/Sound & Voice/Display/Payment Methods/Printer/
+ * About layout. Every [SettingsViewModel] read/call is unchanged by either pass (GPS/network
+ * polling, printer discovery/pairing, offline-map download states, fare schedule, force-update +
+ * heartbeat, MDM locate response, admin-PIN-gated factory reset) — this rebuild only re-skins the
+ * surfaces each tab's content already sat on: diagnostics tiles now show their status through a
+ * [HudStatusPill] instead of a coloured dot, and every toggle/locked/fare-schedule row is a
+ * [GlassCard] instead of a flat bordered panel.
  *
  * Content mapping, deliberate (not 1:1 with the old single-screen layout):
  * - **General**: GPS/Network/Offline-maps/Tariff-signature diagnostics, the real Auto Accept Jobs
@@ -199,49 +207,115 @@ private fun MainSettingsContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(CaptainPalette.bg)
+            .background(CaptainPalette.hudBg)
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
-        TwoPaneShell(
-            title = "Settings & diagnostics",
-            onBack = onBack,
-            tabs = SettingsTab.values().map { it.label },
-            selectedIndex = tab.ordinal,
-            onSelectTab = { index -> onSelectTab(SettingsTab.values()[index]) },
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
+                Box(
+                    modifier = Modifier.size(48.dp).clip(CircleShape)
+                        .background(CaptainPalette.hudGlass)
+                        .border(1.dp, CaptainPalette.hudGlassBorderPurple, CircleShape)
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("←", fontSize = 24.sp, color = CaptainPalette.textPrimary)
+                }
+                Text(
+                    "Settings & diagnostics",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp,
+                    color = CaptainPalette.textPrimary,
+                    modifier = Modifier.padding(start = 16.dp),
+                )
+            }
+            Row(modifier = Modifier.fillMaxSize()) {
+                SettingsTabRail(
+                    selected = tab,
+                    onSelect = onSelectTab,
+                    modifier = Modifier.width(230.dp).fillMaxHeight(),
+                )
+                Spacer(Modifier.width(16.dp))
+                GlassCard(modifier = Modifier.weight(1f).fillMaxHeight(), cornerRadiusDp = 20) {
+                    Box(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+                        when (tab) {
+                            SettingsTab.GENERAL -> GeneralTabContent(
+                                state = state,
+                                onSetAutoAccept = viewModel::setAutoAcceptJobs,
+                                onDownloadOfflineMaps = viewModel::downloadOfflineMaps,
+                                onOpenPermissions = onOpenPermissions,
+                                onOpenOfflineSync = onOpenOfflineSync,
+                                onOpenPaymentMethodsTab = { onSelectTab(SettingsTab.PAYMENT_METHODS) },
+                            )
+                            SettingsTab.NOTIFICATIONS -> ComingSoonTabContent(
+                                title = "Notifications",
+                                message = "Job offers and dispatcher messages are always delivered — per-notification " +
+                                    "preferences (sound, priority, quiet hours) aren't configurable yet.",
+                            )
+                            SettingsTab.SOUND_VOICE -> ComingSoonTabContent(
+                                title = "Sound & Voice",
+                                message = "Alert tones and voice-guidance options aren't configurable yet.",
+                            )
+                            SettingsTab.DISPLAY -> DisplayTabContent(
+                                state = state,
+                                onSetShowMap = viewModel::setShowMapInBackground,
+                            )
+                            SettingsTab.PAYMENT_METHODS -> PaymentMethodsTabContent(
+                                state = state,
+                                onSetAllowCash = viewModel::setAllowCash,
+                                onSetMaxiVehicle = viewModel::setMaxiVehicle,
+                            )
+                            SettingsTab.PRINTER -> PrinterTabContent(state = state, viewModel = viewModel)
+                            SettingsTab.ABOUT -> AboutTabContent(
+                                state = state,
+                                onOpenPairMeter = onOpenPairMeter,
+                                onFactoryResetClick = onFactoryResetClick,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Left tab rail — a [GlassCard] hosting a vertical list of tab tiles, the active one glowing
+ * ([neonGlow] halo + accent border + [gameClick] press feedback), replacing the old
+ * `TwoPaneShell`'s plain panel/highlight rail. Purely visual: [selected]/[onSelect] are the exact
+ * same caller-controlled state `MainSettingsContent` already held — no new selection logic.
+ */
+@Composable
+private fun SettingsTabRail(selected: SettingsTab, onSelect: (SettingsTab) -> Unit, modifier: Modifier = Modifier) {
+    GlassCard(modifier = modifier, cornerRadiusDp = 20) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            when (tab) {
-                SettingsTab.GENERAL -> GeneralTabContent(
-                    state = state,
-                    onSetAutoAccept = viewModel::setAutoAcceptJobs,
-                    onDownloadOfflineMaps = viewModel::downloadOfflineMaps,
-                    onOpenPermissions = onOpenPermissions,
-                    onOpenOfflineSync = onOpenOfflineSync,
-                    onOpenPaymentMethodsTab = { onSelectTab(SettingsTab.PAYMENT_METHODS) },
-                )
-                SettingsTab.NOTIFICATIONS -> ComingSoonTabContent(
-                    title = "Notifications",
-                    message = "Job offers and dispatcher messages are always delivered — per-notification " +
-                        "preferences (sound, priority, quiet hours) aren't configurable yet.",
-                )
-                SettingsTab.SOUND_VOICE -> ComingSoonTabContent(
-                    title = "Sound & Voice",
-                    message = "Alert tones and voice-guidance options aren't configurable yet.",
-                )
-                SettingsTab.DISPLAY -> DisplayTabContent(
-                    state = state,
-                    onSetShowMap = viewModel::setShowMapInBackground,
-                )
-                SettingsTab.PAYMENT_METHODS -> PaymentMethodsTabContent(
-                    state = state,
-                    onSetAllowCash = viewModel::setAllowCash,
-                    onSetMaxiVehicle = viewModel::setMaxiVehicle,
-                )
-                SettingsTab.PRINTER -> PrinterTabContent(state = state, viewModel = viewModel)
-                SettingsTab.ABOUT -> AboutTabContent(
-                    state = state,
-                    onOpenPairMeter = onOpenPairMeter,
-                    onFactoryResetClick = onFactoryResetClick,
-                )
+            SettingsTab.values().forEach { t ->
+                val isSelected = t == selected
+                val shape = RoundedCornerShape(12.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .then(if (isSelected) Modifier.neonGlow(CaptainPalette.hudAccent, 12.dp, strength = 0.6f, spread = 3.dp) else Modifier)
+                        .clip(shape)
+                        .background(if (isSelected) CaptainPalette.hudAccent.copy(alpha = 0.22f) else Color.Transparent)
+                        .then(if (isSelected) Modifier.border(1.dp, CaptainPalette.hudSweepMid, shape) else Modifier)
+                        .gameClick(onClick = { onSelect(t) }, shape = shape, glowColor = CaptainPalette.hudSweepMid)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        t.label,
+                        fontFamily = InterFamily,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 16.sp,
+                        color = if (isSelected) CaptainPalette.textPrimary else CaptainPalette.textSecondary,
+                    )
+                }
             }
         }
     }
@@ -389,25 +463,27 @@ private fun PaymentMethodsTabContent(
             onCheckedChange = onSetAllowCash,
         )
         Spacer(Modifier.height(20.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
         Spacer(Modifier.height(20.dp))
     }
 }
 
 /** Printer tab — hosts the existing printer-pairing flow verbatim (scan + discovered-device list +
  * paired status), just without the [au.com.threesixty.cabdispatch.ui.theme.PaneShell]/back-arrow
- * wrapper the old standalone sub-screen used, since [TwoPaneShell] already supplies the panel this
- * renders inside. Deliberately not wrapped in a scrolling `Column` — the `LazyColumn` below needs a
- * bounded height to measure, which it gets from `TwoPaneShell`'s own bounded content panel; nesting
- * it inside an outer `verticalScroll` would hand it an infinite height instead and crash. */
+ * wrapper the old standalone sub-screen used, since [MainSettingsContent]'s own [GlassCard] content
+ * panel already supplies the bounded panel this renders inside. Deliberately not wrapped in a
+ * scrolling `Column` — the `LazyColumn` below needs a bounded height to measure, which it gets from
+ * that panel; nesting it inside an outer `verticalScroll` would hand it an infinite height instead
+ * and crash. HUD kit rebuild: the paired-status line is now a [HudStatusPill] and each discovered
+ * device is a [GlassCard] row — same discovery/pairing calls as before. */
 @Composable
 private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewModel) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            state.pairedPrinter?.let { "Paired: ${it.name}" } ?: "No printer paired",
-            fontFamily = InterFamily,
-            fontSize = 16.sp,
-            color = CaptainPalette.textSecondary,
+        HudStatusPill(
+            label = "Printer",
+            value = state.pairedPrinter?.let { "Paired: ${it.name}" } ?: "No printer paired",
+            tone = if (state.pairedPrinter != null) HudTone.Success else HudTone.Neutral,
+            pulsing = false,
         )
         Spacer(Modifier.height(20.dp))
 
@@ -421,23 +497,20 @@ private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewMod
 
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(state.discoveredPrinters) { device: PrinterDevice ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(CaptainPalette.panel)
-                        .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 20.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-                    CaptainButton(
-                        text = "PAIR",
-                        heightDp = 56,
-                        fontSize = 18.sp,
-                        widthDp = 130,
-                    ) { viewModel.pairPrinter(device.id) }
+                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                        CaptainButton(
+                            text = "PAIR",
+                            heightDp = 56,
+                            fontSize = 18.sp,
+                            widthDp = 130,
+                        ) { viewModel.pairPrinter(device.id) }
+                    }
                 }
             }
         }
@@ -497,8 +570,8 @@ private fun ComingSoonBadge() {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(8.dp))
+            .background(CaptainPalette.hudTrack)
+            .border(1.dp, CaptainPalette.hudGlassBorderPurple, RoundedCornerShape(8.dp))
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(
@@ -516,38 +589,37 @@ private fun ComingSoonBadge() {
  * [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore] flag (Auto Accept Jobs/Show Map
  * in Background/Allow Cash), never decorative. Same [androidx.compose.material3.Switch] color
  * treatment [FareScheduleContent]'s pre-existing maxi-vehicle switch already used, for visual
- * consistency across every real toggle in this screen. */
+ * consistency across every real toggle in this screen. HUD kit rebuild: the row's surface is now a
+ * [GlassCard] instead of a flat bordered [Row] — the toggle's [checked]/[onCheckedChange] wiring is
+ * untouched. */
 @Composable
 private fun ToggleSettingRow(label: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(CaptainPalette.raised)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-            .padding(20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
-            Text(
-                description,
-                fontFamily = InterFamily,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                color = CaptainPalette.textMuted,
-                modifier = Modifier.padding(top = 4.dp),
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+                Text(
+                    description,
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    color = CaptainPalette.textMuted,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.width(16.dp))
+            androidx.compose.material3.Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = androidx.compose.material3.SwitchDefaults.colors(
+                    checkedTrackColor = CaptainPalette.primary,
+                    checkedThumbColor = CaptainPalette.hudAccent,
+                ),
             )
         }
-        Spacer(Modifier.width(16.dp))
-        androidx.compose.material3.Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = androidx.compose.material3.SwitchDefaults.colors(
-                checkedTrackColor = CaptainPalette.primary,
-                checkedThumbColor = CaptainPalette.accent,
-            ),
-        )
     }
 }
 
@@ -557,39 +629,45 @@ private fun ToggleSettingRow(label: String, description: String, checked: Boolea
  * lock glyph instead of a working control, and a "COMING SOON" badge instead of a value that looks
  * editable. Tapping it is safe (never a crash, never a silent no-op that looks like it worked) — a
  * brief [android.widget.Toast] names the row and says it isn't available yet, then disappears on
- * its own; no new dialog/snackbar plumbing needed for a row this deliberately inert.
+ * its own; no new dialog/snackbar plumbing needed for a row this deliberately inert. HUD kit
+ * rebuild: same [GlassCard] surface as [ToggleSettingRow], still no glow (a locked row shouldn't
+ * read as "live" the way a real toggle does).
  */
 @Composable
 private fun LockedSettingRow(label: String, value: String) {
     val context = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .alpha(0.55f)
-            .clip(RoundedCornerShape(16.dp))
-            .background(CaptainPalette.raised)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-            .clickable {
-                android.widget.Toast.makeText(context, "$label isn't available yet", android.widget.Toast.LENGTH_SHORT).show()
+    GlassCard(modifier = Modifier.fillMaxWidth().alpha(0.55f), cornerRadiusDp = 16) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    android.widget.Toast.makeText(context, "$label isn't available yet", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))
+            Column(modifier = Modifier.weight(1f).padding(start = 14.dp)) {
+                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+                Text(value, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))
             }
-            .padding(horizontal = 20.dp, vertical = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))
-        Column(modifier = Modifier.weight(1f).padding(start = 14.dp)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
-            Text(value, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))
+            ComingSoonBadge()
         }
-        ComingSoonBadge()
     }
 }
 
 // --- Diagnostics tiles ---
 
-private enum class DiagTone(val dot: Color) {
-    OK(CaptainPalette.success),
-    WARN(CaptainPalette.warning),
-    BAD(CaptainPalette.danger),
+private enum class DiagTone { OK, WARN, BAD }
+
+/** Maps this screen's pre-existing OK/WARN/BAD diagnostic tone onto the kit's [HudTone] so
+ * [DiagTile] can render its status through [HudStatusPill] — same three-way meaning, just the kit's
+ * vocabulary (BAD -> Danger is the one non-obvious mapping, since this screen never uses
+ * [HudTone.Accent] for a diagnostic). */
+private fun DiagTone.toHudTone(): HudTone = when (this) {
+    DiagTone.OK -> HudTone.Success
+    DiagTone.WARN -> HudTone.Warning
+    DiagTone.BAD -> HudTone.Danger
 }
 
 @Composable
@@ -679,8 +757,11 @@ private fun LocateTile(state: SettingsUiState, modifier: Modifier) {
     }
 }
 
-/** One 100dp diagnostics tile: icon · name 18sp semibold · sub 16sp · 12dp status dot; amber/red
- * 1.5dp border when non-nominal. */
+/** One diagnostics tile: icon · name, then the real status read through a [HudStatusPill]
+ * ([tone] mapped via [DiagTone.toHudTone]) instead of the old colored-dot-in-a-panel — the kit's
+ * "GlassCard surface, HudStatusPill status" convention. [glow] halos the whole card when
+ * non-nominal, same "amber/red border on trouble" signal the old tile gave, just as a kit glow
+ * instead of a border. */
 @Composable
 private fun DiagTile(
     icon: ImageVector,
@@ -690,45 +771,37 @@ private fun DiagTile(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
-    val shape = RoundedCornerShape(16.dp)
-    val borderMod = when (tone) {
-        DiagTone.OK -> Modifier.border(1.dp, CaptainPalette.panelBorder, shape)
-        DiagTone.WARN -> Modifier.border(1.5.dp, CaptainPalette.warning.copy(alpha = 0.7f), shape)
-        DiagTone.BAD -> Modifier.border(1.5.dp, CaptainPalette.danger.copy(alpha = 0.7f), shape)
-    }
-    Row(
+    val hudTone = tone.toHudTone()
+    GlassCard(
         modifier = modifier
-            .height(100.dp)
-            .clip(shape)
-            .background(CaptainPalette.raised)
-            .then(borderMod)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .height(128.dp)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        cornerRadiusDp = 16,
+        glow = if (tone == DiagTone.OK) null else hudTone.color(),
     ) {
-        Box(
-            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
-                .background(CaptainPalette.panel).border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(20.dp))
+                Text(
+                    name,
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textPrimary,
+                    modifier = Modifier.padding(start = 10.dp),
+                )
+            }
+            HudStatusPill(label = "Status", value = sub, tone = hudTone, pulsing = false, modifier = Modifier.fillMaxWidth())
         }
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(name, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-            Text(
-                sub,
-                fontFamily = InterFamily,
-                fontSize = 16.sp,
-                color = if (tone == DiagTone.OK) CaptainPalette.textMuted else tone.dot,
-            )
-        }
-        Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(tone.dot))
     }
 }
 
-/** 96dp action tile: icon above a bold label, elderly-friendly button sizing; danger-tinted for
- * the factory reset. */
+/** Action tile: icon above a bold label, elderly-friendly button sizing; danger-tinted for the
+ * factory reset via the same [GlassCard] `glow` the rest of the kit uses for a non-neutral surface,
+ * instead of the old flat danger border. */
 @Composable
 private fun ActionTile(
     icon: ImageVector,
@@ -738,31 +811,32 @@ private fun ActionTile(
     danger: Boolean = false,
     enabled: Boolean = true,
 ) {
-    val shape = RoundedCornerShape(16.dp)
-    val borderColor = if (danger) CaptainPalette.danger.copy(alpha = 0.7f) else CaptainPalette.panelBorder
-    val tint = if (danger) CaptainPalette.danger else CaptainPalette.accent
-    Column(
+    val tint = if (danger) CaptainPalette.danger else CaptainPalette.hudAccent
+    GlassCard(
         modifier = modifier
             .height(96.dp)
-            .clip(shape)
-            .background(CaptainPalette.raised)
-            .border(1.5.dp, borderColor, shape)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .alpha(if (enabled) 1f else 0.4f)
+            .clickable(enabled = enabled, onClick = onClick),
+        cornerRadiusDp = 16,
+        glow = if (danger) CaptainPalette.danger else null,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp))
-        Spacer(Modifier.height(8.dp))
-        Text(
-            label,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 15.sp,
-            color = if (danger) CaptainPalette.danger else CaptainPalette.textPrimary,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-        )
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(
+                label,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = if (danger) CaptainPalette.danger else CaptainPalette.textPrimary,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
     }
 }
 
@@ -805,7 +879,7 @@ private fun FareScheduleBody(
 
         val tariff = state.fareSchedule
         when {
-            state.fareScheduleLoading -> CircularProgressIndicator(color = CaptainPalette.accent)
+            state.fareScheduleLoading -> CircularProgressIndicator(color = CaptainPalette.hudAccent)
             tariff == null -> Text(
                 "No cached fare schedule available.",
                 fontFamily = InterFamily,
@@ -813,31 +887,28 @@ private fun FareScheduleBody(
                 color = CaptainPalette.textSecondary,
             )
             else -> Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(CaptainPalette.panel)
-                        .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-                    FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
-                    if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
-                    FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
-                    FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
-                    FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
-                    FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
-                    if (tariff.holidayRate1 != "0") {
-                        FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
+                        FareScheduleRow("Hiring charge (flag fall)", tariff.flagFall)
+                        if (tariff.peakCharge != "0") FareScheduleRow("Peak time hiring charge", tariff.peakCharge)
+                        FareScheduleRow("Distance rate, first ${tariff.distKmThreshold}km", "${tariff.distRate1}/km")
+                        FareScheduleRow("Distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.distRate2}/km")
+                        FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")
+                        FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")
+                        if (tariff.holidayRate1 != "0") {
+                            FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")
+                        }
+                        if (tariff.holidayRate2 != "0") {
+                            FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
+                        }
+                        FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
+                        FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
                     }
-                    if (tariff.holidayRate2 != "0") {
-                        FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")
-                    }
-                    FareScheduleRow("Waiting time", "${tariff.waitingRatePerMin}/min")
-                    FareScheduleRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
                 }
 
                 MaxiCabFaresSection(maxiMultiplier = tariff.maxiMultiplier)
@@ -852,51 +923,35 @@ private fun FareScheduleBody(
         // honestly-labelled driver self-declaration (see MaxiVehicleStore's own doc for why
         // this is not read from a real vehicle record: `VehicleDto` carries no such field
         // anywhere server-side). Placed here, the app's existing vehicle/fare-schedule
-        // area, rather than inventing a new settings section.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(CaptainPalette.panel)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "This vehicle has 5+ passenger seats",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
-                    color = CaptainPalette.textPrimary,
-                )
-                Text(
-                    "Your own declaration for this vehicle, saved on this device — not read from a vehicle record. " +
-                        "Also shown on the Start Meter card. Turns on the maxi (×1.5) rate only together with 5+ " +
-                        "passengers, or a Sydney Airport rank maxi request, and never for a wheelchair hiring.",
-                    fontFamily = InterFamily,
-                    fontSize = 13.sp,
-                    color = CaptainPalette.textMuted,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            androidx.compose.material3.Switch(
-                checked = state.isMaxiVehicle,
-                onCheckedChange = onSetMaxiVehicle,
-                colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedTrackColor = CaptainPalette.primary,
-                    checkedThumbColor = CaptainPalette.accent,
-                ),
-            )
-        }
+        // area, rather than inventing a new settings section. HUD kit rebuild: this row was its own
+        // hand-rolled panel+switch before this pass — now the exact same [ToggleSettingRow] every
+        // other real toggle on this screen uses, same [GlassCard] surface, same switch wiring.
+        ToggleSettingRow(
+            label = "This vehicle has 5+ passenger seats",
+            description = "Your own declaration for this vehicle, saved on this device — not read from a vehicle record. " +
+                "Also shown on the Start Meter card. Turns on the maxi (×1.5) rate only together with 5+ " +
+                "passengers, or a Sydney Airport rank maxi request, and never for a wheelchair hiring.",
+            checked = state.isMaxiVehicle,
+            onCheckedChange = onSetMaxiVehicle,
+        )
     }
 }
 
+/** One label + tabular-figure dollar value row (`FareScheduleBody`'s convention — see
+ * [au.com.threesixty.cabdispatch.ui.screens.pricing.PricingPaneContent]'s own `PricingRow`, the
+ * same idea in the Pricing pane). */
 @Composable
 private fun FareScheduleRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
-        Text("$$value", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+        Text(
+            "$$value",
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp,
+            color = CaptainPalette.textPrimary,
+            style = TextStyle(fontFeatureSettings = "tnum"),
+        )
     }
 }
 
@@ -907,7 +962,8 @@ private fun FareScheduleSectionTitle(text: String) {
         fontFamily = InterFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 14.sp,
-        color = CaptainPalette.accent,
+        letterSpacing = 1.sp,
+        color = CaptainPalette.hudAccent,
     )
 }
 
@@ -933,7 +989,7 @@ private fun FareScheduleNote(text: String) {
  */
 @Composable
 private fun TaxiFareHotlineNotice() {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             FareScheduleSectionTitle("TAXI FARE HOTLINE")
             Text(
@@ -944,7 +1000,7 @@ private fun TaxiFareHotlineNotice() {
                 color = CaptainPalette.textPrimary,
             )
             FareScheduleNote("Ask your driver, or call this number, if you believe you've been charged incorrectly.")
-            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
             FareScheduleNote("The meter must always be switched on during a rank or hail trip.")
         }
     }
@@ -959,7 +1015,7 @@ private fun TaxiFareHotlineNotice() {
  */
 @Composable
 private fun MaxiCabFaresSection(maxiMultiplier: String) {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             FareScheduleSectionTitle("MAXI-CAB FARES")
             CaptainChip(label = "MAXI RATE", value = "${formatMaxiPercent(maxiMultiplier)}%")
@@ -983,7 +1039,7 @@ private fun MaxiCabFaresSection(maxiMultiplier: String) {
  */
 @Composable
 private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String) {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             FareScheduleSectionTitle("ADDITIONAL CHARGES")
             CaptainChip(label = "PASSENGER SERVICE LEVY", value = "$$pslAmount")
@@ -991,13 +1047,13 @@ private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String) 
                 "Optional to pass on to the passenger. Charged once per trip, regardless of the number of " +
                     "passengers. (Fares Order 2026, cl 3.)",
             )
-            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
             CaptainChip(label = "CLEANING FEE CAP", value = "$$cleaningFeeCap + GST")
             FareScheduleNote(
                 "Only chargeable when soiling means the vehicle can't reasonably be used before it's " +
                     "cleaned. (Fares Order 2026, cl 2(f).)",
             )
-            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
             FareScheduleNote(
                 "Tolls are passed on at the actual cost incurred during this hiring only — never a " +
                     "\"return\" toll.",
@@ -1014,7 +1070,7 @@ private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String) 
  */
 @Composable
 private fun SydneyAirportFixedFareSection() {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             FareScheduleSectionTitle("SYDNEY AIRPORT FIXED FARE")
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1056,7 +1112,7 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(CaptainPalette.bg)
+            .background(CaptainPalette.hudBg)
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
         PaneShell(title = "Pair meter", onBack = onBack) {
@@ -1071,44 +1127,35 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
 
                 when (pairState) {
                     is PairMeterState.Success -> {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(CaptainPalette.success.copy(alpha = 0.12f))
-                                .border(1.5.dp, CaptainPalette.success, RoundedCornerShape(16.dp))
-                                .padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(24.dp))
-                            Text(
-                                "Paired" + (pairState.vehicleId?.let { " — vehicle $it" } ?: ""),
-                                fontFamily = InterFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 17.sp,
-                                color = CaptainPalette.success,
-                                modifier = Modifier.padding(start = 12.dp),
-                            )
+                        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16, glow = CaptainPalette.success) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(24.dp))
+                                Text(
+                                    "Paired" + (pairState.vehicleId?.let { " — vehicle $it" } ?: ""),
+                                    fontFamily = InterFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 17.sp,
+                                    color = CaptainPalette.success,
+                                    modifier = Modifier.padding(start = 12.dp),
+                                )
+                            }
                         }
                     }
                     else -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(72.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(CaptainPalette.panel)
-                                .border(2.dp, CaptainPalette.accent, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                code.ifEmpty { "········" },
-                                fontFamily = InterFamily,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 28.sp,
-                                letterSpacing = 6.sp,
-                                color = if (code.isEmpty()) CaptainPalette.textMuted else CaptainPalette.textPrimary,
-                            )
+                        GlassCard(modifier = Modifier.fillMaxWidth().height(72.dp), cornerRadiusDp = 12, glow = CaptainPalette.hudAccent) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    code.ifEmpty { "········" },
+                                    fontFamily = ChakraPetch,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 28.sp,
+                                    letterSpacing = 6.sp,
+                                    color = if (code.isEmpty()) CaptainPalette.textMuted else CaptainPalette.textPrimary,
+                                )
+                            }
                         }
                         Spacer(Modifier.height(16.dp))
                         PairCodeKeyRows(
@@ -1159,8 +1206,8 @@ private fun PairCodeKeyRows(onKey: (Char) -> Unit, onBackspace: () -> Unit) {
                             .weight(1f)
                             .height(48.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(CaptainPalette.raised)
-                            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(8.dp))
+                            .background(CaptainPalette.hudGlass)
+                            .border(1.dp, CaptainPalette.hudGlassBorderPurple, RoundedCornerShape(8.dp))
                             .clickable { if (c == '⌫') onBackspace() else onKey(c) },
                         contentAlignment = Alignment.Center,
                     ) {

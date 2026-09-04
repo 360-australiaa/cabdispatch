@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,7 +30,8 @@ import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_STANDARD
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
+import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
@@ -60,9 +62,15 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * justify a dedicated ViewModel, matching the same convention `DeckHomeScreen`'s own `HomeExtras`
  * and `ProfileScreen`'s compliance-expiry cards already use. This intentionally duplicates rather
  * than shares `SettingsScreen.kt`'s private `FareScheduleBody`/row composables — that screen's
- * fare-schedule content stays untouched (Phase D's freshly-verified two-pane Settings work), and
- * this pane's card layout (Fare Structure / Distance Tiers) genuinely differs from that screen's
- * fuller cl.15-notice layout anyway.
+ * fare-schedule content stays untouched, and this pane's card layout (Fare Structure / Distance
+ * Tiers) genuinely differs from that screen's fuller cl.15-notice layout anyway.
+ *
+ * **HUD kit rebuild (2026-09-04).** Purely visual — same [TariffDto] fields, same loader, same
+ * "no edit button" decision above; only the surfaces changed: both cards are now [GlassCard]s (the
+ * Fare Structure card carries the kit's accent glow, matching [au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent]'s
+ * "hero card glows, detail card doesn't" convention), rows use tabular figures
+ * (`fontFeatureSettings = "tnum"`) in [ChakraPetch] so the dollar/percentage columns line up, and
+ * dividers are the kit's `hudTrack` line instead of `panelBorder`.
  */
 @Composable
 fun PricingPaneContent(modifier: Modifier = Modifier) {
@@ -86,7 +94,7 @@ fun PricingPaneContent(modifier: Modifier = Modifier) {
         Box(modifier = Modifier.height(20.dp))
 
         when {
-            loading -> CircularProgressIndicator(color = CaptainPalette.accent)
+            loading -> CircularProgressIndicator(color = CaptainPalette.hudAccent)
             tariff == null -> Text(
                 "No cached fare schedule available.",
                 fontFamily = InterFamily,
@@ -101,15 +109,29 @@ fun PricingPaneContent(modifier: Modifier = Modifier) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Shared typography
+// ---------------------------------------------------------------------------------------------
+
+private val TabularFigures = TextStyle(fontFeatureSettings = "tnum")
+
+private val EyebrowStyle = TextStyle(
+    fontFamily = InterFamily,
+    fontWeight = FontWeight.Bold,
+    fontSize = 14.sp,
+    letterSpacing = 1.sp,
+    color = CaptainPalette.hudAccent,
+)
+
 /** "Fare Structure" card — every figure other than the fixed night-time window and Sydney Airport
  * Fixed Fare (regulated flat constants, unchanged by tariff) is read live off [TariffDto], never a
  * hardcoded literal — same sourcing discipline `SettingsScreen.kt`'s `FareScheduleBody` uses. */
 @Composable
 private fun FareStructureCard(tariff: TariffDto) {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(tariff.name, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
-            Text("FARE STRUCTURE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CaptainPalette.accent)
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
+        Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
+            Text("FARE STRUCTURE", style = EyebrowStyle)
             Divider()
             PricingRow("Hiring charge (flag fall)", "$${tariff.flagFall}")
             if (tariff.peakCharge.nonZeroOrNull() != null) PricingRow("Peak time hiring charge", "$${tariff.peakCharge}")
@@ -139,9 +161,9 @@ private fun FareStructureCard(tariff: TariffDto) {
  */
 @Composable
 private fun DistanceTiersCard(tariff: TariffDto) {
-    CaptainPanel(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 20) {
         Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("DISTANCE TIERS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CaptainPalette.accent)
+            Text("DISTANCE TIERS", style = EyebrowStyle)
             Text(
                 "This tariff bills distance in two flat bands, not a sliding scale — every trip's " +
                     "distance falls into exactly one of the two rows below.",
@@ -171,24 +193,33 @@ private fun DistanceTiersCard(tariff: TariffDto) {
 @Composable
 private fun DistanceTierRow(label: String, dayRate: String, nightRate: String, holidayRate: String?) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+        Text(label, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
         PricingRow("Day rate", "$dayRate/km")
         PricingRow("Night rate (10pm–6am)", "$nightRate/km")
         if (holidayRate != null) PricingRow("Holiday rate (country)", "$holidayRate/km")
     }
 }
 
+/** One label + tabular-figure value row — the kit's convention for a "figures line up" list (see
+ * [au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent]'s `BreakdownRow`). */
 @Composable
 private fun PricingRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)
-        Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+        Text(label, fontFamily = InterFamily, fontSize = 15.sp, color = CaptainPalette.textSecondary)
+        Text(
+            value,
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp,
+            color = CaptainPalette.textPrimary,
+            style = TabularFigures,
+        )
     }
 }
 
 @Composable
 private fun Divider() {
-    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
 }
 
 /** Same formatting rule `SettingsScreen.kt`'s private `formatMaxiPercent` uses — duplicated rather
