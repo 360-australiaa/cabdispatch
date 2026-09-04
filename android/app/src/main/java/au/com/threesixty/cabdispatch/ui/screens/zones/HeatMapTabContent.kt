@@ -1,7 +1,6 @@
 package au.com.threesixty.cabdispatch.ui.screens.zones
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +38,8 @@ import au.com.threesixty.cabdispatch.data.remote.ZoneDto
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
@@ -69,6 +70,11 @@ import kotlin.math.min
  * pixel-perfect metres-on-map geofence accuracy (an exact circle would need a hand-rolled
  * `FillLayer` polygon built from a bearing/distance offset helper that doesn't exist anywhere in
  * this app's `GeoMath` today — left as real future work, not faked here).
+ *
+ * **HUD kit rebuild (2026-09-04).** Chrome only: [SurgeLegendCard] and [SelectedZoneCard] are now
+ * [GlassCard]s carrying a [HudStatusPill] for the tapped zone's surge multiplier. The real
+ * interactive Mapbox `MapView`, its circle annotations, and every [SurgeModel] color/multiplier
+ * computation above are untouched.
  */
 @Composable
 fun HeatMapTabContent(
@@ -215,68 +221,59 @@ private data class MapHolder(
  * this file's class doc for why this is a relative cue, not a metres-accurate geofence. */
 private fun radiusPxFor(radiusM: Double): Double = max(24.0, min(90.0, radiusM / 15.0))
 
-/** Surge-multiplier legend — the four real bands [SurgeModel] can ever produce, each shown with
- * its real [SurgeModel.color]. */
+/** Surge-multiplier legend, now a [GlassCard] (was a hand-rolled `bg`-tinted `Column`) — the four
+ * real bands [SurgeModel] can ever produce, each shown with its real [SurgeModel.color]. */
 @Composable
 private fun SurgeLegendCard(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.bg.copy(alpha = 0.9f))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("SURGE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
-        listOf(1.0, 1.2, 1.6, 2.0).forEach { multiplier ->
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(4.dp)).background(SurgeModel.color(multiplier)))
-                Text(
-                    "${"%.1f".format(multiplier)}x",
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textSecondary,
-                )
+    GlassCard(modifier = modifier, cornerRadiusDp = 14) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("SURGE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+            listOf(1.0, 1.2, 1.6, 2.0).forEach { multiplier ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.size(14.dp).clip(RoundedCornerShape(4.dp)).background(SurgeModel.color(multiplier)))
+                    Text(
+                        "${"%.1f".format(multiplier)}x",
+                        fontFamily = ChakraPetch,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
             }
         }
     }
 }
 
-/** Tapped-zone info card — real numbers off the same [ZoneStatsDto] the table/Surge Areas tab
- * show, or an honest "no live statistics yet" line when this zone hasn't reported any. */
+/** Tapped-zone info card, now a [GlassCard] carrying the multiplier as a [HudStatusPill] (was a
+ * hand-rolled `bg`-tinted `Column` with the multiplier as plain text) — real numbers off the same
+ * [ZoneStatsDto] the table/Surge Areas tab show, or an honest "no live statistics yet" line when
+ * this zone hasn't reported any. */
 @Composable
 private fun SelectedZoneCard(zone: ZoneDto, stats: ZoneStatsDto?, modifier: Modifier = Modifier, onDismiss: () -> Unit) {
     val multiplier = stats?.let(SurgeModel::multiplier) ?: 1.0
-    Column(
-        modifier = modifier
-            .width(280.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.bg.copy(alpha = 0.92f))
-            .border(1.dp, SurgeModel.color(multiplier).copy(alpha = 0.6f), RoundedCornerShape(14.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("${zone.number} · ${zone.name}", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-            Text(
-                "✕",
-                color = CaptainPalette.textMuted,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(start = 8.dp).clickable(onClick = onDismiss),
-            )
-        }
-        if (stats != null) {
-            Text(SurgeModel.label(stats), fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = SurgeModel.color(multiplier))
-            Text(
-                "${stats.bookingsLastHour} bookings + ${stats.streetHailsLastHour} hails/hr · " +
-                    "${stats.vacantVehicles} vacant · ${stats.busyVehicles} busy · ${stats.plottedVehicles} plotted",
-                fontFamily = InterFamily,
-                fontSize = 13.sp,
-                color = CaptainPalette.textSecondary,
-            )
-        } else {
-            Text("No live statistics reported for this zone yet.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
+    GlassCard(modifier = modifier.width(280.dp), cornerRadiusDp = 14, glow = if (stats != null) SurgeModel.color(multiplier) else null) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("${zone.number} · ${zone.name}", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                Text(
+                    "✕",
+                    color = CaptainPalette.textMuted,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 8.dp).clickable(onClick = onDismiss),
+                )
+            }
+            if (stats != null) {
+                HudStatusPill(label = "Surge", value = SurgeModel.label(stats), tone = surgeTone(multiplier), pulsing = false)
+                Text(
+                    "${stats.bookingsLastHour} bookings + ${stats.streetHailsLastHour} hails/hr · " +
+                        "${stats.vacantVehicles} vacant · ${stats.busyVehicles} busy · ${stats.plottedVehicles} plotted",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+            } else {
+                Text("No live statistics reported for this zone yet.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
+            }
         }
     }
 }

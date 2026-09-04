@@ -41,7 +41,11 @@ import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.color
 
 /**
  * 26 · Zone Statistics — reskinned onto [CaptainPalette] (2026-08-29 purple migration pass).
@@ -58,6 +62,14 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * - The hot-zone highlight/tip is computed from the REAL rows (highest bookings+hails demand,
  *   shown only when any demand exists) — never hardcoded to a fixed zone.
  * - Rows beyond the fixed table height scroll INSIDE the table container only.
+ *
+ * **HUD kit rebuild (2026-09-04).** [StatsTable]/[HotZoneTip]/[UnavailableCard] are now [GlassCard]s
+ * (were flat `panel`-background containers) — same header-row-then-purple-divider convention
+ * `TripsWheelContent`'s history table already uses, for one consistent chrome language app-wide.
+ * [SurgeAreaCard] (the Surge Areas tab) now carries its multiplier as a [HudStatusPill] instead of a
+ * hand-rolled colored badge, toned via [surgeTone] — 1.0x neutral, 1.2x accent, 1.6x warning, 2.0x
+ * danger, a pure presentation mapping over [SurgeModel]'s existing real bands. The table's own
+ * columns/numbers and every ViewModel/polling behaviour are unchanged.
  */
 @Composable
 fun ZoneStatisticsScreen(
@@ -166,32 +178,40 @@ private fun hottestZone(stats: List<ZoneStatsDto>): ZoneStatsDto? =
     stats.maxByOrNull { it.bookingsLastHour + it.streetHailsLastHour }
         ?.takeIf { it.bookingsLastHour + it.streetHailsLastHour > 0 }
 
-/** Panel table, 52dp header row + 72dp rows. Rows scroll inside. */
+/** [SurgeModel.multiplier] band -> [HudTone], per the HUD kit rebuild's tone convention — 1.0x
+ * neutral, 1.2x accent, 1.6x warning, 2.0x danger. A pure presentation mapping over [SurgeModel]'s
+ * existing real bands/formula; computes nothing new. */
+internal fun surgeTone(multiplier: Double): HudTone = when {
+    multiplier <= 1.0 -> HudTone.Neutral
+    multiplier <= 1.2 -> HudTone.Accent
+    multiplier <= 1.6 -> HudTone.Warning
+    else -> HudTone.Danger
+}
+
+/** [GlassCard] table, 52dp header row + 72dp rows, header/rows separated by the same purple
+ * divider convention `TripsWheelContent`'s history table uses. Rows scroll inside. */
 @Composable
 private fun StatsTable(stats: List<ZoneStatsDto>, modifier: Modifier = Modifier) {
     val hot = hottestZone(stats)
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp)),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(52.dp).background(CaptainPalette.raised),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            HeaderCell("ZONE", ZONE_COL, align = TextAlign.Start)
-            HeaderCell("PLOTTED", PLOTTED_COL)
-            HeaderCell("VACANT", VACANT_COL)
-            HeaderCell("BUSY", BUSY_COL)
-            HeaderCell("JOBS HOLDING", JOBS_COL)
-            HeaderCell("BOOKINGS/HR", BOOKINGS_COL)
-            HeaderCell("HAILS/HR", HAILS_COL)
-        }
-        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            items(stats, key = { it.zoneId }) { row ->
-                StatsRow(row = row, hot = row.zoneId == hot?.zoneId)
+    GlassCard(modifier = modifier.fillMaxWidth(), cornerRadiusDp = 18) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HeaderCell("ZONE", ZONE_COL, align = TextAlign.Start)
+                HeaderCell("PLOTTED", PLOTTED_COL)
+                HeaderCell("VACANT", VACANT_COL)
+                HeaderCell("BUSY", BUSY_COL)
+                HeaderCell("JOBS HOLDING", JOBS_COL)
+                HeaderCell("BOOKINGS/HR", BOOKINGS_COL)
+                HeaderCell("HAILS/HR", HAILS_COL)
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudGlassBorderPurple))
+            LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                items(stats, key = { it.zoneId }) { row ->
+                    StatsRow(row = row, hot = row.zoneId == hot?.zoneId)
+                }
             }
         }
     }
@@ -268,32 +288,28 @@ private fun androidx.compose.foundation.layout.RowScope.NumberCell(
     )
 }
 
-/** Amber hot-zone tip bar, composed from the real hottest row (hidden when no zone reports any
- * demand). */
+/** Amber hot-zone tip bar, now a [GlassCard], composed from the real hottest row (hidden when no
+ * zone reports any demand). */
 @Composable
 private fun HotZoneTip(stats: List<ZoneStatsDto>) {
     val hot = hottestZone(stats) ?: return
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(58.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(CaptainPalette.warning.copy(alpha = 0.1f))
-            .border(1.dp, CaptainPalette.warning.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(Icons.Rounded.LocalFireDepartment, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(20.dp))
-        Text(
-            "${hot.zoneName}: ${hot.streetHailsLastHour} street hails + ${hot.bookingsLastHour} bookings " +
-                "in the last hour and ${hot.vacantVehicles} vacant cars — best plot right now",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 17.sp,
-            color = CaptainPalette.warning,
-            maxLines = 1,
-        )
+    GlassCard(modifier = Modifier.fillMaxWidth().height(58.dp), cornerRadiusDp = 14, glow = CaptainPalette.warning) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Rounded.LocalFireDepartment, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(20.dp))
+            Text(
+                "${hot.zoneName}: ${hot.streetHailsLastHour} street hails + ${hot.bookingsLastHour} bookings " +
+                    "in the last hour and ${hot.vacantVehicles} vacant cars — best plot right now",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 17.sp,
+                color = CaptainPalette.warning,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -349,30 +365,17 @@ fun SurgeAreasTabContent(viewModel: ZoneStatisticsViewModel = viewModel()) {
     }
 }
 
+/** Now a [GlassCard] with the multiplier carried as a [HudStatusPill] (was a hand-rolled colored
+ * badge `Box`) — same [SurgeModel] value/copy, toned via [surgeTone]. */
 @Composable
 private fun SurgeAreaCard(row: ZoneStatsDto) {
     val multiplier = SurgeModel.multiplier(row)
-    val color = SurgeModel.color(multiplier)
-    androidx.compose.material3.Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = CaptainPalette.panel,
-        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.5f)),
-    ) {
+    val tone = surgeTone(multiplier)
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16, glow = tone.color()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(color.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(SurgeModel.label(row), fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = color)
-            }
-            Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     "${row.zoneNumber} · ${row.zoneName}",
@@ -389,6 +392,8 @@ private fun SurgeAreaCard(row: ZoneStatsDto) {
                     color = CaptainPalette.textSecondary,
                 )
             }
+            Spacer(Modifier.width(16.dp))
+            HudStatusPill(label = "Surge", value = SurgeModel.label(row), tone = tone, pulsing = false)
         }
     }
 }
@@ -421,59 +426,57 @@ fun LastUpdatedChip(lastUpdatedAt: java.time.Instant?, modifier: Modifier = Modi
 }
 
 /**
- * 26b — unavailable state: big panel card with icon, headline, explanation, and three fading
+ * 26b — unavailable state: big glass card with icon, headline, explanation, and three fading
  * skeleton bars. Doubles as the no-zones-configured state with matching honest copy. No RETRY
- * button — see file doc.
+ * button — see file doc. Now a [GlassCard] (was a flat `panel`-background `Column`) — same content,
+ * unchanged.
  */
 @Composable
 private fun UnavailableCard(modifier: Modifier = Modifier, error: String?) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(horizontal = 32.dp, vertical = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Spacer(Modifier.weight(1f))
-        Icon(Icons.Rounded.SatelliteAlt, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(52.dp))
-        Text(
-            text = if (error != null) {
-                "Statistics unavailable — reconnecting to the fleet server"
-            } else {
-                "No zones reporting statistics yet"
-            },
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 24.sp,
-            color = CaptainPalette.textPrimary,
-        )
-        Text(
-            text = if (error != null) {
-                "Live supply & demand needs a data connection. The meter itself keeps working " +
-                    "offline; zone stats retry automatically every 20 s while this screen is open. ($error)"
-            } else {
-                "Your operator has not published zone demand data for this region yet. This screen " +
-                    "refreshes automatically every 20 s while it is open."
-            },
-            fontFamily = InterFamily,
-            fontSize = 16.sp,
-            color = CaptainPalette.textSecondary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.width(620.dp),
-        )
-        listOf(0.6f, 0.45f, 0.3f).forEach { a ->
-            Box(
-                modifier = Modifier
-                    .width(900.dp)
-                    .height(26.dp)
-                    .alpha(a)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(CaptainPalette.raised),
+    GlassCard(modifier = modifier.fillMaxWidth(), cornerRadiusDp = 24) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Spacer(Modifier.weight(1f))
+            Icon(Icons.Rounded.SatelliteAlt, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(52.dp))
+            Text(
+                text = if (error != null) {
+                    "Statistics unavailable — reconnecting to the fleet server"
+                } else {
+                    "No zones reporting statistics yet"
+                },
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 24.sp,
+                color = CaptainPalette.textPrimary,
             )
+            Text(
+                text = if (error != null) {
+                    "Live supply & demand needs a data connection. The meter itself keeps working " +
+                        "offline; zone stats retry automatically every 20 s while this screen is open. ($error)"
+                } else {
+                    "Your operator has not published zone demand data for this region yet. This screen " +
+                        "refreshes automatically every 20 s while it is open."
+                },
+                fontFamily = InterFamily,
+                fontSize = 16.sp,
+                color = CaptainPalette.textSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(620.dp),
+            )
+            listOf(0.6f, 0.45f, 0.3f).forEach { a ->
+                Box(
+                    modifier = Modifier
+                        .width(900.dp)
+                        .height(26.dp)
+                        .alpha(a)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(CaptainPalette.raised),
+                )
+            }
+            Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.weight(1f))
     }
 }

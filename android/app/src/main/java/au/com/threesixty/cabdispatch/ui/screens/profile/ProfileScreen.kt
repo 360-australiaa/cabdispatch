@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Warning
@@ -60,8 +59,11 @@ import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.color
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
@@ -119,6 +121,18 @@ import java.time.temporal.ChronoUnit
  *   upload button for a driver account would either silently 403 or need a real RBAC change this
  *   Android-scoped pass isn't positioned to make unprompted — see [DocumentsPane]'s own doc.
  *   "Police check" is omitted entirely, per task instructions — no backend field exists anywhere.
+ *
+ * **HUD kit rebuild (2026-09-04).** Purely visual, same posture as the Trips/Earnings/Dispatch pass
+ * on `ui/theme/Hud.kt`: the identity card is now a [GlassCard] (was `CaptainPanel`), the real
+ * compliance-expiry warning rows, the overall-compliance banner, the cl.14 dossier grid cells and
+ * every Documents-tab status row are [GlassCard]s carrying a [HudStatusPill] for their status
+ * (amber "renew soon"/red "expired" on the expiry rows, green/amber/red by days-remaining on the
+ * Documents tab, matching [documentStatusFor]'s existing thresholds exactly). One small honest
+ * addition, not a new data source: a "Verified" [HudStatusPill] now shows on the identity card when
+ * [ProfileViewModel.userDetail]'s `suitabilityStatus == "clear"` — the exact same real field/contract
+ * `DeckHomeScreen`'s own header badge already reads off the SAME `userDetail` call this screen was
+ * already making; hidden entirely (never a "not verified" claim) otherwise. No ViewModel touched,
+ * no callback/behaviour changed, no rating/edit-profile affordance reintroduced.
  */
 @Composable
 fun ProfileScreen(
@@ -174,8 +188,9 @@ fun ProfileScreen(
     }
 }
 
-/** The 400dp identity card — avatar + photo actions + attribute rows. All photo capture/upload
- * logic below is byte-for-byte the pre-port behaviour, only restyled. */
+/** The 400dp identity card, now a [GlassCard] (was `CaptainPanel`) — avatar + photo actions +
+ * attribute rows. All photo capture/upload logic below is byte-for-byte the pre-port behaviour,
+ * only restyled. */
 @Composable
 private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
     val context = LocalContext.current
@@ -218,9 +233,17 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
         }
     }
 
-    CaptainPanel(
+    // Real backend field, same contract au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen's
+    // own header badge uses: UserDto.suitabilityStatus == "clear" via GET /v1/auth/me. userDetail
+    // is already fetched in full by this ViewModel (see its own doc) — this is one more field read
+    // off data already on hand, not a new network call. `null`/anything-but-"clear" shows nothing,
+    // never a false/"unverified" claim.
+    val verified = userDetail?.suitabilityStatus?.equals("clear", ignoreCase = true) == true
+
+    GlassCard(
         modifier = Modifier.width(400.dp).fillMaxHeight(),
         cornerRadiusDp = 24,
+        glow = if (verified) CaptainPalette.success else null,
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(28.dp),
@@ -306,6 +329,10 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
                 }
             }
 
+            if (verified) {
+                HudStatusPill(label = "Status", value = "Verified", tone = HudTone.Success, pulsing = false, modifier = Modifier.fillMaxWidth())
+            }
+
             Spacer(Modifier.height(2.dp))
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 IdentityAttribute("NAME", session?.driverName ?: "Not signed in")
@@ -377,61 +404,56 @@ private fun ComplianceColumn(
     }
 }
 
-/** One real `ComplianceExpiryItem` row — the amber "expiring in 54 days" card. */
+/** One real `ComplianceExpiryItem` row — the amber "expiring in 54 days" card, now a [GlassCard]
+ * carrying a [HudStatusPill] for the expiry status (amber "renew soon" / red "expired"). */
 @Composable
 private fun ExpiryCard(item: ComplianceExpiryItemDto) {
     val expired = item.daysRemaining < 0 || item.status.equals("expired", ignoreCase = true)
-    val accent = if (expired) CaptainPalette.danger else CaptainPalette.warning
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(CaptainPalette.panel)
-            .border(1.5.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-            .padding(horizontal = 22.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    val tone = if (expired) HudTone.Danger else HudTone.Warning
+    val accent = tone.color()
+    GlassCard(
+        modifier = Modifier.fillMaxWidth().height(64.dp),
+        cornerRadiusDp = 16,
+        glow = accent,
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(item.label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-            Text(
-                if (expired) {
-                    "${item.field} expired ${item.expiryDate}"
-                } else {
-                    "${item.field} expiring in ${item.daysRemaining} days — renew soon"
-                },
-                fontFamily = InterFamily,
-                fontSize = 13.sp,
-                color = accent,
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(item.label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                Text(
+                    if (expired) {
+                        "${item.field} expired ${item.expiryDate}"
+                    } else {
+                        "${item.field} expiring in ${item.daysRemaining} days — renew soon"
+                    },
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = accent,
+                )
+            }
+            HudStatusPill(
+                label = if (expired) "Expired" else "Renew",
+                value = if (expired) item.expiryDate else "${item.daysRemaining}d",
+                tone = tone,
             )
         }
-        StatusBadge(icon = if (expired) Icons.Rounded.Cancel else Icons.Rounded.Warning, color = accent)
     }
 }
 
+/** The overall cl.14 compliance readout, now a full-width [HudStatusPill] (was a hand-rolled
+ * dot+text banner) — green when compliant, amber otherwise, same real [ComplianceUiState.Loaded]
+ * value. */
 @Composable
 private fun OverallBanner(compliant: Boolean) {
-    val color = if (compliant) CaptainPalette.success else CaptainPalette.warning
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(color.copy(alpha = 0.14f))
-            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text(
-            if (compliant) "Vehicle compliant — all documents on file" else "Missing required compliance documents",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            color = CaptainPalette.textPrimary,
-        )
-    }
+    HudStatusPill(
+        label = "Compliance",
+        value = if (compliant) "All documents on file" else "Missing required documents",
+        tone = if (compliant) HudTone.Success else HudTone.Warning,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** 2-wide grid of compact dossier rows — `satisfied` null renders the neutral "—" fallback. */
@@ -447,30 +469,35 @@ private fun ComplianceGrid(items: List<Pair<String, Boolean?>>) {
     }
 }
 
+/** One cl.14 dossier cell, now a [GlassCard] (was a flat `panel`-background `Row`) — the
+ * check/warning [StatusBadge] icon is unchanged, just tinted through the shared [HudTone] mapping
+ * so it reads consistently with every other status indicator on this screen. */
 @Composable
 private fun ComplianceCard(label: String, satisfied: Boolean?, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .height(56.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(CaptainPalette.panel)
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(16.dp))
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            label,
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 14.sp,
-            color = CaptainPalette.textPrimary,
-            modifier = Modifier.weight(1f),
-        )
-        when (satisfied) {
-            true -> StatusBadge(icon = Icons.Rounded.CheckCircle, color = CaptainPalette.success)
-            false -> StatusBadge(icon = Icons.Rounded.Warning, color = CaptainPalette.warning)
-            null -> Text("—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = CaptainPalette.textMuted)
+    val tone = when (satisfied) {
+        true -> HudTone.Success
+        false -> HudTone.Warning
+        null -> HudTone.Neutral
+    }
+    GlassCard(modifier = modifier.height(56.dp), cornerRadiusDp = 16) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                label,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = CaptainPalette.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            when (satisfied) {
+                true -> StatusBadge(icon = Icons.Rounded.CheckCircle, color = tone.color())
+                false -> StatusBadge(icon = Icons.Rounded.Warning, color = tone.color())
+                null -> Text("—", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = CaptainPalette.textMuted)
+            }
         }
     }
 }
@@ -573,47 +600,53 @@ private fun documentStatusFor(expiryIso: String?, warningDays: Long = 30): Docum
     }
 }
 
+/** [DocumentStatus] -> [HudTone] — green/amber/red by days-remaining, neutral grey for "not on
+ * file" (never a false-negative red for a document this device simply hasn't seen a date for). */
+private fun DocumentStatus.tone(): HudTone = when (this) {
+    DocumentStatus.VERIFIED -> HudTone.Success
+    DocumentStatus.EXPIRING_SOON -> HudTone.Warning
+    DocumentStatus.EXPIRED -> HudTone.Danger
+    DocumentStatus.UNKNOWN -> HudTone.Neutral
+}
+
 private fun formatExpiryDate(expiryIso: String): String =
     runCatching { LocalDate.parse(expiryIso) }.getOrNull()
         ?.let { DateTimeFormatter.ofPattern("d MMM yyyy").format(it) }
         ?: expiryIso
 
+/** One Documents-tab row, now a [GlassCard] with a trailing [HudStatusPill] carrying the real
+ * Verified/Expiring soon/Expired/Not on file status — green/amber/red/neutral by
+ * [documentStatusFor]'s existing days-remaining threshold, unchanged. */
 @Composable
 private fun DocumentStatusRow(label: String, expiryIso: String?) {
     val status = documentStatusFor(expiryIso)
-    val (statusText, accent) = when (status) {
-        DocumentStatus.VERIFIED -> "Verified" to CaptainPalette.success
-        DocumentStatus.EXPIRING_SOON -> "Expiring soon" to CaptainPalette.warning
-        DocumentStatus.EXPIRED -> "Expired" to CaptainPalette.danger
-        DocumentStatus.UNKNOWN -> "Not on file" to CaptainPalette.textMuted
+    val tone = status.tone()
+    val statusText = when (status) {
+        DocumentStatus.VERIFIED -> "Verified"
+        DocumentStatus.EXPIRING_SOON -> "Expiring soon"
+        DocumentStatus.EXPIRED -> "Expired"
+        DocumentStatus.UNKNOWN -> "Not on file"
     }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(76.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(CaptainPalette.panel)
-            .border(1.5.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
-            .padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    GlassCard(
+        modifier = Modifier.fillMaxWidth().height(76.dp),
+        cornerRadiusDp = 18,
+        glow = if (status == DocumentStatus.EXPIRED) tone.color() else null,
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
-            Text(
-                if (expiryIso != null) "Expires ${formatExpiryDate(expiryIso)}" else "Not on file",
-                fontFamily = InterFamily,
-                fontSize = 13.sp,
-                color = CaptainPalette.textSecondary,
-            )
-        }
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(accent.copy(alpha = 0.16f))
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(statusText.uppercase(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = accent)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+                Text(
+                    if (expiryIso != null) "Expires ${formatExpiryDate(expiryIso)}" else "Not on file",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+            }
+            HudStatusPill(label = "Status", value = statusText, tone = tone, pulsing = status == DocumentStatus.EXPIRED)
         }
     }
 }

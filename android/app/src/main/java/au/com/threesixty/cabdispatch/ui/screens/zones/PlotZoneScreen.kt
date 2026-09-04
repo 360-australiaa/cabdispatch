@@ -19,7 +19,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.EventAvailable
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,14 +30,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,11 +42,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.ZoneDto
+import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
-import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatTile
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
@@ -66,13 +69,25 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  *   card says "Currently plotted" plainly. Live demand lives on the Statistics screen.
  * - More than 6 zones scroll INSIDE the fixed-height grid container (the page itself never
  *   scrolls vertically).
+ *
+ * **HUD kit rebuild (2026-09-04).** Cards are now [GlassCard]s and, where a real [ZoneStatsDto] row
+ * exists for the zone (joined in client-side from [ZoneStatisticsViewModel] — the SAME ViewModel
+ * [PlotZoneTabContent]'s sibling tabs [HeatMapTabContent]/[AirportQueueTabContent] already join in
+ * this exact way, not a new data source), show real vehicle-count/bookings/hails [HudStatTile]s and
+ * a [SurgeModel]-derived surge [HudStatusPill] — closing the very gap this file's own honesty note
+ * above used to flag, with real numbers, not the fabricated "Queue 4 · 12 bookings/hr" copy that
+ * note explicitly rejected. No zone-stats row yet (or the zone genuinely has none): the honest
+ * "Tap to join this zone's queue"/"Currently plotted" caption still shows, unchanged.
  */
 @Composable
 fun PlotZoneScreen(
     navController: NavHostController,
     viewModel: PlotZoneViewModel = viewModel(),
+    statsViewModel: ZoneStatisticsViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val statsState by statsViewModel.uiState.collectAsState()
+    val statsByZoneId = remember(statsState.stats) { statsState.stats.associateBy { it.zoneId } }
 
     Column(
         modifier = Modifier
@@ -125,7 +140,7 @@ fun PlotZoneScreen(
                     Spacer(Modifier.height(16.dp))
                     BackRow(navController)
                 } else {
-                    // Populated — 3-column grid of 220dp zone cards. Scrolls internally only when
+                    // Populated — 3-column grid of zone cards. Scrolls internally only when
                     // the list outgrows the fixed region (>6 zones).
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
@@ -136,6 +151,7 @@ fun PlotZoneScreen(
                         items(s.zones, key = { it.id }) { zone ->
                             ZoneCard(
                                 zone = zone,
+                                stats = statsByZoneId[zone.id],
                                 plotted = zone.id == s.plottedZoneId,
                                 busy = s.busy,
                                 onPlot = { viewModel.plotInto(zone) },
@@ -197,23 +213,12 @@ private fun PlotHeader(plottedZone: ZoneDto?, showPill: Boolean) {
         )
         Spacer(Modifier.weight(1f))
         if (showPill && plottedZone != null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(CaptainPalette.success.copy(alpha = 0.12f))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(16.dp))
-                Text(
-                    "Plotted: ${plottedZone.number} — ${plottedZone.name}",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
-                    color = CaptainPalette.success,
-                )
-            }
+            HudStatusPill(
+                label = "Plotted",
+                value = "${plottedZone.number} — ${plottedZone.name}",
+                tone = HudTone.Success,
+                pulsing = false,
+            )
         }
     }
 }
@@ -232,11 +237,19 @@ private fun BackRow(navController: NavHostController) {
  * it: reuses [PlotZoneViewModel] and the same [ZoneCard]/[EmptyStateCard] composables
  * [PlotZoneScreen] itself uses, minus that standalone route's own title/back-row chrome (the tab
  * shell supplies its own). [PlotZoneScreen] and this route it lives on are otherwise untouched and
- * still reachable exactly as before.
+ * still reachable exactly as before. Also joins the same [ZoneStatisticsViewModel] its sibling tabs
+ * ([HeatMapTabContent]/[AirportQueueTabContent]) already use, so [ZoneCard] can show real
+ * vehicle/bookings/hails numbers where a stats row exists for the zone — see [PlotZoneScreen]'s own
+ * doc for why this isn't a new data source.
  */
 @Composable
-fun PlotZoneTabContent(viewModel: PlotZoneViewModel = viewModel()) {
+fun PlotZoneTabContent(
+    viewModel: PlotZoneViewModel = viewModel(),
+    statsViewModel: ZoneStatisticsViewModel = viewModel(),
+) {
     val state by viewModel.uiState.collectAsState()
+    val statsState by statsViewModel.uiState.collectAsState()
+    val statsByZoneId = remember(statsState.stats) { statsState.stats.associateBy { it.zoneId } }
 
     when (val s = state) {
         is PlotZoneUiState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -263,25 +276,13 @@ fun PlotZoneTabContent(viewModel: PlotZoneViewModel = viewModel()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 val plottedZone = s.zones.firstOrNull { it.id == s.plottedZoneId }
                 if (plottedZone != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 14.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(CaptainPalette.success.copy(alpha = 0.12f))
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(16.dp))
-                            Text(
-                                "Plotted: ${plottedZone.number} — ${plottedZone.name}",
-                                fontFamily = InterFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                color = CaptainPalette.success,
-                            )
-                        }
-                    }
+                    HudStatusPill(
+                        label = "Plotted",
+                        value = "${plottedZone.number} — ${plottedZone.name}",
+                        tone = HudTone.Success,
+                        pulsing = false,
+                        modifier = Modifier.padding(bottom = 14.dp),
+                    )
                 }
                 if (s.error != null) {
                     Text(s.error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
@@ -296,6 +297,7 @@ fun PlotZoneTabContent(viewModel: PlotZoneViewModel = viewModel()) {
                     items(s.zones, key = { it.id }) { zone ->
                         ZoneCard(
                             zone = zone,
+                            stats = statsByZoneId[zone.id],
                             plotted = zone.id == s.plottedZoneId,
                             busy = s.busy,
                             onPlot = { viewModel.plotInto(zone) },
@@ -309,110 +311,145 @@ fun PlotZoneTabContent(viewModel: PlotZoneViewModel = viewModel()) {
 }
 
 /**
- * 220dp zone card: 52dp Chakra number badge + name, pinned bottom CTA. Plotted card flips to the
- * success-bordered variant with the danger-outline "PLOTTED · UNPLOT".
+ * Zone card, now a [GlassCard] (was a hand-rolled clip/background/border `Column`) — the 52dp
+ * Chakra number badge + name, pinned bottom CTA, plotted state and PLOT HERE/PLOTTED-UNPLOT
+ * behaviour are all byte-for-byte unchanged. When [stats] resolves (the real
+ * [au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto] row for this zone — see
+ * [PlotZoneScreen]'s own doc for how it's joined in), the honest "no per-zone demand field" caption
+ * is replaced by real vehicle-count/bookings/hails [HudStatTile]s and a [SurgeModel]-derived surge
+ * [HudStatusPill]; with no stats row yet, the exact same honest caption as before still shows.
+ * Height grows from 220dp to 268dp only when the stats row is shown, to fit the extra tiles without
+ * cramping the existing content.
  */
 @Composable
 private fun ZoneCard(
     zone: ZoneDto,
+    stats: ZoneStatsDto?,
     plotted: Boolean,
     busy: Boolean,
     onPlot: () -> Unit,
     onUnplot: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(20.dp)
-    Column(
-        modifier = Modifier
-            .height(220.dp)
-            .clip(shape)
-            .background(if (plotted) CaptainPalette.success.copy(alpha = 0.10f) else CaptainPalette.panel)
-            .border(
-                width = if (plotted) 2.dp else 1.dp,
-                color = if (plotted) CaptainPalette.success else CaptainPalette.panelBorder,
-                shape = shape,
-            )
-            .padding(horizontal = 22.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    GlassCard(
+        modifier = Modifier.height(if (stats != null) 268.dp else 220.dp),
+        cornerRadiusDp = 20,
+        glow = if (plotted) CaptainPalette.success else null,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (plotted) CaptainPalette.success else CaptainPalette.raised),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    zone.number,
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 24.sp,
-                    color = if (plotted) CaptainPalette.bg else CaptainPalette.accent,
-                )
-            }
-            Text(
-                zone.name,
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 22.sp,
-                color = CaptainPalette.textPrimary,
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (!plotted) {
-                Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(15.dp))
-            }
-            Text(
-                // No per-zone queue/demand fields exist on ZoneDto — see file doc.
-                text = if (plotted) "Currently plotted" else "Tap to join this zone's queue",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 15.sp,
-                color = if (plotted) CaptainPalette.success else CaptainPalette.textSecondary,
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        if (plotted) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(1.5.dp, CaptainPalette.danger.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
-                    .alpha(if (busy) 0.4f else 1f)
-                    .clickable(enabled = !busy, onClick = onUnplot),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (busy) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = CaptainPalette.danger)
-                } else {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (plotted) CaptainPalette.success else CaptainPalette.raised),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        "PLOTTED · UNPLOT",
+                        zone.number,
+                        fontFamily = ChakraPetch,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 24.sp,
+                        color = if (plotted) CaptainPalette.bg else CaptainPalette.accent,
+                    )
+                }
+                Text(
+                    zone.name,
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    color = CaptainPalette.textPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                if (stats != null) {
+                    val multiplier = SurgeModel.multiplier(stats)
+                    HudStatusPill(label = "Surge", value = SurgeModel.label(stats), tone = surgeTone(multiplier), pulsing = false)
+                }
+            }
+            if (stats != null) {
+                // Real vehicle-count/bookings/hails numbers off the same ZoneStatsDto row the
+                // Statistics/Surge Areas tabs render — see this function's own doc.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HudStatTile(
+                        icon = Icons.Rounded.DirectionsCar,
+                        label = "Vehicles",
+                        value = "${stats.vacantVehicles + stats.busyVehicles}",
+                        sub = "${stats.vacantVehicles} vacant",
+                        valueFontSize = 18.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    HudStatTile(
+                        icon = Icons.Rounded.EventAvailable,
+                        label = "Bookings/hr",
+                        value = "${stats.bookingsLastHour}",
+                        valueFontSize = 18.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    HudStatTile(
+                        icon = Icons.Rounded.Flag,
+                        label = "Hails/hr",
+                        value = "${stats.streetHailsLastHour}",
+                        valueFontSize = 18.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (!plotted) {
+                        Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(15.dp))
+                    }
+                    Text(
+                        // No live stats row for this zone yet — see this function's own doc.
+                        text = if (plotted) "Currently plotted" else "Tap to join this zone's queue",
                         fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = CaptainPalette.danger,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        color = if (plotted) CaptainPalette.success else CaptainPalette.textSecondary,
                     )
                 }
             }
-        } else {
-            CaptainButton(
-                text = "PLOT HERE",
-                heightDp = 58,
-                fontSize = 16.sp,
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = onPlot,
-            )
+            Spacer(Modifier.weight(1f))
+            if (plotted) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(58.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(1.5.dp, CaptainPalette.danger.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                        .alpha(if (busy) 0.4f else 1f)
+                        .clickable(enabled = !busy, onClick = onUnplot),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = CaptainPalette.danger)
+                    } else {
+                        Text(
+                            "PLOTTED · UNPLOT",
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = CaptainPalette.danger,
+                        )
+                    }
+                }
+            } else {
+                CaptainButton(
+                    text = "PLOT HERE",
+                    heightDp = 58,
+                    fontSize = 16.sp,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onPlot,
+                )
+            }
         }
     }
 }
 
-/**
- * The dashed-border empty/error card (also reused for the load-error state). Compose has no
- * dashed border modifier, so the dash is drawn with a [PathEffect.dashPathEffect] rounded-rect
- * stroke.
- */
+/** The empty/error card (also reused for the load-error state), now a [GlassCard] (was a
+ * hand-rolled dashed-border `Column`) — same title/body/refresh-button content, unchanged. */
 @Composable
 private fun EmptyStateCard(
     modifier: Modifier = Modifier,
@@ -421,51 +458,39 @@ private fun EmptyStateCard(
     buttonText: String,
     onButtonClick: () -> Unit,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(CaptainPalette.panel)
-            .drawBehind {
-                drawRoundRect(
-                    color = CaptainPalette.panelBorder,
-                    cornerRadius = CornerRadius(24.dp.toPx()),
-                    style = Stroke(
-                        width = 1.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 8.dp.toPx())),
-                    ),
-                )
-            }
-            .padding(horizontal = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Spacer(Modifier.weight(1f))
-        Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(56.dp))
-        Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
-        Text(
-            body,
-            fontFamily = InterFamily,
-            fontSize = 16.sp,
-            color = CaptainPalette.textSecondary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.width(560.dp),
-        )
-        Box(
-            modifier = Modifier
-                .width(240.dp)
-                .height(64.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(CaptainPalette.raised)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
-                .clickable(onClick = onButtonClick),
-            contentAlignment = Alignment.Center,
+    GlassCard(modifier = modifier.fillMaxWidth(), cornerRadiusDp = 24) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Rounded.Refresh, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
-                Text(buttonText, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.accent)
+            Spacer(Modifier.weight(1f))
+            Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(56.dp))
+            Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
+            Text(
+                body,
+                fontFamily = InterFamily,
+                fontSize = 16.sp,
+                color = CaptainPalette.textSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(560.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .width(240.dp)
+                    .height(64.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(CaptainPalette.raised)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+                    .clickable(onClick = onButtonClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
+                    Text(buttonText, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.accent)
+                }
             }
+            Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.weight(1f))
     }
 }

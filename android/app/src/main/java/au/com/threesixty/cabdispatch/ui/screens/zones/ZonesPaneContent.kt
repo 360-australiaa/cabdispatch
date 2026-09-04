@@ -2,7 +2,6 @@ package au.com.threesixty.cabdispatch.ui.screens.zones
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.gameClick
+import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 
 /**
  * Nav rail `ZONES` pane (`squishy-herding-iverson.md` Phase F) — a real tabbed Heat Map / Zone
@@ -52,6 +53,11 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * composition, scoped to `DeckHomeScreen`'s ViewModelStoreOwner (the "home" nav-graph entry) — so
  * they are created once and keep polling/state across tab switches, exactly like every other
  * ViewModel-backed pane in this shell.
+ *
+ * **HUD kit rebuild (2026-09-04).** [ZonesTabPill] now uses the HUD accent/glass tokens and the
+ * shared [neonGlow]/[gameClick] primitives — the same treatment `TripsWheelContent`'s own filter
+ * pills already got — instead of the flat primary/raised colors. Every tab's own content is
+ * restyled in its own file; this file's only change is the tab-switcher chrome.
  */
 @Composable
 fun ZonesPaneContent() {
@@ -80,17 +86,21 @@ private enum class ZonesTab(val label: String) {
     AIRPORT_QUEUE("Airport Queue"),
 }
 
+/** Now styled off the HUD accent/glass tokens with a [neonGlow] halo when selected and the shared
+ * [gameClick] press feedback — was flat `primary`/`raised` fills. Same selection state/callback. */
 @Composable
 private fun ZonesTabPill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) CaptainPalette.primary else CaptainPalette.raised
+    val shape = RoundedCornerShape(999.dp)
+    val bg = if (selected) CaptainPalette.hudAccent else CaptainPalette.hudGlass
     val textColor = if (selected) CaptainPalette.textPrimary else CaptainPalette.textSecondary
     Box(
         modifier = Modifier
             .height(44.dp)
-            .clip(RoundedCornerShape(999.dp))
+            .then(if (selected) Modifier.neonGlow(CaptainPalette.hudAccent, 999.dp, strength = 0.8f, spread = 4.dp) else Modifier)
+            .clip(shape)
             .background(bg)
-            .border(1.dp, if (selected) CaptainPalette.primary else CaptainPalette.panelBorder, RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
+            .border(1.dp, if (selected) CaptainPalette.hudSweepMid else CaptainPalette.hudGlassBorderPurple, shape)
+            .gameClick(onClick = onClick, shape = shape, glowColor = CaptainPalette.hudSweepMid)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {

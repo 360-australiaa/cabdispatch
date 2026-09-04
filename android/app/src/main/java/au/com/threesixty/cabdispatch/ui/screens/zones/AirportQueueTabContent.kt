@@ -1,6 +1,5 @@
 package au.com.threesixty.cabdispatch.ui.screens.zones
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FlightTakeoff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -37,6 +35,8 @@ import au.com.threesixty.cabdispatch.data.remote.ZoneDto
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
@@ -54,6 +54,10 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * [ZoneDto.name] contains "airport" (case-insensitive) — joined with its real live stats from the
  * same [ZoneStatisticsViewModel] every other tab uses. If an operator has never created a zone
  * named "Airport" (or similar), this tab honestly shows nothing rather than inventing one.
+ *
+ * **HUD kit rebuild (2026-09-04).** [AirportZoneCard] is now a [GlassCard] carrying its surge
+ * multiplier as a [HudStatusPill] (was a `Surface` with a hand-rolled colored badge) — same
+ * filter/data/[SurgeModel] computation, unchanged.
  */
 @Composable
 fun AirportQueueTabContent(
@@ -110,16 +114,12 @@ fun AirportQueueTabContent(
     }
 }
 
+/** Now a [GlassCard] with the multiplier carried as a [HudStatusPill] (was a `Surface` with a
+ * hand-rolled colored badge `Box`) — same real zone/stats content, toned via [surgeTone]. */
 @Composable
 private fun AirportZoneCard(zone: ZoneDto, stats: ZoneStatsDto?) {
     val multiplier = stats?.let(SurgeModel::multiplier) ?: 1.0
-    val color = SurgeModel.color(multiplier)
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = CaptainPalette.panel,
-        border = BorderStroke(1.dp, CaptainPalette.panelBorder),
-    ) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.raised),
@@ -142,11 +142,7 @@ private fun AirportZoneCard(zone: ZoneDto, stats: ZoneStatsDto?) {
                 )
             }
             if (stats != null) {
-                Box(
-                    modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = 0.16f)).padding(horizontal = 14.dp, vertical = 8.dp),
-                ) {
-                    Text(SurgeModel.label(stats), fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = color)
-                }
+                HudStatusPill(label = "Surge", value = SurgeModel.label(stats), tone = surgeTone(multiplier), pulsing = false)
             }
         }
     }
