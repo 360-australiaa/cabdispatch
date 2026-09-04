@@ -14,7 +14,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -23,8 +22,11 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.createGlowLine
+import au.com.threesixty.cabdispatch.ui.theme.toMapboxHex
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
@@ -33,7 +35,6 @@ import com.mapbox.maps.plugin.annotation.annotations
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationManager
-import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.createCircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.createPolylineAnnotationManager
 import com.mapbox.maps.plugin.compass.compass
@@ -51,12 +52,15 @@ internal data class MapPoint(val lat: Double, val lng: Double)
 
 /**
  * Non-interactive Mapbox backdrop behind the Meter screen's dial (Meter "game-level" visual pass,
- * 2026-09-03) — this app's SECOND real `MapView`, a direct reuse of the lifecycle/`rememberUpdatedState`/
- * "frame once, then only touch layers on data change" pattern proven in
- * [au.com.threesixty.cabdispatch.ui.screens.zones.HeatMapTabContent] (the first). Everything drawn
- * is real data, or absent:
+ * 2026-09-03; navigator wiring, 2026-09-04) — this app's SECOND real `MapView`, a direct reuse of
+ * the lifecycle/`rememberUpdatedState`/"frame once, then only touch layers on data change" pattern
+ * proven in [au.com.threesixty.cabdispatch.ui.screens.zones.HeatMapTabContent] (the first).
+ * Everything drawn is real data, or absent:
  *
- * - **Route polyline** — every vertex is a real GPS fix. Two sources, concatenated in order:
+ * - **Route polyline** — the HUD kit's two-layer glow line
+ *   ([au.com.threesixty.cabdispatch.ui.theme.createGlowLine]: wide low-alpha halo under a thin
+ *   bright line, explicit sort keys) in [CaptainPalette.hudAccent]. Every vertex is a real GPS
+ *   fix. Two sources, concatenated in order:
  *   [persistedTrace] (the active `TripEntity.gpsTraceJson`, via
  *   [au.com.threesixty.cabdispatch.data.repository.TripRepository.observeActiveTripGpsTrace]) and
  *   then [liveTrace], a screen-local accumulation of `AppContainer.speedSource.locationFix`
@@ -69,16 +73,28 @@ internal data class MapPoint(val lat: Double, val lng: Double)
  *   simply grows and the live half keeps appending after it.
  * - **Pickup pin** (green) — `TripContext.startLat/startLng`, the real trip start.
  * - **Vehicle marker** (purple) — the latest real fix, or the trip start before the first fix.
- * - **Destination pin** — deliberately NOT drawn. `TripContext` carries a `destAddress` string but
- *   no destination coordinates (the dispatch offer's `destLat/destLng` are never threaded into the
- *   hand-off), and a pin at a guessed/geocoded spot would be a fabricated destination.
+ * - **Destination pin** (red) — drawn ONLY when real coordinates arrive via [destLat]/[destLng] —
+ *   today, the driver's own real Mapbox-geocoded pick from [MeterNavViewModel]'s destination search
+ *   (`HiredScreen`'s nav layout wires this in); before a destination is chosen, the caller passes
+ *   null and no pin is drawn — a pin at a guessed/geocoded spot would be a fabricated destination.
+ * - **Planned route** ([plannedRoute]) — a second, dimmer glow line in [CaptainPalette.hudSweepMid]
+ *   for [MeterNavViewModel]'s real Directions-API polyline, drawn under the driven trace. Empty
+ *   (nothing drawn) until a route has actually been fetched.
+ *
+ * **Camera.** With no [plannedRoute] (the ordinary metered mockup-#3 backdrop) the camera frames
+ * once on the first real position then eases to follow the vehicle at a fixed zoom, exactly as
+ * before. Once a real [plannedRoute] exists (mockup-#4's "TRIP IN PROGRESS" pane) the camera
+ * instead fits the whole picture — route + vehicle + destination — via `MapboxMap
+ * .cameraForCoordinates(points, EdgeInsets, bearing = null, pitch = null)`, re-fit whenever the
+ * route reference changes (a fresh route or a reroute), so the driver sees the full trip context
+ * rather than a tight follow-cam that would hide the destination off-screen.
  *
  * Gestures are fully disabled (`gestures.updateSettings`) — this is a backdrop the dial floats
- * over, not a map to pan; the camera follows the vehicle's real position with a short ease, keyed
- * on a ~10m-quantised position so 1 Hz fixes don't restart the ease every tick. Scale bar and
- * compass are hidden (they'd sit under the dim overlay looking broken); Mapbox's logo/attribution
- * are left enabled per its terms, dimmed like the rest of the map. A dark overlay + radial vignette
- * on top keeps the dial legible over street detail.
+ * over, not a map to pan. Scale bar and compass are hidden (they'd sit under the dim overlay
+ * looking broken); Mapbox's logo/attribution are left enabled per its terms, dimmed like the rest
+ * of the map. A dark overlay ([dimAlpha]) + radial vignette on top keeps the dial legible over
+ * street detail — the mockup-#4 "TRIP IN PROGRESS" pane, where the map is the content rather than
+ * a backdrop, passes a lighter wash.
  */
 @Composable
 internal fun MeterBackdropMap(
@@ -88,6 +104,10 @@ internal fun MeterBackdropMap(
     liveTrace: List<MapPoint>,
     liveFix: LocationFix?,
     modifier: Modifier = Modifier,
+    destLat: Double? = null,
+    destLng: Double? = null,
+    plannedRoute: List<MapPoint> = emptyList(),
+    dimAlpha: Float = 0.62f,
 ) {
     val routePoints = remember(persistedTrace, liveTrace) {
         persistedTrace.map { MapPoint(it.lat, it.lng) } + liveTrace
@@ -96,6 +116,8 @@ internal fun MeterBackdropMap(
         ?: routePoints.lastOrNull()
         ?: if (startLat != null && startLng != null) MapPoint(startLat, startLng) else null
     val pickup: MapPoint? = if (startLat != null && startLng != null) MapPoint(startLat, startLng) else null
+    val destination: MapPoint? = if (destLat != null && destLng != null) MapPoint(destLat, destLng) else null
+    val hasPlannedRoute = plannedRoute.size >= 2
 
     val mapHolder = remember { mutableStateOf<BackdropHolder?>(null) }
     var mapReady by remember { mutableStateOf(false) }
@@ -132,13 +154,14 @@ internal fun MeterBackdropMap(
                 },
             )
         }
-        // Dim + vignette so the dial reads on top of street detail. Two layers: a flat ~62% bg
-        // wash, then a radial fade that's near-transparent behind the dial's centre and darker at
-        // the corners — the "map recedes, dial floats" look from the mockup.
+        // Dim + vignette so the dial reads on top of street detail. Two layers: a flat bg wash
+        // ([dimAlpha], ~62% by default), then a radial fade that's near-transparent behind the
+        // dial's centre and darker at the corners — the "map recedes, dial floats" look from the
+        // mockup.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(CaptainPalette.bg.copy(alpha = 0.62f))
+                .background(CaptainPalette.hudBg.copy(alpha = dimAlpha.coerceIn(0f, 1f)))
                 .background(
                     Brush.radialGradient(
                         colors = listOf(Color.Transparent, CaptainPalette.bg.copy(alpha = 0.55f)),
@@ -147,10 +170,12 @@ internal fun MeterBackdropMap(
         )
     }
 
-    // One-time initial framing, exactly like HeatMapTabContent: first time the style is loaded AND
-    // we have a real position. Subsequent moves go through the follow effect below.
-    LaunchedEffect(mapReady, vehicle != null) {
-        if (cameraFramed || !mapReady) return@LaunchedEffect
+    // One-time initial framing (follow-cam mode only — see class doc), exactly like
+    // HeatMapTabContent: first time the style is loaded AND we have a real position. Subsequent
+    // moves go through the follow effect below. Skipped once a real planned route exists — that
+    // case gets the bounds-fit camera instead (see the effect further down).
+    LaunchedEffect(mapReady, vehicle != null, hasPlannedRoute) {
+        if (cameraFramed || !mapReady || hasPlannedRoute) return@LaunchedEffect
         val holder = mapHolder.value ?: return@LaunchedEffect
         val target = vehicle ?: return@LaunchedEffect
         holder.mapView.mapboxMap.setCamera(
@@ -159,10 +184,10 @@ internal fun MeterBackdropMap(
         cameraFramed = true
     }
 
-    // Camera follow — eases to the vehicle's real position whenever it moves >~10 m (see
-    // followKey). Gestures are disabled, so there is no driver pan to fight with.
-    LaunchedEffect(mapReady, cameraFramed, followKey) {
-        if (!mapReady || !cameraFramed) return@LaunchedEffect
+    // Camera follow (follow-cam mode only) — eases to the vehicle's real position whenever it
+    // moves >~10 m (see followKey). Gestures are disabled, so there is no driver pan to fight with.
+    LaunchedEffect(mapReady, cameraFramed, followKey, hasPlannedRoute) {
+        if (!mapReady || !cameraFramed || hasPlannedRoute) return@LaunchedEffect
         val holder = mapHolder.value ?: return@LaunchedEffect
         val target = vehicle ?: return@LaunchedEffect
         holder.mapView.camera.easeTo(
@@ -171,32 +196,57 @@ internal fun MeterBackdropMap(
         )
     }
 
-    // Layer refresh on data change only (never moves the camera): the route polyline is drawn as
-    // two line annotations — a wide, low-alpha one underneath for the glow and a narrow bright one
-    // on top — then pickup + vehicle circle annotations. deleteAll + recreate, same as the heat
+    // Bounds-fit camera (navigator mode only) — re-fit whenever the route reference changes (a
+    // fresh route or a reroute) or the destination moves, so the whole trip stays in frame rather
+    // than a tight follow-cam hiding the destination off-screen. `cameraForCoordinates` is the
+    // synchronous overload (the map's already loaded by the time a route can exist), padded so the
+    // route never touches the pane's edge (where the dial/cards sit in the caller's layout).
+    LaunchedEffect(mapReady, plannedRoute, destination) {
+        if (!mapReady || !hasPlannedRoute) return@LaunchedEffect
+        val holder = mapHolder.value ?: return@LaunchedEffect
+        val points = buildList {
+            plannedRoute.forEach { add(Point.fromLngLat(it.lng, it.lat)) }
+            vehicle?.let { add(Point.fromLngLat(it.lng, it.lat)) }
+            destination?.let { add(Point.fromLngLat(it.lng, it.lat)) }
+        }
+        if (points.size < 2) return@LaunchedEffect
+        runCatching {
+            val fitted = holder.mapView.mapboxMap.cameraForCoordinates(
+                points,
+                CameraOptions.Builder().build(),
+                EdgeInsets(BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX),
+                null,
+                null,
+            )
+            holder.mapView.camera.easeTo(fitted, MapAnimationOptions.mapAnimationOptions { duration(900) })
+        }
+        cameraFramed = true
+    }
+
+    // Layer refresh on data change only (never moves the camera): the planned route (if any) and
+    // the driven trace are each the kit's two-layer glow line (`createGlowLine` — wide low-alpha
+    // halo under a narrow bright line, sort-keyed so the bright line stays on top), then
+    // pickup + destination + vehicle circle annotations. deleteAll + recreate, same as the heat
     // map: a trip's trace is at most a few thousand points, well within what this costs.
-    LaunchedEffect(mapReady, routePoints, pickup, vehicle) {
+    LaunchedEffect(mapReady, routePoints, plannedRoute, pickup, destination, vehicle) {
         val holder = mapHolder.value ?: return@LaunchedEffect
         if (!mapReady) return@LaunchedEffect
         holder.lines.deleteAll()
         holder.circles.deleteAll()
 
-        if (routePoints.size >= 2) {
-            val geo = routePoints.map { Point.fromLngLat(it.lng, it.lat) }
-            holder.lines.create(
-                listOf(
-                    PolylineAnnotationOptions()
-                        .withPoints(geo)
-                        .withLineColor(CaptainPalette.accent.toHex())
-                        .withLineWidth(14.0)
-                        .withLineOpacity(0.28),
-                    PolylineAnnotationOptions()
-                        .withPoints(geo)
-                        .withLineColor(CaptainPalette.accent.toHex())
-                        .withLineWidth(4.0)
-                        .withLineOpacity(0.95),
-                ),
+        // Planned (navigator) route first so the driven trace draws over it. Dimmer, lighter
+        // purple: "where we're going" reads as secondary to "where we've actually been".
+        if (plannedRoute.size >= 2) {
+            holder.lines.createGlowLine(
+                points = plannedRoute.map { Point.fromLngLat(it.lng, it.lat) },
+                color = CaptainPalette.hudSweepMid,
+                glowOpacity = 0.18,
+                lineWidth = 3.0,
+                lineOpacity = 0.55,
             )
+        }
+        if (routePoints.size >= 2) {
+            holder.lines.createGlowLine(points = routePoints.map { Point.fromLngLat(it.lng, it.lat) })
         }
         val pins = buildList {
             if (pickup != null) {
@@ -204,9 +254,19 @@ internal fun MeterBackdropMap(
                     CircleAnnotationOptions()
                         .withPoint(Point.fromLngLat(pickup.lng, pickup.lat))
                         .withCircleRadius(7.0)
-                        .withCircleColor(CaptainPalette.success.toHex())
+                        .withCircleColor(CaptainPalette.success.toMapboxHex())
                         .withCircleStrokeWidth(3.0)
-                        .withCircleStrokeColor(CaptainPalette.textPrimary.toHex()),
+                        .withCircleStrokeColor(CaptainPalette.textPrimary.toMapboxHex()),
+                )
+            }
+            if (destination != null) {
+                add(
+                    CircleAnnotationOptions()
+                        .withPoint(Point.fromLngLat(destination.lng, destination.lat))
+                        .withCircleRadius(7.0)
+                        .withCircleColor(CaptainPalette.danger.toMapboxHex())
+                        .withCircleStrokeWidth(3.0)
+                        .withCircleStrokeColor(CaptainPalette.textPrimary.toMapboxHex()),
                 )
             }
             if (vehicle != null) {
@@ -215,16 +275,16 @@ internal fun MeterBackdropMap(
                     CircleAnnotationOptions()
                         .withPoint(Point.fromLngLat(vehicle.lng, vehicle.lat))
                         .withCircleRadius(18.0)
-                        .withCircleColor(CaptainPalette.accent.toHex())
+                        .withCircleColor(CaptainPalette.hudAccent.toMapboxHex())
                         .withCircleOpacity(0.25),
                 )
                 add(
                     CircleAnnotationOptions()
                         .withPoint(Point.fromLngLat(vehicle.lng, vehicle.lat))
                         .withCircleRadius(8.0)
-                        .withCircleColor(CaptainPalette.accent.toHex())
+                        .withCircleColor(CaptainPalette.hudAccent.toMapboxHex())
                         .withCircleStrokeWidth(3.0)
-                        .withCircleStrokeColor(CaptainPalette.textPrimary.toHex()),
+                        .withCircleStrokeColor(CaptainPalette.textPrimary.toMapboxHex()),
                 )
             }
         }
@@ -251,15 +311,13 @@ internal fun MeterBackdropMap(
 }
 
 private const val BACKDROP_ZOOM = 14.5
+private const val BOUNDS_FIT_PADDING_PX = 56.0
 
 private data class BackdropHolder(
     val mapView: MapView,
     val lines: PolylineAnnotationManager,
     val circles: CircleAnnotationManager,
 )
-
-/** Mapbox annotation colour strings are CSS hex; this is the same palette token, not a new colour. */
-private fun Color.toHex(): String = "#%06X".format(0xFFFFFF and toArgb())
 
 /**
  * Screen-local live-trace accumulator (see [MeterBackdropMap]'s class doc for why this exists

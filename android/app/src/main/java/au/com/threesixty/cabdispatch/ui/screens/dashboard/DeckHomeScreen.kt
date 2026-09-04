@@ -546,7 +546,16 @@ fun DeckHomeScreen(
                         CaptainPane.METER -> HiredScreen(navController = navController)
                     }
                 }
-                if (pane == CaptainPane.DASHBOARD || pane == CaptainPane.METER) {
+                // Meter-focus collapse (2026-09-04): while a fare is actually live on the METER
+                // pane, this footer bar (SHIFT TIME/TRIPS/EARNINGS/NEXT BREAK + the GPS/WI-FI/
+                // PRINTER/METER status tray) hides so HiredScreen's Row above — already `weight(1f)`
+                // in the enclosing Column — expands into the freed ~170dp and the dial/map genuinely
+                // grow rather than just gaining whitespace. `hasActiveTrip` (this file's own real
+                // Room "is a fare open" read, doc'd above) is the same signal already gating the nav
+                // rail's METER alias, so this collapses for exactly the live-fare duration and comes
+                // back the moment Close & Pay actually closes the trip. Header and nav rail are
+                // untouched — the driver keeps METER/other panes and the SOS pill reachable.
+                if (pane == CaptainPane.DASHBOARD || (pane == CaptainPane.METER && !hasActiveTrip)) {
                     Spacer(Modifier.height(18.dp))
                     // 136dp -> 152dp (2026-09-04 HUD chrome pass): the NEXT BREAK cell now carries
                     // the ring + "Break in" + "Working until" + the TAKE BREAK button at
