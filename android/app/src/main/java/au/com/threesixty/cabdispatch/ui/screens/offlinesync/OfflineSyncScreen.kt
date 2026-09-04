@@ -252,7 +252,9 @@ private fun SyncButton(text: String, icon: ImageVector, onClick: () -> Unit, mod
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(24.dp))
-        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)
+        // onAccent (fixed white), not textPrimary — this sits on the solid CaptainPalette.primary
+        // fill (see CaptainPalette.onAccent's doc).
+        Icon(icon, contentDescription = null, tint = CaptainPalette.onAccent, modifier = Modifier.size(24.dp))
+        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.onAccent)
     }
 }

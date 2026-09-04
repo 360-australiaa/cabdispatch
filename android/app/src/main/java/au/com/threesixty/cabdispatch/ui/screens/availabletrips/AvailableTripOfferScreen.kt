@@ -348,13 +348,15 @@ private fun SolidOfferButton(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(30.dp))
+        // onAccent (fixed white), not textPrimary — this sits on the solid containerColor fill
+        // (success at this composable's one call site), see CaptainPalette.onAccent's doc.
+        Icon(icon, contentDescription = null, tint = CaptainPalette.onAccent, modifier = Modifier.size(30.dp))
         Text(
             text,
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 26.sp,
-            color = CaptainPalette.textPrimary,
+            color = CaptainPalette.onAccent,
             modifier = Modifier.padding(start = 12.dp),
         )
     }

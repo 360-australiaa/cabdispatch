@@ -22,6 +22,7 @@ import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.ThemeMode
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +98,10 @@ data class SettingsUiState(
     val autoAcceptJobs: Boolean = false,
     val showMapInBackground: Boolean = true,
     val allowCash: Boolean = true,
+    /** Real Light/Dark/System display theme (2026-09-04 day-mode pass) — see [ThemeMode]'s own
+     * doc and [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore.themeMode]. Mirrored
+     * into this state the same way the three flags above are. */
+    val themeMode: ThemeMode = ThemeMode.DARK,
 )
 
 /** Real meter/device pairing (2026-08-28 — backend spec: `POST /v1/fleet/devices/register`,
@@ -144,6 +149,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 autoAcceptJobs = AppContainer.settingsPreferencesStore.autoAcceptJobs.value,
                 showMapInBackground = AppContainer.settingsPreferencesStore.showMapInBackground.value,
                 allowCash = AppContainer.settingsPreferencesStore.allowCash.value,
+                themeMode = AppContainer.settingsPreferencesStore.themeMode.value,
             )
         }
     }
@@ -164,6 +170,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setAllowCash(value: Boolean) {
         AppContainer.settingsPreferencesStore.setAllowCash(value)
         _uiState.update { it.copy(allowCash = value) }
+    }
+
+    /** See [SettingsUiState.themeMode]'s doc. [au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme]
+     * (composed once at the app root, not here) is what actually reacts to the store's `StateFlow`
+     * and repaints the whole app — this just writes through, same as every other real toggle above. */
+    fun setThemeMode(value: ThemeMode) {
+        AppContainer.settingsPreferencesStore.setThemeMode(value)
+        _uiState.update { it.copy(themeMode = value) }
     }
 
     /**

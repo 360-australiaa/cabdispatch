@@ -68,9 +68,31 @@ class SettingsPreferencesStore(context: Context) {
         _allowCash.value = value
     }
 
+    /**
+     * The real Light/Dark(/System) display theme (2026-09-04 day-mode pass) — see [ThemeMode]'s
+     * own doc. Read by [au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme] (the composition
+     * root, not a screen) to drive [au.com.threesixty.cabdispatch.ui.theme.CaptainPalette.applyTheme]
+     * for the whole app — a `StateFlow` here rather than a plain field for the same reason
+     * [showMapInBackground] is one: the writer (Settings' Display tab) and the reader
+     * ([CabDispatchTheme], composed once at the very top of [au.com.threesixty.cabdispatch.MainActivity])
+     * are two different composables with no shared ViewModel. Defaults [ThemeMode.DARK]: a driver
+     * who never opens Settings -> Display keeps today's exact HUD look, unchanged by this pass.
+     */
+    private val _themeMode = MutableStateFlow(
+        prefs.getString(KEY_THEME_MODE, null)?.let { saved ->
+            runCatching { ThemeMode.valueOf(saved) }.getOrNull()
+        } ?: ThemeMode.DARK,
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+    fun setThemeMode(value: ThemeMode) {
+        prefs.edit().putString(KEY_THEME_MODE, value.name).apply()
+        _themeMode.value = value
+    }
+
     private companion object {
         const val KEY_AUTO_ACCEPT_JOBS = "auto_accept_jobs"
         const val KEY_SHOW_MAP_IN_BACKGROUND = "show_map_in_background"
         const val KEY_ALLOW_CASH = "allow_cash"
+        const val KEY_THEME_MODE = "theme_mode"
     }
 }

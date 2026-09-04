@@ -159,7 +159,10 @@ private fun MessageBubbleRow(message: MessageDto, onClick: () -> Unit) {
                 Text(
                     text = message.body,
                     fontFamily = InterFamily,
-                    color = CaptainPalette.textPrimary,
+                    // Dispatch bubbles sit on CaptainPalette.raised (neutral surface) -> textPrimary
+                    // reads correctly in both themes; driver bubbles sit on the solid `primary`
+                    // fill -> need the fixed-white onAccent, not textPrimary (see that token's doc).
+                    color = if (fromDispatch) CaptainPalette.textPrimary else CaptainPalette.onAccent,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 3,

@@ -108,6 +108,16 @@ import kotlin.math.sin
 /** Blur radius (px) of the neon glow arc — the blueprint's `BlurMaskFilter(35f, NORMAL)`. */
 const val HUD_GLOW_BLUR_PX = 35f
 
+/** Blur radius (px) of the light-mode "soft drop shadow" pass — a real, small elevation shadow,
+ * not a neon glow (see [rememberHudGlowPaint]'s doc) — deliberately much tighter than
+ * [HUD_GLOW_BLUR_PX] so it reads as lift off the page rather than another halo. */
+const val HUD_DAY_SHADOW_BLUR_PX = 14f
+
+/** Width (dp) of the light-mode crisp accent ring [drawHudArc] draws on top of the lit sweep —
+ * the "still glowing" cue a neon sign gave for free in the dark, done here as a sharp, saturated
+ * outline instead (see that function's doc). */
+private val HUD_DAY_RING_WIDTH = 2.dp
+
 /** The one physics spring every HUD state transition uses (gauge progress, speed needle, rings). */
 fun hudSpring(): SpringSpec<Float> =
     spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow)
@@ -127,9 +137,21 @@ fun HudTone.color(): Color = when (this) {
  * The framework paint that produces the glow: a stroked, round-capped, blurred paint. Remembered
  * per colour so the `BlurMaskFilter` (and its cached blur kernel) is allocated once per composable,
  * never per frame. Stroke width is set at draw time (it depends on the arc's geometry).
+ *
+ * Light-mode day pass (2026-09-04): a saturated neon-coloured blur reads as "a lit sign" only
+ * against a near-black background — the same blur painted in [CaptainPalette.hudAccent] on a light
+ * background reads as a muddy purple smear, not a glow. So in light mode ([CaptainPalette.isLight])
+ * this paints the arc's **shadow** pass instead of its **glow** pass: a small-radius, dark,
+ * low-alpha blur (a real elevation shadow) rather than a big saturated one — [drawHudArc] then adds
+ * a crisp, unblurred accent-coloured ring on top (see that function's doc) as the "still glowing"
+ * cue a neon sign gave for free in the dark. Defaults still resolve to the dark-mode neon values so
+ * an explicit caller override (there are none today) keeps working unchanged.
  */
 @Composable
-private fun rememberHudGlowPaint(color: Color = CaptainPalette.hudAccent, blurRadiusPx: Float = HUD_GLOW_BLUR_PX): android.graphics.Paint =
+private fun rememberHudGlowPaint(
+    color: Color = if (CaptainPalette.isLight) CaptainPalette.hudDayShadow else CaptainPalette.hudAccent,
+    blurRadiusPx: Float = if (CaptainPalette.isLight) HUD_DAY_SHADOW_BLUR_PX else HUD_GLOW_BLUR_PX,
+): android.graphics.Paint =
     remember(color, blurRadiusPx) {
         Paint().asFrameworkPaint().apply {
             isAntiAlias = true
@@ -163,6 +185,15 @@ private class HudArcGeometry(val center: Offset, val radius: Float, val strokePx
  * up with the arc's start regardless of where the caller anchors it — the gradient stops are
  * expressed as fractions of a full turn so `#5B3FD6` sits at the arc's start, `#9E77FF` mid-sweep
  * and `#6E3FF3` at full sweep.
+ *
+ * Light-mode day pass (2026-09-04): [CaptainPalette.isLight] swaps the middle pass from a
+ * saturated neon blur to a tight, dark drop-shadow ([glowPaint] already carries the right colour
+ * and blur radius for whichever mode is active — see [rememberHudGlowPaint]) at a dampened
+ * [glowAlpha], and adds a fourth pass on top: a crisp, unblurred [CaptainPalette.hudAccent] line
+ * traced back through the centre of the lit stroke — a bright "lit core" running down the middle of
+ * the gradient arc. That line is the light-mode replacement for "this is the lit part of the gauge"
+ * — a blur can't do that job on a light background (there's nothing for it to glow against), a
+ * sharp saturated line can.
  */
 private fun DrawScope.drawHudArc(
     g: HudArcGeometry,
@@ -183,10 +214,12 @@ private fun DrawScope.drawHudArc(
     )
     val lit = sweepDeg * progress.coerceIn(0f, 1f)
     if (lit < 0.5f) return
+    val isLight = CaptainPalette.isLight
+    val effectiveGlowAlpha = if (isLight) glowAlpha * 0.4f else glowAlpha
     rotate(degrees = startDeg, pivot = g.center) {
         drawIntoCanvas { canvas ->
             glowPaint.strokeWidth = g.strokePx * 1.5f
-            glowPaint.alpha = (glowAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
+            glowPaint.alpha = (effectiveGlowAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
             canvas.nativeCanvas.drawArc(
                 g.topLeft.x, g.topLeft.y, g.topLeft.x + g.size.width, g.topLeft.y + g.size.height,
                 0f, lit, false, glowPaint,
@@ -210,6 +243,17 @@ private fun DrawScope.drawHudArc(
             size = g.size,
             style = Stroke(g.strokePx, cap = StrokeCap.Round),
         )
+        if (isLight) {
+            drawArc(
+                color = CaptainPalette.hudAccent,
+                startAngle = 0f,
+                sweepAngle = lit,
+                useCenter = false,
+                topLeft = g.topLeft,
+                size = g.size,
+                style = Stroke(HUD_DAY_RING_WIDTH.toPx(), cap = StrokeCap.Round),
+            )
+        }
     }
 }
 
@@ -684,11 +728,21 @@ fun HudRing(progress: Float, modifier: Modifier = Modifier, strokeWidthDp: Int =
 
 // ============================================================================================
 // Previews — one per component, on the HUD background
+//
+// Light/Dark day pass (2026-09-04): every preview below now explicitly calls
+// CaptainPalette.applyTheme(...) as its first statement (dark previews included) rather than
+// relying on whatever the object's ambient state happens to be — Compose Preview can render
+// multiple @Preview functions in one process (interactive/gallery preview), and CaptainPalette is
+// global mutable state, so a preview that assumed "the default is dark" could silently show the
+// wrong theme depending on render order. The *Light previews are the direct side-by-side proof the
+// glow-technique swap in drawHudArc/rememberHudGlowPaint (neon blur -> crisp lit core + soft
+// shadow) reads correctly against a real light background, not just in isolation.
 // ============================================================================================
 
-@Preview(widthDp = 320, heightDp = 320, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Meter gauge — dark", widthDp = 320, heightDp = 320, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewGlowingMeterGauge() {
+    CaptainPalette.applyTheme(isLight = false)
     GlowingMeterGauge(progress = 0.62f, modifier = Modifier.size(300.dp)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("FARE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 2.sp, color = CaptainPalette.textMuted)
@@ -697,9 +751,34 @@ private fun PreviewGlowingMeterGauge() {
     }
 }
 
-@Preview(widthDp = 360, heightDp = 360, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Meter gauge — light", widthDp = 320, heightDp = 320, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewGlowingMeterGaugeLight() {
+    CaptainPalette.applyTheme(isLight = true)
+    GlowingMeterGauge(progress = 0.62f, modifier = Modifier.size(300.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("FARE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 2.sp, color = CaptainPalette.textMuted)
+            RollingMoneyText(amount = "\$18.65", fontSize = 48.sp)
+        }
+    }
+}
+
+@Preview(name = "Speedometer — dark", widthDp = 360, heightDp = 360, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewGlowingSpeedometer() {
+    CaptainPalette.applyTheme(isLight = false)
+    GlowingSpeedometer(speedKmh = 57f, modifier = Modifier.size(340.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("57", fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 56.sp, color = CaptainPalette.textPrimary)
+            Text("km/h", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+        }
+    }
+}
+
+@Preview(name = "Speedometer — light", widthDp = 360, heightDp = 360, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewGlowingSpeedometerLight() {
+    CaptainPalette.applyTheme(isLight = true)
     GlowingSpeedometer(speedKmh = 57f, modifier = Modifier.size(340.dp)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("57", fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 56.sp, color = CaptainPalette.textPrimary)
@@ -711,6 +790,7 @@ private fun PreviewGlowingSpeedometer() {
 @Preview(widthDp = 320, heightDp = 120, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewRollingMoneyText() {
+    CaptainPalette.applyTheme(isLight = false)
     // Tap-free demo: the figure steps once shortly after composition so the roll is visible in an
     // interactive preview; a static render shows the resting state.
     var amount by remember { mutableStateOf("\$18.65") }
@@ -723,9 +803,28 @@ private fun PreviewRollingMoneyText() {
     }
 }
 
-@Preview(widthDp = 360, heightDp = 200, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Glass card — dark", widthDp = 360, heightDp = 200, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewGlassCard() {
+    CaptainPalette.applyTheme(isLight = false)
+    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        GlassCard(modifier = Modifier.fillMaxSize(), glow = CaptainPalette.hudAccent) {
+            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("NEXT PICKUP", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 2.sp, color = CaptainPalette.textMuted)
+                Text("12 Bay St, Glebe", fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+                Text("4 min · 1.8 km", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary)
+            }
+        }
+    }
+}
+
+/** Light-mode side-by-side of [PreviewGlassCard] — the direct proof [neonGlow]'s crisp-ring +
+ * soft-shadow substitution (see that function's doc) reads correctly against a real light
+ * background instead of the dark-mode halo. */
+@Preview(name = "Glass card — light", widthDp = 360, heightDp = 200, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewGlassCardLight() {
+    CaptainPalette.applyTheme(isLight = true)
     Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
         GlassCard(modifier = Modifier.fillMaxSize(), glow = CaptainPalette.hudAccent) {
             Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -740,6 +839,7 @@ private fun PreviewGlassCard() {
 @Preview(widthDp = 560, heightDp = 96, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewHudStatusPill() {
+    CaptainPalette.applyTheme(isLight = false)
     Row(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         HudStatusPill(label = "System", value = "ONLINE", tone = HudTone.Success)
         HudStatusPill(label = "GPS", value = "12 sats", tone = HudTone.Neutral)
@@ -750,6 +850,7 @@ private fun PreviewHudStatusPill() {
 @Preview(widthDp = 600, heightDp = 120, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewHudStatTile() {
+    CaptainPalette.applyTheme(isLight = false)
     Row(modifier = Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         HudStatTile(icon = Icons.Rounded.Schedule, label = "Shift time", value = "4h 12m", sub = "Started 06:40", modifier = Modifier.weight(1f))
         HudStatTile(icon = Icons.Rounded.LocalTaxi, label = "Trips", value = "9", sub = "\$212.40 earned", tone = HudTone.Success, modifier = Modifier.weight(1f))
@@ -760,6 +861,7 @@ private fun PreviewHudStatTile() {
 @Preview(widthDp = 120, heightDp = 120, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewHudRing() {
+    CaptainPalette.applyTheme(isLight = false)
     val p = 0.7f
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         HudRing(progress = p, modifier = Modifier.size(80.dp))

@@ -1381,7 +1381,9 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             letterSpacing = 2.sp,
-                            color = CaptainPalette.textPrimary,
+                            // onAccent (fixed white), not textPrimary — this label sits on a solid
+                            // primary/hudAccent gradient fill (see CaptainPalette.onAccent's doc).
+                            color = CaptainPalette.onAccent,
                         )
                     }
                 }

@@ -165,7 +165,7 @@ fun MessageThreadScreen(
                                     .background(CaptainPalette.primary),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = CaptainPalette.textPrimary)
+                                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = CaptainPalette.onAccent)
                             }
                         } else {
                             CaptainButton(
@@ -221,7 +221,10 @@ private fun MessageBubble(message: MessageDto) {
                 .background(if (fromDriver) CaptainPalette.primary else CaptainPalette.raised)
                 .padding(horizontal = 18.dp, vertical = 12.dp),
         ) {
-            Text(message.body, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+            // Driver bubbles sit on the solid `primary` fill -> onAccent (fixed white), not
+            // textPrimary (see that token's doc); dispatch bubbles sit on the neutral `raised`
+            // surface -> textPrimary is correct there.
+            Text(message.body, fontFamily = InterFamily, fontSize = 16.sp, color = if (fromDriver) CaptainPalette.onAccent else CaptainPalette.textPrimary)
         }
         Text(
             text = "${if (fromDriver) "You" else "Dispatch"} · ${formatMessageClockTime(message.sentAt)}",

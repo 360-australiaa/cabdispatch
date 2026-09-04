@@ -209,10 +209,12 @@ private fun EndShiftButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Flag, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(20.dp))
+        // onAccent (fixed white), not textPrimary — this sits on the solid CaptainPalette.danger
+        // fill (see CaptainPalette.onAccent's doc).
+        Icon(Icons.Rounded.Flag, contentDescription = null, tint = CaptainPalette.onAccent, modifier = Modifier.size(20.dp))
         Text(
             "END SHIFT & RECONCILE",
-            color = CaptainPalette.textPrimary,
+            color = CaptainPalette.onAccent,
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 18.sp,

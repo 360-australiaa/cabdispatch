@@ -54,6 +54,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 
 /**
@@ -275,7 +276,10 @@ fun CaptainButton(
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = fontSize,
-            color = if (outline) CaptainPalette.accent else CaptainPalette.textPrimary,
+            // onAccent (fixed white), not textPrimary — this label sits on the solid `primary`
+            // fill, and textPrimary flips to near-black in light mode (see CaptainPalette.onAccent's
+            // doc for the bug this fixes).
+            color = if (outline) CaptainPalette.accent else CaptainPalette.onAccent,
         )
     }
 }
@@ -542,19 +546,49 @@ fun CaptainDialogScrim(visible: Boolean, onDismissRequest: () -> Unit, content: 
  * behind the content (cheap `drawBehind`, no blur/RenderEffect, per the SM-T575 frame budget).
  * Place BEFORE `.clip()`/`.background()` in the modifier chain so the glow lands outside the
  * surface's own bounds. [strength] 0..1 scales every layer's alpha (animate it for a pulse).
+ *
+ * Light-mode day pass (2026-09-04): the dark-mode technique — three expanding, fading [color]
+ * rects standing in for a blur — reads as "a lit sign" against a near-black surface; painted in the
+ * same saturated [color] against a light card it reads as a smudge, not a glow (same reasoning as
+ * [Hud.kt]'s `drawHudArc`/`rememberHudGlowPaint`, which this mirrors). So in light mode
+ * ([CaptainPalette.isLight]) this draws the design's other affordance instead: a small, dark,
+ * downward-biased soft shadow (real elevation, using [CaptainPalette.hudDayShadow] — a fixed dark
+ * tint, not [color]) plus a crisp, opaque 1.5dp [color] ring hugging the surface's own edge. Same
+ * "this element is active/glowing" meaning, the daylight-appropriate technique for it.
  */
 fun Modifier.neonGlow(color: Color, cornerRadius: Dp, strength: Float = 1f, spread: Dp = 5.dp): Modifier =
     drawBehind {
         if (strength <= 0.01f) return@drawBehind
-        val step = spread.toPx()
         val r = cornerRadius.toPx()
-        for (i in 3 downTo 1) {
-            val inset = step * i
+        if (CaptainPalette.isLight) {
+            val shadowStep = spread.toPx() * 0.7f
+            for (i in 3 downTo 1) {
+                val inset = shadowStep * i
+                val bias = inset * 0.35f // downward/rightward bias so it reads as a real cast shadow, not a halo
+                drawRoundRect(
+                    color = CaptainPalette.hudDayShadow.copy(alpha = (0.16f / i) * strength),
+                    topLeft = Offset(-inset * 0.5f, -inset * 0.5f + bias),
+                    size = Size(size.width + inset, size.height + inset),
+                    cornerRadius = CornerRadius(r + inset * 0.5f, r + inset * 0.5f),
+                )
+            }
             drawRoundRect(
-                color = color.copy(alpha = (0.22f / i) * strength),
-                topLeft = Offset(-inset, -inset),
-                size = Size(size.width + inset * 2, size.height + inset * 2),
-                cornerRadius = CornerRadius(r + inset, r + inset),
+                color = color.copy(alpha = 0.9f * strength),
+                topLeft = Offset.Zero,
+                size = size,
+                cornerRadius = CornerRadius(r, r),
+                style = Stroke(width = 1.5.dp.toPx()),
             )
+        } else {
+            val step = spread.toPx()
+            for (i in 3 downTo 1) {
+                val inset = step * i
+                drawRoundRect(
+                    color = color.copy(alpha = (0.22f / i) * strength),
+                    topLeft = Offset(-inset, -inset),
+                    size = Size(size.width + inset * 2, size.height + inset * 2),
+                    cornerRadius = CornerRadius(r + inset, r + inset),
+                )
+            }
         }
     }

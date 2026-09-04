@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -1408,3 +1409,45 @@ private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean,
 
 @Composable
 private fun rememberCoroutineScope2() = androidx.compose.runtime.rememberCoroutineScope()
+
+// ============================================================================================
+// Previews (2026-09-04 day-mode pass) — Close & Pay, in both themes
+//
+// [CloseAndPayScreen] itself needs a live [CloseAndPayViewModel] (AndroidViewModel, real
+// repositories via AppContainer) and can't be previewed directly. This composes the same
+// building blocks the real screen renders — [TotalCol]'s fare-summary [GlassCard] shape and
+// [PayCard] — as a representative, honest stand-in: not the live stateful screen, but real
+// production composables at real sizes, not a redrawn mockup.
+// ============================================================================================
+
+@Preview(name = "Close & Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Composable
+private fun PreviewCloseAndPaySample() {
+    CaptainPalette.applyTheme(isLight = false)
+    CloseAndPayPreviewSample()
+}
+
+@Preview(name = "Close & Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewCloseAndPaySampleLight() {
+    CaptainPalette.applyTheme(isLight = true)
+    CloseAndPayPreviewSample()
+}
+
+@Composable
+private fun CloseAndPayPreviewSample() {
+    Row(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        GlassCard(modifier = Modifier.width(320.dp).fillMaxSize(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
+            Column(modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp)) {
+                Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                RollingMoneyText(amount = "\$42.80", fontSize = 64.sp, color = CaptainPalette.success)
+                Text("Includes \$5.00 tip", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            PayCard(icon = Icons.Rounded.Payments, label = "Cash", accent = CaptainPalette.success, subtitle = "Exact change or tender + calculate", selected = true, onClick = {})
+            PayCard(icon = Icons.Rounded.CreditCard, label = "Card", accent = CaptainPalette.accent, subtitle = "Tap, insert or swipe", onClick = {})
+            PayCard(icon = Icons.Rounded.ConfirmationNumber, label = "Voucher", accent = CaptainPalette.warning, subtitle = "CabCharge / TTSS / docket", onClick = {})
+        }
+    }
+}

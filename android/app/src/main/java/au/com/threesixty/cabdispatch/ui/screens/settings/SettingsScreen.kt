@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.ThemeMode
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_STANDARD
@@ -120,8 +121,9 @@ private enum class SettingsTab(val label: String) {
  * - **Notifications** / **Sound & Voice**: no real backing state exists for either anywhere in
  *   this app — rendered as an honest "coming soon" panel rather than fabricated toggles.
  * - **Display**: the real Show Map in Background toggle (gates
- *   [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s Live Map pane) + a
- *   locked Theme row.
+ *   [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s Live Map pane) + the real
+ *   Light/Dark/System [ThemeSettingRow] (2026-09-04 day-mode pass — this replaced what used to be
+ *   a permanently-locked "Theme · Dark (Captain Taxis)" row; see that composable's own doc).
  * - **Payment Methods**: the real Allow Cash toggle (gates
  *   [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen]'s CASH card) with the
  *   fare schedule folded in directly below it (own tab wasn't worth it for content this is already
@@ -138,9 +140,10 @@ private enum class SettingsTab(val label: String) {
  * [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore] (see that class's own doc for
  * why a small SharedPreferences-backed store, matching this app's existing
  * [au.com.threesixty.cabdispatch.domain.DevicePairingStore]/[au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]
- * precedent, rather than introducing a new DataStore dependency). Language/Theme/Units render as
+ * precedent, rather than introducing a new DataStore dependency). Language/Units still render as
  * locked "coming soon" rows per this plan's confirmed decision — visible for completeness, never a
- * working-looking toggle with nothing behind it; see [LockedSettingRow].
+ * working-looking toggle with nothing behind it; see [LockedSettingRow]. Theme (2026-09-04
+ * day-mode pass) is no longer one of them — see [ThemeSettingRow].
  */
 @Composable
 fun SettingsScreen(
@@ -260,6 +263,7 @@ private fun MainSettingsContent(
                             SettingsTab.DISPLAY -> DisplayTabContent(
                                 state = state,
                                 onSetShowMap = viewModel::setShowMapInBackground,
+                                onSetThemeMode = viewModel::setThemeMode,
                             )
                             SettingsTab.PAYMENT_METHODS -> PaymentMethodsTabContent(
                                 state = state,
@@ -424,7 +428,11 @@ private fun ComingSoonTabContent(title: String, message: String) {
 }
 
 @Composable
-private fun DisplayTabContent(state: SettingsUiState, onSetShowMap: (Boolean) -> Unit) {
+private fun DisplayTabContent(
+    state: SettingsUiState,
+    onSetShowMap: (Boolean) -> Unit,
+    onSetThemeMode: (ThemeMode) -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SectionLabel("MAP")
         Spacer(Modifier.height(12.dp))
@@ -438,7 +446,68 @@ private fun DisplayTabContent(state: SettingsUiState, onSetShowMap: (Boolean) ->
         Spacer(Modifier.height(24.dp))
         SectionLabel("APPEARANCE")
         Spacer(Modifier.height(12.dp))
-        LockedSettingRow(label = "Theme", value = "Dark (Captain Taxis)")
+        ThemeSettingRow(themeMode = state.themeMode, onSelect = onSetThemeMode)
+    }
+}
+
+/**
+ * The real Theme row (2026-09-04 day-mode pass) — replaces the old permanently-[LockedSettingRow]
+ * "Theme · Dark (Captain Taxis)" placeholder. A 3-way segmented picker rather than a [Switch]:
+ * [ThemeMode] has three real values (the required Light/Dark plus the System nice-to-have), and a
+ * row of large, equally-weighted, elderly-friendly touch targets reads its current selection at a
+ * glance the way a two-state switch can't for three options. Same [GlassCard] surface as every
+ * other real row on this tab; the selected segment gets a solid [CaptainPalette.primary] fill +
+ * [CaptainPalette.accent] border, matching how [TwoPaneShell]'s own selected-tab treatment reads
+ * "this one is active" elsewhere on this screen.
+ */
+@Composable
+private fun ThemeSettingRow(themeMode: ThemeMode, onSelect: (ThemeMode) -> Unit) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text("Theme", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
+            Text(
+                "Light mode trades the glowing HUD look for a high-contrast daylight palette — easier to " +
+                    "read on a dashboard-mounted tablet in direct sun.",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                color = CaptainPalette.textMuted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                ThemeMode.entries.forEach { mode ->
+                    ThemeModeSegment(
+                        mode = mode,
+                        selected = mode == themeMode,
+                        onClick = { onSelect(mode) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeModeSegment(mode: ThemeMode, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(12.dp)
+    Box(
+        modifier = modifier
+            .height(64.dp)
+            .clip(shape)
+            .background(if (selected) CaptainPalette.primary else CaptainPalette.raised)
+            .border(1.dp, if (selected) CaptainPalette.accent else CaptainPalette.panelBorder, shape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            mode.label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            color = if (selected) CaptainPalette.onAccent else CaptainPalette.textSecondary,
+        )
     }
 }
 
@@ -624,7 +693,7 @@ private fun ToggleSettingRow(label: String, description: String, checked: Boolea
 }
 
 /**
- * A decorative, deliberately-locked row (Language/Theme/Units) — per this plan's confirmed
+ * A decorative, deliberately-locked row (Language/Units) — per this plan's confirmed
  * decision, shown for visual completeness but never fake-functional: greyed out (55% alpha), a
  * lock glyph instead of a working control, and a "COMING SOON" badge instead of a value that looks
  * editable. Tapping it is safe (never a crash, never a silent no-op that looks like it worked) — a

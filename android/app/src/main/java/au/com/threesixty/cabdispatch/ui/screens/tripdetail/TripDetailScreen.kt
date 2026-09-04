@@ -442,6 +442,6 @@ private fun DangerButton(text: String, modifier: Modifier = Modifier, enabled: B
             .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
+        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.onAccent)
     }
 }

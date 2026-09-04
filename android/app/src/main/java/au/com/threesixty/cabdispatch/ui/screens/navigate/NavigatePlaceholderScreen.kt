@@ -70,7 +70,7 @@ import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
  */
 @Composable
 fun NavigatePlaceholderScreen(navController: NavHostController) {
-    Box(modifier = Modifier.fillMaxSize().background(MapBg)) {
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.mapBg)) {
         DecorativeMap()
 
         // PREVIEW chip — honest copy, unchanged prominence: same position, same explicit wording.
@@ -106,14 +106,14 @@ fun NavigatePlaceholderScreen(navController: NavHostController) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null, tint = CaptainPalette.textPrimary, modifier = Modifier.size(44.dp))
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null, tint = InstructionInk, modifier = Modifier.size(44.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     "In 400 m, turn left",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 30.sp,
-                    color = CaptainPalette.textPrimary,
+                    color = InstructionInk,
                 )
                 Text(
                     "Marion St — then pickup on the right (preview — not live guidance)",
@@ -128,7 +128,7 @@ fun NavigatePlaceholderScreen(navController: NavHostController) {
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Medium,
                     fontSize = 22.sp,
-                    color = CaptainPalette.textPrimary,
+                    color = InstructionInk,
                 )
                 Text(
                     "ETA 4:18 PM",
@@ -179,17 +179,20 @@ fun NavigatePlaceholderScreen(navController: NavHostController) {
     }
 }
 
-private val MapBg = Color(0xFF0D1420)
-private val MapRoad = Color(0xFF1C2940)
-private val MapArterial = Color(0xFF243352)
-private val MapLabel = Color(0xFF33445F)
 
 /** Green-glass instruction banner fill (rgba(11,46,26,0.96)), kept as the meter-running colour
- * language distinct from [CaptainPalette]'s own success token for exact visual parity. */
+ * language distinct from [CaptainPalette]'s own success token for exact visual parity. Deliberately
+ * NOT theme-reactive (unlike [CaptainPalette]'s tokens) — a turn-by-turn instruction banner reads
+ * the same fixed dark-green "still navigating" surface in real nav apps day or night. */
 private val InstructionBg = Color(0xF50B2E1A)
 
 /** Mint secondary text on the instruction banner. */
 private val InstructionMint = Color(0xFFA7E8C2)
+
+/** Primary text/icon ink on [InstructionBg] — a fixed light colour, NOT [CaptainPalette.textPrimary]
+ * (which flips to near-black in light mode and would go invisible on this fixed dark-green surface;
+ * a real bug this pass fixed — [InstructionBg] doesn't track the theme, so its ink can't either). */
+private val InstructionInk = Color(0xFFF4FAFF)
 
 /**
  * The decorative street grid stretched to the 1280×800 canvas, plus a route polyline and pickup
@@ -205,7 +208,7 @@ private fun DecorativeMap() {
                     .offset(x = 0.dp, y = y.dp)
                     .fillMaxWidth()
                     .height(11.dp)
-                    .background(MapRoad),
+                    .background(CaptainPalette.mapStreet),
             )
         }
         // Vertical streets.
@@ -215,12 +218,12 @@ private fun DecorativeMap() {
                     .offset(x = x.dp, y = 0.dp)
                     .width(19.dp)
                     .fillMaxHeight()
-                    .background(MapRoad),
+                    .background(CaptainPalette.mapStreet),
             )
         }
         // Arterials.
-        Box(Modifier.offset(x = 0.dp, y = 360.dp).fillMaxWidth().height(19.dp).background(MapArterial))
-        Box(Modifier.offset(x = 698.dp, y = 0.dp).width(29.dp).fillMaxHeight().background(MapArterial))
+        Box(Modifier.offset(x = 0.dp, y = 360.dp).fillMaxWidth().height(19.dp).background(CaptainPalette.mapArterial))
+        Box(Modifier.offset(x = 698.dp, y = 0.dp).width(29.dp).fillMaxHeight().background(CaptainPalette.mapArterial))
 
         // District labels.
         MapDistrictLabel("SYDNEY CITY", x = 97, y = 63)
@@ -274,7 +277,7 @@ private fun DecorativeMap() {
                 .border(3.dp, Color.White, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text("P", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+            Text("P", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.onAccent)
         }
     }
 }
@@ -287,7 +290,7 @@ private fun MapDistrictLabel(text: String, x: Int, y: Int) {
         fontWeight = FontWeight.Bold,
         fontSize = 13.sp,
         letterSpacing = 2.sp,
-        color = MapLabel,
+        color = CaptainPalette.mapLabel,
         modifier = Modifier.offset(x = x.dp, y = y.dp),
     )
 }

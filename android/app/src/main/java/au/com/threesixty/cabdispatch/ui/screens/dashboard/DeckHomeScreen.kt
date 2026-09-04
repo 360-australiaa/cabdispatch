@@ -1333,7 +1333,7 @@ private fun LiveDispatchCard(
                         .border(1.5.dp, CaptainPalette.danger.copy(alpha = badgePulse), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(dispatchState.cards.size.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textPrimary)
+                    Text(dispatchState.cards.size.toString(), fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.onAccent)
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -2008,7 +2008,7 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
                             fontFamily = InterFamily,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
-                            color = CaptainPalette.textPrimary,
+                            color = CaptainPalette.onAccent,
                         )
                     }
                 }
@@ -2054,9 +2054,23 @@ private fun previewState(available: Boolean = true) = WheelDashboardUiState(
     ),
 )
 
-@Preview(name = "Header — available", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Header — available (dark)", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewCaptainHeaderAvailable() {
+    CaptainPalette.applyTheme(isLight = false)
+    Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
+        CaptainHeader(state = previewState(), verified = true, hasActiveTrip = false, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
+    }
+}
+
+/** Light-mode side-by-side of [PreviewCaptainHeaderAvailable] — dashboard chrome (2026-09-04
+ * day-mode pass), one of this pass's three required before/after samples (dashboard/meter
+ * dial/Close & Pay — see [au.com.threesixty.cabdispatch.ui.theme.Hud]'s previews for the meter
+ * dial and [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen]'s for Close & Pay). */
+@Preview(name = "Header — available (light)", widthDp = 1280, heightDp = 140, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewCaptainHeaderAvailableLight() {
+    CaptainPalette.applyTheme(isLight = true)
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
         CaptainHeader(state = previewState(), verified = true, hasActiveTrip = false, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
     }
@@ -2065,6 +2079,7 @@ private fun PreviewCaptainHeaderAvailable() {
 @Preview(name = "Header — hired", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewCaptainHeaderHired() {
+    CaptainPalette.applyTheme(isLight = false)
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
         CaptainHeader(state = previewState(), verified = true, hasActiveTrip = true, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
     }
@@ -2073,6 +2088,7 @@ private fun PreviewCaptainHeaderHired() {
 @Preview(name = "Header — off duty", widthDp = 1280, heightDp = 140, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewCaptainHeaderOffDuty() {
+    CaptainPalette.applyTheme(isLight = false)
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg)) {
         CaptainHeader(state = previewState(available = false), verified = null, hasActiveTrip = false, onShowDriverId = {}, onOpenProfile = {}, onToggleAvailability = {}, onSos = {})
     }
@@ -2081,6 +2097,7 @@ private fun PreviewCaptainHeaderOffDuty() {
 @Preview(name = "Rail — dispatch selected, 3 offers, meter live", widthDp = 160, heightDp = 760, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewCaptainNavRail() {
+    CaptainPalette.applyTheme(isLight = false)
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp)) {
         CaptainNavRail(
             pane = CaptainPane.DISPATCH,
@@ -2096,9 +2113,27 @@ private fun PreviewCaptainNavRail() {
     }
 }
 
-@Preview(name = "Bottom bar", widthDp = 1280, heightDp = 176, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Bottom bar (dark)", widthDp = 1280, heightDp = 176, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewShiftStatsBar() {
+    CaptainPalette.applyTheme(isLight = false)
+    val state = previewState()
+    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(152.dp)) {
+        ShiftStatsBar(
+            state = state,
+            extras = HomeExtras(verified = true, earningsPctChange = 12.0, tripsActiveThisShift = 1, fatigueAlertCount = 1, latestFatigueKind = "shift_duration"),
+            onTakeBreak = {},
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        )
+        Spacer(Modifier.width(16.dp))
+        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
+    }
+}
+
+@Preview(name = "Bottom bar (light)", widthDp = 1280, heightDp = 176, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Composable
+private fun PreviewShiftStatsBarLight() {
+    CaptainPalette.applyTheme(isLight = true)
     val state = previewState()
     Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(152.dp)) {
         ShiftStatsBar(
@@ -2199,7 +2234,7 @@ private fun DriverIdCard(
                     modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(CaptainPalette.primary)
                         .padding(horizontal = 20.dp, vertical = 10.dp),
                 ) {
-                    Text("VERIFIED DRIVER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                    Text("VERIFIED DRIVER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.onAccent)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 6.dp)) {
@@ -2230,7 +2265,7 @@ private fun StatusMapPanel(onPlotZone: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0D1420))
+            .background(CaptainPalette.mapBg)
             .onGloballyPositioned { sizePx = it.size },
     ) {
         if (!showMapInBackground) {
@@ -2349,8 +2384,12 @@ private fun MapHiddenPlaceholder() {
 
 @Composable
 private fun IllustrativeStreetGrid() {
-    val street = Color(0xFF1C2940)
-    val arterial = Color(0xFF243352)
+    // CaptainPalette.mapStreet/mapArterial (not a local hardcoded literal) — this fallback
+    // "fake map" used to stay a fixed dark navy regardless of theme, a real day-mode bug fixed in
+    // this pass: a hardcoded night-map illustration pasted onto a light-themed dashboard looked
+    // broken. See CaptainPalette's own doc for the token.
+    val street = CaptainPalette.mapStreet
+    val arterial = CaptainPalette.mapArterial
     listOf(120, 260, 420, 580, 700).forEach { y -> Box(Modifier.offset(y = y.dp).fillMaxWidth().height(10.dp).background(street)) }
     listOf(140, 320, 520, 660).forEach { x -> Box(Modifier.offset(x = x.dp).fillMaxHeight().width(12.dp).background(street)) }
     Box(Modifier.offset(y = 340.dp).fillMaxWidth().height(18.dp).background(arterial))
@@ -2363,7 +2402,7 @@ private fun IllustrativeStreetGrid() {
 
 @Composable
 private fun SuburbLabel(text: String, x: androidx.compose.ui.unit.Dp, y: androidx.compose.ui.unit.Dp) {
-    Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 2.sp, color = Color(0xFF33445F), modifier = Modifier.offset(x = x, y = y))
+    Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 2.sp, color = CaptainPalette.mapLabel, modifier = Modifier.offset(x = x, y = y))
 }
 
 // ============================================================================================

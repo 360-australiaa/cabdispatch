@@ -160,7 +160,7 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
                     modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.primary),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("CD", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+                    Text("CD", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.onAccent)
                 }
                 Text("Driver sign-in", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = CaptainPalette.textPrimary)
             }

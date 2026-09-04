@@ -92,7 +92,7 @@ fun SplashScreen(navController: NavHostController) {
                     .background(CaptainPalette.primary),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("CD", color = CaptainPalette.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 48.sp)
+                Text("CD", color = CaptainPalette.onAccent, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 48.sp)
             }
             Text("CAB DISPATCH", color = CaptainPalette.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp)
             Text("The Captain Taxis · NSW Taxi Meter", color = CaptainPalette.textSecondary, fontFamily = InterFamily, fontSize = 18.sp)
