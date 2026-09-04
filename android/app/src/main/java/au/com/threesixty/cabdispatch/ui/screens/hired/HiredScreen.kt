@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,14 +41,26 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ConfirmationNumber
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.ForkLeft
+import androidx.compose.material.icons.rounded.ForkRight
+import androidx.compose.material.icons.rounded.Merge
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Receipt
+import androidx.compose.material.icons.rounded.RoundaboutLeft
+import androidx.compose.material.icons.rounded.RoundaboutRight
+import androidx.compose.material.icons.rounded.Straight
 import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sell
+import androidx.compose.material.icons.rounded.TurnLeft
+import androidx.compose.material.icons.rounded.TurnRight
+import androidx.compose.material.icons.rounded.TurnSharpLeft
+import androidx.compose.material.icons.rounded.TurnSharpRight
+import androidx.compose.material.icons.rounded.TurnSlightLeft
+import androidx.compose.material.icons.rounded.TurnSlightRight
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -172,13 +185,22 @@ import kotlin.math.roundToInt
  *   tapping the scrim) collapses it, and opening any one-shot action inside it (SET PRICE/ADD
  *   TOLL/MORE) also closes it first — see the `actions` callbacks built in [HiredScreen] — so the
  *   driver lands back on the plain dial+map view rather than two stacked scrims.
+ * - **Destination search is always visible on the map panel, never gated behind a menu**
+ *   (2026-09-05 pass, direct user correction: it was "multiple taps deep" — MORE tile inside
+ *   [ControlsDrawer] inside [ControlsHandle] — before this). [MapDestinationSearchBar] now sits at
+ *   the top of the (right-hand) map panel for the entire time a fare is running, in both map-panel
+ *   shapes below — a compact, genuinely optional "Enter destination" field with a search icon that
+ *   opens the same [DestinationSearchDialog] on tap. [ControlsDrawer]'s MORE tile still opens the
+ *   identical dialog too (a harmless second entry point, not a duplicate implementation) — see
+ *   [MapDestinationSearchBar]'s own doc.
  * - **Two map-panel shapes, one real trigger, unchanged since the last pass — just re-homed to the
  *   right side and bigger.** Mockup #3 (no destination) is the plain driven-route + pickup-pin
  *   backdrop. Mockup #4 (destination set) is used **when `meterNavViewModel.uiState.value
- *   .destination != null`** — a real Mapbox-geocoded place the driver picked via the destination
- *   search dialog (reached from [ControlsDrawer]'s MORE tile) — and adds the real planned route,
- *   destination pin, PICK UP/DESTINATION cards, the route/ETA strip, OPEN NAVIGATION and the voice
- *   toggle directly onto the (now right-hand, now bigger) map panel — exactly the same content and
+ *   .destination != null`** — a real Mapbox-geocoded place the driver picked via the now-visible
+ *   destination search — and adds the real planned route, destination pin, PICK UP/DESTINATION
+ *   cards (the DESTINATION card's own real turn icon + remaining-trip summary — see
+ *   [maneuverIcon]/[remainingSummary]), the route/ETA strip, OPEN NAVIGATION and the voice toggle
+ *   directly onto the (now right-hand, now bigger) map panel — exactly the same content and
  *   the same `onOpenNavigation`/`onToggleVoice`/`onChangeDestination`/`onClearDestination`/
  *   `onRetryRoute` callbacks as before, just literally swapped from the left/centre side to the
  *   right.
@@ -695,15 +717,28 @@ private fun RowScope.MeterPaneLayout(
             dimAlpha = 0.30f,
             modifier = Modifier.fillMaxSize(),
         )
-        Row(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HudStatusPill(
-                label = "Trip",
-                value = if (isPaused) "PAUSED" else "IN PROGRESS",
-                tone = if (isPaused) HudTone.Warning else HudTone.Accent,
-            )
-            AnimatedVisibility(visible = hasDestination && navState.offRoute, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
-                HudStatusPill(label = "Nav", value = "REROUTING…", tone = HudTone.Warning)
+        Column(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HudStatusPill(
+                    label = "Trip",
+                    value = if (isPaused) "PAUSED" else "IN PROGRESS",
+                    tone = if (isPaused) HudTone.Warning else HudTone.Accent,
+                )
+                AnimatedVisibility(visible = hasDestination && navState.offRoute, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                    HudStatusPill(label = "Nav", value = "REROUTING…", tone = HudTone.Warning)
+                }
             }
+            // The destination search, surfaced directly on the map panel — visible the entire
+            // time a fare is running, never behind ControlsHandle/MORE. Genuinely optional: an
+            // empty field with placeholder text, never blocking or nagging. Tapping it opens the
+            // exact same DestinationSearchDialog (same onQueryChange/selectDestination/
+            // clearDestination calls) — see MeterPaneLayout's own doc for why the on-screen
+            // AddressKeypad lives in that dialog rather than inline here.
+            MapDestinationSearchBar(
+                destinationLabel = destination?.placeName,
+                onClick = onChangeDestination,
+                onClear = if (hasDestination) onClearDestination else null,
+            )
         }
         if (hasDestination) {
             Column(modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
@@ -717,8 +752,7 @@ private fun RowScope.MeterPaneLayout(
                         modifier = Modifier.weight(1f),
                     )
                     NavDestinationCard(
-                        destination = destination,
-                        instruction = navState.currentInstruction,
+                        navState = navState,
                         onChange = onChangeDestination,
                         onClear = onClearDestination,
                         modifier = Modifier.weight(1f),
@@ -740,6 +774,65 @@ private fun RowScope.MeterPaneLayout(
                     SpeechToggleButton(enabled = speechEnabled, onToggle = onToggleVoice)
                 }
             }
+        }
+    }
+}
+
+/**
+ * The primary, always-visible destination entry point (2026-09-05 pass): an optional "Enter
+ * destination" field with a search icon, sitting directly on the map panel — visible for the
+ * entire time a fare is running, never gated behind [ControlsHandle]/[ControlsDrawer]'s MORE tile.
+ * Direct user correction: destination search was "multiple taps deep" before this; this affordance
+ * is now the first thing on the map panel, right where the trip/nav status pills already sit.
+ *
+ * Genuinely optional — an empty field just shows placeholder text, never a validation error or a
+ * nag — and it never types inline: tapping it (whatever its current label) opens the exact same
+ * [DestinationSearchDialog] this screen already had, wired to the exact same
+ * [MeterNavViewModel.onQueryChange]/[MeterNavViewModel.selectDestination] calls (see that dialog's
+ * own doc for why address entry there is the hand-rolled [AddressKeypad], not a system
+ * `TextField` — the identical constraint applies to any text entry on this screen, so this bar is a
+ * button-shaped launcher for that dialog rather than a second, competing text-input
+ * implementation). [destinationLabel] is the real [MeterNavUiState.destination]'s place name once
+ * one is picked (replacing the placeholder); [onClear] is non-null (and renders a small clear
+ * icon) only once a destination actually exists, so an empty/optional field never shows a
+ * clear affordance with nothing to clear.
+ */
+@Composable
+private fun MapDestinationSearchBar(
+    destinationLabel: String?,
+    onClick: () -> Unit,
+    onClear: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .widthIn(min = 220.dp, max = 340.dp)
+            .height(46.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.panel.copy(alpha = 0.92f))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))
+        Text(
+            destinationLabel ?: "Enter destination (optional)",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            color = if (destinationLabel == null) CaptainPalette.textMuted else CaptainPalette.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 10.dp).weight(1f),
+        )
+        if (onClear != null) {
+            Icon(
+                Icons.Rounded.Close,
+                contentDescription = "Clear destination",
+                tint = CaptainPalette.textMuted,
+                modifier = Modifier.size(15.dp).padding(start = 6.dp).clickable(onClick = onClear),
+            )
         }
     }
 }
@@ -880,14 +973,69 @@ private fun NavStopCard(icon: ImageVector, tone: Color, label: String, address: 
 }
 
 /**
+ * A real directional icon for the current maneuver, derived ONLY from Mapbox's own
+ * `maneuver.type`/`maneuver.modifier` fields ([RouteStep.maneuverType]/[RouteStep.modifier],
+ * parsed in [MapboxDirections.parseRoute]) — never inferred by pattern-matching
+ * [RouteStep.instruction] text, and never a generic/default arrow when the data doesn't support
+ * one (returns `null`, so the caller falls back to the instruction text alone).
+ *
+ * `depart`/`arrive` get fixed icons (a maneuver TYPE, not a laterality — nothing to guess).
+ * `roundabout`/`rotary`/`fork` need a real `left`/`right` modifier for their directional icon
+ * (Mapbox does supply one for these); anything else on them falls through to the generic
+ * modifier-only mapping below. `merge` has no left/right icon in this project's icon set, so it
+ * gets one direction-neutral glyph regardless of modifier — that is not a guess, it is the
+ * accurate icon for "merge" full stop. `uturn` has no laterality in Mapbox's data at all (the
+ * modifier is just `"uturn"`), and this icon set's only u-turn glyphs are direction-specific
+ * (`UTurnLeft`/`UTurnRight`) — picking either would assert a direction the API never gave, so it
+ * intentionally maps to `null` (text only) rather than a distinct icon.
+ */
+private fun maneuverIcon(maneuverType: String?, modifier: String?): ImageVector? = when {
+    maneuverType == "arrive" -> Icons.Rounded.Flag
+    maneuverType == "depart" -> Icons.Rounded.DirectionsCar
+    (maneuverType == "roundabout" || maneuverType == "rotary" || maneuverType == "roundabout turn") && modifier == "left" -> Icons.Rounded.RoundaboutLeft
+    (maneuverType == "roundabout" || maneuverType == "rotary" || maneuverType == "roundabout turn") && modifier == "right" -> Icons.Rounded.RoundaboutRight
+    maneuverType == "fork" && modifier == "left" -> Icons.Rounded.ForkLeft
+    maneuverType == "fork" && modifier == "right" -> Icons.Rounded.ForkRight
+    maneuverType == "merge" -> Icons.Rounded.Merge
+    modifier == "left" -> Icons.Rounded.TurnLeft
+    modifier == "right" -> Icons.Rounded.TurnRight
+    modifier == "slight left" -> Icons.Rounded.TurnSlightLeft
+    modifier == "slight right" -> Icons.Rounded.TurnSlightRight
+    modifier == "sharp left" -> Icons.Rounded.TurnSharpLeft
+    modifier == "sharp right" -> Icons.Rounded.TurnSharpRight
+    modifier == "straight" -> Icons.Rounded.Straight
+    else -> null
+}
+
+/**
+ * "2.4 km · 6 min · ETA 4:32 PM" — the real remaining-trip summary
+ * ([MeterNavUiState.remainingDistanceM]/[.remainingDurationS]/[.etaEpochMillis], the same fields
+ * [RouteEtaPanel] renders as three separate stats) collapsed into one line so it can sit directly
+ * beside the turn icon/instruction, per the direct request to show a distance/time/ETA summary
+ * "next to or below the turn icon" rather than only in the separate strip below. `null` (no route
+ * yet) renders as "—", never a fabricated distance.
+ */
+private fun remainingSummary(navState: MeterNavUiState): String {
+    if (navState.route == null) return "—"
+    return "${formatDistanceM(navState.remainingDistanceM)} · " +
+        "${formatDurationS(navState.remainingDurationS)} · " +
+        "ETA ${formatEtaClock(navState.etaEpochMillis)}"
+}
+
+/**
  * DESTINATION card on the nav pane — the real [GeocodeResult] the driver picked
- * ([MeterNavViewModel.selectDestination]), [instruction] (`navState.currentInstruction`, or "—"
- * before a route/step exists) as the detail line, and CHANGE/clear actions
- * ([onChange] reopens the same destination-search dialog; [onClear] calls
+ * ([MeterNavViewModel.selectDestination]), the current maneuver
+ * ([navState.currentInstruction] plus a real [maneuverIcon] derived from
+ * `navState.route.steps[navState.currentStepIndex]`'s own `maneuverType`/`modifier` — never a
+ * guessed icon), the real remaining-trip [remainingSummary], and CHANGE/clear actions
+ * ([onChange] reopens the same destination-search entry point; [onClear] calls
  * [MeterNavViewModel.clearDestination] outright, dropping back to mockup #3).
  */
 @Composable
-private fun NavDestinationCard(destination: GeocodeResult?, instruction: String?, onChange: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
+private fun NavDestinationCard(navState: MeterNavUiState, onChange: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
+    val destination = navState.destination
+    val currentStep = navState.route?.steps?.getOrNull(navState.currentStepIndex)
+    val icon = maneuverIcon(currentStep?.maneuverType, currentStep?.modifier)
     GlassCard(modifier = modifier, cornerRadiusDp = 16) {
         Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
             IconSquare(icon = Icons.Rounded.Flag, tint = CaptainPalette.danger, size = 30.dp)
@@ -921,12 +1069,34 @@ private fun NavDestinationCard(destination: GeocodeResult?, instruction: String?
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp),
                 )
+                // Real turn icon (never guessed — see maneuverIcon's doc) beside the spoken
+                // instruction text; the icon is simply omitted when the data doesn't support one.
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
+                    if (icon != null) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = CaptainPalette.hudAccent,
+                            modifier = Modifier.size(14.dp).padding(end = 4.dp),
+                        )
+                    }
+                    Text(
+                        navState.currentInstruction ?: "—",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 10.sp,
+                        color = CaptainPalette.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 Text(
-                    instruction ?: "—",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Medium,
+                    remainingSummary(navState),
+                    fontFamily = ChakraPetch,
+                    fontWeight = FontWeight.SemiBold,
                     fontSize = 10.sp,
-                    color = CaptainPalette.textSecondary,
+                    color = CaptainPalette.textMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 2.dp),
@@ -1012,7 +1182,9 @@ private fun AccrualNote() {
 }
 
 // ============================================================================================
-// Destination search — reached from the MORE sheet (mockup #3) or CHANGE (mockup #4)
+// Destination search — reached from [MapDestinationSearchBar] (the always-visible map-panel
+// entry point, both mockups), [ControlsDrawer]'s MORE tile, or CHANGE (mockup #4's DESTINATION
+// card) — all three open this identical dialog, never a duplicate search implementation.
 // ============================================================================================
 
 /**

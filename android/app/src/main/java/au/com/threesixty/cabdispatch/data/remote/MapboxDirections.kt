@@ -69,7 +69,7 @@ class MapboxDirections(private val client: OkHttpClient) {
         }
     }
 
-    private fun parseRoute(body: String): DirectionsRoute? {
+    internal fun parseRoute(body: String): DirectionsRoute? {
         val root = JSON.parseToJsonElement(body).jsonObject
         val route = root["routes"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
         val distanceM = route["distance"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: return null
@@ -91,6 +91,13 @@ class MapboxDirections(private val client: OkHttpClient) {
                     lat = lat,
                     lng = lng,
                     distanceM = step["distance"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
+                    // Real Mapbox maneuver fields — "turn"/"depart"/"arrive"/"merge"/"roundabout"/
+                    // "fork"/"continue"/... and "left"/"right"/"slight left"/"sharp right"/
+                    // "straight"/"uturn"/... respectively. Absent on some maneuvers (e.g. some
+                    // "depart"/"arrive" steps carry no modifier) — left null rather than guessed,
+                    // exactly like every other optional field this parser reads.
+                    maneuverType = maneuver["type"]?.jsonPrimitive?.content,
+                    modifier = maneuver["modifier"]?.jsonPrimitive?.content,
                 )
             }
             .orEmpty()
@@ -122,12 +129,20 @@ data class RoutePoint(val lat: Double, val lng: Double)
  * One maneuver. [lat]/[lng] is where the maneuver happens — the navigator advances to the next
  * step (and speaks it) once the vehicle gets within a threshold of this point. [distanceM] is the
  * length of this step, used for the "in N m" remaining-distance readout.
+ *
+ * [maneuverType]/[modifier] are Mapbox's own `maneuver.type`/`maneuver.modifier` strings (e.g.
+ * `"turn"`/`"right"`, `"roundabout"`/`"left"`, `"arrive"`/null) — real data, never inferred from
+ * [instruction] by string-matching. The UI's turn-icon mapping reads these two fields only; a null
+ * value (either one) means Mapbox did not supply a laterality/type for this maneuver, and the icon
+ * mapping must render no icon rather than guess one.
  */
 data class RouteStep(
     val instruction: String,
     val lat: Double,
     val lng: Double,
     val distanceM: Double,
+    val maneuverType: String? = null,
+    val modifier: String? = null,
 )
 
 /**
