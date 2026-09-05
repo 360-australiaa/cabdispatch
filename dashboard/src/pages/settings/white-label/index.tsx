@@ -330,7 +330,7 @@ export default function WhiteLabelSettingsPage() {
                                   : BRAND_DEFAULT.primary_color,
                                 color: "#fff",
                               }
-                            : { color: "var(--color-muted-foreground, inherit)" }
+                            : { color: "var(--muted-foreground, inherit)" }
                         }
                       >
                         {label}
