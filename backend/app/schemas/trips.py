@@ -189,6 +189,16 @@ class TripUpdate(BaseModel):
 
 class TripTickRequest(BaseModel):
     points: list[TelemetryPoint] = Field(..., min_length=1)
+    # Sibling fields, NOT part of TelemetryPoint above -- these describe the
+    # trip's destination (a single mid-trip decision), not one GPS sample.
+    # See app.models.trips.Trip.planned_dest_lat/lng's doc comment (module
+    # docstring deviation #7) for the end_lat/end_lng distinction. Optional:
+    # None here means "this tick doesn't carry a destination update" and
+    # app.services.trips.apply_tick leaves whatever's already on the trip
+    # row untouched -- a driver who already picked one is not required to
+    # keep re-sending it on every subsequent tick.
+    dest_lat: float | None = Field(default=None, ge=-90, le=90)
+    dest_lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 # --- Close ------------------------------------------------------------------

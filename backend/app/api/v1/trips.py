@@ -518,7 +518,14 @@ async def tick_trip(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is not open")
 
     try:
-        await apply_tick(session, tenant_id=tenant_id, trip=trip, points=payload.points)
+        await apply_tick(
+            session,
+            tenant_id=tenant_id,
+            trip=trip,
+            points=payload.points,
+            dest_lat=payload.dest_lat,
+            dest_lng=payload.dest_lng,
+        )
     except UnknownTariffError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 

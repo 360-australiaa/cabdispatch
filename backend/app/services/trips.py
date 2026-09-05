@@ -156,11 +156,32 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
 
 
 async def apply_tick(
-    session: AsyncSession, *, tenant_id: str, trip: Trip, points: list[TelemetryPoint]
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    trip: Trip,
+    points: list[TelemetryPoint],
+    dest_lat: float | None = None,
+    dest_lng: float | None = None,
 ) -> Trip:
     """Feeds a batch of telemetry points through the fare engine sequentially,
     mutating `trip`'s running totals + tick-continuity anchor in place.
-    Does NOT commit — caller owns the session/transaction."""
+    Does NOT commit — caller owns the session/transaction.
+
+    `dest_lat`/`dest_lng` (Live Map route-line pass, see
+    `app.models.trips.Trip.planned_dest_lat`/`planned_dest_lng`'s doc
+    comment, module docstring deviation #7) are a driver-picked mid-trip
+    destination, not a telemetry point — written onto the trip row only
+    when BOTH are not None. When either is None (a tick that carries no
+    destination update, the common case), the trip's existing
+    planned_dest_lat/lng are left exactly as they are: a driver who already
+    picked a destination does not need to keep resending it on every
+    subsequent tick, and this must never silently clear a value some
+    earlier tick already set."""
+    if dest_lat is not None and dest_lng is not None:
+        trip.planned_dest_lat = dest_lat
+        trip.planned_dest_lng = dest_lng
+
     state = await build_fare_state(session, tenant_id=tenant_id, trip=trip)
 
     prev_lat = trip.last_lat if trip.last_lat is not None else trip.start_lat

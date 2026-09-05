@@ -19,7 +19,7 @@ from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
 from app.models.duress_snapshot import DuressSnapshot
 from app.models.fatigue_alert import FatigueAlert
-from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
+from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle, VehiclePositionHistory
 from app.models.geofence import Geofence
 from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
@@ -33,8 +33,11 @@ from app.models.user import User
 from app.models.vouchers import CorporateAccount, Voucher
 from app.models.zones import Zone
 
-# live_ops owns no table of its own (see app/services/live_ops.py) — nothing
-# to import here for that domain.
+# live_ops owns no *models file* of its own (see app/services/live_ops.py's
+# module docstring), but as of the durable position-history pass it does own
+# one table, `VehiclePositionHistory` -- modeled in app/models/fleet.py
+# alongside the `Vehicle` row it references (see that file's module
+# docstring), imported above.
 
 __all__ = [
     "Announcement",
@@ -68,6 +71,7 @@ __all__ = [
     "TripRating",
     "User",
     "Vehicle",
+    "VehiclePositionHistory",
     "Voucher",
     "WalletTransaction",
     "Zone",

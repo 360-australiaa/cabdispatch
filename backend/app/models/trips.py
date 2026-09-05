@@ -75,6 +75,25 @@ No column in the brief's list was renamed, dropped, or retyped.
    payment-time decision, unlike the pre-trip `negotiated_total` above); see
    `app.services.trips.close_trip` and `app.api.v1.trips.sync_trips` for
    where it's persisted.
+7. `planned_dest_lat`/`planned_dest_lng` are added by a later feature step
+   (dispatcher Live Map route-line pass) on top of the domain brief's
+   original field list. Confirmed by direct investigation: before this pass
+   there was no server-side concept at all of "a driver picked a destination
+   mid-trip" — `end_lat`/`end_lng` above are the REAL final stop and are
+   written ONLY once, at `close_trip()`; a dispatcher watching a trip live
+   has never had anything to draw a route line towards. These two columns
+   are the INTENDED destination instead: set via `PATCH /v1/trips/{id}/tick`
+   (see `app.schemas.trips.TripTickRequest.dest_lat`/`dest_lng` and
+   `app.services.trips.apply_tick`) whenever a driver's device sends one,
+   left alone (never cleared) on any tick that omits them — a driver who
+   already picked a destination is not required to keep re-sending it on
+   every subsequent tick — and surfaced read-only on `GET /v1/vehicles` via
+   `app.services.live_ops._compose_vehicle_live`'s
+   `planned_dest_lat`/`planned_dest_lng`. May legitimately differ from where
+   the trip actually ends (a passenger changes their mind, a diversion, a
+   driver never sends one at all — NULL is the honest "no destination picked
+   yet" answer, never a fabricated 0/0, same convention as the rest of this
+   model's optional columns). Nullable, no backfill needed.
 """
 from __future__ import annotations
 
@@ -152,6 +171,17 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     start_lng: Mapped[float] = mapped_column(nullable=False)
     end_lat: Mapped[float | None] = mapped_column(nullable=True)
     end_lng: Mapped[float | None] = mapped_column(nullable=True)
+
+    # --- driver-picked mid-trip destination (module docstring deviation #7).
+    # Set via PATCH /v1/trips/{id}/tick whenever a driver's device sends
+    # dest_lat/dest_lng (app.services.trips.apply_tick), left untouched on
+    # any tick that omits them. Deliberately distinct from end_lat/end_lng
+    # above: those are the REAL final stop, known only once the trip
+    # closes; these are the INTENDED destination while the trip is still
+    # open, and may never match where the trip actually ends. NULL means
+    # "no destination picked (yet)" — never a fabricated 0/0.
+    planned_dest_lat: Mapped[float | None] = mapped_column(nullable=True)
+    planned_dest_lng: Mapped[float | None] = mapped_column(nullable=True)
 
     # --- tick continuity anchor (deviation #2) ---
     last_lat: Mapped[float | None] = mapped_column(nullable=True)

@@ -542,6 +542,119 @@ async def test_tick_unknown_tariff_is_422(client: AsyncClient, session: AsyncSes
     assert resp.status_code == 422
 
 
+async def test_tick_with_dest_persists_planned_destination(client: AsyncClient, session: AsyncSession):
+    """A driver-picked mid-trip destination sent on a tick is written onto
+    Trip.planned_dest_lat/lng (module docstring deviation #7) -- verified
+    against the ORM row directly since TripRead doesn't (and needn't) echo
+    it back; the read-only surface for it is GET /v1/vehicles instead (see
+    test_live_ops.py)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    dest_lat, dest_lng = -33.8568, 151.2153  # Sydney Opera House, arbitrary real destination
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [{"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": datetime.now(UTC).isoformat()}],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    row = await session.get(Trip, trip["id"])
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
+async def test_tick_omitting_dest_does_not_clear_previously_set_value(
+    client: AsyncClient, session: AsyncSession
+):
+    """A later tick that carries no dest_lat/dest_lng at all must leave a
+    previously-picked destination alone -- a driver isn't required to keep
+    resending it on every subsequent tick (see apply_tick's own docstring)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    dest_lat, dest_lng = -33.8568, 151.2153
+    first = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=10)).isoformat()}
+            ],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+    assert first.status_code == 200
+
+    second = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": -33.859, "lng": 151.211, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=20)).isoformat()}
+            ]
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200
+
+    row = await session.get(Trip, trip["id"])
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
+async def test_close_trip_only_writes_end_lat_lng_not_planned_dest(
+    client: AsyncClient, session: AsyncSession
+):
+    """close_trip is unaffected by this pass: it still only ever writes the
+    REAL end_lat/end_lng, and never touches planned_dest_lat/lng even when a
+    destination was picked mid-trip via tick (see Trip's module docstring
+    deviation #7 for the end_lat/end_lng vs planned_dest_lat/lng
+    distinction)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    dest_lat, dest_lng = -33.8568, 151.2153
+    await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [{"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": datetime.now(UTC).isoformat()}],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+
+    real_end_lat, real_end_lng = -33.80, 151.05  # deliberately NOT the planned destination above
+    close_resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"end_lat": real_end_lat, "end_lng": real_end_lng},
+        headers=headers,
+    )
+    assert close_resp.status_code == 200
+    assert close_resp.json()["end_lat"] == real_end_lat
+    assert close_resp.json()["end_lng"] == real_end_lng
+
+    row = await session.get(Trip, trip["id"])
+    assert row.end_lat == real_end_lat
+    assert row.end_lng == real_end_lng
+    # planned_dest_lat/lng survive, untouched by close -- they describe the
+    # driver's mid-trip intent, not the (possibly different) real outcome.
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
 # --- close -----------------------------------------------------------------
 
 
