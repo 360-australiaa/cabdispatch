@@ -791,9 +791,10 @@ data class DeviceDto(
  * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Three call
  * sites, all best-effort/fire-and-forget: the MDM "locate" response
  * ([DeviceCommandHeartbeat][au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]),
- * the ambient 30s while-on-shift heartbeat
- * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat], Taxi Meter
- * SaaS Complete Blueprint §6.2.2 "vehicle.heartbeat"), and (separately, still unwired — see
+ * the ambient while-on-shift heartbeat
+ * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat] — originally
+ * the Taxi Meter SaaS Complete Blueprint's literal §6.2.2 "vehicle.heartbeat" 30s figure, now 5s;
+ * see that class's own "Interval" doc for why), and (separately, still unwired — see
  * HANDOFF.md "Availability broadcast not wired") the Idle screen's "For Hire" toggle. [status] has
  * no server-side enum constraint (backend: a plain `str`, `min_length=1, max_length=20`), just
  * documented examples ("available"/"on_trip"/"offline"/"break") — any short non-empty string
@@ -838,6 +839,20 @@ data class PositionPublishRequestDto(
     /** `"wifi"` / `"4g"` / `"offline"` (or similar transport-derived categories) — see this
      * field's read site for the exact mapping. Optional/additive, same reasoning as [battery]. */
     val network: String? = null,
+    /** Ground speed, km/h, from [au.com.threesixty.cabdispatch.domain.LocationFix.speedKmh] at
+     * the same instant as [lat]/[lng] — `null` only if
+     * [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.publishOnce] had no fix at all
+     * (it would have skipped the call entirely in that case; kept nullable here rather than
+     * non-null purely so this DTO matches the wire shape of a field the backend also treats as
+     * optional). Wire name `speed_kmh` — must byte-for-byte match the backend's
+     * `PositionPublishRequest.speed_kmh` (`app/schemas/live_ops.py`). */
+    @SerialName("speed_kmh") val speedKmh: Double? = null,
+    /** Compass bearing in degrees (0=north), from
+     * [au.com.threesixty.cabdispatch.domain.LocationFix.heading] — `null` whenever that field is
+     * (device stationary, or the platform reported no bearing for this fix); never fabricated,
+     * same honest-null posture as [battery]/[network] above. Wire name `heading` — must
+     * byte-for-byte match the backend's `PositionPublishRequest.heading` (`app/schemas/live_ops.py`). */
+    val heading: Double? = null,
 )
 
 /** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`
@@ -1084,8 +1099,42 @@ data class TelemetryPointDto(
     val ts: String,
 )
 
+/**
+ * [destLat]/[destLng] (`dest_lat`/`dest_lng` on the wire — exact backend field names, per the
+ * sibling backend-track agent's addition to `TripTickRequest`) are the driver's *picked*
+ * destination, sourced from the same [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
+ * columns [au.com.threesixty.cabdispatch.data.repository.TripRepository.updateDropoff] writes
+ * (`endLat`/`endLng`) — see that method's own doc for why those columns hold "where we're
+ * heading" while a trip is open. `Double?`, default `null`: honest "not known yet" for every tick
+ * before [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel.selectDestination] has
+ * run, exactly the same "real null, never a placeholder" convention this file's header and
+ * [PositionPublishRequestDto]'s `battery`/`network` already follow — never fabricate a coordinate
+ * to fill these in early.
+ *
+ * HONEST GAP (found during this pass, not introduced by it): as of 2026-09-05, [ApiService.tickTrip]
+ * itself has **no call site anywhere in this app** — verified by grepping every production source
+ * file, not assumed. [au.com.threesixty.cabdispatch.data.repository.TripRepository] holds no
+ * [ApiService] reference at all, and
+ * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s periodic `doPersistTick` only
+ * calls [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick] (Room-only, per that
+ * method's own doc — "this method never touches the network either way"). This app's trip flow is
+ * deliberately offline-first end to end: [ApiService.createTrip] is likewise never called, an open
+ * trip has no server-side id at all, and the only network trip write that exists today is the bulk
+ * `POST /v1/trips/sync` [SyncOutboxEntity]-driven replay [au.com.threesixty.cabdispatch.sync
+ * .OutboxDrainer] fires once a trip closes. So these two fields are added here to match the
+ * backend's wire contract byte-for-byte and are ready the moment a live per-tick call exists, but
+ * as of this pass nothing constructs or sends a [TripTickRequestDto] in production code — wiring
+ * an actual "give an open trip a server id, then PATCH it periodically" mechanism is a materially
+ * larger architecture change than threading two fields through an existing call, and is out of
+ * scope for this pass; flagging it explicitly here rather than quietly leaving these fields to look
+ * load-bearing when they are not yet wired to anything.
+ */
 @Serializable
-data class TripTickRequestDto(val points: List<TelemetryPointDto>)
+data class TripTickRequestDto(
+    val points: List<TelemetryPointDto>,
+    @SerialName("dest_lat") val destLat: Double? = null,
+    @SerialName("dest_lng") val destLng: Double? = null,
+)
 
 /** One leg of a split-fare payment — mirrors the backend's `SplitPaymentItem`
  * (`backend/app/schemas/trips.py`) exactly: [method] is one of `cash|card|voucher|account`

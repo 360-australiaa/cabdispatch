@@ -38,6 +38,15 @@ import au.com.threesixty.cabdispatch.domain.fare.TimeClass as CalcTimeClass
  * @property timestampMillis Fix time, `System.currentTimeMillis()`-epoch millis (from
  *   `android.location.Location.getTime()`), used for jump/staleness filtering — not a monotonic
  *   clock, don't use it for elapsed-time math against [System.currentTimeMillis] directly.
+ * @property heading Compass bearing in degrees (0=north), from
+ *   `android.location.Location.getBearing()` when `Location.hasBearing()` is true; `null` when
+ *   the platform reports no bearing (e.g. device stationary) — never fabricated, same honest-null
+ *   convention as [accuracyM]'s own handling here. Defaulted to `null` so this field is additive:
+ *   every call site that already constructs a [LocationFix] without naming it (there was exactly
+ *   one, `RealLocationProvider.onNewFix`, checked when this field was added) keeps compiling.
+ *   Threaded through to `PositionPublishRequestDto.heading` by
+ *   [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.publishOnce] so the dispatcher
+ *   Live Map can orient the vehicle marker, not just place it.
  */
 data class LocationFix(
     val lat: Double,
@@ -45,6 +54,7 @@ data class LocationFix(
     val speedKmh: Double,
     val accuracyM: Float,
     val timestampMillis: Long,
+    val heading: Double? = null,
 )
 
 /**

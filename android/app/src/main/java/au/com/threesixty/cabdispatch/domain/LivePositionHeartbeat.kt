@@ -55,11 +55,29 @@ import kotlinx.coroutines.launch
  * two checks are equivalent today.
  *
  * ### Interval
- * [HEARTBEAT_INTERVAL_MS] (30s) is the blueprint's own literal figure (§6.2.2). Deliberately much
- * coarser than the fare engine's 1Hz GPS tick rate
- * ([au.com.threesixty.cabdispatch.domain.location.RealLocationProvider]) — this is an ambient
- * presence signal for a dispatcher's map, not a precision feed, so publishing every second would
- * just be pointless battery/data burn for a dot that does not need to move that smoothly.
+ * [HEARTBEAT_INTERVAL_MS] was originally 30s — the blueprint's own literal figure (§6.2.2) — but
+ * that made the dispatcher Live Map marker visibly *jump* between fixes rather than read as a
+ * vehicle actually moving, once this class started carrying real speed/heading per publish (see
+ * this file's `speedKmh`/`heading` passthrough in [publishOnce]) instead of just a bare lat/lng
+ * dot. Now 5s, matching this app's own existing precedent for "how often is fast enough to feel
+ * live without being a precision feed": [DuressController]'s active-phase GPS relay
+ * (`ACTIVE_POLL_INTERVAL_MS`, also 5000L) already polls/publishes position at exactly this
+ * cadence while a duress event is open, for the same "dispatcher/responder needs to see the dot
+ * actually move" reason — see also `docs/DURESS_DEVICE_INTEGRATION.md` for that stream's own
+ * write-up. 5s is still far coarser than the fare engine's 1Hz GPS tick rate
+ * ([au.com.threesixty.cabdispatch.domain.location.RealLocationProvider]) — this remains an
+ * ambient presence signal for a dispatcher's map, not a precision feed, so publishing every
+ * second (matching the fare engine tick 1:1) would still be pointless battery/data burn for a
+ * dot that does not need frame-by-frame precision, just visible motion.
+ *
+ * As with the original 30s figure, 5s is a default this pass chose to make the map feel
+ * real-time, not a re-derivation of the blueprint's §6.2.2 spec text (which still literally says
+ * 30s) or a decided business/battery-budget policy — flagged here the same way this codebase's
+ * own convention elsewhere insists a chosen-not-derived number be flagged as such rather than
+ * silently presented as settled (see `docs/DURESS_DEVICE_INTEGRATION.md` sec 8's "exact number...
+ * is a business decision, not an engineering one" framing for its retention-window figure).
+ * Trivial to retune if a real battery-life measurement or a dispatcher-side complaint says
+ * otherwise.
  *
  * ### Failure handling
  * Best-effort and silent-on-failure, matching every other background publish in this app
@@ -149,6 +167,12 @@ class LivePositionHeartbeat(
                     status = HEARTBEAT_STATUS,
                     battery = readBatteryPercent(),
                     network = readNetworkType(),
+                    // Straight passthrough of the same fix's own speed/heading — see
+                    // LocationFix.speedKmh/.heading for provenance (fused-location speed, real
+                    // Location.getBearing() or honest null). Lets the dispatcher Live Map show a
+                    // moving, oriented marker instead of just a bare dot.
+                    speedKmh = fix.speedKmh,
+                    heading = fix.heading,
                 ),
             )
         }
@@ -184,7 +208,9 @@ class LivePositionHeartbeat(
     }.getOrNull()
 
     private companion object {
-        const val HEARTBEAT_INTERVAL_MS = 30_000L
+        // See this class's own "Interval" doc above for why this is 5s, not the blueprint's
+        // literal 30s figure.
+        const val HEARTBEAT_INTERVAL_MS = 5_000L
 
         /** See this class's own doc ("Why 'shift open'...") for why this is a fixed placeholder
          * rather than a real availability/on-trip status — no such signal exists to read from a
