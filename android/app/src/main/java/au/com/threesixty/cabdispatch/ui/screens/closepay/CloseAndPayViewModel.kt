@@ -2,6 +2,7 @@ package au.com.threesixty.cabdispatch.ui.screens.closepay
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
@@ -13,6 +14,7 @@ import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
 import au.com.threesixty.cabdispatch.hardware.receipt.ReceiptLine
+import au.com.threesixty.cabdispatch.sync.SyncWorker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -567,6 +569,16 @@ class CloseAndPayViewModel : ViewModel() {
             )
             _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
             fillPickupAddressBestEffort(closed)
+            // Real bug found live, 2026-09-05: closing a trip never itself triggered a sync —
+            // TripRepository.closeTrip only marks the outbox row ready, and nothing actually
+            // enqueues SyncWorker until either a connectivity *change* fires
+            // (ConnectivitySyncTrigger, which a device that's been online the whole time never
+            // sees) or the ~15 min periodic backstop. That left a just-closed trip's serverId
+            // null for however long it took one of those to fire, which is exactly why
+            // RatePassengerViewModel.load() kept surfacing NotSynced immediately after Close &
+            // Pay's own receipt step claimed "Trip synced". Same enqueueOneTime call
+            // ConnectivitySyncTrigger already makes on reconnect — not a new sync path.
+            SyncWorker.enqueueOneTime(WorkManager.getInstance(AppContainer.appContext))
         }
     }
 

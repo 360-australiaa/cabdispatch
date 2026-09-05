@@ -178,6 +178,26 @@ class NavProgressTest {
         assertEquals(1_000_000L + 90_500L, NavProgress.etaEpochMillis(1_000_000L, 90.5))
     }
 
+    @Test
+    fun `distance to the current maneuver is just the straight-line leg, not the whole trip`() {
+        // Sitting at vertex 5, heading for maneuver 1 (vertex 10): ~5 * LAT_STEP degrees of
+        // latitude away, independent of how much road remains after that maneuver.
+        val expected = NavProgress.haversineM(points[5].lat, LNG, points[10].lat, LNG)
+        assertEquals(expected, NavProgress.distanceToCurrentManeuverM(points[5].lat, LNG, steps, currentIndex = 1), 1e-6)
+        assertTrue(expected < route.distanceM)
+
+        // Standing exactly on the maneuver point: zero, not "whatever is left of the trip".
+        assertEquals(0.0, NavProgress.distanceToCurrentManeuverM(points[10].lat, LNG, steps, currentIndex = 1), 1e-6)
+
+        // An out-of-range index clamps to the last (arrive) step rather than throwing.
+        assertEquals(
+            NavProgress.distanceToCurrentManeuverM(START_LAT, LNG, steps, currentIndex = steps.lastIndex),
+            NavProgress.distanceToCurrentManeuverM(START_LAT, LNG, steps, currentIndex = 99),
+            1e-6,
+        )
+        assertEquals(0.0, NavProgress.distanceToCurrentManeuverM(START_LAT, LNG, emptyList(), currentIndex = 0), 0.0)
+    }
+
     // ------------------------------------------------------------------ off-route
 
     @Test

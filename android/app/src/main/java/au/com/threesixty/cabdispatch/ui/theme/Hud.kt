@@ -304,6 +304,14 @@ fun GlowingMeterGauge(
  * (`tickOuter - majorLen - 9dp`) rather than to the track (`trackR - 24dp`), because this arc's
  * default stroke (14dp) is nearly three times `MeterDialArt`'s 5dp and the original constant would
  * put labels under the major ticks.
+ *
+ * **Calm glow pass (2026-09-05).** A first attempt here added a travelling highlight that
+ * continuously circled the ring — reverted immediately on direct feedback ("this circle is
+ * moving continuously, its doing pain in my head... calm animations"). What stayed: the glow
+ * arc's own brightness now scales gently with real speed (`0.55 + 0.45 * speed/max` instead of a
+ * flat `0.85`, itself spring-smoothed since it rides [animatedSpeed]) — a quiet, real readout, not
+ * a decorative loop, and it never moves *positionally* the way the reverted highlight did. Sitting
+ * still or crawling in traffic, the ring simply sits at its calm resting brightness.
  */
 @Composable
 fun GlowingSpeedometer(
@@ -333,7 +341,8 @@ fun GlowingSpeedometer(
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val g = HudArcGeometry.fit(this, strokeWidthDp.dp.toPx(), HUD_ARC_INSET.toPx())
-            drawHudArc(g, animatedSpeed / safeMax, startDeg, sweepDeg, glowPaint)
+            val speedFraction = (animatedSpeed / safeMax).coerceIn(0f, 1f)
+            drawHudArc(g, speedFraction, startDeg, sweepDeg, glowPaint, glowAlpha = 0.55f + 0.45f * speedFraction)
 
             // Ticks + labels — MeterDialArt's geometry.
             val cx = g.center.x

@@ -132,6 +132,20 @@ object NavProgress {
      * route — a route that is mostly motorway with a slow CBD tail will read optimistic near the
      * end. A route with zero distance or duration yields 0.
      */
+    /**
+     * Straight-line distance from the fix to the *upcoming* maneuver point
+     * (`steps[currentIndex]`) — the real "next turn in 300 m" readout a driver actually wants,
+     * as opposed to [remainingDistanceM]'s whole-remaining-trip figure (this is exactly that
+     * function's first term, exposed on its own). Same approximation as [remainingDistanceM]:
+     * the road may bend between the fix and the maneuver, so this can read slightly short right
+     * up until the maneuver is reached, never negative or fabricated beyond that.
+     */
+    fun distanceToCurrentManeuverM(lat: Double, lng: Double, steps: List<RouteStep>, currentIndex: Int): Double {
+        if (steps.isEmpty()) return 0.0
+        val index = currentIndex.coerceIn(0, steps.lastIndex)
+        return haversineM(lat, lng, steps[index].lat, steps[index].lng)
+    }
+
     fun remainingDurationS(remainingDistanceM: Double, route: DirectionsRoute): Double {
         if (route.distanceM <= 0.0 || route.durationS <= 0.0) return 0.0
         val averageSpeedMps = route.distanceM / route.durationS

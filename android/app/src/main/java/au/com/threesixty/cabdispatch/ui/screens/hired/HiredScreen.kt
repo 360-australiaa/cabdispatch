@@ -386,7 +386,6 @@ fun HiredScreen(
                     fareState = fareState,
                     isPaused = isPaused,
                     tripContext = tripContext,
-                    startAtIso = activeTrip?.startAt,
                     persistedTrace = persistedTrace,
                     liveTrace = liveTrace,
                     liveFix = liveFix,
@@ -667,7 +666,6 @@ private fun RowScope.MeterPaneLayout(
     fareState: FareState,
     isPaused: Boolean,
     tripContext: TripContext?,
-    startAtIso: String?,
     persistedTrace: List<TelemetryPointDto>,
     liveTrace: List<MapPoint>,
     liveFix: LocationFix?,
@@ -746,41 +744,33 @@ private fun RowScope.MeterPaneLayout(
                 onClick = onChangeDestination,
                 onClear = if (hasDestination) onClearDestination else null,
             )
+            // The actual turn-by-turn guidance, given real top-of-map billing (direct correction,
+            // 2026-09-05: the maneuver used to be a 10sp subtext line buried in the bottom-corner
+            // DESTINATION card — easy to miss entirely while driving). Shown only once a route is
+            // actually live; before that the search bar above is the only thing here, same as today.
+            AnimatedVisibility(
+                visible = hasDestination && navState.route != null,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150)),
+            ) {
+                NavTurnBanner(navState = navState, modifier = Modifier.widthIn(max = 480.dp))
+            }
         }
         if (hasDestination) {
-            Column(modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NavStopCard(
-                        icon = Icons.Rounded.Place,
-                        tone = CaptainPalette.success,
-                        label = "PICK UP",
-                        address = tripContext?.originAddress ?: "—",
-                        detail = startAtIso?.asLocalTime()?.let { "Picked up $it" } ?: "—",
-                        modifier = Modifier.weight(1f),
-                    )
-                    NavDestinationCard(
-                        navState = navState,
-                        onChange = onChangeDestination,
-                        onClear = onClearDestination,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                RouteEtaPanel(navState = navState, onRetry = onRetryRoute)
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CaptainButton(
-                        text = "OPEN NAVIGATION",
-                        heightDp = 50,
-                        fontSize = 15.sp,
-                        enabled = destination != null,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        destination?.let { onOpenNavigation(NavigationTarget(it.lat, it.lng, it.placeName)) }
-                    }
-                    SpeechToggleButton(enabled = speechEnabled, onToggle = onToggleVoice)
-                }
-            }
+            // One slim glass bar, not three stacked cards — direct correction, 2026-09-05: the old
+            // PICK UP/DESTINATION row + separate ETA strip + separate OPEN NAVIGATION row cost
+            // ~190dp of map real estate and read as opaque boxes over the driving surface. Same
+            // fields, same actions, laid out to cost roughly a third of that.
+            NavBottomBar(
+                navState = navState,
+                onChange = onChangeDestination,
+                onClear = onClearDestination,
+                onRetryRoute = onRetryRoute,
+                onOpenNavigation = { destination?.let { onOpenNavigation(NavigationTarget(it.lat, it.lng, it.placeName)) } },
+                speechEnabled = speechEnabled,
+                onToggleVoice = onToggleVoice,
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
+            )
         }
     }
 }
@@ -953,32 +943,6 @@ private fun ControlsDrawer(
     }
 }
 
-/** PICK UP card on the nav pane — icon in a tinted square, label, address, detail. Shared shell
- * ([IconSquare]) with [NavDestinationCard]; PICK UP has no actions (the pickup is fixed once a
- * trip is open), so it stays the plain read-only card. */
-@Composable
-private fun NavStopCard(icon: ImageVector, tone: Color, label: String, address: String, detail: String, modifier: Modifier = Modifier) {
-    GlassCard(modifier = modifier, cornerRadiusDp = 16) {
-        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
-            IconSquare(icon = icon, tint = tone, size = 30.dp)
-            Column(modifier = Modifier.padding(start = 10.dp)) {
-                Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = tone)
-                Text(
-                    address,
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    color = CaptainPalette.textPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                Text(detail, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = CaptainPalette.textSecondary, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
-            }
-        }
-    }
-}
-
 /**
  * A real directional icon for the current maneuver, derived ONLY from Mapbox's own
  * `maneuver.type`/`maneuver.modifier` fields ([RouteStep.maneuverType]/[RouteStep.modifier],
@@ -1015,156 +979,181 @@ private fun maneuverIcon(maneuverType: String?, modifier: String?): ImageVector?
 }
 
 /**
- * "2.4 km · 6 min · ETA 4:32 PM" — the real remaining-trip summary
- * ([MeterNavUiState.remainingDistanceM]/[.remainingDurationS]/[.etaEpochMillis], the same fields
- * [RouteEtaPanel] renders as three separate stats) collapsed into one line so it can sit directly
- * beside the turn icon/instruction, per the direct request to show a distance/time/ETA summary
- * "next to or below the turn icon" rather than only in the separate strip below. `null` (no route
- * yet) renders as "—", never a fabricated distance.
- */
-private fun remainingSummary(navState: MeterNavUiState): String {
-    if (navState.route == null) return "—"
-    return "${formatDistanceM(navState.remainingDistanceM)} · " +
-        "${formatDurationS(navState.remainingDurationS)} · " +
-        "ETA ${formatEtaClock(navState.etaEpochMillis)}"
-}
-
-/**
- * DESTINATION card on the nav pane — the real [GeocodeResult] the driver picked
- * ([MeterNavViewModel.selectDestination]), the current maneuver
- * ([navState.currentInstruction] plus a real [maneuverIcon] derived from
- * `navState.route.steps[navState.currentStepIndex]`'s own `maneuverType`/`modifier` — never a
- * guessed icon), the real remaining-trip [remainingSummary], and CHANGE/clear actions
- * ([onChange] reopens the same destination-search entry point; [onClear] calls
- * [MeterNavViewModel.clearDestination] outright, dropping back to mockup #3).
+ * The prominent top-of-map turn-by-turn banner (2026-09-05 redesign — direct correction: "can't
+ * see turn by turn guidance", because the maneuver used to be a 10sp subtext line inside the
+ * bottom-corner DESTINATION card). Shown only once [MeterNavUiState.route] is non-null — big real
+ * turn icon ([maneuverIcon], never guessed), the actual spoken instruction
+ * ([navState.currentInstruction]) as the headline, and the real "next turn in Xm" readout
+ * ([navState.distanceToNextManeuverM] — [NavProgress.distanceToCurrentManeuverM], distinct from
+ * the whole-trip remaining distance) as the number a driver glancing over actually needs.
  */
 @Composable
-private fun NavDestinationCard(navState: MeterNavUiState, onChange: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
-    val destination = navState.destination
+private fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modifier) {
     val currentStep = navState.route?.steps?.getOrNull(navState.currentStepIndex)
-    val icon = maneuverIcon(currentStep?.maneuverType, currentStep?.modifier)
-    GlassCard(modifier = modifier, cornerRadiusDp = 16) {
-        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
-            IconSquare(icon = Icons.Rounded.Flag, tint = CaptainPalette.danger, size = 30.dp)
-            Column(modifier = Modifier.padding(start = 10.dp).weight(1f)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("DESTINATION", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = CaptainPalette.danger)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "CHANGE",
-                            fontFamily = InterFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 9.sp,
-                            color = CaptainPalette.hudSweepMid,
-                            modifier = Modifier.clickable(onClick = onChange),
-                        )
-                        Icon(
-                            Icons.Rounded.Close,
-                            contentDescription = "Clear destination",
-                            tint = CaptainPalette.textMuted,
-                            modifier = Modifier.size(13.dp).clickable(onClick = onClear),
-                        )
-                    }
-                }
-                Text(
-                    destination?.placeName ?: "—",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    color = CaptainPalette.textPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                // Real turn icon (never guessed — see maneuverIcon's doc) beside the spoken
-                // instruction text; the icon is simply omitted when the data doesn't support one.
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
-                    if (icon != null) {
-                        Icon(
-                            icon,
-                            contentDescription = null,
-                            tint = CaptainPalette.hudAccent,
-                            modifier = Modifier.size(14.dp).padding(end = 4.dp),
-                        )
-                    }
-                    Text(
-                        navState.currentInstruction ?: "—",
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 10.sp,
-                        color = CaptainPalette.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Text(
-                    remainingSummary(navState),
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp,
-                    color = CaptainPalette.textMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
+    val icon = maneuverIcon(currentStep?.maneuverType, currentStep?.modifier) ?: Icons.Rounded.Straight
+    GlassCard(modifier = modifier.fillMaxWidth(), cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.hudAccent.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(28.dp))
             }
+            Text(
+                navState.currentInstruction ?: "Continue on route",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                color = CaptainPalette.textPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 14.dp).weight(1f),
+            )
+            Text(
+                formatDistanceM(navState.distanceToNextManeuverM),
+                fontFamily = ChakraPetch,
+                fontWeight = FontWeight.Bold,
+                fontSize = 19.sp,
+                color = CaptainPalette.hudAccent,
+                modifier = Modifier.padding(start = 10.dp),
+            )
         }
     }
 }
 
+/** One line of [NavBottomBar]'s route summary: a small tinted pin icon + a single-line ellipsized
+ * address. Shared shell between the PICK UP and DESTINATION rows. */
+@Composable
+private fun NavStopLine(icon: ImageVector, tone: Color, address: String, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = tone, modifier = Modifier.size(13.dp))
+        Text(
+            address,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 11.sp,
+            color = CaptainPalette.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 6.dp),
+        )
+    }
+}
+
 /**
- * Route/ETA strip under the PICK UP/DESTINATION cards — honestly reflects exactly one of four
- * real states: fetching ([navState.routing], a spinner), failed ([navState.routeError] + a real
- * RETRY calling [MeterNavViewModel.retryRoute]), live ([navState.route] non-null: DISTANCE/ETA/
- * ARRIVE from [MeterNavViewModel]'s own [NavProgress] arithmetic), or none yet.
+ * The map panel's entire bottom-edge nav surface, as one slim glass bar (2026-09-05 redesign —
+ * direct correction: "pickup and destination is hiding the background of the map"). Replaces the
+ * old three-stacked-card block (a PICK UP/DESTINATION row, a separate ETA strip, a separate OPEN
+ * NAVIGATION row — together costing ~190dp of map real estate) with one row costing roughly a
+ * third of that; every field is the same [MeterNavUiState] those three composables read, none of
+ * it re-derived.
+ *
+ * Left: PICK UP ([navState.pickupAddress] — real once [MeterNavViewModel.resolvePickupAddress]
+ * resolves it, "—" until then, never fabricated) over DESTINATION ([navState.destination]) with
+ * CHANGE/clear inline. Middle: exactly one of [navState.routing]/[navState.routeError]/
+ * [navState.route]'s DISTANCE-ETA-ARRIVE stats/"no route yet" — the same four honest states
+ * [RouteEtaPanel] used to render. Right: OPEN NAVIGATION + the voice toggle.
  */
 @Composable
-private fun RouteEtaPanel(navState: MeterNavUiState, onRetry: () -> Unit) {
-    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14) {
+private fun NavBottomBar(
+    navState: MeterNavUiState,
+    onChange: () -> Unit,
+    onClear: () -> Unit,
+    onRetryRoute: () -> Unit,
+    onOpenNavigation: () -> Unit,
+    speechEnabled: Boolean,
+    onToggleVoice: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val destination = navState.destination
+    GlassCard(modifier = modifier, cornerRadiusDp = 16) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            when {
-                navState.routing -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), color = CaptainPalette.hudAccent, strokeWidth = 2.dp)
+            Column(modifier = Modifier.weight(1f, fill = false).widthIn(max = 220.dp)) {
+                NavStopLine(icon = Icons.Rounded.Place, tone = CaptainPalette.success, address = navState.pickupAddress ?: "—")
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    NavStopLine(
+                        icon = Icons.Rounded.Flag,
+                        tone = CaptainPalette.danger,
+                        address = destination?.placeName ?: "—",
+                        modifier = Modifier.weight(1f),
+                    )
                     Text(
-                        "Finding route…",
+                        "CHANGE",
                         fontFamily = InterFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 12.sp,
-                        color = CaptainPalette.textSecondary,
-                        modifier = Modifier.padding(start = 10.dp),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp,
+                        color = CaptainPalette.hudSweepMid,
+                        modifier = Modifier.padding(start = 8.dp).clickable(onClick = onChange),
+                    )
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Clear destination",
+                        tint = CaptainPalette.textMuted,
+                        modifier = Modifier.size(13.dp).padding(start = 6.dp).clickable(onClick = onClear),
                     )
                 }
-                navState.routeError != null -> {
-                    Text(
-                        navState.routeError,
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 12.sp,
-                        color = CaptainPalette.danger,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                    )
-                    CaptainButton(text = "RETRY", outline = true, heightDp = 34, fontSize = 12.sp, widthDp = 88, onClick = onRetry)
-                }
-                navState.route != null -> {
-                    MiniEtaStat("DISTANCE", formatDistanceM(navState.remainingDistanceM))
-                    MiniEtaStat("ETA", formatDurationS(navState.remainingDurationS))
-                    MiniEtaStat("ARRIVE", formatEtaClock(navState.etaEpochMillis))
-                }
-                else -> Text(
-                    "No route yet",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    color = CaptainPalette.textMuted,
-                )
             }
+            Box(modifier = Modifier.padding(horizontal = 12.dp).width(1.dp).height(32.dp).background(CaptainPalette.panelBorder))
+            Row(modifier = Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    navState.routing -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(13.dp), color = CaptainPalette.hudAccent, strokeWidth = 2.dp)
+                        Text(
+                            "Finding route…",
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            color = CaptainPalette.textSecondary,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                    navState.routeError != null -> {
+                        Text(
+                            navState.routeError,
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            color = CaptainPalette.danger,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 110.dp).padding(end = 6.dp),
+                        )
+                        CaptainButton(text = "RETRY", outline = true, heightDp = 32, fontSize = 11.sp, widthDp = 68, onClick = onRetryRoute)
+                    }
+                    navState.route != null -> {
+                        MiniEtaStat("DISTANCE", formatDistanceM(navState.remainingDistanceM))
+                        Spacer(Modifier.width(12.dp))
+                        MiniEtaStat("ETA", formatDurationS(navState.remainingDurationS))
+                        Spacer(Modifier.width(12.dp))
+                        MiniEtaStat("ARRIVE", formatEtaClock(navState.etaEpochMillis))
+                    }
+                    else -> Text(
+                        "No route yet",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                        color = CaptainPalette.textMuted,
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            CaptainButton(
+                text = "NAVIGATE",
+                heightDp = 42,
+                widthDp = 108,
+                fontSize = 12.sp,
+                enabled = destination != null,
+                onClick = onOpenNavigation,
+            )
+            Spacer(Modifier.width(8.dp))
+            SpeechToggleButton(enabled = speechEnabled, onToggle = onToggleVoice)
         }
     }
 }

@@ -1334,7 +1334,13 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
             }
         }
         Text(
-            "Trip synced ✓ · outbox clear · fare posted to shift totals",
+            // Was a hardcoded "Trip synced ✓" — a real overclaim, found live 2026-09-05: the trip
+            // is genuinely saved locally and posted to today's shift totals (both true the
+            // instant closeTrip() returns, above), but the server sync itself is only just
+            // starting (see CloseAndPayViewModel.finalizeClose's SyncWorker.enqueueOneTime call)
+            // and can take a real few seconds — RatePassengerViewModel.load() surfacing
+            // "hasn't synced yet" right after this screen claimed the opposite is what exposed it.
+            "Saved locally · sync started · fare posted to shift totals",
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,

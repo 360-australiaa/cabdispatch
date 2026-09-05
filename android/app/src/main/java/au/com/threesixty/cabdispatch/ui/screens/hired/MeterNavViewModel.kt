@@ -53,6 +53,9 @@ data class MeterNavUiState(
     val currentStepIndex: Int = 0,
     /** `route.steps[currentStepIndex].instruction`, or null with no route. */
     val currentInstruction: String? = null,
+    /** Straight-line distance to the *upcoming* maneuver point — [NavProgress.distanceToCurrentManeuverM].
+     * The real "next turn in 300 m" readout, distinct from [remainingDistanceM]'s whole-trip figure. */
+    val distanceToNextManeuverM: Double? = null,
     /** See [NavProgress.remainingDistanceM] for the approximation. Null with no route. */
     val remainingDistanceM: Double? = null,
     /** See [NavProgress.remainingDurationS] for the approximation. Null with no route. */
@@ -63,6 +66,16 @@ data class MeterNavUiState(
     val offRoute: Boolean = false,
     /** Whether nav instructions are spoken. Mirrors the fare-speech toggle — see [MeterNavViewModel.setVoiceEnabled]. */
     val voiceEnabled: Boolean = false,
+
+    /**
+     * The real pickup address for this trip, resolved once [selectDestination] is first called
+     * (see [MeterNavViewModel.resolvePickupAddress]) — either the dispatch-offer address the trip
+     * already carried, or a fresh reverse-geocode of where the meter actually started. Null until
+     * resolved (render an honest "—", never fabricate a placeholder); this is a display-only
+     * mirror of [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.pickupAddress], not a
+     * second source of truth for it.
+     */
+    val pickupAddress: String? = null,
 )
 
 /**
@@ -177,6 +190,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
         // place name — feeding that in would fire a fresh search and repopulate the list.
         typedQuery.value = ""
         persistDropoff(result)
+        resolvePickupAddress()
         requestRoute(result, automatic = false)
     }
 
@@ -248,6 +262,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
                 offRoute = false,
                 currentStepIndex = stepIndex,
                 currentInstruction = route.steps.getOrNull(stepIndex)?.instruction,
+                distanceToNextManeuverM = NavProgress.distanceToCurrentManeuverM(fix.lat, fix.lng, route.steps, stepIndex),
                 remainingDistanceM = remainingM,
                 remainingDurationS = remainingS,
                 etaEpochMillis = NavProgress.etaEpochMillis(System.currentTimeMillis(), remainingS),
@@ -291,6 +306,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
                 offRoute = false,
                 currentStepIndex = nextIndex,
                 currentInstruction = route.steps.getOrNull(nextIndex)?.instruction,
+                distanceToNextManeuverM = NavProgress.distanceToCurrentManeuverM(fix.lat, fix.lng, route.steps, nextIndex),
                 remainingDistanceM = remainingM,
                 remainingDurationS = remainingS,
                 etaEpochMillis = NavProgress.etaEpochMillis(System.currentTimeMillis(), remainingS),
@@ -323,6 +339,38 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
                     lat = result.lat,
                     lng = result.lng,
                 )
+            }
+        }
+    }
+
+    /**
+     * Fills [MeterNavUiState.pickupAddress] the moment the nav pane's PICK UP card first needs
+     * one — i.e. right when a destination is picked, not lazily waiting for trip close.
+     * [TripEntity.pickupAddress][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.pickupAddress]'s
+     * own doc explains why it is usually blank at this point: it is only populated at open time
+     * from a dispatch offer's address, so a street-hail/rank/Start-Meter trip (this app's most
+     * common case) has nothing there yet. Reuses [TripRepository.fillPickupAddressIfMissing] —
+     * the exact same idempotent, never-overwrite, never-fabricate write the close-time call site
+     * already makes — so there is exactly one path that ever fills that column, just two moments
+     * that can trigger it. A failed/no-result reverse-geocode leaves [MeterNavUiState.pickupAddress]
+     * null; the card renders its existing honest "—", nothing invented.
+     */
+    private fun resolvePickupAddress() {
+        if (_uiState.value.pickupAddress != null) return
+        viewModelScope.launch {
+            runCatching {
+                val active = tripRepository.observeActiveTrip().first() ?: return@launch
+                val existing = active.pickupAddress
+                if (!existing.isNullOrBlank()) {
+                    _uiState.update { it.copy(pickupAddress = existing) }
+                    return@launch
+                }
+                val resolved = AppContainer.mapboxReverseGeocoding
+                    .reverseGeocode(active.startLat, active.startLng)
+                    .getOrNull()
+                    ?: return@launch
+                tripRepository.fillPickupAddressIfMissing(active.clientUuid, resolved)
+                _uiState.update { it.copy(pickupAddress = resolved) }
             }
         }
     }

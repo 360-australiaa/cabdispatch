@@ -26,10 +26,12 @@ import okhttp3.Request
  * a plain authenticated HTTPS GET the public `pk.*` runtime token is explicitly designed for.
  *
  * **One-time lookup, not a live feature.** Unlike [MapboxGeocoding.search] (called on every
- * keystroke in the navigator's drop-off search box), this is called exactly once per trip, at
- * trip-close time (see [au.com.threesixty.cabdispatch.data.repository.TripRepository]'s
- * `fillPickupAddressIfMissing` doc for the exact call site) — a record-keeping fill for History /
- * Trip Detail, not something that ticks.
+ * keystroke in the navigator's drop-off search box), this is called at most twice per trip — once
+ * from [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel] the moment a destination
+ * is first picked (so the live nav pane's PICK UP card has something to show instead of "—"), and
+ * as a fallback from [au.com.threesixty.cabdispatch.data.repository.TripRepository]'s
+ * `fillPickupAddressIfMissing` at close time for a trip whose driver never opened the navigator at
+ * all — a record-keeping fill for History/Trip Detail either way, not something that ticks.
  *
  * **Never fabricates.** A failed request, a non-2xx response, or a malformed body all surface as
  * [Result.failure]; a coordinate with no address on record (open water, deep bush, a token-less
@@ -42,10 +44,16 @@ class MapboxReverseGeocoding(private val client: OkHttpClient) {
 
     /**
      * The real formatted place name for ([lat], [lng]), or `null` if Mapbox has no address on
-     * record for that point. `types=address` restricts results to street addresses (rather than,
-     * say, a whole postcode or country polygon) so the returned string reads like a pickup
-     * location rather than an administrative area; `limit=1` since only the single best match is
-     * ever used.
+     * record for that point. Tries `types=address` first (a real street address reads best as a
+     * pickup location); [PICKUP_FALLBACK_TYPES] widens the search only when that comes back with
+     * *nothing at all* — confirmed live, 2026-09-05: a real Karachi coordinate with a healthy road
+     * network still returned zero `address`-typed features (verified with a direct curl against
+     * Mapbox's own API, not a guess), which is a real address-coverage gap in parts of the world
+     * this app's field-testing has hit, not something specific to Australia. The fallback still
+     * only ever returns a real Mapbox feature (a locality/POI/neighbourhood name, e.g. "Shah
+     * Faisal, Karachi") — never a region/country-level result broad enough to be useless as a
+     * pickup label, and never anything invented. `limit=1` on both requests since only the single
+     * best match is ever used.
      */
     suspend fun reverseGeocode(lat: Double, lng: Double): Result<String?> = withContext(Dispatchers.IO) {
         val token = BuildConfig.MAPBOX_ACCESS_TOKEN
@@ -58,15 +66,20 @@ class MapboxReverseGeocoding(private val client: OkHttpClient) {
         // MapboxStaticImage.roundTo convention, reimplemented locally below).
         val lon = lng.roundTo5()
         val la = lat.roundTo5()
-        val url = "$BASE_URL$lon,$la.json?types=address&limit=1&access_token=$token"
         runCatching {
-            client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
-                if (!response.isSuccessful) {
-                    error("Mapbox reverse geocoding HTTP ${response.code}")
-                }
-                val body = response.body?.string().orEmpty()
-                parseReverseGeocodePlaceName(body)
+            val address = fetchPlaceName(lon, la, "address", token)
+            address ?: fetchPlaceName(lon, la, PICKUP_FALLBACK_TYPES, token)
+        }
+    }
+
+    private fun fetchPlaceName(lon: Double, lat: Double, types: String, token: String): String? {
+        val url = "$BASE_URL$lon,$lat.json?types=$types&limit=1&access_token=$token"
+        client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("Mapbox reverse geocoding HTTP ${response.code}")
             }
+            val body = response.body?.string().orEmpty()
+            return parseReverseGeocodePlaceName(body)
         }
     }
 
@@ -77,6 +90,11 @@ class MapboxReverseGeocoding(private val client: OkHttpClient) {
 
     private companion object {
         const val BASE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places/"
+
+        /** Local/neighbourhood-scale fallback types, tried only when a real street `address`
+         * isn't on record — deliberately excludes `place`/`district`/`region`/`postcode`/
+         * `country`, which would resolve to something too broad to read as a pickup location. */
+        const val PICKUP_FALLBACK_TYPES = "poi,neighborhood,locality"
     }
 }
 

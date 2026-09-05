@@ -370,7 +370,9 @@ object AppContainer {
 
     // Reverse-geocoding gateway (real pickup/drop-off addresses pass, 2026-09-05) — same REST-only
     // reasoning as the two above, just coordinates -> address instead of the other way around. See
-    // MapboxReverseGeocoding's own doc; called once per trip at close time, not on every tick.
+    // MapboxReverseGeocoding's own doc; called at most twice per trip (MeterNavViewModel.resolve-
+    // PickupAddress the moment a destination is first picked, CloseAndPayViewModel as a fallback
+    // at close) and idempotent either way, never on every tick.
     val mapboxReverseGeocoding: MapboxReverseGeocoding by lazy { MapboxReverseGeocoding(okHttpClient) }
     val jobsRepository: JobsRepository by lazy {
         RemoteBackedJobsRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)

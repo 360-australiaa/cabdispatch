@@ -330,10 +330,13 @@ class TripRepository(
     }
 
     /**
-     * Best-effort reverse-geocode fill for [TripEntity.pickupAddress], called once from
-     * [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]'s `finalizeClose`
-     * right after [closeTrip] returns, using the just-closed trip's real
-     * [TripEntity.startLat]/[TripEntity.startLng] against
+     * Best-effort reverse-geocode fill for [TripEntity.pickupAddress]. Two call sites, both using
+     * the same idempotent write: [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel]
+     * (`resolvePickupAddress`) calls this the moment a destination is first picked, live, so the
+     * nav pane's PICK UP card has a real address to show; [au.com.threesixty.cabdispatch.ui.
+     * screens.closepay.CloseAndPayViewModel]'s `finalizeClose` calls it again right after
+     * [closeTrip] returns as a fallback for a trip whose driver never opened the navigator at all.
+     * Both use the trip's real [TripEntity.startLat]/[TripEntity.startLng] against
      * [au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding.reverseGeocode].
      * [TripEntity.pickupAddress]'s own doc explains why this column is often `null` at close time:
      * it's only populated at [openTrip] from a dispatch offer's `originAddress`, so a
