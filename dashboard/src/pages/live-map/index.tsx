@@ -27,15 +27,18 @@ import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 // Fleet & Drivers will otherwise never see an expiring licence/rego/
 // insurance date at all.
 import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
-import { FleetMapCanvas } from "./FleetMapCanvas";
+import { FleetMapCanvas, ROUTE_LINE_COLOR, type VehicleMapState } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
 import { ResolveDuressModal } from "./ResolveDuressModal";
 import { VehicleDetailModal } from "./VehicleDetailModal";
+import { useLiveMapGeofencesQuery } from "./useGeofences";
+import { usePositionHistory } from "./usePositionHistory";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
 import {
   batteryColor,
   formatLatLng,
   formatRelativeTime,
+  geofencesContaining,
   isStale,
   mergeLivePosition,
   networkBadgeVariant,
@@ -128,9 +131,40 @@ export default function LiveMapPage() {
     refetchInterval: 5000,
   });
 
+  // --- data: geofences (rarely change -- see useGeofences.ts's staleTime) --
+  const geofencesQuery = useLiveMapGeofencesQuery();
+  const geofences = useMemo(() => geofencesQuery.data ?? [], [geofencesQuery.data]);
+
   const mapVehicles = useMemo(
     () => (vehiclesMapQuery.data?.items ?? []).map((v) => mergeLivePosition(v, positions)),
     [vehiclesMapQuery.data, positions],
+  );
+
+  // Idle detection needs a short position-history buffer this hook owns (see
+  // its own doc) -- fed from `mapVehicles` since that's the up-to-100-vehicle
+  // snapshot that's actually kept live via the WS merge above, unlike the
+  // filtered/paginated table query.
+  const getIdleInfo = usePositionHistory(mapVehicles);
+
+  // The map + vehicle detail panel's own enriched view of each vehicle --
+  // idle status and geofence containment computed once here (the only place
+  // that owns both the position-history buffer and the fetched geofence
+  // list) and threaded down, so FleetMapCanvas, its hover card and
+  // VehicleDetailModal can never disagree about a vehicle's idle/geofence
+  // state (see FleetMapCanvas.VehicleMapState's own doc).
+  const mapVehicleStates: VehicleMapState[] = useMemo(
+    () =>
+      mapVehicles.map((v) => ({
+        ...v,
+        idleInfo: getIdleInfo(v),
+        insideGeofences: v.lat != null && v.lng != null ? geofencesContaining(v.lat, v.lng, geofences) : [],
+      })),
+    [mapVehicles, getIdleInfo, geofences],
+  );
+
+  const selectedVehicleMapState = useMemo(
+    () => (selectedVehicleId ? (mapVehicleStates.find((v) => v.id === selectedVehicleId) ?? null) : null),
+    [mapVehicleStates, selectedVehicleId],
   );
 
   const tableVehicles = useMemo(
@@ -209,7 +243,7 @@ export default function LiveMapPage() {
       render: (v) => (
         <span
           className={isStale(v.position_updated_at) ? "font-medium text-destructive" : "text-muted-foreground"}
-          title={isStale(v.position_updated_at) ? "No update in over 90s -- may have lost connectivity" : undefined}
+          title={isStale(v.position_updated_at) ? "No update in over 15s -- may have lost connectivity" : undefined}
         >
           {formatRelativeTime(v.position_updated_at)}
         </span>
@@ -330,7 +364,7 @@ export default function LiveMapPage() {
         <FleetStatTile
           label="Reporting now"
           value={fleetHealth.onlineNow}
-          hint="Sent a position update in the last 90s"
+          hint="Sent a position update in the last 15s"
           tone="success"
         />
         <FleetStatTile label="Available" value={fleetHealth.available} tone="success" />
@@ -362,8 +396,9 @@ export default function LiveMapPage() {
             </div>
           ) : (
             <FleetMapCanvas
-              vehicles={mapVehicles}
+              vehicles={mapVehicleStates}
               duressEvents={duressEvents}
+              geofences={geofences}
               onSelectVehicle={setSelectedVehicleId}
             />
           )}
@@ -381,6 +416,10 @@ export default function LiveMapPage() {
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--destructive)" }} /> Duress
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full" style={{ background: ROUTE_LINE_COLOR }} /> Route to
+              destination
             </span>
           </div>
         </CardContent>
@@ -461,6 +500,7 @@ export default function LiveMapPage() {
         vehicleId={selectedVehicleId}
         open={selectedVehicleId != null}
         onClose={() => setSelectedVehicleId(null)}
+        mapState={selectedVehicleMapState}
       />
       <ResolveDuressModal event={resolvingEvent} onClose={() => setResolvingEvent(null)} />
     </div>

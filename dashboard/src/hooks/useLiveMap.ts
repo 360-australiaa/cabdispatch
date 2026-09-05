@@ -12,6 +12,16 @@ export interface LivePosition {
   status: string;
   battery: number | null;
   network: string | null;
+  /** km/h, if the paired device's GPS provider reported one on this publish --
+   * null when unknown (e.g. a device/GPS stack that doesn't surface speed),
+   * never a guess. Part of the same contract addition as `heading` below --
+   * see backend `PositionRead`/`PositionPublishRequest` (app/schemas/live_ops.py)
+   * and the Android `LocationFix` honest-null pattern this mirrors. */
+  speed_kmh: number | null;
+  /** 0-360 compass degrees, null when unknown (vehicle stationary, or the
+   * GPS provider never reported one). Never fabricate a heading from a null
+   * value -- render markers un-rotated instead (see FleetMapCanvas). */
+  heading: number | null;
   updated_at: string;
 }
 
