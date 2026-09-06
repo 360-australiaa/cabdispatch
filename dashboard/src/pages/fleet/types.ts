@@ -144,6 +144,16 @@ export interface Driver {
  */
 export interface DriverComplianceRead {
   id: string;
+  /** The driver's meter login code (`UserRead.driver_code`) — the 6-character
+   * code auto-generated at creation that the driver types into the tablet's
+   * "DRIVER #" field alongside their PIN (the meter posts
+   * `driver_code` + `pin` to `/v1/auth/driver-login`, NOT email + password).
+   * Surfaced here because it was previously returned by the API but never
+   * displayed anywhere in the dashboard — meaning an operator who created a
+   * driver had no way to find out the credential that driver needs to sign
+   * in, which silently blocked onboarding entirely (found 2026-09-07 while
+   * testing a fresh driver onboarding end to end). Null for non-driver roles. */
+  driver_code: string | null;
   driver_license_expiry: string | null;
   driver_authority_expiry: string | null;
   suitability_status: string | null;

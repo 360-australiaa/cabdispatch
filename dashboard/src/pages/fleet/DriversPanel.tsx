@@ -308,6 +308,17 @@ export function DriversPanel() {
               )}
             </div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+            {/* Driver code first: it is the one thing an operator opens this
+              * modal needing, since it's half of the driver's meter sign-in
+              * (code + PIN) and appears nowhere else in the dashboard. Shown
+              * monospace because it gets read off this screen and typed into a
+              * tablet keypad. Falls back to an honest "—" rather than a
+              * placeholder while the per-user fetch is in flight or if this
+              * user genuinely has no code (non-driver roles). */}
+            <div>
+              <dt className="text-xs text-muted-foreground">Driver code (meter login)</dt>
+              <dd className="font-mono">{driverComplianceQuery.data?.driver_code || "—"}</dd>
+            </div>
             <div>
               <dt className="text-xs text-muted-foreground">Phone</dt>
               <dd>{selected.phone || "—"}</dd>
