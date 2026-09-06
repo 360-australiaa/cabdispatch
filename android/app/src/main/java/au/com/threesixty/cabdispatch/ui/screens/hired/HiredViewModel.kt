@@ -15,13 +15,11 @@ import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
-import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
-import au.com.threesixty.cabdispatch.domain.location.TracePointRecorder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -81,12 +79,6 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     // real distanceM/movingS/waitingS to read once the trip reaches S4.
     private val tripRepository: TripRepository = AppContainer.tripRepository
     private var persistedTripClientUuid: String? = null
-
-    /** The last real [LocationFix] actually appended to the persisted trace — see
-     * [nextTracePoint]'s doc. `null` before the first fix. Only ever read/written from this VM's
-     * own main-thread call sites ([persistTick]/[endTrip]), so no extra synchronisation needed —
-     * same single-writer reasoning as [persistedTripClientUuid]. */
-    private var lastTracedFix: LocationFix? = null
 
     init {
         // Best-effort GPS supplier for AppContainer.duressController's Active-phase relay — see
@@ -193,11 +185,10 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * nullable [persistedTripClientUuid]); the next emission after that
      * catches Room up to the latest cumulative state, so nothing is lost.
      *
-     * [nextTracePoint] is read synchronously here, not inside the launched coroutine below — same
-     * "decide now, off the current [lastTracedFix]/[AppContainer.speedSource] snapshot" reasoning
-     * [openTripInRoom] already uses for [persistedTripClientUuid], so two fareState emissions in
-     * quick succession can never both read the same not-yet-updated [lastTracedFix] and record the
-     * same fix twice.
+     * [nextTracePoint] is read synchronously here, not inside the launched coroutine below — it
+     * reads real, current state ([AppContainer.speedSource.locationFix]), so there's no reason to
+     * defer it into the coroutine, and doing it here keeps its read as close as possible to the
+     * exact moment [FareEngineImpl.tick] made its own accrual decision for this same emission.
      */
     private fun persistTick(state: FareState) {
         val clientUuid = persistedTripClientUuid ?: return
@@ -206,36 +197,55 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * The one real GPS point, if any, this specific fare-engine tick should append to the
-     * persisted trace — see [TracePointRecorder]'s class doc for the full fare-integrity story
-     * (short version: `POST /v1/trips/sync`'s server-side replay derives distance/waiting time
-     * straight from this trace, so recording one real point per fare-engine tick is what keeps
-     * the server's independent recompute within its own 1% variance check of the device's own
-     * total — this is NOT merely feeding the meter map's polyline).
+     * The one real GPS point this fare-engine tick appends to the persisted trace — see
+     * `POST /v1/trips/sync`'s server-side `recompute_from_trace` (`backend/app/services/trips.py`),
+     * which independently REPLAYS this exact trace through the same tick algorithm
+     * [FareEngineImpl.tick] runs on-device to validate `deviceTotal` within a 1% variance
+     * tolerance. This is NOT merely feeding the meter map's polyline.
      *
-     * Reads [AppContainer.speedSource.locationFix] — the exact same [LocationFix] whose
-     * [LocationFix.speedKmh] [FareEngineImpl.tick] itself just read for THIS tick (both are set
-     * together, atomically, by
-     * [au.com.threesixty.cabdispatch.domain.location.RealLocationProvider.onNewFix] — see that
-     * class's doc), not a second, independent location read. Returns `null` (append nothing this
-     * tick) whenever there is no live fix at all (no permission, cold start, no signal) — an
-     * honest "no GPS this second" gap, never a fabricated point — or when [TracePointRecorder.isNewFix]
-     * says this is the same fix already recorded for the previous tick (the fare engine's 1 s
-     * coroutine delay firing before the location provider's own ~1 Hz emission has, per that
-     * object's own doc).
+     * **Revision history, both real fare-integrity bugs found live, not in a lab:**
+     * 1. Originally this always passed `newPoints = emptyList()` — the trace never grew at all, so
+     *    the server replayed an empty trace and flagged every trip (14.08% variance, confirmed
+     *    live 2026-09-06/07).
+     * 2. The first fix recorded one point per tick but SKIPPED it whenever
+     *    [AppContainer.speedSource.locationFix] hadn't changed since the last recorded fix (real
+     *    GPS updates aren't locked to this engine's 1 Hz tick clock — a live device trace showed
+     *    consecutive fix gaps of 1.40s, 2.01s, 2.04s, 0.98s, 1.05s, 0.96s, not a clean 1.0s). That
+     *    got variance down to 3.12% (device $8.26 vs. server $8.01) but still over the 1%
+     *    tolerance — still flagged. The root cause, verified by construction in
+     *    `TripTraceReplayFidelityTest`'s "legacy" case (not merely asserted): a point was recorded
+     *    using the STALE FIX'S OWN timestamp, so the trace's temporal coverage tracked the GPS
+     *    receiver's jittery update cadence, not the fare engine's steady 1 Hz billing clock. Most
+     *    damaging at the very end of a trip: `recompute_from_trace` iterates only over recorded
+     *    trace points and never extends past the last one to the trip's real `endAt` — if GPS goes
+     *    stale right as the driver stops the meter, EVERY second of real elapsed (and billed)
+     *    waiting time between the last GPS fix and the actual close is invisible to the server,
+     *    permanently. The identical failure mode can also happen mid-trip during any stale-GPS
+     *    window, not only at the end.
+     *
+     * **Current design (fix 2):** record a point on EVERY tick, unconditionally (whenever there is
+     * ANY known fix, fresh or stale), carrying the last known REAL fix's lat/lng/speed forward and
+     * stamping it with `Instant.now()` — the tick's own real wall-clock time — rather than the
+     * fix's own (possibly much older) GPS timestamp. This makes the trace's temporal resolution
+     * track the fare engine's own tick clock instead of the GPS receiver's arrival cadence, so
+     * server and device now integrate elapsed time from structurally the same stream, closing both
+     * the mid-trip-jitter gap and the end-of-trip tail gap identically. Nothing about the POSITION
+     * is fabricated — it is always the last real fix this device actually received, exactly the
+     * position the fare engine's own [FareEngineImpl.tick] used for this same tick's speed/mode
+     * decision; only the point's timestamp is "now" rather than "whenever the position was last
+     * confirmed", which is the timestamp of the actual event being recorded — this tick firing.
+     *
+     * Returns `null` (append nothing this tick) only when there has never been a live fix at all
+     * (no permission, cold start, no signal yet) — an honest "nothing real to record" gap, never a
+     * fabricated point.
      */
     private fun nextTracePoint(): TelemetryPointDto? {
         val fix = AppContainer.speedSource.locationFix.value ?: return null
-        if (!TracePointRecorder.isNewFix(fix.timestampMillis, lastTracedFix?.timestampMillis)) return null
-        lastTracedFix = fix
         return TelemetryPointDto(
             lat = fix.lat,
             lng = fix.lng,
             speedKmh = fix.speedKmh,
-            // The fix's own real GPS timestamp, not "now" — recompute_from_trace derives
-            // elapsed_seconds from the gap between consecutive points' `ts`, so this must be when
-            // the position was actually true, not when this tick happened to run.
-            ts = Instant.ofEpochMilli(fix.timestampMillis).toString(),
+            ts = Instant.now().toString(),
         )
     }
 
