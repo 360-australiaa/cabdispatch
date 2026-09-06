@@ -7,7 +7,8 @@ domains (see app/main.py's own module docstring):
 
 - `platform_router` (`/v1/platform/app-releases`) — platform-owner only
   (`require_platform_owner`, same gate as every other `/v1/platform/...`
-  route — see app/api/v1/platform.py). Publishes a new release.
+  route — see app/api/v1/platform.py). Lists and publishes releases; toggles
+  `is_active` on one.
 - `router` (`/v1/app-releases`) — any authenticated tenant/device user.
   `GET /latest` is what `domain/AppUpdateChecker.kt` polls; `GET /{id}/download`
   streams the APK. Neither route is tenant-scoped (releases are
@@ -17,7 +18,7 @@ domains (see app/main.py's own module docstring):
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,7 @@ from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
 from app.core.security import get_current_user
 from app.schemas.app_releases import AppReleaseRead, AppReleaseUpdate, LatestAppReleaseRead
+from app.schemas.platform import Page
 from app.services import app_releases as app_releases_service
 
 platform_router = APIRouter(prefix="/v1/platform/app-releases", tags=["app-releases"])
@@ -46,6 +48,20 @@ def _release_error_to_http(exc: app_releases_service.AppReleaseError) -> HTTPExc
 
 def _download_url_for(release_id: str) -> str:
     return f"/v1/app-releases/{release_id}/download"
+
+
+@platform_router.get("", response_model=Page[AppReleaseRead])
+async def list_app_releases(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    _owner=Depends(require_platform_owner),
+):
+    """Platform-owner-only. The dashboard's Publish Update history table —
+    every release ever published, newest version_code first, so an admin can
+    see what's live/unpublished without re-uploading to check."""
+    releases, total = await app_releases_service.list_releases(session, skip=skip, limit=limit)
+    return Page[AppReleaseRead](items=releases, total=total, skip=skip, limit=limit)
 
 
 @platform_router.post("", response_model=AppReleaseRead, status_code=status.HTTP_201_CREATED)

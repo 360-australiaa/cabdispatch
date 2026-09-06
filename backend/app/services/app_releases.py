@@ -15,7 +15,7 @@ import os
 import uuid
 from pathlib import Path
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app_release import AppRelease
@@ -146,3 +146,17 @@ async def set_active(session: AsyncSession, release: AppRelease, *, is_active: b
     await session.commit()
     await session.refresh(release)
     return release
+
+
+async def list_releases(
+    session: AsyncSession, *, skip: int = 0, limit: int = 20
+) -> tuple[list[AppRelease], int]:
+    """Every published release, newest `version_code` first — the dashboard's
+    Publish Update history table. Platform-wide, so no tenant filter (see
+    `AppRelease`'s own docstring); paginated the same `skip`/`limit`/`total`
+    shape as `app.services.platform.list_tenants`."""
+    total = (await session.execute(select(func.count()).select_from(AppRelease))).scalar_one()
+    result = await session.execute(
+        select(AppRelease).order_by(desc(AppRelease.version_code)).offset(skip).limit(limit)
+    )
+    return list(result.scalars().all()), total

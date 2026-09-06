@@ -9,6 +9,7 @@ import {
   Plus,
   Route,
   Siren,
+  Upload,
   Users,
 } from "lucide-react";
 import {
@@ -37,6 +38,12 @@ import {
   type PlatformTenant,
   type TenantStatus,
 } from "@/hooks/usePlatformConsole";
+import {
+  useAppReleases,
+  usePublishAppRelease,
+  useSetAppReleaseActive,
+  type AppRelease,
+} from "@/hooks/useAppReleases";
 import { errorMessage, formatAud, formatDateTime, tenantStatusBadgeVariant } from "./format";
 
 const EMPTY_FORM: CreateTenantValues = {
@@ -143,6 +150,193 @@ function BillingSummary() {
           </div>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+const EMPTY_RELEASE_FORM = { version_code: "", version_name: "", release_notes: "" };
+
+/** Publish a new Android build + browse release history — the dashboard side
+ * of the OTA self-update pipeline (`domain/AppUpdateChecker.kt` on the
+ * device, `app/api/v1/app_releases.py` on the backend). Replaces the earlier
+ * "publish via a raw curl call, no UI" gap: this is the only place a real
+ * APK ever reaches a tablet, so it lives on the platform-owner console next
+ * to the tenant list, not inside any one tenant's fleet page. */
+function AppReleasesSection() {
+  const [skip, setSkip] = useState(0);
+  const releasesQuery = useAppReleases(skip);
+  const publishRelease = usePublishAppRelease();
+  const setActive = useSetAppReleaseActive();
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState(EMPTY_RELEASE_FORM);
+  const [file, setFile] = useState<File | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function openPublish() {
+    setForm(EMPTY_RELEASE_FORM);
+    setFile(null);
+    setFormError(null);
+    setFormOpen(true);
+  }
+
+  async function submitPublish() {
+    setFormError(null);
+    const versionCode = Number(form.version_code);
+    if (!Number.isInteger(versionCode) || versionCode <= 0) {
+      setFormError("Version code must be a positive whole number (Android's own versionCode).");
+      return;
+    }
+    if (!form.version_name.trim()) {
+      setFormError("Version name is required (e.g. \"1.2.0\").");
+      return;
+    }
+    if (!file) {
+      setFormError("Choose the built .apk file to upload.");
+      return;
+    }
+    try {
+      await publishRelease.mutateAsync({
+        version_code: versionCode,
+        version_name: form.version_name,
+        release_notes: form.release_notes,
+        file,
+      });
+      setFormOpen(false);
+    } catch (err) {
+      setFormError(errorMessage(err));
+    }
+  }
+
+  const columns: TableColumn<AppRelease>[] = [
+    { key: "version_name", header: "Version", render: (r) => <span className="font-medium">{r.version_name}</span> },
+    { key: "version_code", header: "Version code", render: (r) => r.version_code },
+    {
+      key: "is_active",
+      header: "Status",
+      render: (r) => <Badge variant={r.is_active ? "success" : "outline"}>{r.is_active ? "Active" : "Unpublished"}</Badge>,
+    },
+    { key: "created_at", header: "Published", sortable: true, sortAccessor: (r) => new Date(r.created_at), render: (r) => formatDateTime(r.created_at) },
+    { key: "sha256", header: "SHA-256", render: (r) => <span className="font-mono text-xs text-muted-foreground">{r.sha256.slice(0, 12)}…</span> },
+    {
+      key: "actions",
+      header: "",
+      render: (r) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={setActive.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActive.mutate({ id: r.id, isActive: !r.is_active });
+          }}
+        >
+          {r.is_active ? "Unpublish" : "Republish"}
+        </Button>
+      ),
+    },
+  ];
+
+  const total = releasesQuery.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PLATFORM_PAGE_LIMIT));
+  const page = Math.floor(skip / PLATFORM_PAGE_LIMIT);
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>App Releases</CardTitle>
+        <Button onClick={openPublish}>
+          <Upload className="h-4 w-4" />
+          Publish release
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Every tablet checks the highest active release here — this is the only way a real update
+          reaches a tablet; there is no Play Store involved. See a device's own update state on the
+          Fleet → Devices table.
+        </p>
+        {releasesQuery.isError && (
+          <p className="mb-3 flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load releases. Check the backend connection and try again.
+          </p>
+        )}
+        <Table
+          columns={columns}
+          data={releasesQuery.data?.items ?? []}
+          rowKey={(r) => r.id}
+          isLoading={releasesQuery.isLoading}
+          emptyState={releasesQuery.isError ? "Couldn't load releases." : "No releases published yet."}
+        />
+        {pageCount > 1 && (
+          <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              Page {page + 1} of {pageCount}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PLATFORM_PAGE_LIMIT))}>
+                Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setSkip((s) => s + PLATFORM_PAGE_LIMIT)}>
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+
+      <Modal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title="Publish release"
+        description="Uploads a real APK to our own server — nothing goes through the Play Store. Every tablet flagged for update downloads and SHA-256-verifies this exact file before installing it."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={submitPublish} disabled={publishRelease.isPending}>
+              {publishRelease.isPending ? "Uploading…" : "Publish"}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {formError && (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{formError}</p>
+          )}
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">APK file</span>
+            <Input type="file" accept=".apk" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Version code</span>
+            <Input
+              type="number"
+              value={form.version_code}
+              onChange={(e) => setForm((v) => ({ ...v, version_code: e.target.value }))}
+              placeholder="Must be higher than every tablet's current versionCode"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Version name</span>
+            <Input
+              value={form.version_name}
+              onChange={(e) => setForm((v) => ({ ...v, version_name: e.target.value }))}
+              placeholder="1.2.0"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Release notes (optional)</span>
+            <Input
+              value={form.release_notes}
+              onChange={(e) => setForm((v) => ({ ...v, release_notes: e.target.value }))}
+              placeholder="What changed in this build"
+            />
+          </label>
+        </div>
+      </Modal>
     </Card>
   );
 }
@@ -373,6 +567,7 @@ export default function PlatformConsolePage() {
 
       <HealthSummary />
       <BillingSummary />
+      <AppReleasesSection />
 
       <Card>
         <CardHeader>

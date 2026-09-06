@@ -261,6 +261,32 @@ export function useForceUpdate() {
   });
 }
 
+/** Flags every registered device for update in one action — there is no
+ * bulk endpoint on the backend, so this fetches up to `LOOKUP_LIMIT` devices
+ * (same "good enough for one fleet" cap `useDeviceOptions` already accepts)
+ * and fires the existing one-at-a-time `/force-update` call for each one
+ * that isn't already pending, in parallel. Returns how many were actually
+ * (re)flagged so the confirming UI can say something real, not just "done".
+ */
+export function useForceUpdateAll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.get<Page<Device>>("/v1/fleet/devices", {
+        params: { skip: 0, limit: LOOKUP_LIMIT },
+      });
+      const targets = data.items.filter((d) => !d.force_update_pending);
+      await Promise.all(
+        targets.map((d) =>
+          apiClient.post<Device>(`/v1/fleet/devices/${d.id}/force-update`, { enabled: true }),
+        ),
+      );
+      return { flagged: targets.length, total: data.items.length };
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
 export function useLocateDevice() {
   const qc = useQueryClient();
   return useMutation({

@@ -29,6 +29,7 @@ import {
   useDeleteDevice,
   useDevices,
   useForceUpdate,
+  useForceUpdateAll,
   useKioskLock,
   useLocateDevice,
   useRebootDevice,
@@ -99,8 +100,16 @@ export function DevicesPanel() {
   const deleteDevice = useDeleteDevice();
   const kioskLock = useKioskLock();
   const forceUpdate = useForceUpdate();
+  const forceUpdateAll = useForceUpdateAll();
   const locateDevice = useLocateDevice();
   const rebootDevice = useRebootDevice();
+  const [confirmingPushAll, setConfirmingPushAll] = useState(false);
+  const [pushAllResult, setPushAllResult] = useState<{ flagged: number; total: number } | null>(null);
+
+  async function confirmPushAll() {
+    const result = await forceUpdateAll.mutateAsync();
+    setPushAllResult(result);
+  }
 
   function openCreate() {
     setEditing(null);
@@ -336,9 +345,20 @@ export function DevicesPanel() {
             />
           </div>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" /> Register device
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setPushAllResult(null);
+              setConfirmingPushAll(true);
+            }}
+          >
+            <RefreshCw className="h-4 w-4" /> Push update to all tablets
+          </Button>
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" /> Register device
+          </Button>
+        </div>
       </div>
 
       {devicesQuery.isError ? (
@@ -449,6 +469,31 @@ export function DevicesPanel() {
               Delete
             </Button>
           </>
+        }
+      />
+
+      <Modal
+        open={confirmingPushAll}
+        onClose={() => setConfirmingPushAll(false)}
+        title={pushAllResult ? "Update pushed" : "Push update to every tablet?"}
+        description={
+          pushAllResult
+            ? `Flagged ${pushAllResult.flagged} of ${pushAllResult.total} registered device${pushAllResult.total === 1 ? "" : "s"} for update (the rest already had an update pending). Each one downloads and verifies the latest published release automatically; a driver still needs to tap Install unless that tablet has been set up as this app's own Device Owner.`
+            : "Flags every registered device that doesn't already have an update pending. Each tablet then auto-downloads and verifies the latest published release — make sure you've published the build you want first, from App Releases above."
+        }
+        footer={
+          pushAllResult ? (
+            <Button onClick={() => setConfirmingPushAll(false)}>Done</Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setConfirmingPushAll(false)}>
+                Cancel
+              </Button>
+              <Button onClick={confirmPushAll} disabled={forceUpdateAll.isPending}>
+                {forceUpdateAll.isPending ? "Pushing…" : "Push to all"}
+              </Button>
+            </>
+          )
         }
       />
     </div>

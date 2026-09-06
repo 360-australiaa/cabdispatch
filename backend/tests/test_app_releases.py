@@ -140,3 +140,41 @@ async def test_download_streams_the_uploaded_apk_bytes(client, session):
     assert resp.content == content
 
 
+async def test_list_app_releases_requires_platform_owner(client, session):
+    headers = await auth_headers(client, session, role="owner")
+    resp = await client.get("/v1/platform/app-releases", headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_list_app_releases_newest_version_code_first(client, session):
+    headers = await _platform_owner_headers(client, session)
+    await _publish_release(client, headers, version_code=600, version_name="6.0.0")
+    await _publish_release(client, headers, version_code=601, version_name="6.0.1")
+
+    resp = await client.get("/v1/platform/app-releases", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    version_codes = [item["version_code"] for item in body["items"]]
+    # Newest first, and both of this test's own releases are present -- other
+    # tests in this module publish their own version_codes into the same
+    # shared session db, so this only asserts relative order/membership, not
+    # an exact total.
+    assert version_codes.index(601) < version_codes.index(600)
+    assert body["total"] >= 2
+
+
+async def test_list_app_releases_reflects_unpublish(client, session):
+    headers = await _platform_owner_headers(client, session)
+    resp = await _publish_release(client, headers, version_code=610, version_name="6.1.0")
+    release_id = resp.json()["id"]
+
+    await client.patch(
+        f"/v1/platform/app-releases/{release_id}", json={"is_active": False}, headers=headers
+    )
+
+    resp = await client.get("/v1/platform/app-releases", headers=headers)
+    body = resp.json()
+    listed = next(item for item in body["items"] if item["id"] == release_id)
+    assert listed["is_active"] is False
+
+
