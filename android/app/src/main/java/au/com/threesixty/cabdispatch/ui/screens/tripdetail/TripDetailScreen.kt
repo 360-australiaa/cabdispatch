@@ -32,7 +32,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -219,6 +221,8 @@ private fun TimelineEntry(icon: androidx.compose.ui.graphics.vector.ImageVector,
  * pins with no line for those — the honest option per this app's hard rule against fabricating
  * data, with a small caption saying exactly that.
  */
+private const val TRIP_ROUTE_MAP_LOG_TAG = "TripRouteMap"
+
 @Composable
 private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDto>) {
     // Same never-fake-a-0,0-fix convention this app already applies elsewhere (see this
@@ -288,7 +292,25 @@ private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDt
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,
                         ) {
-                            when (painter.state) {
+                            val state = painter.state
+                            // Real failure found live 2026-09-07 (Trip Detail's ROUTE card
+                            // rendering "Map unavailable" the first time a trip actually had a
+                            // real GPS trace — see MapboxStaticImage.encodeOverlayValue's own doc
+                            // for the confirmed root cause, a raw '?' in the polyline breaking the
+                            // URL). This branch used to discard AsyncImagePainter.State.Error's
+                            // own throwable entirely, leaving nothing in logcat to diagnose a
+                            // failure by — permanently fixed here, independent of that specific
+                            // cause, so the NEXT failure (whatever it turns out to be) is
+                            // diagnosable too. Coil's default ImageLoader (this app never installs
+                            // an ImageLoaderFactory) runs its own OkHttpClient with none of this
+                            // app's own logging interceptor, so this is the only place such a
+                            // failure is otherwise visible at all.
+                            if (state is AsyncImagePainter.State.Error) {
+                                LaunchedEffect(state.result.throwable, mapUrl) {
+                                    Log.e(TRIP_ROUTE_MAP_LOG_TAG, "Trip route map image failed to load: url=$mapUrl", state.result.throwable)
+                                }
+                            }
+                            when (state) {
                                 is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
                                 is AsyncImagePainter.State.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                     CircularProgressIndicator(color = CaptainPalette.accent, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)

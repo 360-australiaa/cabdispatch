@@ -9,10 +9,10 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 
 /**
- * Confirms the actual point-thresholding decision this pass made
- * ([TracePointRecorder]/`HiredViewModel.nextTracePoint`: record one real point per fare-engine
- * tick, not a sparse distance/time-thresholded sample) by replaying the SAME two algorithms real
- * code runs:
+ * Confirms the actual point-recording decision `HiredViewModel.nextTracePoint` makes (record a
+ * point on EVERY fare-engine tick, carrying the last known fix forward, timestamped with the
+ * tick's own real time — see that method's own doc for the full revision history) by replaying
+ * the SAME two algorithms real code runs:
  *
  * - **"Device"** — [au.com.threesixty.cabdispatch.domain.FareEngineImpl.tick]'s own formula:
  *   `distanceDeltaKm = speedKmh / 3600.0` per 1-second tick (a synthetic distance derived from
@@ -29,6 +29,20 @@ import java.math.RoundingMode
  * NOT run the real Python backend, so it is not literal proof `recompute_from_trace` agrees; it is
  * proof the identical, tested port of that same algorithm agrees, which is the strongest check
  * available without a running backend instance.
+ *
+ * **2026-09-07, real device pass #2:** the first version of this file only modelled a
+ * perfectly-tick-aligned trace (one point exactly every 1.0s, matching the device's own tick
+ * clock) and passed — but a real device trip still failed the 1% tolerance (3.12% variance, $8.26
+ * device vs. $8.01 server) after that first fix shipped, because real GPS fixes do NOT arrive on a
+ * clean 1 Hz clock (a real trace's consecutive fix gaps, captured live: 1.40s, 2.01s, 2.04s,
+ * 0.98s, 1.05s, 0.96s), and a trip can end while GPS is stale. The two tests below —
+ * "legacy record-by-fix-timestamp design fails once a trailing GPS gap goes unrecorded" and
+ * "recording every tick with the tick's own timestamp keeps device and replay within 1 percent" —
+ * use that exact real jitter pattern (plus a trailing GPS outage, the specific scenario that
+ * actually breaks) to reproduce the failure this file's original version missed, and confirm the
+ * fix. Per the request that produced these: the "legacy" test was run FIRST and confirmed failing
+ * (over 1%) against the design being replaced, before the "current design" test was written to
+ * confirm the fix actually closes the gap — not assumed.
  */
 class TripTraceReplayFidelityTest {
 
@@ -105,7 +119,8 @@ class TripTraceReplayFidelityTest {
 
     @Test
     fun `coalescing a long wait into one sparse end-of-gap point loses the waiting charge`() {
-        // The exact failure mode TracePointRecorder's own doc warns a sparse/thresholded sample
+        // The exact failure mode a distance/time-thresholded sparse sample (an approach
+        // considered and rejected for HiredViewModel.nextTracePoint — see that method's own doc)
         // would create: 60s genuinely stationary at the rank, then 5s pulling away at 50 km/h,
         // recorded as ONE trace point at the very end of that 65s gap (a plausible "record every
         // ~50m or ~60s" sparse threshold would do exactly this: nothing to record while stationary,
@@ -147,6 +162,111 @@ class TripTraceReplayFidelityTest {
             "expected the sparse sample to diverge by MORE than 1% (device=$deviceTotal sparse=$sparseTotal " +
                 "variance=$variancePct%) — if this fails, the failure mode this test documents no longer reproduces",
             variancePct > BigDecimal("1.00"),
+        )
+    }
+
+    /** Real consecutive-GPS-fix gaps captured live from a device trace (2026-09-07): NOT locked to
+     * the fare engine's 1 Hz tick clock. Shared by both tests below so they exercise the identical
+     * jitter pattern the real device produced. */
+    private val realDeviceJitterCycleSeconds = listOf(1.395, 2.005, 2.038, 0.978, 1.047, 0.960)
+
+    @Test
+    fun `legacy record-by-fix-timestamp design fails once a trailing GPS gap goes unrecorded`() {
+        // Repeats the real jitter cycle ~6x to cover a realistic ~50s mid-trip span (36 gaps,
+        // ~50.5s), then a 12s GPS outage before the meter is actually stopped — an unremarkable
+        // real scenario (GPS momentarily loses lock, e.g. under an overpass or a building, right
+        // as the fare ends). Speed stays low/idle the whole time (matching the real trip's own
+        // server-reported "moving_s":0), so this isolates the timing bug from any mode-switching
+        // question the earlier "coalescing" test above already covers separately.
+        val midTripGaps = List(6) { realDeviceJitterCycleSeconds }.flatten()
+        val trailingGapSeconds = 12.0
+        val speedKmh = 3.0
+        val totalRealSeconds = midTripGaps.sum() + trailingGapSeconds
+
+        // --- device: one tick per REAL second for the trip's WHOLE real duration, tail included
+        // — this is what FareEngineImpl.tick actually does; it has no notion of "GPS trace", it
+        // just ticks on its own coroutine delay(1000) clock for as long as the trip is HIRED. ---
+        val deviceState = FareState(tariff = URBAN_TARIFF)
+        var elapsedDeviceSeconds = 0.0
+        while (elapsedDeviceSeconds < totalRealSeconds) {
+            engine.tick(deviceState, speedKmh = speedKmh, distanceDeltaKm = deviceDistanceDeltaKm(speedKmh), elapsedSeconds = 1)
+            elapsedDeviceSeconds += 1.0
+        }
+        val deviceTotal = engine.close(deviceState).grandTotal
+
+        // --- legacy replay: ONE trace point per genuinely new GPS fix arrival, using THAT fix's
+        // own timestamp (the design this pass is retiring — see HiredViewModel.nextTracePoint's
+        // doc, revision 2) — nothing represents the trailing 12s gap at all, because no new fix
+        // ever arrived to close it before the trip ended, and recompute_from_trace never extends
+        // past the last recorded point to the trip's real endAt. ---
+        val legacyState = FareState(tariff = URBAN_TARIFF)
+        for (gap in midTripGaps) {
+            engine.tick(legacyState, speedKmh = speedKmh, distanceDeltaKm = BigDecimal.ZERO, elapsedSeconds = gap)
+        }
+        // (the trailing 12s gap: no point recorded, so no tick(...) call for it at all)
+        val legacyTotal = engine.close(legacyState).grandTotal
+
+        val variancePct = (deviceTotal - legacyTotal).abs()
+            .divide(deviceTotal, 6, RoundingMode.HALF_UP)
+            .multiply(BigDecimal(100))
+
+        // Confirmed BEFORE writing the fix (per this file's class doc): this assertion fails
+        // against the design being replaced only if that design no longer actually drops the
+        // trailing gap — i.e. it documents the real bug, not a hypothetical one.
+        assertTrue(
+            "expected the legacy design to diverge by MORE than 1% once a trailing GPS gap goes " +
+                "unrecorded (device=$deviceTotal legacy=$legacyTotal variance=$variancePct%) — this is " +
+                "the real device failure mode (14.08%% then 3.12%% variance) this test reproduces",
+            variancePct > BigDecimal("1.00"),
+        )
+    }
+
+    @Test
+    fun `recording every tick with the tick's own timestamp keeps device and replay within 1 percent, with real jitter and a trailing GPS gap`() {
+        // Identical scenario to the legacy-design test above (same real jitter, same trailing GPS
+        // outage) but modelling this pass's actual fix: HiredViewModel.nextTracePoint now records
+        // a point on EVERY fare-engine tick — not only when the GPS fix changes — carrying the
+        // last known real fix's lat/lng/speed forward and stamping it with the TICK's own real
+        // wall-clock time. The trace's temporal resolution therefore tracks the fare engine's tick
+        // clock rather than the GPS receiver's jittery arrival cadence, so it also naturally
+        // covers the trailing 12s outage (the device keeps ticking — and therefore keeps
+        // recording — right up to the moment the meter actually stops).
+        val midTripGaps = List(6) { realDeviceJitterCycleSeconds }.flatten()
+        val trailingGapSeconds = 12.0
+        val speedKmh = 3.0
+        val totalRealSeconds = midTripGaps.sum() + trailingGapSeconds
+
+        val deviceState = FareState(tariff = URBAN_TARIFF)
+        var elapsedDeviceSeconds = 0.0
+        while (elapsedDeviceSeconds < totalRealSeconds) {
+            engine.tick(deviceState, speedKmh = speedKmh, distanceDeltaKm = deviceDistanceDeltaKm(speedKmh), elapsedSeconds = 1)
+            elapsedDeviceSeconds += 1.0
+        }
+        val deviceTotal = engine.close(deviceState).grandTotal
+
+        // New design's replay: one point per ~1.0s of REAL tick time (the fare engine's own
+        // cadence), for the trip's whole real duration including the trailing outage — position/
+        // speed would be carried forward from the last real fix in production, but since speed is
+        // constant throughout this scenario that has no effect on the arithmetic being checked
+        // here (elapsed-time coverage, not position fidelity — already covered by the very first
+        // test in this file).
+        val newDesignState = FareState(tariff = URBAN_TARIFF)
+        var recordedSeconds = 0.0
+        while (recordedSeconds < totalRealSeconds) {
+            val tickElapsed = minOf(1.0, totalRealSeconds - recordedSeconds)
+            engine.tick(newDesignState, speedKmh = speedKmh, distanceDeltaKm = BigDecimal.ZERO, elapsedSeconds = tickElapsed)
+            recordedSeconds += tickElapsed
+        }
+        val newDesignTotal = engine.close(newDesignState).grandTotal
+
+        val variancePct = (deviceTotal - newDesignTotal).abs()
+            .divide(deviceTotal, 6, RoundingMode.HALF_UP)
+            .multiply(BigDecimal(100))
+
+        assertTrue(
+            "device=$deviceTotal new-design=$newDesignTotal variance=$variancePct% (must be <= 1%, " +
+                "compute_variance_pct's own tolerance)",
+            variancePct <= BigDecimal("1.00"),
         )
     }
 }

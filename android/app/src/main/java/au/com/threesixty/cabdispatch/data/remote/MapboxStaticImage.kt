@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.data.remote
 
 import au.com.threesixty.cabdispatch.BuildConfig
+import java.net.URLEncoder
 import kotlin.math.roundToInt
 
 /**
@@ -129,7 +130,8 @@ object MapboxStaticImage {
         val overlays = buildList {
             // Path drawn first so the pickup/drop-off pins layer on top of it, not under it.
             if (drivenPathPoints.size >= 2) {
-                add("path-3+${PATH_COLOR_HEX}-0.85(${encodePolyline(downsampleForOverlay(drivenPathPoints))})")
+                val polyline = encodePolyline(downsampleForOverlay(drivenPathPoints))
+                add("path-3+${PATH_COLOR_HEX}-0.85(${encodeOverlayValue(polyline)})")
             }
             add(pinOverlay(PICKUP_PIN_COLOR_HEX, pickupLat, pickupLng))
             if (dropoffLat != null && dropoffLng != null) {
@@ -176,6 +178,49 @@ object MapboxStaticImage {
      * "a large number of points" without a stated hard count, so this is a conservative, chosen
      * ceiling rather than a transcribed limit. */
     private const val MAX_PATH_POINTS = 300
+
+    /**
+     * Percent-encodes a single overlay parameter VALUE (here, only the encoded-polyline blob a
+     * `path-` overlay embeds) before it goes into the URL's path segment.
+     *
+     * **Real bug, found live 2026-09-07** (Trip Detail's ROUTE card silently rendering "Map
+     * unavailable" the first time a trip's `gps_trace` actually had real points, per the 2026-09-07
+     * trace-recording fix — see [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
+     * doc): the Google/Mapbox encoded-polyline alphabet ([encodePolyline]'s own doc) is plain ASCII
+     * 63-126, which includes `?` — and a delta of exactly zero between two consecutive points
+     * (identical to 5-decimal precision, e.g. lat is the same but lng moved a hair, or vice versa —
+     * exactly what a near-stationary "waiting" trip's own GPS jitter produces routinely, see
+     * `MapboxStaticImageEncodingTest`) encodes to a single literal `?` character. This was NEVER
+     * caught before because a `path-` overlay was never actually built until the trace-recording
+     * fix landed: an empty trace (`gps_trace_ref`/`gpsTraceJson` == `"[]"`, this app's own
+     * long-standing state before that fix) skips this whole branch, so this defect was dormant in
+     * this file from the day [tripOverlayUrl] was written, not something the trace-recording pass
+     * introduced — it only started actually running once real points existed to draw.
+     *
+     * A raw, un-encoded `?` embedded mid-path is exactly RFC 3986's query-string delimiter:
+     * `okhttp3.HttpUrl` (what Coil's default `ImageLoader`/`OkHttpClient` builds the real network
+     * request from) parses everything from that FIRST `?` onward as the query string — silently
+     * truncating the actual path (losing the closing `)`, every following overlay, and critically
+     * the `/auto/{w}x{h}` size segment the Static Images API requires) rather than throwing.
+     * Confirmed directly (not assumed) by round-tripping a real near-zero-delta polyline through
+     * `okhttp3.HttpUrl.parse()`: the resulting request path ends mid-overlay with no size segment
+     * at all, and everything after the `?` — including the OTHER pin overlays and the real
+     * `access_token` — becomes one garbage query string. Mapbox's server has nothing valid to
+     * render for that request path, so it 4xxs, and Coil's `AsyncImagePainter` lands in
+     * `State.Error` — the observed "Map unavailable". [TripDetailScreen]'s own `else` branch now
+     * logs that `Error.result.throwable` (previously silently discarded) so a future failure like
+     * this one is diagnosable from logcat instead of a bare "unavailable" string.
+     *
+     * [java.net.URLEncoder] is designed for `application/x-www-form-urlencoded` (query-string)
+     * encoding, not path-segment encoding — its one behavioural quirk (space -> `+` rather than
+     * `%20`) is irrelevant here since neither an encoded polyline nor a pin's numeric coordinate
+     * string can ever contain a literal space. It otherwise percent-encodes every character outside
+     * `A-Za-z0-9.-_*`, which is a strict superset of what actually needs escaping — over-encoding a
+     * few already-safe characters is harmless (Mapbox's server percent-decodes the path segment
+     * before parsing the overlay spec, recovering the exact original bytes either way), whereas
+     * under-encoding is the bug this function exists to close.
+     */
+    private fun encodeOverlayValue(value: String): String = URLEncoder.encode(value, "UTF-8")
 
     private fun pinOverlay(colorHex: String, lat: Double, lng: Double): String {
         val lon = lng.roundTo(5)

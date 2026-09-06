@@ -55,10 +55,11 @@ class TripRepository(
      * never grew for the entire life of a live trip — confirmed to make `POST /v1/trips/sync`'s
      * server-side `recompute_from_trace` (which replays this exact trace to independently validate
      * `deviceTotal`) compute a flagfall-only fare and auto-flag every real trip for review.
-     * [HiredViewModel]'s `nextTracePoint`/[TracePointRecorder][au.com.threesixty.cabdispatch.domain.location.TracePointRecorder]
-     * now feed one real point per fare-engine tick into [tick], so this Flow reflects the trip's
-     * actual driven path in near-real-time (bounded only by [tick]'s own Room write latency) rather
-     * than staying `"[]"` for the whole trip.
+     * [HiredViewModel]'s `nextTracePoint` now feeds one real point per fare-engine tick into
+     * [tick] (see that method's own doc for a second, subtler variant of this same bug — recording
+     * a point only when the GPS fix itself changed — found and fixed on a live device the same
+     * day), so this Flow reflects the trip's actual driven path in near-real-time (bounded only by
+     * [tick]'s own Room write latency) rather than staying `"[]"` for the whole trip.
      */
     fun observeActiveTripGpsTrace(): Flow<List<TelemetryPointDto>> =
         tripDao.observeActiveTrip().map { trip ->
