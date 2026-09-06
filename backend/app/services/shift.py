@@ -330,6 +330,91 @@ async def end_shift(
     return shift
 
 
+async def close_open_shifts_for_vehicle_deletion(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, actor_user_id: str | None
+) -> list[Shift]:
+    """Closes every currently-open shift on a vehicle that is about to be
+    deleted, instead of leaving it open forever, pointing at a `vehicle_id`
+    that no longer exists in the fleet register (the real production bug this
+    fixes: `DELETE /v1/fleet/vehicles/{id}` used to leave dangling open
+    shifts, which then rendered as raw UUIDs on the dashboard's drivers list
+    where a rego should be — see `DriversPanel.tsx` / `format.ts`).
+
+    DECISION (two defensible options existed — CLOSE vs REFUSE the vehicle
+    delete; this is the one chosen, called from `DELETE
+    /v1/fleet/vehicles/{id}` in `app/api/v1/fleet.py`): an open shift is live
+    OPERATIONAL STATE — "who is currently driving this vehicle right now" —
+    not historical EVIDENCE the way a PSL ledger entry or an uploaded
+    compliance document is (contrast `app.services.user
+    .assert_user_deletable`, which correctly REFUSES those: "each of these
+    rows is evidence THAT SOMETHING HAPPENED", independent of whether the
+    vehicle/driver is later deleted). A driver cannot literally keep driving
+    a vehicle that has just been removed from the fleet register, so an open
+    shift surviving the vehicle's deletion is already the LESS truthful
+    record of the two — it goes on silently claiming a live session against
+    a vehicle_id nothing else in the system can resolve. Closing it produces
+    the more truthful record for a fare-regulated operator: "this shift
+    ended when its vehicle was deleted", not "this shift is still open"
+    (false) or a delete that's refused forever until a dispatcher notices and
+    manually ends the shift first (needlessly blocks a legitimate fleet
+    change for what is, after all, still just live state, not evidence).
+
+    This also mirrors a precedent already established in this exact module:
+    `start_shift` auto-closes a driver's OWN dangling open shift rather than
+    refusing to let them start a new one, using the identical
+    `end_shift(..., psl_owed=Decimal(0), reconciled=False)` call below.
+
+    `psl_owed=Decimal(0)` / `reconciled=False`: the four trip-derived
+    aggregates (trips_count/km_total/cash_total/card_total) are recomputed
+    HONESTLY from the shift's own real trips inside `end_shift()` — nothing
+    here fabricates those. But `psl_owed`/`reconciled` are ordinarily figures
+    the DRIVER supplies at end-of-shift (their physical cash count vs the
+    system total); this is an involuntary, admin-triggered closure with no
+    driver present to supply them, so `psl_owed` stays at zero and
+    `reconciled` is explicitly False — honestly flagging "nobody reconciled
+    this shift" for a dispatcher/owner to follow up on, rather than
+    pretending a reconciliation happened that didn't.
+
+    Every closure is also recorded to the tamper-evident audit log
+    (`action="shift_force_closed_vehicle_deleted"`) so there is a permanent,
+    hash-chained record of WHY this shift ended when it did, distinct from an
+    ordinary driver-initiated `POST /v1/shifts/{id}/end` — "recording why",
+    per the task brief. Returns the list of shifts that were closed (empty if
+    none were open) purely for the caller's own logging/response purposes.
+    """
+    result = await session.execute(
+        select(Shift).where(
+            Shift.tenant_id == tenant_id, Shift.vehicle_id == vehicle_id, Shift.end_at.is_(None)
+        )
+    )
+    open_shifts = result.scalars().all()
+    for shift in open_shifts:
+        logger.info(
+            "delete_vehicle: vehicle %s has open shift %s (driver %s) — force-closing it as "
+            "unreconciled before the vehicle row is removed.",
+            vehicle_id,
+            shift.id,
+            shift.driver_id,
+        )
+        await end_shift(session, shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+        await record_audit(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            action="shift_force_closed_vehicle_deleted",
+            entity_type="shift",
+            entity_id=shift.id,
+            before={"end_at": None, "reconciled": False},
+            after={
+                "end_at": shift.end_at.isoformat() if shift.end_at else None,
+                "reconciled": False,
+                "reason": "vehicle_deleted",
+                "vehicle_id": vehicle_id,
+            },
+        )
+    return list(open_shifts)
+
+
 def build_report(shift: Shift) -> dict:
     """Builds the JSON summary payload for `GET /v1/shifts/{id}/report`.
 

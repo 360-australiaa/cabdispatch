@@ -343,3 +343,44 @@ class VehiclePilotReport(BaseModel):
     duress_event_count_total: int
     flagged_for_review_count: int
     generated_at: datetime
+
+
+# --- TEMPORARY force-wipe (see app.services.fleet_wipe's module docstring for
+# full context; removed along with the rest of this tooling once onboarding/
+# pairing testing is done) ----------------------------------------------------
+
+
+class FleetForceWipeRequest(BaseModel):
+    confirm: Literal[True] = Field(
+        description="Must be explicitly `true` on every call. This endpoint purges audit/"
+        "financial evidence (PSL ledger, wallet transactions, trip ratings, compliance "
+        "documents, tariff change-log entries) for every driver on the tenant and is "
+        "irreversible -- there is no default/implicit form of this request."
+    )
+
+
+class FleetForceWipeFailure(BaseModel):
+    kind: Literal["vehicle", "device", "driver"]
+    id: str
+    reason: str
+
+
+class FleetForceWipeResult(BaseModel):
+    vehicles_deleted: int
+    devices_deleted: int
+    drivers_deleted: int
+    evidence_rows_destroyed: dict[str, int] = Field(
+        description="Evidence category -> row count PERMANENTLY destroyed by this call (PSL "
+        "ledger entries/top-ups, wallet transactions, trip ratings, compliance documents, "
+        "tariff change-log entries). Zero counts are included for every category this "
+        "endpoint is capable of purging, not just ones with rows this run."
+    )
+    audit_log_preserved: Literal[True] = Field(
+        default=True,
+        description="Always true: this force wipe never deletes AuditLog rows, under any "
+        "circumstance -- the tamper-evident hash chain (app.models.audit_log) is left intact "
+        "even for tenants/drivers otherwise fully wiped. See app.services.fleet_wipe's module "
+        "docstring for the full reasoning. A driver who has ever been recorded as an audit-log "
+        "actor is reported in `failures` below instead of being silently skipped.",
+    )
+    failures: list[FleetForceWipeFailure]

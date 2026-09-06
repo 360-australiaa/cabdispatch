@@ -28,6 +28,7 @@ from app.models.fleet import (  # noqa: F401
     Vehicle,
     VehiclePositionHistory,
 )
+from app.models.audit_log import AuditLog
 from app.models.shift import Shift
 from app.models.user import ROLE_DRIVER, User
 from tests.conftest import auth_headers
@@ -189,6 +190,104 @@ async def test_delete_vehicle_unbinds_devices(client, session):
     resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["vehicle_id"] is None
+
+
+async def test_delete_vehicle_closes_open_shift_instead_of_leaving_it_dangling(client, session):
+    """Real production bug regression test: deleting a vehicle with a driver
+    still on an OPEN shift used to leave that shift open forever, pointing at
+    a vehicle_id that no longer resolves to anything (Shift.vehicle_id has no
+    FK — see app/models/shift.py's own DEVIATION note) — surfacing on the
+    dashboard's drivers list as a raw UUID where a rego should be. The chosen
+    fix CLOSES the open shift as part of the vehicle delete (see
+    app.services.shift.close_open_shifts_for_vehicle_deletion's own
+    docstring for why "close" was chosen over "refuse the delete") — marking
+    it unreconciled with a zero psl_owed (honest: nobody actually reconciled
+    it) and recording a tamper-evident audit-log entry explaining why."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-OPENSHIFT")
+    vehicle_id = resp.json()["id"]
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+    assert resp.json()["end_at"] is None
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    # The vehicle is gone...
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # ...but the shift that was open on it is now CLOSED, not dangling.
+    resp = await client.get(f"/v1/shifts/{shift_id}", headers=headers)
+    assert resp.status_code == 200
+    shift_body = resp.json()
+    assert shift_body["end_at"] is not None
+    assert shift_body["reconciled"] is False
+    assert Decimal(str(shift_body["psl_owed"])) == Decimal("0.00")
+    # vehicle_id is left as-is on the now-closed historical shift row (same
+    # "unconstrained cross-domain id, unaffected by the referent's deletion"
+    # convention already documented on Trip/Shift) -- it's the OPEN-ness that
+    # was the bug, not the stored id itself.
+    assert shift_body["vehicle_id"] == vehicle_id
+
+    # A tamper-evident audit-log entry explains why this shift closed when it did.
+    result = await session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "shift",
+            AuditLog.entity_id == shift_id,
+            AuditLog.action == "shift_force_closed_vehicle_deleted",
+        )
+    )
+    audit_rows = result.scalars().all()
+    assert len(audit_rows) == 1
+    assert audit_rows[0].after_json["reason"] == "vehicle_deleted"
+    assert audit_rows[0].after_json["vehicle_id"] == vehicle_id
+
+
+async def test_delete_vehicle_does_not_touch_already_closed_shifts(client, session):
+    """Sanity check on the fix above: a shift that was already ended before
+    the vehicle delete must be left completely alone (no re-closing, no
+    audit-log noise) -- only genuinely OPEN shifts are in scope."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-CLOSEDSHIFT")
+    vehicle_id = resp.json()["id"]
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start", json={"driver_id": driver_id, "vehicle_id": vehicle_id}, headers=headers
+    )
+    shift_id = resp.json()["id"]
+    resp = await client.post(
+        f"/v1/shifts/{shift_id}/end",
+        json={"psl_owed": "12.50", "reconciled": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    original_end_at = resp.json()["end_at"]
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/v1/shifts/{shift_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["end_at"] == original_end_at
+    assert body["reconciled"] is True
+    assert Decimal(str(body["psl_owed"])) == Decimal("12.50")
+
+    result = await session.execute(
+        select(func.count())
+        .select_from(AuditLog)
+        .where(AuditLog.entity_type == "shift", AuditLog.entity_id == shift_id)
+    )
+    assert result.scalar_one() == 0
 
 
 async def test_delete_vehicle_with_position_history_and_pairing_codes_succeeds(client, session):

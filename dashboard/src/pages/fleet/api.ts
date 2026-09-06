@@ -311,18 +311,19 @@ export function useLocateDevice() {
   });
 }
 
-export function useRebootDevice() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (id: string) => {
-      const { data } = await apiClient.post<Device>(`/v1/fleet/devices/${id}/reboot`, {
-        enabled: true,
-      });
-      return data;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
-  });
-}
+// NOTE: there is deliberately no `useRebootDevice` hook here (a
+// `POST /v1/fleet/devices/{id}/reboot` mutation, same shape as
+// useLocateDevice above, used to exist and was removed). The backend
+// endpoint itself still exists -- it's real groundwork for a future
+// device-owner-aware app build, see `Device.reboot_requested`'s own HONESTY
+// NOTE in backend/app/models/fleet.py -- but nothing on the Android side
+// ever reads that flag today (DeviceCommandHeartbeat.kt says so explicitly),
+// so a dashboard control wired to it would silently do nothing while
+// looking like a working "Reboot" button and a "Pending" status that never
+// resolves. DevicesPanel.tsx's reboot column/button are permanently
+// disabled with an explanatory tooltip instead of calling this endpoint --
+// see REBOOT_NOT_SUPPORTED_REASON there. Re-add this hook only once a real
+// device-owner-aware reboot path exists end to end.
 
 // ---------------------------------------------------------------------------
 // Drivers — the list itself is a READ-ONLY live-status rollup from
@@ -706,6 +707,64 @@ export function useWipeAllFleetData() {
         driversDeleted: driversResult.deleted,
         devicesDeleted: devicesResult.deleted,
         failures: [...devicesResult.failures, ...vehiclesResult.failures, ...driversResult.failures],
+      };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fleet", "vehicles"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "drivers"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "devices"] });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORARY force-wipe (see backend app.services.fleet_wipe's module
+// docstring for full context). `useWipeAllFleetData` above (correctly)
+// leaves behind exactly the drivers who still have real PSL/wallet/rating/
+// compliance/tariff-change-log evidence on file -- `assert_user_deletable`
+// refuses those, and it must keep refusing them for the DEFAULT wipe. This
+// is a SEPARATE, owner-only, explicitly-opted-into action for a genuinely
+// empty test tenant: it calls a real backend endpoint
+// (`POST /v1/fleet/wipe-test-data/force`) that purges those evidence rows
+// server-side -- never implemented by looping per-row deletes from the
+// client, which would silently defeat assert_user_deletable from outside
+// with none of its "here's exactly what's blocking" honesty. It never
+// deletes AuditLog rows, under any circumstance -- see
+// `audit_log_preserved` below, always true, and the backend module
+// docstring for why.
+// ---------------------------------------------------------------------------
+
+export interface FleetForceWipeFailure {
+  kind: "vehicle" | "device" | "driver";
+  id: string;
+  reason: string;
+}
+
+export interface FleetForceWipeResult {
+  vehiclesDeleted: number;
+  devicesDeleted: number;
+  driversDeleted: number;
+  /** Evidence category -> row count PERMANENTLY destroyed by this call. */
+  evidenceRowsDestroyed: Record<string, number>;
+  /** Always true -- see this section's module note. Kept as a real field
+   * (not assumed) so the confirm/result UI reflects exactly what the
+   * backend says happened, not what the frontend assumes it did. */
+  auditLogPreserved: boolean;
+  failures: FleetForceWipeFailure[];
+}
+
+export function useForceWipeAllFleetData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<FleetForceWipeResult> => {
+      const { data } = await apiClient.post("/v1/fleet/wipe-test-data/force", { confirm: true });
+      return {
+        vehiclesDeleted: data.vehicles_deleted,
+        devicesDeleted: data.devices_deleted,
+        driversDeleted: data.drivers_deleted,
+        evidenceRowsDestroyed: data.evidence_rows_destroyed,
+        auditLogPreserved: data.audit_log_preserved,
+        failures: data.failures,
       };
     },
     onSuccess: () => {
