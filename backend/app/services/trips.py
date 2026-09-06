@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.fleet import Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, TripGpsTrace
 from app.schemas.trips import TelemetryPoint
 from app.services import payments as payments_service
 from app.services.fare_engine import (
@@ -433,6 +433,44 @@ async def recompute_from_trace(
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))
     return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak
+
+
+def build_gps_trace_row(
+    *, tenant_id: str, trip_id: str, gps_trace: list[TelemetryPoint], recorded_at: datetime
+) -> TripGpsTrace | None:
+    """Builds the durable `TripGpsTrace` row for a just-synced trip's raw
+    telemetry, or `None` when `gps_trace` is empty.
+
+    Returning `None` (rather than a row with `points: []`) for an empty trace
+    is deliberate -- see `TripGpsTrace`'s own "EMPTY TRACE" doc section: every
+    synced trip arrives with `gps_trace: []` today (a parallel workstream is
+    fixing the on-device bug that causes this), and a junk all-empty row per
+    trip would both waste a row and give `GET /v1/trips/{id}/gps-trace` a
+    false "recorded, but empty" state to report instead of the honest
+    "nothing stored" one.
+
+    Does NOT add the row to any session or commit -- caller (`sync_trips`)
+    owns adding/flushing it in the same transaction as the `Trip` row it
+    belongs to, so a failed insert (e.g. a racing duplicate client_uuid) rolls
+    both back together and never orphans a trace for a trip that itself
+    didn't get created (see `TripGpsTrace`'s own "IDEMPOTENCY" doc section).
+
+    `points` are serialized via each `TelemetryPoint`'s own
+    `.model_dump(mode="json")` -- JSON has no native datetime type, so `ts` is
+    written out as an ISO-8601 string; `get_trip_gps_trace`
+    (`app/api/v1/trips.py`) reconstructs `TelemetryPoint` instances straight
+    back from these dicts on read, which pydantic parses just as happily from
+    the ISO string as from a real `datetime`.
+    """
+    if not gps_trace:
+        return None
+    return TripGpsTrace(
+        tenant_id=tenant_id,
+        trip_id=trip_id,
+        points=[point.model_dump(mode="json") for point in gps_trace],
+        point_count=len(gps_trace),
+        recorded_at=recorded_at,
+    )
 
 
 # Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug

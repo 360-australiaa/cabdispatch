@@ -3,8 +3,11 @@
 Full CRUD (list/get/create/update/delete) plus domain-specific endpoints:
 PATCH .../tick (telemetry batch -> running totals), POST .../close (finalize
 via the fare engine), POST /sync (bulk offline-replay upload with per-item
-idempotency + server-side fare verification), and PATCH .../flag (blueprint
-5.2.5 "Dispute" button — flag/clear a closed trip for operator review).
+idempotency + server-side fare verification), PATCH .../flag (blueprint
+5.2.5 "Dispute" button — flag/clear a closed trip for operator review), and
+GET .../gps-trace (dedicated fetch for the durable GPS trace persisted by
+/sync — see app.models.trips.TripGpsTrace — deliberately kept out of the
+list/detail payload above).
 
 EVERY query in this file filters by tenant_id via `get_current_tenant_id` —
 the sole multi-tenancy enforcement mechanism in this system.
@@ -23,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import Vehicle
-from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip, TripGpsTrace
 from app.models.user import User
 from app.schemas.trips import (
     DriverEarningsTodayRead,
@@ -31,9 +34,11 @@ from app.schemas.trips import (
     ReceiptEmailResponse,
     ReceiptSmsRequest,
     ReceiptSmsResponse,
+    TelemetryPoint,
     TripCloseRequest,
     TripCreate,
     TripFlagRequest,
+    TripGpsTraceRead,
     TripListResponse,
     TripRead,
     TripSyncItem,
@@ -56,6 +61,7 @@ from app.services.trips import (
     TripNotClosedError,
     UnknownTariffError,
     apply_tick,
+    build_gps_trace_row,
     close_trip,
     compute_variance_pct,
     driver_earnings_today,
@@ -328,6 +334,24 @@ async def sync_trips(
             tip_amount=item.tip_amount,
         )
         session.add(trip)
+
+        # Durable GPS-trace persistence (see app.models.trips.TripGpsTrace's
+        # module docstring for the full design rationale) — added to the SAME
+        # flush as `trip` above, not a separate one, so a racing duplicate
+        # client_uuid (the IntegrityError branch below) rolls the trace back
+        # together with the trip it belongs to rather than orphaning it.
+        # `build_gps_trace_row` itself returns None (no row at all) for an
+        # empty gps_trace — see that function's own doc comment for why this
+        # must never create a junk "recorded but empty" row.
+        trace_row = build_gps_trace_row(
+            tenant_id=tenant_id,
+            trip_id=new_trip_id,
+            gps_trace=item.gps_trace,
+            recorded_at=item.end_at,
+        )
+        if trace_row is not None:
+            session.add(trace_row)
+
         try:
             await session.flush()
         except IntegrityError:
@@ -441,6 +465,57 @@ async def get_trip(
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
     return await _get_trip_or_404(trip_id, tenant_id, session)
+
+
+# --- GPS trace (dashboard trip-detail route map) -----------------------------
+
+
+@router.get("/{trip_id}/gps-trace", response_model=TripGpsTraceRead)
+async def get_trip_gps_trace(
+    trip_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> TripGpsTraceRead:
+    """Dedicated fetch for the durable trace `app.models.trips.TripGpsTrace`
+    stores — deliberately NOT part of `GET /v1/trips`/`GET /v1/trips/{id}`
+    (see that model's own docstring for why a paged list response must never
+    carry one of these). The dashboard's trip-detail modal calls this only
+    when it actually opens (see `dashboard/src/hooks/useTrips.ts`'s
+    `useTripGpsTraceQuery`), not for every row in the trips table.
+
+    `/{trip_id}/gps-trace` is two path segments, so it can never collide with
+    the single-segment `GET /{trip_id}` above regardless of registration
+    order — same reasoning as `earnings_today`'s own doc comment.
+
+    Two distinct "nothing here" outcomes, deliberately not conflated:
+      * 404 — `trip_id` doesn't resolve to a trip owned by this tenant at all
+        (via `_get_trip_or_404`, same tenant-scoping as every other endpoint
+        in this file — a trip belonging to a different tenant 404s exactly
+        like one that doesn't exist, never leaking whether it belongs to
+        someone else).
+      * 200 with `points: []`/`point_count: 0` — the trip is real, but no
+        trace was ever stored for it: either it was opened+closed through the
+        online create/tick/close flow (which never carries a raw trace to
+        persist in the first place), or it was synced with an empty
+        `gps_trace` (today's Android-bug reality — see
+        `app.schemas.trips.TripSyncItem.gps_trace`'s doc comment). This is the
+        honest "no route recorded" state `TripRouteMap` already degrades to
+        (A/B pins + labelled straight-line stand-in) — never a fabricated
+        route.
+    """
+    await _get_trip_or_404(trip_id, tenant_id, session)
+
+    result = await session.execute(
+        select(TripGpsTrace).where(
+            TripGpsTrace.tenant_id == tenant_id, TripGpsTrace.trip_id == trip_id
+        )
+    )
+    trace = result.scalar_one_or_none()
+    if trace is None:
+        return TripGpsTraceRead(trip_id=trip_id, points=[], point_count=0)
+
+    points = [TelemetryPoint(**point) for point in trace.points]
+    return TripGpsTraceRead(trip_id=trip_id, points=points, point_count=len(points))
 
 
 # --- Update (partial; pre-close mutable fields) --------------------------

@@ -5,6 +5,7 @@ import { Badge, Button, Input, Modal, Select } from "@/components/ui";
 import {
   useCloseTripMutation,
   useFlagTripMutation,
+  useTripGpsTraceQuery,
   type PaymentMethod,
   type SplitPaymentItem,
   type Trip,
@@ -78,6 +79,10 @@ export function TripDetailModal({
 
   const closeMutation = useCloseTripMutation();
   const flagMutation = useFlagTripMutation();
+  // Fetched only while this modal is actually open (`open` gates `enabled`)
+  // -- never for the trips list/table. See useTripGpsTraceQuery's own doc
+  // comment for why this is a dedicated fetch rather than a Trip field.
+  const gpsTraceQuery = useTripGpsTraceQuery(trip?.id ?? null, open);
 
   if (!trip) return null;
 
@@ -283,13 +288,14 @@ export function TripDetailModal({
             startLng={trip.start_lng}
             endLat={trip.end_lat}
             endLng={trip.end_lng}
-            // The dashboard has no field for the actual driven GPS trace yet
-            // -- see TripRouteMap's own `trace` prop doc for exactly why
-            // (backend/app/schemas/trips.py's TripRead only exposes
-            // gps_trace_ref, an opaque string with no endpoint that resolves
-            // it back to real points). Omitted here, not fabricated -- the
-            // map below degrades honestly to the A/B markers + labeled
-            // straight-line stand-in.
+            // Real recorded points from GET /v1/trips/{id}/gps-trace, fetched
+            // above only while this modal is open. `undefined` while the
+            // fetch is still pending, or `[]`/a too-short trace once it
+            // resolves with no real trace stored for this trip -- either way
+            // TripRouteMap's own `validTracePoints` degrades honestly to the
+            // A/B markers + labeled straight-line stand-in, never a
+            // fabricated route.
+            trace={gpsTraceQuery.data?.points}
           />
         </div>
 

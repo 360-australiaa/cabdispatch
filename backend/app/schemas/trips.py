@@ -398,6 +398,35 @@ class TripSyncResponse(BaseModel):
     results: list[TripSyncResultItem]
 
 
+# --- GPS trace read (dashboard trip-detail route map) ------------------------
+
+
+class TripGpsTraceRead(BaseModel):
+    """`GET /v1/trips/{id}/gps-trace` response -- the dedicated fetch endpoint
+    for the durable trace `app.models.trips.TripGpsTrace` stores, kept OUT of
+    `TripRead`/`TripListResponse` entirely (see that model's own docstring for
+    why: a 50-row page of trips must never carry a ~100-300KB trace per row).
+
+    `points` reuses `TelemetryPoint` -- the exact wire shape
+    `TripSyncItem.gps_trace` already accepts, so a dashboard trip-detail view
+    fetching this looks like the same shape the device originally uploaded.
+    Chronological order (as recorded), never re-sorted here.
+
+    `points: []` / `point_count: 0` is this endpoint's own honest "no trace
+    stored for this (real) trip" answer -- e.g. a trip opened+closed via the
+    online create/tick/close flow (which never carries a raw trace at all), or
+    a synced trip whose device sent an empty `gps_trace` (today's Android-bug
+    reality). This is a 200, not a 404: the trip itself exists and was found;
+    only `GET /v1/trips/{id}` returning nothing at all for the id (wrong id,
+    or another tenant's trip) is a 404 -- see
+    `app.api.v1.trips.get_trip_gps_trace`.
+    """
+
+    trip_id: str
+    points: list[TelemetryPoint]
+    point_count: int
+
+
 # --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------
 
 

@@ -302,3 +302,44 @@ export function useFlagTripMutation() {
     },
   });
 }
+
+// --- GPS trace (trip-detail route map) --------------------------------------
+// `GET /v1/trips/{id}/gps-trace` -- a DEDICATED endpoint, deliberately not a
+// field on `Trip` above: the backend keeps the (potentially ~100-300KB, one
+// point per second recorded) trace out of TripRead/TripListResponse entirely
+// so a page of trips never balloons — see backend/app/models/trips.py's
+// TripGpsTrace docstring. Fetched only by useTripGpsTraceQuery below, called
+// from TripDetailModal only while it's actually open (its `enabled` flag),
+// never from the trips list/table.
+
+export interface TripGpsTracePoint {
+  lat: number;
+  lng: number;
+  speed_kmh: number;
+  ts: string;
+}
+
+export interface TripGpsTraceResponse {
+  trip_id: string;
+  points: TripGpsTracePoint[];
+  point_count: number;
+}
+
+/**
+ * `points: []` is this endpoint's own honest "no trace stored for this trip"
+ * answer (a trip opened+closed online never carries one; a synced trip may
+ * have been uploaded with an empty `gps_trace` — today's Android-bug
+ * reality) — never treated as an error. `TripRouteMap` already degrades
+ * correctly on an empty/short trace (falls back to the labelled straight-line
+ * stand-in), so callers can pass `data?.points` straight through unchanged.
+ */
+export function useTripGpsTraceQuery(tripId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: [TRIPS_KEY, tripId, "gps-trace"],
+    queryFn: async () => {
+      const res = await apiClient.get<TripGpsTraceResponse>(`/v1/trips/${tripId}/gps-trace`);
+      return res.data;
+    },
+    enabled: enabled && tripId != null,
+  });
+}

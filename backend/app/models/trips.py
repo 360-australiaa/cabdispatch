@@ -94,6 +94,14 @@ No column in the brief's list was renamed, dropped, or retyped.
    driver never sends one at all — NULL is the honest "no destination picked
    yet" answer, never a fabricated 0/0, same convention as the rest of this
    model's optional columns). Nullable, no backfill needed.
+
+`TripGpsTrace` (below, own class -- GPS-trace persistence pass) is a
+DIFFERENT table, not a column added to `Trip` itself. `Trip.gps_trace_ref`
+(the pre-existing nullable Text pointer above) is left completely
+untouched -- it was never resolved by anything and the Android client never
+even set it; it is not repurposed to point at the new table. See
+`TripGpsTrace`'s own class docstring for why the real trace lives in its own
+table instead.
 """
 from __future__ import annotations
 
@@ -101,7 +109,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -258,3 +266,102 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # directly rather than folding it into the fare-engine breakdown. NULL means "no tip
     # recorded" (every trip before this pass, and every trip closed without one).
     tip_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+
+class TripGpsTrace(Base, TenantScopedMixin):
+    """The real, raw GPS/speed trace recorded on-device for one trip -- the
+    durable answer to "what route did this vehicle actually drive" (product
+    decision: draw the real route on the dashboard trip-detail map, and
+    retain it as route evidence to defend a disputed fare -- this is a
+    legally fare-regulated taxi meter, same audit-record posture as the
+    existing compliance "evidence pack" export).
+
+    Persisted on `POST /v1/trips/sync` (see `app.api.v1.trips.sync_trips`),
+    the only place the server ever sees a trip's raw `gps_trace` today --
+    `app.services.trips.recompute_from_trace` already consumes that same
+    payload once, transiently, purely to independently verify
+    `TripSyncItem.device_total`; this table is the ADDITIVE, durable copy of
+    the exact same points, written alongside (never instead of) that
+    verification. `POST /v1/trips`, `PATCH .../tick` and `POST .../close`
+    (the *online* create/tick/close flow) never receive a raw trace at all --
+    a trip opened+closed that way simply has no row here, same as a synced
+    trip whose device sent `gps_trace: []` (see below).
+
+    WHY A SEPARATE TABLE, NOT A COLUMN ON `Trip` (design rationale, since
+    Trip's own module docstring's "no column renamed/dropped" note doesn't
+    cover new tables): `GET /v1/trips` returns PAGES of trips
+    (`TripListResponse`, default page size 50). At roughly one point per
+    second, an hour-long fare's trace is on the order of 3,600 points
+    (~100-300KB serialized) -- embedding that in `TripRead` would multiply a
+    50-row list response by up to ~15MB for data the list view never renders.
+    Keeping the trace in its own table, fetched only by the dedicated
+    `GET /v1/trips/{id}/gps-trace` endpoint the dashboard's trip-detail modal
+    calls when (and only when) it actually opens, keeps every existing
+    list/detail read (`TripRead`/`TripListResponse`) exactly as cheap as it
+    was before this pass -- `TripRead` gained no new field.
+
+    ONE ROW PER TRIP (not one row per point, unlike the sibling
+    `VehiclePositionHistory`/`DeviceVersionHistory` many-rows-per-parent
+    append-only tables in `app.models.fleet`): every real consumer of a
+    trip's trace (the route-map polyline, the evidence-pack export) always
+    wants "the whole ordered trace for this trip" as one unit, never a
+    time-sliced subset of it -- so a single JSON column holding the full
+    ordered point list avoids thousands of per-trip row inserts/reads for no
+    query-pattern benefit. Same plain-JSON-column convention already used by
+    `Trip.auto_tolls_applied`/`Trip.split_payments` above. Trade-off accepted
+    knowingly: a single JSON column is read/written as one blob (no
+    server-side range query "points between t1 and t2"); nothing in this
+    system needs that today, and if it ever does, the ordered `points` list
+    is trivially sliceable in Python after the one fetch.
+
+    EMPTY TRACE (today's reality -- see `app.schemas.trips.TripSyncItem.
+    gps_trace`'s doc comment: every synced trip currently arrives with
+    `gps_trace: []` because of an Android-side bug a parallel workstream is
+    fixing): `app.services.trips.build_gps_trace_row` deliberately returns
+    `None` for an empty list, and the sync router only adds a row when it
+    gets one back -- an empty trace creates NO row at all, never a row with
+    `points: []`. This is what keeps "route recorded" honest: whether a row
+    exists is the one, unambiguous signal `GET /v1/trips/{id}/gps-trace`
+    reads to decide between "here is the real trace" and "nothing was
+    recorded" (returned as `points: []`, a 200 -- the trip itself is real,
+    only the trace is missing; see that endpoint's own doc comment for its
+    separate 404-vs-200-empty distinction), with no third "recorded-but-empty"
+    state to ever misrepresent as a route.
+
+    IDEMPOTENCY: written in the same flush as the `Trip` row it belongs to,
+    inside `sync_trips`'s existing per-item "does this client_uuid already
+    exist" duplicate check -- a duplicate resync never reaches the code path
+    that builds a new `TripGpsTrace` at all (it `continue`s straight to
+    recording `duplicate=True` against the trip already on file), and if that
+    flush's client_uuid unique-constraint insert races and fails, the whole
+    flush (trip row AND trace row together) rolls back, so no orphaned trace
+    is ever left behind for a trip that itself failed to insert.
+
+    `TenantScopedMixin` (not the unconstrained-cross-domain-ref convention
+    `Trip`'s own columns use) since `trip_id` here references a row this SAME
+    domain owns, already guaranteed on `Base.metadata` by the time this class
+    is defined (it's declared earlier in this very module) -- same reasoning
+    `app.models.fleet.VehiclePositionHistory`/`DevicePairingCode` already
+    apply to `vehicle_id`/`device_id` FKs within their own file.
+    """
+
+    __tablename__ = "trip_gps_traces"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "trip_id", name="uq_trip_gps_traces_tenant_trip_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trip_id: Mapped[str] = mapped_column(String(36), ForeignKey("trips.id"), nullable=False, index=True)
+    # Ordered list of {"lat": float, "lng": float, "speed_kmh": float, "ts": "<ISO-8601>"}
+    # -- the wire shape of app.schemas.trips.TelemetryPoint, JSON-serialized
+    # (JSON has no native datetime type) via that schema's own
+    # `.model_dump(mode="json")` -- see app.services.trips.build_gps_trace_row.
+    # Never empty -- see this class's own "EMPTY TRACE" doc section above; a
+    # `[]` trace never gets a row at all.
+    points: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    # Denormalized len(points), set once at insert time -- lets a caller (or a
+    # future evidence-pack summary line) know "how many points" without
+    # deserializing/loading the full JSON blob, same spirit as
+    # Trip.distance_m being precomputed rather than derived on every read.
+    point_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
