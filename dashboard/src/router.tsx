@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PlatformOwnerRoute } from "@/components/PlatformOwnerRoute";
 import LoginPage from "@/pages/login";
+import GettingStartedPage from "@/pages/getting-started";
 import LiveMapPage from "@/pages/live-map";
 import DispatchPage from "@/pages/dispatch";
 import MessagesPage from "@/pages/messages";
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Navigate to="/live-map" replace /> },
+      { path: "getting-started", element: <GettingStartedPage /> },
       { path: "live-map", element: <LiveMapPage /> },
       { path: "dispatch", element: <DispatchPage /> },
       { path: "messages", element: <MessagesPage /> },

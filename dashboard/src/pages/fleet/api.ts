@@ -6,6 +6,8 @@ import type {
   Device,
   DeviceFormValues,
   Driver,
+  DriverComplianceRead,
+  DriverComplianceUpdate,
   FatigueAlert,
   Page,
   PairingCode,
@@ -93,6 +95,8 @@ function toVehiclePayload(values: VehicleFormValues) {
     tracking_device_id: values.tracking_device_id.trim() || null,
     meter_device_id: values.meter_device_id.trim() || null,
     status: values.status,
+    registration_expiry: values.registration_expiry || null,
+    insurance_expiry: values.insurance_expiry || null,
   };
 }
 
@@ -320,6 +324,11 @@ export interface CreateDriverInput {
   password: string;
   phone?: string;
   driver_licence_no?: string;
+  /** `YYYY-MM-DD` (from `<input type="date">`) — matches `UserCreate`'s
+   * `driver_license_expiry`/`driver_authority_expiry` (`date | None`).
+   * Optional: a driver record must remain saveable without them. */
+  driver_license_expiry?: string;
+  driver_authority_expiry?: string;
 }
 
 /** `POST /v1/users` with `role: "driver"` — the real driver-creation
@@ -337,10 +346,49 @@ export function useCreateDriver() {
         role: "driver",
         phone: values.phone?.trim() || null,
         driver_licence_no: values.driver_licence_no?.trim() || null,
+        driver_license_expiry: values.driver_license_expiry || null,
+        driver_authority_expiry: values.driver_authority_expiry || null,
       });
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "drivers"] }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Driver compliance dates -- GET/PATCH /v1/users/{id}. The `/v1/drivers` list
+// above is a read-only rollup (DriverLiveRead) that doesn't carry
+// driver_license_expiry/driver_authority_expiry, so editing these two dates
+// after a driver has already been created goes through the general user
+// endpoint directly rather than the drivers rollup.
+// ---------------------------------------------------------------------------
+
+export function useDriverCompliance(userId: string | null) {
+  return useQuery({
+    queryKey: ["fleet", "drivers", userId, "compliance"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<DriverComplianceRead>(`/v1/users/${userId}`);
+      return data;
+    },
+    enabled: Boolean(userId),
+  });
+}
+
+/** `PATCH /v1/users/{id}` with just the compliance-date fields. Invalidates
+ * this driver's own compliance query plus the compliance-expiry rollup (see
+ * useComplianceExpiry below) so the Fleet & Drivers banner reflects the new
+ * date immediately. */
+export function useUpdateDriverCompliance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, values }: { id: string; values: DriverComplianceUpdate }) => {
+      const { data } = await apiClient.patch<DriverComplianceRead>(`/v1/users/${id}`, values);
+      return data;
+    },
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["fleet", "drivers", variables.id, "compliance"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "compliance-expiry"] });
+    },
   });
 }
 

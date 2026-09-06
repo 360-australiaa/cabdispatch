@@ -138,6 +138,8 @@ export function VehiclesPanel() {
       tracking_device_id: v.tracking_device_id ?? "",
       meter_device_id: v.meter_device_id ?? "",
       status: v.status,
+      registration_expiry: v.registration_expiry ?? "",
+      insurance_expiry: v.insurance_expiry ?? "",
     });
     setFormError(null);
     setFormOpen(true);
@@ -465,6 +467,29 @@ export function VehiclesPanel() {
             <Input
               value={formValues.meter_device_id}
               onChange={(e) => setFormValues((f) => ({ ...f, meter_device_id: e.target.value }))}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <p className="text-xs text-muted-foreground">
+              Required under NSW Point to Point Transport regulation to keep this vehicle compliant.
+              Cab Dispatch reminds you when these are expiring but does not verify or enforce them.
+              Both are optional — leave blank if unknown for now.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Registration expiry</label>
+            <Input
+              type="date"
+              value={formValues.registration_expiry}
+              onChange={(e) => setFormValues((f) => ({ ...f, registration_expiry: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Insurance expiry</label>
+            <Input
+              type="date"
+              value={formValues.insurance_expiry}
+              onChange={(e) => setFormValues((f) => ({ ...f, insurance_expiry: e.target.value }))}
             />
           </div>
         </div>

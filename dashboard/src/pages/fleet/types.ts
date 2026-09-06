@@ -33,11 +33,17 @@ export interface Vehicle {
   tracking_device_id: string | null;
   meter_device_id: string | null;
   status: VehicleStatus;
+  registration_expiry: string | null;
+  insurance_expiry: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** Form state for the create/edit Vehicle modal — everything as strings for controlled inputs. */
+/** Form state for the create/edit Vehicle modal — everything as strings for
+ * controlled inputs. `registration_expiry`/`insurance_expiry` are
+ * `YYYY-MM-DD` from `<input type="date">`, matching `VehicleCreate`/
+ * `VehicleUpdate`'s `date | None` fields; blank means "unknown, not a
+ * violation" (see backend/app/schemas/fleet.py's own doc comment). */
 export interface VehicleFormValues {
   rego: string;
   vin: string;
@@ -48,6 +54,8 @@ export interface VehicleFormValues {
   tracking_device_id: string;
   meter_device_id: string;
   status: VehicleStatus;
+  registration_expiry: string;
+  insurance_expiry: string;
 }
 
 export const EMPTY_VEHICLE_FORM: VehicleFormValues = {
@@ -60,6 +68,8 @@ export const EMPTY_VEHICLE_FORM: VehicleFormValues = {
   tracking_device_id: "",
   meter_device_id: "",
   status: "active",
+  registration_expiry: "",
+  insurance_expiry: "",
 };
 
 /** `DeviceRead` */
@@ -122,6 +132,28 @@ export interface Driver {
   vehicle_id: string | null;
   shift_start_at: string | null;
   current_trip_id: string | null;
+}
+
+/**
+ * Subset of `UserRead` used by `useDriverCompliance`/`useUpdateDriverCompliance`
+ * (`GET`/`PATCH /v1/users/{id}`) to read and edit a driver's compliance-expiry
+ * dates from the Drivers panel. A separate fetch from the `Driver` rollup
+ * above -- `GET /v1/drivers` (`DriverLiveRead`) doesn't carry these two
+ * fields (see its own doc comment in backend/app/schemas/live_ops.py), so
+ * editing them needs this per-user endpoint instead.
+ */
+export interface DriverComplianceRead {
+  id: string;
+  driver_license_expiry: string | null;
+  driver_authority_expiry: string | null;
+  suitability_status: string | null;
+}
+
+/** `UserUpdate`'s compliance-date subset — both nullable/optional, matching
+ * the backend's "null means unknown, not a violation" convention. */
+export interface DriverComplianceUpdate {
+  driver_license_expiry: string | null;
+  driver_authority_expiry: string | null;
 }
 
 export interface Page<T> {

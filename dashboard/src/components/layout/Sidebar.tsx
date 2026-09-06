@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
+  ListChecks,
   Map,
   Send,
   MessageSquare,
@@ -41,6 +42,11 @@ interface NavItem {
 
 /** Route/label/icon list for the fleet-ops modules. Keep in sync with router.tsx. */
 const NAV_ITEMS: NavItem[] = [
+  // Pinned first — a plain checklist (real live checks, no fabricated
+  // progress) that's most useful the moment a new tenant logs in, before
+  // they've ever added a vehicle/driver/tariff. Never gated: a returning
+  // operator can ignore or revisit it same as any other nav item.
+  { to: "/getting-started", label: "Getting Started", icon: ListChecks },
   { to: "/live-map", label: "Live Map", icon: Map },
   { to: "/dispatch", label: "Dispatch", icon: Send },
   { to: "/messages", label: "Messages", icon: MessageSquare },

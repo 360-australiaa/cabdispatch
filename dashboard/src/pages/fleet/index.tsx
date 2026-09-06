@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Car, Smartphone, Users } from "lucide-react";
 import { PageHeader } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -16,10 +17,21 @@ const TABS: { key: FleetTab; label: string; icon: typeof Car }[] = [
   { key: "devices", label: "Devices", icon: Smartphone },
 ];
 
+const VALID_TABS = new Set<string>(TABS.map((t) => t.key));
+
 /** Fleet & Drivers — /fleet. Vehicle + device CRUD against the real backend,
- * plus a read-only driver rollup (see DriversPanel for why). */
+ * plus a read-only driver rollup (see DriversPanel for why). Honors an
+ * initial `?tab=` query param (e.g. `/fleet?tab=drivers`, used by the Getting
+ * Started checklist to deep-link straight into a specific tab) — same
+ * "read once, plain useState afterwards" convention as ShiftsPage's
+ * `vehicle_id` param; the tab itself is not kept in sync with the URL after
+ * that, matching how this page's other filters already behave. */
 export default function FleetPage() {
-  const [tab, setTab] = useState<FleetTab>("vehicles");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<FleetTab>(() => {
+    const requested = searchParams.get("tab");
+    return requested && VALID_TABS.has(requested) ? (requested as FleetTab) : "vehicles";
+  });
 
   return (
     <div>
