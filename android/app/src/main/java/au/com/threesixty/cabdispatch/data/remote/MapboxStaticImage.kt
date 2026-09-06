@@ -99,10 +99,12 @@ object MapboxStaticImage {
      *   ([au.com.threesixty.cabdispatch.data.local.entity.TripEntity.gpsTraceJson], decoded), as
      *   (lat, lng) pairs in this app's own coordinate order. **Not** a straight line between
      *   pickup and drop-off — see [au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailScreen]'s
-     *   map-card doc for why this function never fabricates one when the trace is empty (which,
-     *   as of this pass, is every trip — the live meter's persister doesn't feed real points into
-     *   `TripEntity.gpsTraceJson` yet, see [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]'s
-     *   own doc). Fewer than 2 points draws no path at all, just the marker(s).
+     *   map-card doc for why this function never fabricates one when the trace is empty (older
+     *   trips predating the 2026-09-07 fix that made the live meter's persister actually feed real
+     *   points into `TripEntity.gpsTraceJson` — see
+     *   [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]'s own doc — plus any
+     *   trip closed before a first GPS fix ever arrived). Fewer than 2 points draws no path at all,
+     *   just the marker(s); passed through [downsampleForOverlay] before encoding when large.
      * @param widthPx/[heightPx] the on-screen pixel size to request — same clamping/no-blurry-upscale
      *   reasoning as [url].
      *
@@ -127,7 +129,7 @@ object MapboxStaticImage {
         val overlays = buildList {
             // Path drawn first so the pickup/drop-off pins layer on top of it, not under it.
             if (drivenPathPoints.size >= 2) {
-                add("path-3+${PATH_COLOR_HEX}-0.85(${encodePolyline(drivenPathPoints)})")
+                add("path-3+${PATH_COLOR_HEX}-0.85(${encodePolyline(downsampleForOverlay(drivenPathPoints))})")
             }
             add(pinOverlay(PICKUP_PIN_COLOR_HEX, pickupLat, pickupLng))
             if (dropoffLat != null && dropoffLng != null) {
@@ -138,6 +140,42 @@ object MapboxStaticImage {
         return "$BASE_URL/$STYLE/static/$overlayPath/auto/${w}x$h$density" +
             "?padding=$OVERLAY_PADDING_PX&access_token=$accessToken"
     }
+
+    /**
+     * Caps the number of points actually drawn in the `path-` overlay — a defensive fix added
+     * alongside the 2026-09-07 pass that made [HiredViewModel][au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]
+     * actually feed real points into `TripEntity.gpsTraceJson` (see that class's own doc): a real
+     * live trip now records roughly one point per fare-engine tick (~1 Hz), so a long fare can
+     * genuinely carry thousands of points — this function's caller ([tripOverlayUrl]) builds a
+     * plain HTTPS GET, and the Static Images API path overlay is encoded straight into that URL, so
+     * an uncapped point count risks a URL long enough to be rejected outright (a 414-class failure,
+     * or a silently truncated overlay) well before it risks any real image-quality loss. This is
+     * purely a display concern: it downsamples ONLY the points handed to this one thumbnail-map
+     * URL builder, never the trace this app actually persists/syncs (`TripRepository`/`ApiService`
+     * send the real, full, unsampled trace — see those classes' own docs) — so the fare-integrity
+     * evidence this pass exists to fix is never touched by this cap.
+     *
+     * Uniform stride sampling (always keeps the first and last point — pickup/drop-off ends of the
+     * drawn path should never visibly detach from the real trace's actual endpoints) rather than a
+     * geometry-aware simplification (e.g. Douglas-Peucker): a thumbnail rendered at
+     * [MAX_DIMENSION_PX] is already too small for a driver to tell a gently-simplified corner from
+     * the exact original one, so the extra complexity of a shape-preserving algorithm isn't worth
+     * it for what is deliberately a cosmetic "roughly where they drove" thumbnail, not the legal
+     * record of the trip.
+     */
+    internal fun downsampleForOverlay(points: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
+        if (points.size <= MAX_PATH_POINTS) return points
+        val stride = (points.size - 1).toDouble() / (MAX_PATH_POINTS - 1)
+        return List(MAX_PATH_POINTS) { i -> points[(i * stride).roundToInt().coerceAtMost(points.size - 1)] }
+    }
+
+    /** See [downsampleForOverlay]'s own doc for why this cap exists and why it's display-only. A
+     * round number comfortably under any real Static Images API URL-length limit even at full
+     * precision-5 polyline encoding (~5-6 encoded chars/point worst case), not a figure derived
+     * from a published Mapbox spec — Mapbox's own docs describe the path overlay as supporting
+     * "a large number of points" without a stated hard count, so this is a conservative, chosen
+     * ceiling rather than a transcribed limit. */
+    private const val MAX_PATH_POINTS = 300
 
     private fun pinOverlay(colorHex: String, lat: Double, lng: Double): String {
         val lon = lng.roundTo(5)

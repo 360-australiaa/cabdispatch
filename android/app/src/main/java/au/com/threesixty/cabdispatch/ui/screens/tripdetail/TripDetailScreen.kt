@@ -204,20 +204,20 @@ private fun TimelineEntry(icon: androidx.compose.ui.graphics.vector.ImageVector,
  * no live GPS fix and no prior `updateDropoff` call. For those this card shows a plain "No route
  * recorded for this trip" message instead of a map with a missing/fabricated second pin.
  *
- * **Driven-path decision: markers only, no path line, by default.** [gpsTracePoints] is the
- * trip's real recorded GPS trace — when it genuinely carries 2+ points, this card draws the ACTUAL
- * driven path as a real Static Images API `path-` overlay (see [MapboxStaticImage.tripOverlayUrl]).
- * But as of this pass that trace is `"[]"` for effectively every trip on this branch: the live
- * meter's persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.doPersistTick])
- * calls `TripRepository.tick(newPoints = emptyList())` on every tick, so `TripEntity.gpsTraceJson`
- * never actually accumulates real points during a live trip today (verified against this branch,
- * not assumed — see that method's own doc, and `MeterBackdropMap`'s class doc, which independently
- * confirms the same gap). Rather than fabricate a straight line between pickup and drop-off and
- * risk it reading as "the route driven" (it would very often NOT be the road the vehicle actually
- * took), this card draws just the two pins with no line in that case — the honest option per this
- * pass's hard rule against fabricating data, with a small caption saying exactly that. The
- * `path-` branch is real, tested, and ready for the day `gpsTraceJson` actually gets fed live
- * points; it simply never fires yet.
+ * **Driven-path decision: markers only, no path line, when there's no trace.** [gpsTracePoints] is
+ * the trip's real recorded GPS trace — when it genuinely carries 2+ points, this card draws the
+ * ACTUAL driven path as a real Static Images API `path-` overlay (see
+ * [MapboxStaticImage.tripOverlayUrl]). **Fixed 2026-09-07:** that trace used to be `"[]"` for
+ * effectively every trip — the live meter's persister
+ * ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.doPersistTick]) always called
+ * `TripRepository.tick(newPoints = emptyList())`, so `TripEntity.gpsTraceJson` never accumulated
+ * real points during a live trip (see that method's own doc, and `MeterBackdropMap`'s class doc,
+ * for the fix). A trip closed on this app from now on carries a real trace; only trips predating
+ * the fix (or one closed before a first GPS fix ever arrived) still show markers-only. Rather than
+ * fabricate a straight line between pickup and drop-off and risk it reading as "the route driven"
+ * (it would very often NOT be the road the vehicle actually took), this card draws just the two
+ * pins with no line for those — the honest option per this app's hard rule against fabricating
+ * data, with a small caption saying exactly that.
  */
 @Composable
 private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDto>) {
@@ -264,7 +264,14 @@ private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDt
                         val drivenPath = remember(trip.clientUuid, gpsTracePoints) {
                             gpsTracePoints.map { it.lat to it.lng }
                         }
-                        val mapUrl = remember(trip.clientUuid, sizePx) {
+                        // Real bug fixed 2026-09-07: this used to be remember(trip.clientUuid,
+                        // sizePx) only — missing drivenPath as a key means Compose would never
+                        // rebuild the URL if gpsTracePoints ever became available/changed after
+                        // this card's first composition (harmless while TripDetailViewModel only
+                        // ever emits gpsTracePoints once, fully loaded, but a stale-closure trap
+                        // for exactly the kind of state update this trace fix (see this file's own
+                        // doc above) makes newly possible).
+                        val mapUrl = remember(trip.clientUuid, sizePx, drivenPath) {
                             MapboxStaticImage.tripOverlayUrl(
                                 pickupLat = trip.startLat,
                                 pickupLng = trip.startLng,
