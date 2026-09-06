@@ -27,12 +27,13 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip, TripGpsTrace
 from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
 from app.services.fare_engine import round_down, round_half_up
@@ -1800,3 +1801,150 @@ async def test_earnings_today_only_counts_closed_trips_status_and_tenant(client:
     resp = await client.get("/v1/trips/earnings/today", headers=headers_a)
     assert resp.status_code == 200
     assert Decimal(resp.json()["today_total"]) == Decimal("15.00")
+
+
+# --- GPS trace persistence (GET /v1/trips/{id}/gps-trace) -------------------
+# app.models.trips.TripGpsTrace: the real, raw GPS/speed trace synced with a
+# trip, persisted durably alongside (never instead of) the existing
+# transient fare-verification use of the same payload
+# (app.services.trips.recompute_from_trace). Kept OUT of TripRead/
+# TripListResponse entirely -- see that model's own docstring -- so these
+# tests hit the dedicated GET .../gps-trace endpoint instead.
+
+
+async def test_sync_persists_gps_trace_fetchable_via_dedicated_endpoint(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8688, "lng": 151.2093, "speed_kmh": 0, "ts": now.isoformat()},
+        {"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()},
+    ]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip_id = resp.json()["results"][0]["trip"]["id"]
+
+    # Not part of the trip payload itself -- the list/detail read stays cheap.
+    assert "gps_trace" not in resp.json()["results"][0]["trip"]
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200, trace_resp.text
+    body = trace_resp.json()
+    assert body["trip_id"] == trip_id
+    assert body["point_count"] == 2
+    assert len(body["points"]) == 2
+    # Chronological order preserved, exact values round-trip.
+    assert body["points"][0]["lat"] == -33.8688
+    assert body["points"][1]["speed_kmh"] == 40
+
+
+async def test_sync_resync_of_same_client_uuid_does_not_duplicate_trace(
+    client: AsyncClient, session: AsyncSession
+):
+    """Idempotency: POST /v1/trips/sync is idempotent on client_uuid -- a
+    duplicate submission of the same item (same client_uuid) must not
+    duplicate, corrupt, or otherwise touch the trace already stored for the
+    trip created on the first sync."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+
+    first = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert first.status_code == 200
+    trip_id = first.json()["results"][0]["trip"]["id"]
+
+    second = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert second.status_code == 200
+    assert second.json()["results"][0]["duplicate"] is True
+    assert second.json()["results"][0]["trip"]["id"] == trip_id
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200
+    # Still exactly the one point from the first sync -- not duplicated.
+    assert trace_resp.json()["point_count"] == 1
+
+
+async def test_sync_with_empty_gps_trace_stores_no_trace_row(client: AsyncClient, session: AsyncSession):
+    """Today's Android-bug reality: every synced trip currently arrives with
+    gps_trace: [] . This must not create a junk row or a misleading "route
+    recorded" state -- the dedicated endpoint must answer with the same
+    honest empty state as a trip that was never synced with a trace at all."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    item = _sync_item(tariff_id=tariff.id, gps_trace=[], device_total="0.00")
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip_id = resp.json()["results"][0]["trip"]["id"]
+
+    row = (
+        await session.execute(
+            select(TripGpsTrace).where(TripGpsTrace.trip_id == trip_id)
+        )
+    ).scalar_one_or_none()
+    assert row is None
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200
+    assert trace_resp.json() == {"trip_id": trip_id, "points": [], "point_count": 0}
+
+
+async def test_gps_trace_for_trip_with_no_stored_trace_is_honest_empty(
+    client: AsyncClient, session: AsyncSession
+):
+    """A trip opened+closed through the online create/tick/close flow never
+    carries a raw trace at all (only POST /v1/trips/sync ever receives one) --
+    the endpoint must answer 200 with an honest empty trace, not fabricate
+    one and not 404 (the trip itself is real)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.get(f"/v1/trips/{trip['id']}/gps-trace", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"trip_id": trip["id"], "points": [], "point_count": 0}
+
+
+async def test_gps_trace_unknown_trip_id_is_404(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    resp = await client.get(f"/v1/trips/{uuid.uuid4()}/gps-trace", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_gps_trace_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    """A trip's GPS trace must never be readable by a different tenant, even
+    with the correct trip id -- tenant scoping is the sole multi-tenancy
+    enforcement mechanism in this system (app.core.database.TenantScopedMixin)."""
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Trace Tenant A")
+    tenant_a = await _tenant_of(client, headers_a)
+    tariff_a = await _seed_tariff(session, tenant_id=tenant_a)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff_a.id, gps_trace=trace, device_total="10.00")
+    sync_resp = await client.post("/v1/trips/sync", json=[item], headers=headers_a)
+    assert sync_resp.status_code == 200
+    trip_id = sync_resp.json()["results"][0]["trip"]["id"]
+
+    # Tenant A can read its own trip's trace.
+    own_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers_a)
+    assert own_resp.status_code == 200
+    assert own_resp.json()["point_count"] == 1
+
+    # Tenant B must get a 404 for the same trip id -- never the tenant A trace,
+    # and never a distinguishable "exists but forbidden" response either.
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Trace Tenant B")
+    other_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers_b)
+    assert other_resp.status_code == 404
