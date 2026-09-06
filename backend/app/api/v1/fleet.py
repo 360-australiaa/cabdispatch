@@ -169,11 +169,25 @@ async def delete_vehicle(
     try:
         vehicle = await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
         # Devices survive vehicle deletion, just unbound — a device isn't
-        # deleted just because its car was retired/sold.
+        # deleted just because its car was retired/sold. Must flush before
+        # the DELETE below: SQLAlchemy's flush always runs every pending
+        # UPDATE ahead of every pending DELETE within one commit regardless
+        # of statement order or ORM relationships (verified empirically for
+        # this exact unrelated-mapped-classes case — there is no
+        # `relationship()` anywhere in this codebase's models, see
+        # app.core.database's docstring), so this unlink is safe even
+        # against postgres's now-enforced FK.
         await fleet_service.unlink_devices_from_vehicle(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # Position history, pairing codes (and, via delete_device below, version
+    # history) cascade away at the DB layer -- see app.models.fleet's
+    # ondelete= comments and app.services.fleet's module docstring for the
+    # real production bug this fixes and the "cascade derived data" design
+    # decision. No extra code needed here: it's the same single DELETE
+    # statement as before, postgres/sqlite (PRAGMA foreign_keys=ON, see
+    # app.core.database) do the rest.
     await session.delete(vehicle)
     await session.commit()
 
@@ -466,6 +480,11 @@ async def delete_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # Version history cascades away and any device_pairing_codes row that
+    # once recorded this device as its `used_by_device_id` has that
+    # dangling back-reference nulled -- both at the DB layer, same
+    # ondelete= mechanism (and same real production bug fix) as
+    # delete_vehicle above. See app.models.fleet's ondelete= comments.
     await session.delete(device)
     await session.commit()
 

@@ -2,6 +2,62 @@
 issuance/consumption, device heartbeat, and the admin kiosk-lock/force-update
 flags. Kept out of the router so the state-machine bits (pairing code
 validation, find-or-create-on-register) aren't tangled up with HTTP concerns.
+
+DELETE-SAFETY BUG (found live on production, reproduced by hand through the
+admin UI's own per-row Delete button — not a concurrency issue, a single
+isolated request fails every time): `DELETE /v1/fleet/vehicles/{id}` and
+`DELETE /v1/fleet/devices/{id}` failed against postgres (the real production
+database — see docker-compose.yml) for any vehicle/device that had ever sent
+a heartbeat or position update — practically every real one, since that's
+routine operation, not an edge case.
+
+ROOT CAUSE: postgres enforces every foreign key by default. Three tables
+carried a NOT NULL FK to `vehicles.id`/`devices.id` with no `ondelete=`
+action, i.e. an implicit `NO ACTION`/`RESTRICT`: `device_version_history
+.device_id`, `vehicle_position_history.vehicle_id`, and
+`device_pairing_codes.vehicle_id` (`device_pairing_codes.used_by_device_id`
+is nullable but has the same implicit-RESTRICT problem). sqlite — this
+project's dev/test DATABASE_URL default (app/core/config.py) and the whole
+test suite's DB (tests/conftest.py) — silently does NOT enforce FKs unless a
+connection explicitly runs `PRAGMA foreign_keys=ON`, which nothing in this
+codebase did before this same fix pass (see app.core.database). That is
+exactly why 649 tests could pass while this failed 100% of the time in
+production: the test suite's database was never able to exercise the
+constraint that was rejecting the delete.
+
+THE OBSERVED "503": production reportedly returned HTTP 503 with no CORS
+headers (so the browser only ever showed a bare "Network Error"), not the
+500 an unhandled `IntegrityError` propagating out of a FastAPI endpoint
+would normally produce (this codebase registers no exception handlers
+anywhere — see app/main.py — so Starlette's own default handler is what
+would run, and it returns 500, not 503; nothing in this repo emits 503 at
+all, grepped exhaustively). This could NOT be independently confirmed or
+explained from the code in this repository — there is no postgres instance
+available in this sandbox to reproduce the live failure against, and nothing
+here (uvicorn is run with no `--limit-concurrency`, no gunicorn, no reverse
+proxy in docker-compose.yml in front of the backend's published port) can
+produce a 503. It is likely coming from a piece of the real production
+deployment topology not represented in this repo (e.g. a load balancer/
+reverse proxy fronting the backend that returns its own 503 on an abruptly
+reset connection) — flagged explicitly rather than guessed at further.
+
+THE FIX has two halves, split by what a dependent row actually MEANS —
+see app.models.fleet's per-column comments for exactly which columns get
+which treatment, and app.services.user.assert_user_deletable's docstring
+for the mirror-image decision on `DELETE /v1/users/{id}`:
+
+  * Derived/ephemeral operational telemetry (device version history,
+    vehicle position history, pairing codes) has nothing left to be
+    evidence FOR once its parent vehicle/device is gone — cascaded away at
+    the DB layer via `ondelete="CASCADE"`/`"SET NULL"` (see the migration
+    for the exact per-column mapping). No service-layer code change was
+    needed for this half; the DB does it automatically as part of the same
+    `DELETE` statement the router already issues.
+  * Audit/financial evidence (compliance documents, PSL ledger, wallet
+    ledger lines, tariff change log, the tamper-evidence audit trail) must
+    never be silently destroyed just to let a delete through — see
+    app.services.user.assert_user_deletable, which refuses those deletes
+    with a specific, actionable 409 instead.
 """
 from __future__ import annotations
 
