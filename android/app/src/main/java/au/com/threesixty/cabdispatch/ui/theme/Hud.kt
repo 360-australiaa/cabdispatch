@@ -751,7 +751,16 @@ fun GlassCard(
                     CircleShape,
                 ),
         )
-        Box(modifier = Modifier.matchParentSize(), content = content)
+        // Deliberately NOT matchParentSize(): a matchParentSize child is excluded from Compose's
+        // own Box-sizing pass, so a caller that (like the header status pill and the GPS/network
+        // strip below it) sets only a height and relies on its content to determine width would
+        // collapse to whatever the fixed-size sheen blob above dictates instead -- which is exactly
+        // the bug this fixes (2026-09-07: "ON BREAK" wrapping to one letter per line, and the
+        // GPS/network/printer/battery strip clipped down to just "GPS", both live on-device right
+        // after the futuristic-HUD reskin merged). Plain content-sized Box: a caller that DOES force
+        // an explicit size via its own `modifier` (most cards) behaves identically either way, since
+        // Box passes the same resolved constraints to every non-matchParentSize child regardless.
+        Box(content = content)
         Box(
             modifier = Modifier
                 .matchParentSize()
