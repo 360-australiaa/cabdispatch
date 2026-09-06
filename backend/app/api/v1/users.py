@@ -40,6 +40,8 @@ def _user_error_to_http(exc: user_service.UserError) -> HTTPException:
         )
     if isinstance(exc, user_service.InvalidPhotoUploadError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, user_service.UserHasDependentRecordsError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
@@ -151,6 +153,11 @@ async def delete_user(
 ):
     try:
         user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
+        # See app.services.user.assert_user_deletable's docstring for exactly
+        # which dependent rows block this (audit/financial evidence) vs. are
+        # left alone (WalletTransaction.created_by_user_id cascades to NULL
+        # at the DB layer instead — see that column's own comment).
+        await user_service.assert_user_deletable(session, user_id=user_id)
     except user_service.UserError as exc:
         raise _user_error_to_http(exc) from exc
 

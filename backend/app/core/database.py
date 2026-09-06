@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, String, event, func
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -25,6 +25,30 @@ from app.core.config import settings
 
 # echo=False even in dev — flip locally if you need SQL logging, don't commit it on.
 engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True)
+
+# SQLite does NOT enforce FOREIGN KEY constraints unless a connection turns it
+# on explicitly (it's a per-connection PRAGMA, off by default, for backwards
+# compatibility with pre-3.6.19 SQLite files) -- postgres (this system's real
+# production database, see docker-compose.yml) enforces every FK by default,
+# always. Before this, dev (sqlite, the default DATABASE_URL above) and the
+# whole test suite (same sqlite engine, see tests/conftest.py) silently
+# accepted inserts/deletes that violate a FK -- a real production bug (a
+# vehicle/device delete that 500s in postgres the moment it has any
+# heartbeat/position history -- see app.services.fleet's module docstring and
+# app.models.fleet's ondelete= comments) shipped invisibly, because nothing
+# in dev/CI could ever exercise the constraint that rejected it. Turning this
+# on for sqlite makes dev/test parity with postgres real, so this whole class
+# of bug is caught before it reaches production, not after.
+@event.listens_for(engine.sync_engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:  # noqa: ANN001 — DBAPI event signature
+    if engine.sync_engine.dialect.name != "sqlite":
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

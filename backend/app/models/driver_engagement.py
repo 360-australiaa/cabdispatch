@@ -83,6 +83,13 @@ class WalletTransaction(Base, TenantScopedMixin, TimestampMixin):
     __tablename__ = "wallet_transactions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # No ondelete= here (defaults to RESTRICT/NO ACTION on postgres) --
+    # DELIBERATELY: `driver_id` is the money-movement record's actual
+    # subject, so it's a blocking dependent, not a cascade/set-null target.
+    # See app.services.user.assert_user_deletable, which turns the resulting
+    # FK violation into a clean, actionable 409 *before* it ever reaches
+    # postgres, rather than papering over it here by destroying or
+    # anonymizing a driver's wallet history just to let the delete through.
     driver_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False, index=True
     )
@@ -94,9 +101,17 @@ class WalletTransaction(Base, TenantScopedMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Who posted the line. Nullable so system-generated rows (and a future
     # trip-close credit) can leave it empty; operator-posted rows via
-    # POST /v1/wallet/transactions always set it.
+    # POST /v1/wallet/transactions always set it. ondelete="SET NULL"
+    # (found live, same class of bug as the fleet-delete one -- see
+    # app.services.fleet's module docstring): this is the STAFF member who
+    # posted the line, not the transaction's subject (that's driver_id
+    # above, which stays blocking) -- routine day-to-day admin action, and
+    # the column already models "unknown poster" as a valid, expected value,
+    # so degrading a departed staff member's old postings to "poster
+    # unknown" on delete is consistent with what this column already means,
+    # not a new kind of data loss.
     created_by_user_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("users.id"), nullable=True
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 

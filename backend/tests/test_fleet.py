@@ -19,9 +19,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.models.fleet import Device, DevicePairingCode, Vehicle  # noqa: F401
+from app.models.fleet import (  # noqa: F401
+    Device,
+    DevicePairingCode,
+    DeviceVersionHistory,
+    Vehicle,
+    VehiclePositionHistory,
+)
 from app.models.shift import Shift
 from app.models.user import ROLE_DRIVER, User
 from tests.conftest import auth_headers
@@ -185,6 +191,80 @@ async def test_delete_vehicle_unbinds_devices(client, session):
     assert resp.json()["vehicle_id"] is None
 
 
+async def test_delete_vehicle_with_position_history_and_pairing_codes_succeeds(client, session):
+    """Real-production bug regression test (see app.services.fleet's module
+    docstring): postgres enforces the NOT NULL FKs from
+    vehicle_position_history/device_pairing_codes to vehicles.id, and every
+    real vehicle accumulates position-history rows from routine heartbeats —
+    so this delete failed 100% of the time in production before the
+    ondelete="CASCADE" fix (app/models/fleet.py). This only proves anything
+    because tests/conftest.py's sqlite engine now enforces PRAGMA
+    foreign_keys=ON (app.core.database) -- before that pass this exact test
+    would have silently passed even with no ondelete= at all, the same way
+    the 649-test suite already did in production."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-CASCADE")
+    vehicle_id = resp.json()["id"]
+
+    # Position history: a couple of heartbeat-style publishes.
+    for lat in (-33.86, -33.87):
+        resp = await client.post(
+            "/v1/fleet/positions",
+            json={"vehicle_id": vehicle_id, "lat": lat, "lng": 151.2, "status": "available"},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+    # A used pairing code: device_pairing_codes.vehicle_id (CASCADE) and
+    # .used_by_device_id (SET NULL, exercised by the device-delete test
+    # below -- here the device is left alive so this row also carries a
+    # live used_by_device_id right up until the vehicle delete).
+    resp = await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    code = resp.json()["code"]
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-cascade-1", "pairing_code": code},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    device_id = resp.json()["id"]
+
+    result = await session.execute(
+        select(func.count()).select_from(VehiclePositionHistory).where(
+            VehiclePositionHistory.vehicle_id == vehicle_id
+        )
+    )
+    assert result.scalar_one() == 2
+    result = await session.execute(
+        select(func.count()).select_from(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    assert result.scalar_one() == 1
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # Dependents didn't leak: cascaded away along with the vehicle.
+    result = await session.execute(
+        select(func.count()).select_from(VehiclePositionHistory).where(
+            VehiclePositionHistory.vehicle_id == vehicle_id
+        )
+    )
+    assert result.scalar_one() == 0
+    result = await session.execute(
+        select(func.count()).select_from(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    assert result.scalar_one() == 0
+
+    # The device that redeemed the pairing code is untouched (only unbound
+    # from the now-deleted vehicle, per the pre-existing unlink behaviour).
+    resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["vehicle_id"] is None
+
+
 # --- devices: CRUD --------------------------------------------------------------
 
 
@@ -212,6 +292,77 @@ async def test_create_get_update_delete_device(client, session):
 
     resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
     assert resp.status_code == 404
+
+
+async def test_delete_device_with_version_history_succeeds_and_unlinks_pairing_code(client, session):
+    """Real-production bug regression test (see app.services.fleet's module
+    docstring): postgres enforces device_version_history.device_id's NOT
+    NULL FK, and every real device accumulates version-history rows from
+    routine heartbeats -- so this delete failed 100% of the time in
+    production before the ondelete="CASCADE" fix. Also covers
+    device_pairing_codes.used_by_device_id's ondelete="SET NULL": deleting
+    the device that redeemed a code must not delete the code row itself
+    (the vehicle's pairing history is worth keeping), just null the
+    now-dangling back-reference."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-DEVCASCADE")
+    vehicle_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    code = resp.json()["code"]
+    # Registering with an app_version stamps Device.app_version directly
+    # (app.services.fleet.register_device) -- it does NOT itself append a
+    # DeviceVersionHistory row; only a heartbeat with a *changed* app_version
+    # does that (app.services.fleet.record_heartbeat). So the two heartbeats
+    # below (None -> "1.0.0", then "1.0.0" -> "1.1.0") are what create the
+    # two history rows asserted below, not the registration call.
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-devcascade-1", "pairing_code": code},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    device_id = resp.json()["id"]
+
+    for app_version in ("1.0.0", "1.1.0"):
+        resp = await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"app_version": app_version},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+    result = await session.execute(
+        select(func.count()).select_from(DeviceVersionHistory).where(
+            DeviceVersionHistory.device_id == device_id
+        )
+    )
+    assert result.scalar_one() == 2
+    result = await session.execute(
+        select(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    pairing_row = result.scalar_one()
+    assert pairing_row.used_by_device_id == device_id
+
+    resp = await client.delete(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # Version history didn't leak: cascaded away along with the device.
+    result = await session.execute(
+        select(func.count()).select_from(DeviceVersionHistory).where(
+            DeviceVersionHistory.device_id == device_id
+        )
+    )
+    assert result.scalar_one() == 0
+
+    # The pairing code row survives (it's the vehicle's history, not the
+    # device's) -- only its dangling used_by_device_id is nulled.
+    await session.refresh(pairing_row)
+    assert pairing_row.used_by_device_id is None
+    assert pairing_row.vehicle_id == vehicle_id
 
 
 async def test_list_devices_filter_by_vehicle_and_lock_state(client, session):

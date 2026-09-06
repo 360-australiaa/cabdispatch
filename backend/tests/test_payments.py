@@ -484,6 +484,36 @@ async def _make_tenant(session, *, name: str = "Voucher Test Tenant") -> str:
     return tenant.id
 
 
+async def _make_trip(session, *, tenant_id: str) -> str:
+    """A minimal real Trip row -- unlike Payment.trip_id (a plain
+    unconstrained String column, see app/models/payment.py), `Voucher.
+    redeemed_by_trip_id` carries a REAL `ForeignKey("trips.id")` (see
+    app/models/vouchers.py's module docstring), so redeeming a voucher
+    needs a trip that actually exists -- a random uuid (this module's
+    `_trip_id()`, fine for every Payment-domain test above) now fails the
+    now-enforced FK (tests/conftest.py's `PRAGMA foreign_keys=ON`, added to
+    give this a dev/test parity with postgres — see app.core.database)."""
+    from app.models.trips import TRIP_STATUS_CLOSED, Trip
+
+    trip = Trip(
+        tenant_id=tenant_id,
+        client_uuid=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        driver_id=str(uuid.uuid4()),
+        tariff_id=str(uuid.uuid4()),
+        type="rank_hail",
+        status=TRIP_STATUS_CLOSED,
+        start_at=datetime.now(UTC),
+        end_at=datetime.now(UTC),
+        start_lat=-33.87,
+        start_lng=151.21,
+    )
+    session.add(trip)
+    await session.commit()
+    await session.refresh(trip)
+    return trip.id
+
+
 async def test_redeem_voucher_succeeds_once_then_fails_on_reuse(session):
     from app.models.vouchers import Voucher
     from app.services.payments import InvalidVoucherCodeError, redeem_voucher
@@ -494,7 +524,7 @@ async def test_redeem_voucher_succeeds_once_then_fails_on_reuse(session):
     await session.commit()
     await session.refresh(voucher)
 
-    trip_id = str(uuid.uuid4())
+    trip_id = await _make_trip(session, tenant_id=tenant_id)
     result = await redeem_voucher(session, tenant_id=tenant_id, voucher_code="PROMO-2026-XYZ", trip_id=trip_id)
     await session.commit()
     assert result == {"voucher_code": "PROMO-2026-XYZ", "redeemed": True, "value_aud": Decimal("15.00")}

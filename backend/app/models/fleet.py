@@ -147,7 +147,22 @@ class DeviceVersionHistory(Base, TenantScopedMixin):
     __tablename__ = "device_version_history"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    device_id: Mapped[str] = mapped_column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
+    # ondelete="CASCADE": a real prod bug (found live -- see
+    # app.services.fleet's module docstring) is that postgres enforces this
+    # FK and every real device accumulates version-history rows from routine
+    # heartbeats, so DELETE /v1/fleet/devices/{id} 500'd on every device that
+    # had ever sent one -- 100% of them in practice. This history is
+    # derived/ephemeral operational telemetry (a firmware-version timeline
+    # feeding the evidence pack), not audit/financial evidence of anything --
+    # once the device itself is gone there is nothing left for its version
+    # history to be evidence FOR, so cascading it away with the device is the
+    # deliberate choice here. Contrast PSLLedgerEntry/ComplianceDocument/
+    # TariffChangeLog (app.services.user.assert_user_deletable), which
+    # instead REFUSE the delete -- those rows are evidence of something that
+    # happened, independent of whether the referenced row still exists.
+    device_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     app_version: Mapped[str] = mapped_column(String(30), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -189,7 +204,18 @@ class VehiclePositionHistory(Base, TenantScopedMixin):
     __tablename__ = "vehicle_position_history"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    vehicle_id: Mapped[str] = mapped_column(String(36), ForeignKey("vehicles.id"), nullable=False, index=True)
+    # ondelete="CASCADE" -- same reasoning and same real prod bug as
+    # DeviceVersionHistory.device_id above: every real vehicle accumulates
+    # position-history rows from routine heartbeats, so postgres rejected
+    # DELETE /v1/fleet/vehicles/{id} for practically every vehicle that had
+    # ever reported a position. Raw GPS breadcrumbs are derived operational
+    # telemetry, not evidence of anything once the vehicle itself is gone --
+    # cascading them away is the deliberate choice (contrast the durable
+    # per-trip `TripGpsTrace`, which is real fare-dispute evidence and is
+    # NOT touched by this pass).
+    vehicle_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     lat: Mapped[float] = mapped_column(Float, nullable=False)
     lng: Mapped[float] = mapped_column(Float, nullable=False)
     # Honest-null, same convention as PositionRead.speed_kmh/heading (see
@@ -205,15 +231,30 @@ class DevicePairingCode(Base, TimestampMixin, TenantScopedMixin):
     (`POST /v1/fleet/vehicles/{id}/pairing-code`) and consumed by
     `POST /v1/fleet/devices/register`. Append-only from the API's perspective —
     rows are only ever created or marked used by the service layer, never
-    directly updated/deleted through the router (no update/delete endpoints)."""
+    directly updated/deleted through the router (no update/delete endpoints).
+
+    DELETE SAFETY (found live -- see app.services.fleet's module docstring):
+    `vehicle_id` is `ondelete="CASCADE"` -- a pairing code only ever makes
+    sense in the context of the vehicle it was minted for (even a *used*
+    one's only remaining value is "this code once bound a device to this
+    vehicle"), so once the vehicle itself is gone there is nothing left for
+    the code to be evidence of; it cascades away with it, same as the two
+    history tables above. `used_by_device_id` is `ondelete="SET NULL"`
+    instead -- deleting the DEVICE that redeemed a code (independent of the
+    vehicle) shouldn't delete the pairing-code row itself (a vehicle's
+    pairing history is worth keeping even if that particular device was later
+    decommissioned), it just loses the now-dangling back-reference.
+    """
 
     __tablename__ = "device_pairing_codes"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    vehicle_id: Mapped[str] = mapped_column(String(36), ForeignKey("vehicles.id"), nullable=False, index=True)
+    vehicle_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     code: Mapped[str] = mapped_column(String(12), nullable=False, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_by_device_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("devices.id"), nullable=True
+        String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True
     )

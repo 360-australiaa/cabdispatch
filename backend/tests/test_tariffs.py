@@ -135,15 +135,47 @@ async def test_update_tariff_writes_change_log(client, session):
 
 
 async def test_delete_tariff(client, session):
+    """Real-production-bug regression test: `write_change_log` unconditionally
+    appends a TariffChangeLog row on every tariff CREATE (before=None, see
+    test_update_tariff_writes_change_log above), so with postgres's FK
+    enforcement — and now sqlite's, see tests/conftest.py / app.core.database
+    — this delete failed 100% of the time for every tariff that ever
+    existed, before the ondelete="CASCADE" fix (app/models/tariffs.py). Also
+    covers `Extra.tariff_id`'s identical fix (found auditing every NOT NULL
+    FK per this same pass's brief)."""
     headers = await auth_headers(client, session, role="admin")
     create_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
     tariff_id = create_resp.json()["id"]
 
+    extra_resp = await client.post(
+        f"/v1/tariffs/{tariff_id}/extras",
+        json={"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"},
+        headers=headers,
+    )
+    assert extra_resp.status_code == 201
+
+    log_resp = await client.get(f"/v1/tariffs/{tariff_id}/change-log", headers=headers)
+    assert log_resp.json()["total"] == 1  # the automatic before=None create-time entry
+
     del_resp = await client.delete(f"/v1/tariffs/{tariff_id}", headers=headers)
-    assert del_resp.status_code == 204
+    assert del_resp.status_code == 204, del_resp.text
 
     get_resp = await client.get(f"/v1/tariffs/{tariff_id}", headers=headers)
     assert get_resp.status_code == 404
+
+    # Dependents didn't leak: cascaded away along with the tariff.
+    from sqlalchemy import func, select
+
+    from app.models.tariffs import Extra, TariffChangeLog
+
+    result = await session.execute(
+        select(func.count()).select_from(Extra).where(Extra.tariff_id == tariff_id)
+    )
+    assert result.scalar_one() == 0
+    result = await session.execute(
+        select(func.count()).select_from(TariffChangeLog).where(TariffChangeLog.tariff_id == tariff_id)
+    )
+    assert result.scalar_one() == 0
 
 
 async def test_tariff_not_found_for_other_tenant(client, session):

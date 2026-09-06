@@ -3,10 +3,20 @@ to close the gap where no domain slice owned "create a driver via the API"."""
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
 from app.core import security
+from app.models.audit_log import AuditLog
+from app.models.compliance import ComplianceDocument
+from app.models.driver_engagement import TripRating, WalletTransaction
+from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
+from app.models.tariffs import Tariff, TariffChangeLog
+from app.models.tenant import Tenant
+from app.models.trips import TRIP_STATUS_CLOSED, Trip
+from app.models.user import User
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -30,6 +40,82 @@ async def _create_driver(client, headers, **overrides):
         **overrides,
     }
     return await client.post("/v1/users", json=payload, headers=headers)
+
+
+# --- helpers for the delete-dependent-records tests below --------------------
+# Direct ORM inserts (same convention as tests/test_psl_ledger.py's
+# _make_tenant/_make_driver and tests/test_driver_engagement.py's
+# _tenant/_user/_trip) rather than round-tripping through every sibling
+# domain's own create endpoint — the only thing under test here is whether
+# app.services.user.assert_user_deletable notices the row, not whether that
+# domain's own create flow works (already covered by that domain's own test
+# file).
+
+
+async def _tenant(session, name: str = "Delete Dependents Tenant") -> str:
+    tenant = Tenant(name=name, plan="standard")
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    return tenant.id
+
+
+async def _user_with_token(session, *, tenant_id: str, role: str = "driver") -> tuple[str, dict]:
+    """Creates a user of `role` in `tenant_id`; returns (user_id, headers)."""
+    user = User(
+        tenant_id=tenant_id,
+        role=role,
+        name=f"Test {role}",
+        email=_unique_email(role),
+        pin_hash=security.hash_password("Test-Passw0rd!"),
+        status="active",
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    token = security.create_access_token(user_id=user.id, tenant_id=tenant_id, role=role)
+    return user.id, {"Authorization": f"Bearer {token}"}
+
+
+async def _trip(session, *, tenant_id: str, driver_id: str) -> str:
+    """Minimal closed Trip row -- only what TripRating's FK needs to exist."""
+    trip = Trip(
+        tenant_id=tenant_id,
+        client_uuid=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        driver_id=driver_id,
+        tariff_id=str(uuid.uuid4()),
+        type="rank_hail",
+        status=TRIP_STATUS_CLOSED,
+        start_at=datetime.now(UTC),
+        end_at=datetime.now(UTC),
+        start_lat=-33.87,
+        start_lng=151.21,
+    )
+    session.add(trip)
+    await session.commit()
+    await session.refresh(trip)
+    return trip.id
+
+
+async def _tariff(session, *, tenant_id: str) -> str:
+    """Minimal Tariff row -- only what TariffChangeLog's FK needs to exist."""
+    tariff = Tariff(
+        tenant_id=tenant_id,
+        name="Delete-Dependents Test Tariff",
+        region="urban",
+        effective_from=datetime(2025, 1, 1, tzinfo=UTC),
+        flag_fall=Decimal("5.00"),
+        dist_rate_1=Decimal("2.50"),
+        dist_rate_2=Decimal("2.30"),
+        night_rate_1=Decimal("3.00"),
+        night_rate_2=Decimal("2.70"),
+        waiting_rate_per_min=Decimal("1.09"),
+    )
+    session.add(tariff)
+    await session.commit()
+    await session.refresh(tariff)
+    return tariff.id
 
 
 async def test_create_and_get_driver(client, session):
@@ -116,6 +202,184 @@ async def test_delete_user(client, session):
 
     resp = await client.get(f"/v1/users/{user_id}", headers=headers)
     assert resp.status_code == 404
+
+
+# --- delete: dependent-records refusal (see app.services.user.assert_user_
+# deletable's docstring for the "cascade vs refuse" design) -------------------
+#
+# Real-production-bug context (see app.services.fleet's module docstring for
+# the vehicle/device half of this same pass): postgres enforces every one of
+# these NOT NULL foreign keys to users.id, so deleting a user referenced by
+# any of them already failed at the database layer before this pass -- these
+# tests both prove `assert_user_deletable` turns that into a clean 409, and
+# (via tests/conftest.py's now-real `PRAGMA foreign_keys=ON`) that the
+# blocking claim is actually true, not just asserted.
+
+
+async def test_delete_user_blocked_by_compliance_documents(client, session):
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    target_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="admin")
+
+    session.add(
+        ComplianceDocument(
+            tenant_id=tenant_id,
+            vehicle_id=str(uuid.uuid4()),
+            doc_type="calibration_record",
+            file_path="uploads/fake/fake.pdf",
+            original_filename="fake.pdf",
+            uploaded_by=target_id,
+            uploaded_at=datetime.now(UTC),
+        )
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{target_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    assert "compliance document" in resp.json()["detail"]
+
+    # Refused, not partially applied.
+    assert (await client.get(f"/v1/users/{target_id}", headers=admin_headers)).status_code == 200
+
+
+async def test_delete_user_blocked_by_psl_ledger_and_topups(client, session):
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    driver_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="driver")
+
+    session.add(PSLLedgerEntry(tenant_id=tenant_id, driver_id=driver_id, period="2026-07"))
+    session.add(
+        PSLTopUp(
+            tenant_id=tenant_id,
+            driver_id=driver_id,
+            period="2026-07",
+            amount=Decimal("20.00"),
+            stripe_charge_id="ch_fake_123",
+        )
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{driver_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "PSL ledger" in detail
+    assert "PSL top-up" in detail
+
+
+async def test_delete_user_blocked_by_wallet_transactions_as_driver(client, session):
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    driver_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="driver")
+
+    session.add(
+        WalletTransaction(tenant_id=tenant_id, driver_id=driver_id, amount_aud=Decimal("50.00"), kind="top_up")
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{driver_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    assert "wallet transaction" in resp.json()["detail"]
+
+
+async def test_delete_user_wallet_poster_reference_is_nulled_not_blocking(client, session):
+    """Contrast with the previous test: WalletTransaction.driver_id (the
+    ledger line's actual subject) blocks; created_by_user_id (the staff
+    member who merely posted it) does not -- it cascades to NULL at the DB
+    layer instead (ondelete="SET NULL", see that column's own comment)."""
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    poster_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="admin")
+    driver_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="driver")
+
+    txn = WalletTransaction(
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        amount_aud=Decimal("10.00"),
+        kind="adjustment",
+        created_by_user_id=poster_id,
+    )
+    session.add(txn)
+    await session.commit()
+    await session.refresh(txn)
+
+    resp = await client.delete(f"/v1/users/{poster_id}", headers=admin_headers)
+    assert resp.status_code == 204, resp.text
+
+    await session.refresh(txn)
+    assert txn.created_by_user_id is None
+    assert txn.driver_id == driver_id  # the ledger line itself survives, untouched
+
+
+async def test_delete_user_blocked_by_trip_ratings(client, session):
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    driver_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="driver")
+    trip_id = await _trip(session, tenant_id=tenant_id, driver_id=driver_id)
+
+    session.add(TripRating(tenant_id=tenant_id, trip_id=trip_id, driver_id=driver_id, stars=5))
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{driver_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    assert "trip rating" in resp.json()["detail"]
+
+
+async def test_delete_user_blocked_by_tariff_change_log(client, session):
+    """Fare-regulation evidence (who changed which rate, when) blocks
+    deletion even for a staff/admin account, not just drivers -- see
+    assert_user_deletable's own comment on this specific check."""
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    actor_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="admin")
+    tariff_id = await _tariff(session, tenant_id=tenant_id)
+
+    session.add(
+        TariffChangeLog(tariff_id=tariff_id, tenant_id=tenant_id, actor_user_id=actor_id, after_json={"flag_fall": "5.00"})
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{actor_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    assert "tariff change log" in resp.json()["detail"]
+
+
+async def test_delete_user_blocked_by_audit_log_as_actor(client, session):
+    """Also documents WHY this one blocks instead of cascading to NULL like
+    the schema-nullable AuditLog.actor_user_id column might suggest: the
+    table is a cryptographic hash chain over its own rows (see
+    app.models.audit_log's docstring) -- an ON DELETE SET NULL would mutate
+    a row post-write, which is exactly what the tamper-evidence chain exists
+    to detect."""
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    actor_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="admin")
+
+    session.add(
+        AuditLog(tenant_id=tenant_id, actor_user_id=actor_id, action="update", entity_type="trip", entity_id="t-1")
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{actor_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    assert "audit log" in resp.json()["detail"]
+
+
+async def test_delete_user_reports_multiple_blockers_together(client, session):
+    tenant_id = await _tenant(session)
+    admin_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    driver_id, _ = await _user_with_token(session, tenant_id=tenant_id, role="driver")
+
+    session.add(PSLLedgerEntry(tenant_id=tenant_id, driver_id=driver_id, period="2026-08"))
+    session.add(
+        WalletTransaction(tenant_id=tenant_id, driver_id=driver_id, amount_aud=Decimal("15.00"), kind="top_up")
+    )
+    await session.commit()
+
+    resp = await client.delete(f"/v1/users/{driver_id}", headers=admin_headers)
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "PSL ledger" in detail
+    assert "wallet transaction" in detail
 
 
 async def test_get_nonexistent_user_is_404(client, session):
