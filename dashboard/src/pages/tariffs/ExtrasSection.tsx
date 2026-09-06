@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { Badge, Button, Modal, Table, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import { useDeleteExtraMutation, useExtrasQuery, type Extra } from "@/hooks/useTariffStudio";
 import { extractErrorMessage, formatMoney } from "./format";
 import { ExtraFormModal } from "./ExtraFormModal";
@@ -20,9 +21,10 @@ const EXTRA_TYPE_LABELS: Record<Extra["type"], string> = {
  * (`/v1/tariffs/{tariffId}/extras`, see backend/app/api/v1/tariffs.py).
  * Only rendered in edit mode: an Extra needs an existing tariff_id to
  * attach to, so a brand-new tariff being created has nowhere for one to go
- * yet. Create/edit/delete are owner/admin gated server-side — same
- * `canWrite` pattern the rest of this page (`index.tsx`, `TollZonesPanel`)
- * already uses; viewing the list stays open to every authenticated role.
+ * yet. Extras are pricing, same as the tariff they're scoped to — create/
+ * edit/delete are platform-owner gated server-side, same `canWrite` pattern
+ * the rest of this page (`index.tsx`, `TollZonesPanel`) already uses;
+ * viewing the list stays open to every authenticated role.
  *
  * Every button here that isn't inside its own portal-rendered Modal is
  * given an explicit `type="button"` — this section renders inside the
@@ -31,7 +33,7 @@ const EXTRA_TYPE_LABELS: Record<Extra["type"], string> = {
  * tariff form. */
 export function ExtrasSection({ tariffId }: ExtrasSectionProps) {
   const { user } = useAuth();
-  const canWrite = user?.role === "owner" || user?.role === "admin";
+  const canWrite = isPlatformOwner(user);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingExtra, setEditingExtra] = useState<Extra | null>(null);

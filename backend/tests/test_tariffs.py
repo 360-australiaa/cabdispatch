@@ -19,9 +19,13 @@ import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from sqlalchemy import select
 
+from app.core import security
 from app.core.database import AsyncSessionLocal
+from app.core.security import PLATFORM_TENANT_ID
 from app.models.tariffs import Tariff
+from app.models.tenant import Tenant
 from app.services import fare_engine as fe
 from app.services.tariff_signing import RATE_FIELDS
 from app.services.tariffs import classify_time_of_day
@@ -30,6 +34,86 @@ from tests.conftest import auth_headers
 pytestmark = pytest.mark.asyncio
 
 _RATE_QUANT = Decimal("0.0001")  # matches app.services.tariff_signing's quantization
+
+
+# --- platform-owner write helpers ------------------------------------------------
+#
+# Every tariff/extra write endpoint (POST/PATCH/DELETE) is platform-owner-only
+# since this pass (see app/api/v1/tariffs.py's module docstring) -- pricing is
+# set centrally, not per-tenant. Existing tests below still authenticate as a
+# tenant "admin" for READS and for identifying which tenant a write should
+# land on, but every actual write goes through the platform owner acting
+# cross-tenant via the `?tenant_id=` override
+# (app.core.security.get_current_tenant_id's docstring) onto that tenant --
+# see test_platform_owner_gates_tariff_and_extra_writes below for the
+# dedicated 403-vs-200 coverage of the gate itself.
+
+
+async def _platform_owner_headers(client, session):
+    """Duplicated per-test-file rather than cross-imported, matching the
+    existing tests/test_platform.py / tests/test_app_releases.py convention."""
+    result = await session.execute(select(Tenant).where(Tenant.id == PLATFORM_TENANT_ID))
+    if result.scalar_one_or_none() is None:
+        session.add(Tenant(id=PLATFORM_TENANT_ID, name="TCT", plan="platform"))
+        await session.commit()
+    return await auth_headers(client, session, role="owner", tenant_id=PLATFORM_TENANT_ID)
+
+
+def _tenant_id_of(headers: dict) -> str:
+    token = headers["Authorization"].removeprefix("Bearer ")
+    return security.decode_token(token)["tenant_id"]
+
+
+async def _create_tariff(client, session, tenant_headers, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.post(f"/v1/tariffs?tenant_id={tenant_id}", json=payload, headers=owner_headers)
+
+
+async def _create_tariff_from_preset(client, session, tenant_headers, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.post(
+        f"/v1/tariffs/from-preset?tenant_id={tenant_id}", json=payload, headers=owner_headers
+    )
+
+
+async def _update_tariff(client, session, tenant_headers, tariff_id, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.patch(
+        f"/v1/tariffs/{tariff_id}?tenant_id={tenant_id}", json=payload, headers=owner_headers
+    )
+
+
+async def _delete_tariff(client, session, tenant_headers, tariff_id):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.delete(f"/v1/tariffs/{tariff_id}?tenant_id={tenant_id}", headers=owner_headers)
+
+
+async def _create_extra(client, session, tenant_headers, tariff_id, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.post(
+        f"/v1/tariffs/{tariff_id}/extras?tenant_id={tenant_id}", json=payload, headers=owner_headers
+    )
+
+
+async def _update_extra(client, session, tenant_headers, tariff_id, extra_id, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.patch(
+        f"/v1/tariffs/{tariff_id}/extras/{extra_id}?tenant_id={tenant_id}", json=payload, headers=owner_headers
+    )
+
+
+async def _delete_extra(client, session, tenant_headers, tariff_id, extra_id):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.delete(
+        f"/v1/tariffs/{tariff_id}/extras/{extra_id}?tenant_id={tenant_id}", headers=owner_headers
+    )
 
 
 def _urban_payload(**overrides) -> dict:
@@ -82,7 +166,7 @@ def _country_payload(**overrides) -> dict:
 async def test_create_and_get_tariff(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post("/v1/tariffs", json=_urban_payload(), headers=headers)
+    resp = await _create_tariff(client, session, headers, _urban_payload())
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["name"] == "Standard Urban"
@@ -97,8 +181,8 @@ async def test_create_and_get_tariff(client, session):
 
 async def test_list_tariffs_paginated_and_filtered(client, session):
     headers = await auth_headers(client, session, role="admin")
-    await client.post("/v1/tariffs", json=_urban_payload(name="Urban A"), headers=headers)
-    await client.post("/v1/tariffs", json=_country_payload(name="Country A"), headers=headers)
+    await _create_tariff(client, session, headers, _urban_payload(name="Urban A"))
+    await _create_tariff(client, session, headers, _country_payload(name="Country A"))
 
     resp = await client.get("/v1/tariffs?region=urban", headers=headers)
     assert resp.status_code == 200
@@ -113,15 +197,11 @@ async def test_list_tariffs_paginated_and_filtered(client, session):
 
 async def test_update_tariff_writes_change_log(client, session):
     headers = await auth_headers(client, session, role="admin")
-    create_resp = await client.post(
-        "/v1/tariffs", json=_urban_payload(booked=True, flag_fall="99.00"), headers=headers
-    )
+    create_resp = await _create_tariff(client, session, headers, _urban_payload(booked=True, flag_fall="99.00"))
     assert create_resp.status_code == 201
     tariff_id = create_resp.json()["id"]
 
-    update_resp = await client.patch(
-        f"/v1/tariffs/{tariff_id}", json={"flag_fall": "120.00"}, headers=headers
-    )
+    update_resp = await _update_tariff(client, session, headers, tariff_id, {"flag_fall": "120.00"})
     assert update_resp.status_code == 200
     assert Decimal(update_resp.json()["flag_fall"]) == Decimal("120.00")
 
@@ -144,20 +224,16 @@ async def test_delete_tariff(client, session):
     covers `Extra.tariff_id`'s identical fix (found auditing every NOT NULL
     FK per this same pass's brief)."""
     headers = await auth_headers(client, session, role="admin")
-    create_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+    create_resp = await _create_tariff(client, session, headers, _urban_payload(booked=True))
     tariff_id = create_resp.json()["id"]
 
-    extra_resp = await client.post(
-        f"/v1/tariffs/{tariff_id}/extras",
-        json={"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"},
-        headers=headers,
-    )
+    extra_resp = await _create_extra(client, session, headers, tariff_id, {"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"})
     assert extra_resp.status_code == 201
 
     log_resp = await client.get(f"/v1/tariffs/{tariff_id}/change-log", headers=headers)
     assert log_resp.json()["total"] == 1  # the automatic before=None create-time entry
 
-    del_resp = await client.delete(f"/v1/tariffs/{tariff_id}", headers=headers)
+    del_resp = await _delete_tariff(client, session, headers, tariff_id)
     assert del_resp.status_code == 204, del_resp.text
 
     get_resp = await client.get(f"/v1/tariffs/{tariff_id}", headers=headers)
@@ -182,11 +258,125 @@ async def test_tariff_not_found_for_other_tenant(client, session):
     headers_a = await auth_headers(client, session, role="admin", tenant_name="Tenant A")
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Tenant B")
 
-    create_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers_a)
+    create_resp = await _create_tariff(client, session, headers_a, _urban_payload(booked=True))
     tariff_id = create_resp.json()["id"]
 
     resp = await client.get(f"/v1/tariffs/{tariff_id}", headers=headers_b)
     assert resp.status_code == 404
+
+
+# --- Platform-owner write gate (product decision, 2026) --------------------------
+#
+# "We have to remove the tariff option from the networks. Only as an admin,
+# we will set up the pricing for the meter." -- every write below is
+# platform-owner-only; a tenant owner/admin can still read but never write.
+
+
+async def test_tenant_admin_gets_403_creating_tariff(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.post("/v1/tariffs", json=_urban_payload(), headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_tenant_owner_gets_403_creating_tariff(client, session):
+    headers = await auth_headers(client, session, role="owner")
+    resp = await client.post("/v1/tariffs", json=_urban_payload(), headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_platform_owner_can_create_tariff_for_a_tenant(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_tariff(client, session, headers, _urban_payload())
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["tenant_id"] == _tenant_id_of(headers)
+
+
+async def test_tenant_admin_gets_403_updating_and_deleting_tariff(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    create_resp = await _create_tariff(client, session, headers, _urban_payload())
+    tariff_id = create_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/v1/tariffs/{tariff_id}", json={"flag_fall": "6.00"}, headers=headers
+    )
+    assert patch_resp.status_code == 403
+
+    del_resp = await client.delete(f"/v1/tariffs/{tariff_id}", headers=headers)
+    assert del_resp.status_code == 403
+
+    # neither write was actually applied
+    get_resp = await client.get(f"/v1/tariffs/{tariff_id}", headers=headers)
+    assert get_resp.status_code == 200
+    assert Decimal(get_resp.json()["flag_fall"]) == Decimal("5.00")
+
+
+async def test_tenant_admin_gets_403_on_extras_crud(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    create_resp = await _create_tariff(client, session, headers, _urban_payload())
+    tariff_id = create_resp.json()["id"]
+
+    create_extra_resp = await client.post(
+        f"/v1/tariffs/{tariff_id}/extras",
+        json={"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"},
+        headers=headers,
+    )
+    assert create_extra_resp.status_code == 403
+
+    extra_resp = await _create_extra(
+        client, session, headers, tariff_id, {"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"}
+    )
+    extra_id = extra_resp.json()["id"]
+
+    patch_extra_resp = await client.patch(
+        f"/v1/tariffs/{tariff_id}/extras/{extra_id}", json={"amount": "20.00"}, headers=headers
+    )
+    assert patch_extra_resp.status_code == 403
+
+    del_extra_resp = await client.delete(
+        f"/v1/tariffs/{tariff_id}/extras/{extra_id}", headers=headers
+    )
+    assert del_extra_resp.status_code == 403
+
+
+async def test_tenant_admin_gets_403_creating_tariff_from_preset(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.post(
+        "/v1/tariffs/from-preset",
+        json={
+            "preset": "airport_rank",
+            "name": "Sydney Airport Rank",
+            "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
+async def test_tenant_reads_stay_open_after_platform_owner_gate(client, session):
+    """Read paths -- in particular the ones the meter/device polls at
+    runtime -- must keep working unchanged for an ordinary tenant user, even
+    though every write above now 403s for that same role."""
+    headers = await auth_headers(client, session, role="admin")
+    await _create_tariff(client, session, headers, _urban_payload(booked=True))
+
+    assert (await client.get("/v1/tariffs", headers=headers)).status_code == 200
+    assert (await client.get("/v1/tariffs/active?region=urban", headers=headers)).status_code == 200
+    assert (await client.get("/v1/tariffs/signing-public-key")).status_code == 200
+    assert (await client.get("/v1/tariffs/presets", headers=headers)).status_code == 200
+    assert (
+        await client.get(
+            "/v1/tariffs/suggest", params={"lat": -33.86, "lng": 151.21}, headers=headers
+        )
+    ).status_code == 200
+
+    # driver role can read too -- the meter authenticates as a driver, not an
+    # owner/admin, when it polls GET /active for the tariff it bills against.
+    driver_headers = await auth_headers(
+        client, session, role="driver", tenant_id=_tenant_id_of(headers)
+    )
+    assert (
+        await client.get("/v1/tariffs/active?region=urban", headers=driver_headers)
+    ).status_code == 200
 
 
 # --- Fares Order validation ------------------------------------------------------
@@ -196,7 +386,7 @@ async def test_create_rank_hail_tariff_exceeding_fares_order_is_rejected(client,
     headers = await auth_headers(client, session, role="admin")
 
     payload = _urban_payload(booked=False, flag_fall="999.00")  # way above the $5.00 cap
-    resp = await client.post("/v1/tariffs", json=payload, headers=headers)
+    resp = await _create_tariff(client, session, headers, payload)
     assert resp.status_code == 422
 
 
@@ -204,7 +394,7 @@ async def test_create_rank_hail_tariff_within_fares_order_succeeds(client, sessi
     headers = await auth_headers(client, session, role="admin")
 
     payload = _urban_payload(booked=False)  # exactly the Fares Order rates
-    resp = await client.post("/v1/tariffs", json=payload, headers=headers)
+    resp = await _create_tariff(client, session, headers, payload)
     assert resp.status_code == 201
 
 
@@ -212,7 +402,7 @@ async def test_booked_tariff_skips_fares_order_validation(client, session):
     headers = await auth_headers(client, session, role="admin")
 
     payload = _urban_payload(booked=True, flag_fall="999.00")
-    resp = await client.post("/v1/tariffs", json=payload, headers=headers)
+    resp = await _create_tariff(client, session, headers, payload)
     assert resp.status_code == 201
 
 
@@ -220,18 +410,16 @@ async def test_exempt_region_skips_fares_order_validation(client, session):
     headers = await auth_headers(client, session, role="admin")
 
     payload = _urban_payload(region="exempt", booked=False, flag_fall="999.00")
-    resp = await client.post("/v1/tariffs", json=payload, headers=headers)
+    resp = await _create_tariff(client, session, headers, payload)
     assert resp.status_code == 201
 
 
 async def test_update_that_would_violate_fares_order_is_rejected(client, session):
     headers = await auth_headers(client, session, role="admin")
-    create_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=False), headers=headers)
+    create_resp = await _create_tariff(client, session, headers, _urban_payload(booked=False))
     tariff_id = create_resp.json()["id"]
 
-    resp = await client.patch(
-        f"/v1/tariffs/{tariff_id}", json={"flag_fall": "999.00"}, headers=headers
-    )
+    resp = await _update_tariff(client, session, headers, tariff_id, {"flag_fall": "999.00"})
     assert resp.status_code == 422
 
     # rejected update must not have been persisted
@@ -246,21 +434,13 @@ async def test_get_active_tariff_resolves_currently_effective_row(client, sessio
     headers = await auth_headers(client, session, role="admin")
     now = datetime.now(UTC)
 
-    await client.post(
-        "/v1/tariffs",
-        json=_urban_payload(
+    await _create_tariff(client, session, headers, _urban_payload(
             name="Old",
             booked=True,
             effective_from=(now - timedelta(days=30)).isoformat(),
             effective_to=(now - timedelta(days=1)).isoformat(),
-        ),
-        headers=headers,
-    )
-    await client.post(
-        "/v1/tariffs",
-        json=_urban_payload(name="Current", booked=True, effective_from=(now - timedelta(days=1)).isoformat()),
-        headers=headers,
-    )
+        ))
+    await _create_tariff(client, session, headers, _urban_payload(name="Current", booked=True, effective_from=(now - timedelta(days=1)).isoformat()))
 
     resp = await client.get("/v1/tariffs/active?region=urban", headers=headers)
     assert resp.status_code == 200
@@ -278,16 +458,12 @@ async def test_get_active_tariff_at_specific_instant(client, session):
     headers = await auth_headers(client, session, role="admin")
     anchor = datetime(2020, 1, 1, tzinfo=UTC)
 
-    await client.post(
-        "/v1/tariffs",
-        json=_urban_payload(
+    await _create_tariff(client, session, headers, _urban_payload(
             name="Y2020",
             booked=True,
             effective_from=anchor.isoformat(),
             effective_to=(anchor + timedelta(days=365)).isoformat(),
-        ),
-        headers=headers,
-    )
+        ))
 
     resp = await client.get(
         "/v1/tariffs/active",
@@ -369,14 +545,10 @@ async def test_fares_order_current_returns_global_row_once_seeded(client, sessio
 
 async def test_extras_crud(client, session):
     headers = await auth_headers(client, session, role="admin")
-    tariff_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+    tariff_resp = await _create_tariff(client, session, headers, _urban_payload(booked=True))
     tariff_id = tariff_resp.json()["id"]
 
-    create_resp = await client.post(
-        f"/v1/tariffs/{tariff_id}/extras",
-        json={"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"},
-        headers=headers,
-    )
+    create_resp = await _create_extra(client, session, headers, tariff_id, {"name": "Cleaning Fee", "amount": "15.00", "type": "fixed"})
     assert create_resp.status_code == 201
     extra = create_resp.json()
     assert extra["tariff_id"] == tariff_id
@@ -385,15 +557,11 @@ async def test_extras_crud(client, session):
     assert list_resp.status_code == 200
     assert list_resp.json()["total"] == 1
 
-    update_resp = await client.patch(
-        f"/v1/tariffs/{tariff_id}/extras/{extra['id']}",
-        json={"amount": "20.00"},
-        headers=headers,
-    )
+    update_resp = await _update_extra(client, session, headers, tariff_id, extra['id'], {"amount": "20.00"})
     assert update_resp.status_code == 200
     assert Decimal(update_resp.json()["amount"]) == Decimal("20.00")
 
-    del_resp = await client.delete(f"/v1/tariffs/{tariff_id}/extras/{extra['id']}", headers=headers)
+    del_resp = await _delete_extra(client, session, headers, tariff_id, extra['id'])
     assert del_resp.status_code == 204
 
     get_resp = await client.get(f"/v1/tariffs/{tariff_id}/extras/{extra['id']}", headers=headers)
@@ -404,7 +572,7 @@ async def test_extras_scoped_to_tariff_tenant(client, session):
     headers_a = await auth_headers(client, session, role="admin", tenant_name="Tenant A2")
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Tenant B2")
 
-    tariff_resp = await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers_a)
+    tariff_resp = await _create_tariff(client, session, headers_a, _urban_payload(booked=True))
     tariff_id = tariff_resp.json()["id"]
 
     resp = await client.get(f"/v1/tariffs/{tariff_id}/extras", headers=headers_b)
@@ -464,7 +632,7 @@ async def test_signing_public_key_endpoint_requires_no_auth(client, session):
 
 async def test_active_tariff_signature_present_and_verifies_against_public_key(client, session):
     headers = await auth_headers(client, session, role="admin")
-    await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+    await _create_tariff(client, session, headers, _urban_payload(booked=True))
 
     key_resp = await client.get("/v1/tariffs/signing-public-key")
     assert key_resp.status_code == 200
@@ -486,7 +654,7 @@ async def test_active_tariff_signature_present_and_verifies_against_public_key(c
 
 async def test_active_tariff_signature_rejects_tampered_payload(client, session):
     headers = await auth_headers(client, session, role="admin")
-    await client.post("/v1/tariffs", json=_urban_payload(booked=True), headers=headers)
+    await _create_tariff(client, session, headers, _urban_payload(booked=True))
 
     key_resp = await client.get("/v1/tariffs/signing-public-key")
     public_key = serialization.load_der_public_key(base64.b64decode(key_resp.json()["public_key"]))
@@ -505,8 +673,8 @@ async def test_active_tariff_signature_rejects_tampered_payload(client, session)
 
 async def test_active_tariff_signature_differs_per_tariff(client, session):
     headers = await auth_headers(client, session, role="admin")
-    await client.post("/v1/tariffs", json=_urban_payload(booked=True, flag_fall="5.00"), headers=headers)
-    await client.post("/v1/tariffs", json=_country_payload(booked=True), headers=headers)
+    await _create_tariff(client, session, headers, _urban_payload(booked=True, flag_fall="5.00"))
+    await _create_tariff(client, session, headers, _country_payload(booked=True))
 
     urban_resp = await client.get("/v1/tariffs/active?region=urban", headers=headers)
     country_resp = await client.get("/v1/tariffs/active?region=country", headers=headers)
@@ -540,15 +708,11 @@ async def test_list_tariff_presets_requires_auth(client, session):
 async def test_create_tariff_from_airport_rank_preset(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "airport_rank",
             "name": "Sydney Airport Rank",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["name"] == "Sydney Airport Rank"
@@ -565,15 +729,11 @@ async def test_create_tariff_from_airport_rank_preset(client, session):
 async def test_create_tariff_from_special_event_preset_is_unregulated(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "special_event",
             "name": "NYE Fireworks 2026",
             "effective_from": datetime(2025, 12, 31, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["booked"] is True
@@ -584,15 +744,11 @@ async def test_create_tariff_from_special_event_preset_is_unregulated(client, se
 async def test_create_tariff_from_shared_ride_preset_reduces_multi_hire_pct(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "shared_ride",
             "name": "Shared Ride",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 201, resp.text
     assert Decimal(resp.json()["multi_hire_pct"]) == Decimal("0.55")
 
@@ -600,15 +756,11 @@ async def test_create_tariff_from_shared_ride_preset_reduces_multi_hire_pct(clie
 async def test_create_tariff_from_wheelchair_preset_has_no_maxi_surcharge(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "wheelchair_accessible",
             "name": "Wheelchair Accessible (WAV)",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["booked"] is False
@@ -618,16 +770,12 @@ async def test_create_tariff_from_wheelchair_preset_has_no_maxi_surcharge(client
 async def test_create_tariff_from_preset_with_overrides(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "shared_ride",
             "name": "Shared Ride Custom",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
             "overrides": {"multi_hire_pct": "0.40"},
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 201, resp.text
     assert Decimal(resp.json()["multi_hire_pct"]) == Decimal("0.40")
 
@@ -637,31 +785,23 @@ async def test_create_tariff_from_preset_still_validates_fares_order(client, ses
 
     # airport_rank is booked=False (rank/hail) — overriding flag_fall above
     # the Fares Order cap must still 422, exactly like a hand-entered tariff.
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "airport_rank",
             "name": "Bad Airport Rank",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
             "overrides": {"flag_fall": "999.00"},
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 422
 
 
 async def test_create_tariff_from_unknown_preset_422s(client, session):
     headers = await auth_headers(client, session, role="admin")
 
-    resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "not_a_real_preset",
             "name": "x",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     assert resp.status_code == 422
 
 
@@ -701,9 +841,7 @@ async def test_suggest_tariff_rejects_invalid_vehicle_class(client, session):
 
 async def test_suggest_tariff_falls_back_to_default_active_tariff(client, session):
     headers = await auth_headers(client, session, role="admin", tenant_name="Suggest Default")
-    create_resp = await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
-    )
+    create_resp = await _create_tariff(client, session, headers, _urban_payload(name="Standard Urban", booked=True))
     tariff_id = create_resp.json()["id"]
 
     resp = await client.get(
@@ -720,18 +858,12 @@ async def test_suggest_tariff_falls_back_to_default_active_tariff(client, sessio
 
 async def test_suggest_tariff_matches_wheelchair_tariff_by_vehicle_class(client, session):
     headers = await auth_headers(client, session, role="admin", tenant_name="Suggest WAT")
-    await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
-    )
-    wav_resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    await _create_tariff(client, session, headers, _urban_payload(name="Standard Urban", booked=True))
+    wav_resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "wheelchair_accessible",
             "name": "Wheelchair Accessible (WAV)",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     wav_tariff_id = wav_resp.json()["id"]
 
     resp = await client.get(
@@ -747,9 +879,7 @@ async def test_suggest_tariff_matches_wheelchair_tariff_by_vehicle_class(client,
 
 async def test_suggest_tariff_matches_airport_geofence_and_named_tariff(client, session):
     headers = await auth_headers(client, session, role="admin", tenant_name="Suggest Airport")
-    await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
-    )
+    await _create_tariff(client, session, headers, _urban_payload(name="Standard Urban", booked=True))
     geofence_resp = await client.post(
         "/v1/geofences",
         json={
@@ -762,15 +892,11 @@ async def test_suggest_tariff_matches_airport_geofence_and_named_tariff(client, 
         headers=headers,
     )
     assert geofence_resp.status_code == 201, geofence_resp.text
-    airport_resp = await client.post(
-        "/v1/tariffs/from-preset",
-        json={
+    airport_resp = await _create_tariff_from_preset(client, session, headers, {
             "preset": "airport_rank",
             "name": "Airport Rank",
             "effective_from": datetime(2025, 11, 3, tzinfo=UTC).isoformat(),
-        },
-        headers=headers,
-    )
+        })
     airport_tariff_id = airport_resp.json()["id"]
 
     resp = await client.get(
@@ -790,9 +916,7 @@ async def test_suggest_tariff_degrades_gracefully_when_airport_geofence_but_no_n
     headers = await auth_headers(
         client, session, role="admin", tenant_name="Suggest Airport NoTariff"
     )
-    default_resp = await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Standard Urban", booked=True), headers=headers
-    )
+    default_resp = await _create_tariff(client, session, headers, _urban_payload(name="Standard Urban", booked=True))
     default_tariff_id = default_resp.json()["id"]
     await client.post(
         "/v1/geofences",
@@ -823,12 +947,8 @@ async def test_suggest_tariff_scoped_to_tenant(client, session):
     headers_a = await auth_headers(client, session, role="admin", tenant_name="Suggest Tenant A")
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Suggest Tenant B")
 
-    await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Tenant A Urban", booked=True), headers=headers_a
-    )
-    b_resp = await client.post(
-        "/v1/tariffs", json=_urban_payload(name="Tenant B Urban", booked=True), headers=headers_b
-    )
+    await _create_tariff(client, session, headers_a, _urban_payload(name="Tenant A Urban", booked=True))
+    b_resp = await _create_tariff(client, session, headers_b, _urban_payload(name="Tenant B Urban", booked=True))
     b_tariff_id = b_resp.json()["id"]
 
     resp = await client.get(

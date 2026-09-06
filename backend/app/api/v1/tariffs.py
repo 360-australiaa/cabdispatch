@@ -45,8 +45,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import VALID_VEHICLE_CLASSES
 from app.models.tariffs import VALID_REGIONS, Extra, Tariff, TariffChangeLog
 from app.models.user import User
@@ -65,19 +66,23 @@ from app.schemas.tariffs import (
     TariffSuggestionRead,
     TariffUpdate,
 )
-from app.services import tariff_presets
-from app.services import tariff_signing
+from app.services import tariff_presets, tariff_signing
 from app.services import tariffs as tariff_service
 
 router = APIRouter(prefix="/v1/tariffs", tags=["tariffs"])
 
-# Fares-Order-regulated rate cards must not be writable by every authenticated
-# tenant user (a driver-role account should never be able to rewrite the rates
-# their own meter bills against) -- same owner/admin-only convention already
-# used by the sibling app.api.v1.zones / app.api.v1.geofences routers for
-# their own write endpoints. This router had no role gate at all until this
-# pass; every read endpoint stays open to any authenticated tenant user.
-_require_admin = require_role("owner", "admin")
+# Pricing is platform-admin-only (product decision, 2026): "we will set up
+# the pricing for the meter, not every network can set up their own pricing"
+# -- so every write endpoint below (create/update/delete a tariff or its
+# extras) requires require_platform_owner, the exact same gate
+# app/api/v1/app_releases.py's platform_router uses (see app/api/v1/platform.py).
+# A platform-owner token that wants to write a SPECIFIC tenant's tariff still
+# goes through the normal get_current_tenant_id cross-tenant override
+# (?tenant_id=<id> -- see that function's docstring); an ordinary tenant
+# owner/admin can no longer create/edit/delete tariffs or extras at all, only
+# read them. Every read endpoint stays open to any authenticated tenant user
+# -- in particular GET /active, which the meter polls at runtime and must
+# keep working unchanged.
 fares_order_router = APIRouter(prefix="/v1/fares-order", tags=["tariffs"])
 
 
@@ -249,7 +254,7 @@ async def create_tariff(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     await tariff_service.validate_tariff_or_422(session, payload)
 
@@ -268,7 +273,7 @@ async def create_tariff_from_preset(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     """Creates a new Tariff pre-filled from a named preset (see
     `GET /v1/tariffs/presets`), with any `overrides` layered on top, then
@@ -320,7 +325,7 @@ async def update_tariff(
     tenant_id: str = Depends(get_current_tenant_id),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     row = await _get_owned_tariff(session, tariff_id, tenant_id)
     before = tariff_service.row_to_log_dict(row)  # snapshot pre-mutation
@@ -340,7 +345,7 @@ async def delete_tariff(
     tariff_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     row = await _get_owned_tariff(session, tariff_id, tenant_id)
     await session.delete(row)
@@ -383,7 +388,7 @@ async def create_extra(
     payload: ExtraCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     await _get_owned_tariff(session, tariff_id, tenant_id)  # 404s if not owned
 
@@ -411,7 +416,7 @@ async def update_extra(
     payload: ExtraUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     row = await _get_owned_extra(session, tariff_id, extra_id, tenant_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -427,7 +432,7 @@ async def delete_extra(
     extra_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     row = await _get_owned_extra(session, tariff_id, extra_id, tenant_id)
     await session.delete(row)

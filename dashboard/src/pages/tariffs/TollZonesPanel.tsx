@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, Card, CardContent, Modal, Table, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
   useDeleteGeofenceMutation,
   useGeofencesQuery,
@@ -15,13 +16,14 @@ const PAGE_SIZE = 15;
 /** Toll Zones tab of Tariff Studio — CRUD over `/v1/geofences?kind=toll`
  * circular zones (name, center lat/lng, radius in meters, toll amount).
  * Region-kind geofences (platform reference zones) are out of scope here;
- * this panel only lists/creates `kind: "toll"`. Create/edit/delete are
- * owner/admin gated server-side (`geofences.py`) — mirrors the same
- * `canWrite` pattern already used by the sibling Zones page
- * (`pages/zones/ZonesPanel.tsx`), which this tab previously didn't copy. */
+ * this panel only lists/creates `kind: "toll"`. Toll pricing is pricing
+ * (product decision, 2026): create/edit/delete are platform-owner gated
+ * server-side (`geofences.py`'s `_require_platform_owner_for_toll`), same
+ * gate as the sibling Rate Cards tab (`pages/tariffs/index.tsx`) and the
+ * Platform Admin console (`src/lib/platformAdmin.ts`). */
 export function TollZonesPanel() {
   const { user } = useAuth();
-  const canWrite = user?.role === "owner" || user?.role === "admin";
+  const canWrite = isPlatformOwner(user);
 
   const [page, setPage] = useState(0);
 
