@@ -159,6 +159,28 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
                 delay(STATUS_POLL_INTERVAL_MS)
             }
         }
+        viewModelScope.launch {
+            // Auto-available on shift start (2026-09-06, direct product instruction: "when I am
+            // logged in, it means my shift is started already... I can only take a break" — a
+            // driver should never have to separately tap "go available" after starting/resuming a
+            // shift). Fires once per real shiftId, via [autoAvailableAppliedForShiftId] — a plain
+            // companion-object var, not per-instance state, specifically BECAUSE this ViewModel is
+            // recreated on ordinary navigation back to the dashboard (same `viewModel()` scoping
+            // every other screen ViewModel gets); without a guard that survives recreation, simply
+            // navigating back to the dashboard while deliberately ON BREAK would silently flip the
+            // driver back to available every time. distinctUntilChanged on shiftId alone (not the
+            // whole DriverSession) so unrelated session field changes never re-trigger this for the
+            // same still-open shift.
+            SessionHolder.session
+                .map { it?.shiftId }
+                .distinctUntilChanged()
+                .collect { shiftId ->
+                    if (shiftId != null && autoAvailableAppliedForShiftId != shiftId) {
+                        autoAvailableAppliedForShiftId = shiftId
+                        setAvailable(true)
+                    }
+                }
+        }
     }
 
     /**
@@ -304,5 +326,12 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
         val pct = runCatching { batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }.getOrNull()
         return pct?.takeIf { it in 0..100 }
+    }
+
+    private companion object {
+        /** See [init]'s auto-available block — a companion-object (class-lifetime, not
+         * instance-lifetime) guard so recreating this ViewModel never re-fires the auto-available
+         * for a shift it already ran for. */
+        var autoAvailableAppliedForShiftId: String? = null
     }
 }

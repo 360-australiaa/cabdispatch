@@ -603,9 +603,12 @@ fun DeckHomeScreen(
                         ShiftStatsBar(
                             state = state,
                             extras = homeExtras,
-                            // Honest local action (see ShiftLimitRing's own doc): no invented
-                            // return-time claim, just the real setAvailable(false) call.
-                            onTakeBreak = { viewModel.setAvailable(false) },
+                            // Real toggle (2026-09-06, matching the header pill's own
+                            // onToggleAvailability): TAKE BREAK/RESUME is the same setAvailable
+                            // flip either direction, not a one-way "go on break" — see
+                            // NextBreakTile's own doc for why it now shows the state-appropriate
+                            // label instead of always "TAKE BREAK".
+                            onTakeBreak = { viewModel.setAvailable(!state.isAvailable) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -782,28 +785,41 @@ private fun rememberHomeExtras(driverId: String?, shiftId: String?): HomeExtras 
 // ============================================================================================
 
 /**
- * The header status pill's three REAL states, derived in [headerStatus] from two signals this
+ * The header status pill's four REAL states, derived in [headerStatus] from three signals this
  * screen already holds: [DeckHomeScreen]'s Room `observeActiveTrip()` read (an OPEN `TripEntity` —
- * the same signal that gates the rail's METER item) and [WheelDashboardUiState.isAvailable].
+ * the same signal that gates the rail's METER item), [WheelDashboardUiState.isAvailable], and
+ * whether the session carries an open `shiftId`. ON_BREAK vs OFF_DUTY split out of a single
+ * OFF_DUTY state 2026-09-06 (direct product instruction) — see [ON_BREAK]'s own doc for why a
+ * driver on an open shift with `isAvailable == false` is honestly "on break", not "off duty".
  *
  * The mockup also draws ON TRIP / PAUSED / COMPLETED pills. None of those is honestly reachable
  * from this file, so none is faked: PAUSED is `FareState.status == STOPPED` on the live
  * [au.com.threesixty.cabdispatch.domain.FareEngine], which is instantiated privately per nav
  * entry inside `HiredViewModel` (see that engine's own "hoist to AppContainer" TODO) — the
  * dashboard cannot observe it; COMPLETED has no persisted signal a dashboard can watch (a closed
- * trip simply stops being the active one, and the pill falls back to AVAILABLE/OFF DUTY); ON TRIP
+ * trip simply stops being the active one, and the pill falls back to AVAILABLE/ON_BREAK); ON TRIP
  * is indistinguishable from HIRED with the data here, so the one open-fare state is shown as the
  * mockup's HIRED / "Trip in progress".
  */
 private enum class HeaderStatus(val title: String, val sub: String, val tone: HudTone) {
     HIRED("HIRED", "Trip in progress", HudTone.Success),
     AVAILABLE("AVAILABLE", "Ready to receive jobs", HudTone.Success),
-    OFF_DUTY("OFF DUTY", "Tap to go available", HudTone.Neutral),
+    // Split from the old single OFF_DUTY state, 2026-09-06 (direct product instruction): a driver
+    // with an open shift and isAvailable == false is ON BREAK — their shift clock is still
+    // running (ShiftStatsBar keeps ticking off the same DriverSession.shiftStartAt regardless of
+    // this flag), they are simply not receiving dispatch offers right now. OFF_DUTY genuinely
+    // means "no open shift at all", which this screen cannot actually reach today (starting a
+    // shift is what gets a driver here in the first place — see WheelDashboardViewModel.init's
+    // auto-available block, which runs the instant a shift is seen) but is kept, honestly, rather
+    // than deleted, as the fallback for a session with no shiftId at all.
+    ON_BREAK("ON BREAK", "Tap to resume", HudTone.Warning),
+    OFF_DUTY("OFF DUTY", "Start a shift to go available", HudTone.Neutral),
 }
 
-private fun headerStatus(isAvailable: Boolean, hasActiveTrip: Boolean): HeaderStatus = when {
+private fun headerStatus(isAvailable: Boolean, hasActiveTrip: Boolean, hasOpenShift: Boolean): HeaderStatus = when {
     hasActiveTrip -> HeaderStatus.HIRED
     isAvailable -> HeaderStatus.AVAILABLE
+    hasOpenShift -> HeaderStatus.ON_BREAK
     else -> HeaderStatus.OFF_DUTY
 }
 
@@ -817,7 +833,11 @@ private fun CaptainHeader(
     onToggleAvailability: () -> Unit,
     onSos: () -> Unit,
 ) {
-    val status = headerStatus(isAvailable = state.isAvailable, hasActiveTrip = hasActiveTrip)
+    val status = headerStatus(
+        isAvailable = state.isAvailable,
+        hasActiveTrip = hasActiveTrip,
+        hasOpenShift = state.session?.shiftId != null,
+    )
     val statusColor = status.tone.color()
     val statusNeutral = status.tone == HudTone.Neutral
     Row(
@@ -1565,6 +1585,7 @@ private fun ShiftStatsBar(
         NextBreakTile(
             remaining = remaining,
             session = state.session,
+            isAvailable = state.isAvailable,
             fatigueAlertCount = extras.fatigueAlertCount,
             latestFatigueKind = extras.latestFatigueKind,
             onTakeBreak = onTakeBreak,
@@ -1640,14 +1661,18 @@ private fun EarningsDelta(pct: Double) {
  * the card gains a red halo once genuinely close to it (<15% left).
  *
  * [fatigueAlertCount]/[latestFatigueKind] stay as the real `GET /v1/fatigue-alerts` signal
- * (see [rememberHomeExtras]), shown only once loaded and non-zero. TAKE BREAK is the pre-existing
- * real action — [onTakeBreak] is wired to `setAvailable(false)`: it honestly does the one thing
- * this app can do (stop receiving offers) and claims no return time it doesn't know.
+ * (see [rememberHomeExtras]), shown only once loaded and non-zero. TAKE BREAK/RESUME
+ * ([onTakeBreak]) is a real two-way `setAvailable` toggle (2026-09-06 — was a one-way
+ * `setAvailable(false)` with no way back from this tile, mirrored from the header pill's own
+ * toggle once [isAvailable] was threaded through here too): it honestly does the one thing this
+ * app can do (stop/resume receiving dispatch offers) and claims no return time it doesn't know —
+ * the shift clock above keeps running regardless, this only ever touches dispatch eligibility.
  */
 @Composable
 private fun NextBreakTile(
     remaining: Duration?,
     session: DriverSession?,
+    isAvailable: Boolean,
     fatigueAlertCount: Int?,
     latestFatigueKind: String?,
     onTakeBreak: () -> Unit,
@@ -1722,7 +1747,7 @@ private fun NextBreakTile(
                     )
                 }
                 // Honest local action, not a fabricated break schedule — see this composable's own
-                // doc. Sets real availability false; claims no return time this app doesn't know.
+                // doc. Real two-way availability toggle; claims no return time this app doesn't know.
                 Box(
                     modifier = Modifier
                         .padding(top = 8.dp)
@@ -1733,7 +1758,7 @@ private fun NextBreakTile(
                         .padding(horizontal = 14.dp, vertical = 7.dp),
                 ) {
                     Text(
-                        "☕ TAKE BREAK",
+                        if (isAvailable) "☕ TAKE BREAK" else "▶ RESUME",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,

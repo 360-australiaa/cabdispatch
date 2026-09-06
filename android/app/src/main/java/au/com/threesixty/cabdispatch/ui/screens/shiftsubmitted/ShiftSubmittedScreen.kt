@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
@@ -114,6 +115,14 @@ private fun finishAndReturnToLogin(navController: NavHostController) {
     ShiftSubmissionHandoff.clear()
     TripDetailHandoff.clear()
     SessionHolder.clear()
+    // Real gap closed 2026-09-06, alongside making AppContainer.accessToken/refreshToken durable
+    // (TokenStore): this ordinary end-of-shift log-off never cleared either token, harmless while
+    // they were in-memory-only (a fresh process had nothing anyway), but a real cross-driver leak
+    // risk once they persist — the next driver to sign in on this tablet overwrites both with
+    // their own on login regardless, but nothing in between (a background sync/heartbeat tick)
+    // should keep firing under the driver who just logged off.
+    AppContainer.accessToken = null
+    AppContainer.refreshToken = null
     navController.navigate(CabDispatchRoutes.LOGIN_VEHICLE_BIND) {
         popUpTo(0)
     }
