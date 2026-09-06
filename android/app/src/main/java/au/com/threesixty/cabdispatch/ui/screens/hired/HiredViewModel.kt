@@ -9,16 +9,19 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
+import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
+import au.com.threesixty.cabdispatch.domain.location.TracePointRecorder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +31,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.math.RoundingMode
+import java.time.Instant
 import java.util.UUID
 
 class HiredViewModel(application: Application) : AndroidViewModel(application) {
@@ -77,6 +81,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     // real distanceM/movingS/waitingS to read once the trip reaches S4.
     private val tripRepository: TripRepository = AppContainer.tripRepository
     private var persistedTripClientUuid: String? = null
+
+    /** The last real [LocationFix] actually appended to the persisted trace — see
+     * [nextTracePoint]'s doc. `null` before the first fix. Only ever read/written from this VM's
+     * own main-thread call sites ([persistTick]/[endTrip]), so no extra synchronisation needed —
+     * same single-writer reasoning as [persistedTripClientUuid]. */
+    private var lastTracedFix: LocationFix? = null
 
     init {
         // Best-effort GPS supplier for AppContainer.duressController's Active-phase relay — see
@@ -182,17 +192,58 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * A no-op until [openTripInRoom]'s write completes (guarded by the
      * nullable [persistedTripClientUuid]); the next emission after that
      * catches Room up to the latest cumulative state, so nothing is lost.
+     *
+     * [nextTracePoint] is read synchronously here, not inside the launched coroutine below — same
+     * "decide now, off the current [lastTracedFix]/[AppContainer.speedSource] snapshot" reasoning
+     * [openTripInRoom] already uses for [persistedTripClientUuid], so two fareState emissions in
+     * quick succession can never both read the same not-yet-updated [lastTracedFix] and record the
+     * same fix twice.
      */
     private fun persistTick(state: FareState) {
         val clientUuid = persistedTripClientUuid ?: return
-        viewModelScope.launch { doPersistTick(clientUuid, state) }
+        val point = nextTracePoint()
+        viewModelScope.launch { doPersistTick(clientUuid, state, point) }
     }
 
-    private suspend fun doPersistTick(clientUuid: String, state: FareState) {
+    /**
+     * The one real GPS point, if any, this specific fare-engine tick should append to the
+     * persisted trace — see [TracePointRecorder]'s class doc for the full fare-integrity story
+     * (short version: `POST /v1/trips/sync`'s server-side replay derives distance/waiting time
+     * straight from this trace, so recording one real point per fare-engine tick is what keeps
+     * the server's independent recompute within its own 1% variance check of the device's own
+     * total — this is NOT merely feeding the meter map's polyline).
+     *
+     * Reads [AppContainer.speedSource.locationFix] — the exact same [LocationFix] whose
+     * [LocationFix.speedKmh] [FareEngineImpl.tick] itself just read for THIS tick (both are set
+     * together, atomically, by
+     * [au.com.threesixty.cabdispatch.domain.location.RealLocationProvider.onNewFix] — see that
+     * class's doc), not a second, independent location read. Returns `null` (append nothing this
+     * tick) whenever there is no live fix at all (no permission, cold start, no signal) — an
+     * honest "no GPS this second" gap, never a fabricated point — or when [TracePointRecorder.isNewFix]
+     * says this is the same fix already recorded for the previous tick (the fare engine's 1 s
+     * coroutine delay firing before the location provider's own ~1 Hz emission has, per that
+     * object's own doc).
+     */
+    private fun nextTracePoint(): TelemetryPointDto? {
+        val fix = AppContainer.speedSource.locationFix.value ?: return null
+        if (!TracePointRecorder.isNewFix(fix.timestampMillis, lastTracedFix?.timestampMillis)) return null
+        lastTracedFix = fix
+        return TelemetryPointDto(
+            lat = fix.lat,
+            lng = fix.lng,
+            speedKmh = fix.speedKmh,
+            // The fix's own real GPS timestamp, not "now" — recompute_from_trace derives
+            // elapsed_seconds from the gap between consecutive points' `ts`, so this must be when
+            // the position was actually true, not when this tick happened to run.
+            ts = Instant.ofEpochMilli(fix.timestampMillis).toString(),
+        )
+    }
+
+    private suspend fun doPersistTick(clientUuid: String, state: FareState, point: TelemetryPointDto?) {
         runCatching {
             tripRepository.tick(
                 clientUuid = clientUuid,
-                newPoints = emptyList(),
+                newPoints = listOfNotNull(point),
                 distanceM = state.distanceKm.movePointRight(3).setScale(0, RoundingMode.HALF_UP).toInt(),
                 movingS = state.movingSeconds,
                 waitingS = state.waitingSeconds,
@@ -265,8 +316,9 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
             onClosed()
             return
         }
+        val point = nextTracePoint()
         viewModelScope.launch {
-            doPersistTick(clientUuid, closedState)
+            doPersistTick(clientUuid, closedState, point)
             SessionHolder.clearLiveTrip()
             onClosed()
         }

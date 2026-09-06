@@ -47,11 +47,18 @@ class TripRepository(
      * for the Meter screen's route-polyline backdrop (Meter "game-level" visual pass, 2026-09-03).
      * Purely additive: same Room `Flow` as [observeActiveTrip], same [decodeGpsTrace] this class
      * already uses for sync — no new write path, no behavior change. Emits an empty list when there
-     * is no open trip or the trace is still `"[]"`. NOTE (honest gap, not fixed here): the live
+     * is no open trip or the trace is still `"[]"`.
+     *
+     * **Fixed (2026-09-07, real fare-integrity bug, not just a cosmetic map gap):** the live
      * meter's own persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
-     * `doPersistTick`) currently calls [tick] with `newPoints = emptyList()`, so this trace only
-     * grows once a caller starts feeding real telemetry points into [tick] — see the Meter
-     * backdrop's own doc for how it supplements this with live fixes in the meantime.
+     * `doPersistTick`) used to always call [tick] with `newPoints = emptyList()`, so this trace
+     * never grew for the entire life of a live trip — confirmed to make `POST /v1/trips/sync`'s
+     * server-side `recompute_from_trace` (which replays this exact trace to independently validate
+     * `deviceTotal`) compute a flagfall-only fare and auto-flag every real trip for review.
+     * [HiredViewModel]'s `nextTracePoint`/[TracePointRecorder][au.com.threesixty.cabdispatch.domain.location.TracePointRecorder]
+     * now feed one real point per fare-engine tick into [tick], so this Flow reflects the trip's
+     * actual driven path in near-real-time (bounded only by [tick]'s own Room write latency) rather
+     * than staying `"[]"` for the whole trip.
      */
     fun observeActiveTripGpsTrace(): Flow<List<TelemetryPointDto>> =
         tripDao.observeActiveTrip().map { trip ->
