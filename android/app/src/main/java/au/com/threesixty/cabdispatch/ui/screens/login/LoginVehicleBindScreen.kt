@@ -111,6 +111,15 @@ fun LoginVehicleBindScreen(
             message = state.deviceMismatchWarning,
             onDismiss = { viewModel.dismissDeviceMismatchWarning() },
         )
+
+        // Fires right after Bind Vehicle, on either path (QR or manual rego) — see
+        // LoginVehicleBindUiState.showUnpairedDeviceNotice's doc for why neither path actually
+        // registers this tablet. Advisory only, same as the dialog above: LoginVehicleBindViewModel.startShift's
+        // own doc argues at length for why this never blocks the driver from continuing.
+        UnpairedDeviceNoticeDialog(
+            visible = state.showUnpairedDeviceNotice,
+            onDismiss = { viewModel.dismissUnpairedDeviceNotice() },
+        )
     }
 }
 
@@ -371,7 +380,11 @@ private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
         Text("Bind to vehicle", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = CaptainPalette.textPrimary)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Scan the QR on the dash, or type the rego to pair this tablet with the vehicle.",
+            // "bind"/"pair" the shift to the vehicle, deliberately not "pair the tablet" — that
+            // word means something specific and different elsewhere in this app (registering the
+            // device itself, Settings ▸ Pair Meter); reusing it here is exactly the confusion this
+            // screen's QR-panel copy below was also causing. See DevicePairingStatus's class doc.
+            "Scan the QR on the dash, or type the rego to bind this shift to the vehicle.",
             fontFamily = InterFamily,
             fontSize = 17.sp,
             color = CaptainPalette.textSecondary,
@@ -403,7 +416,15 @@ private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
                     if (state.qrScanAttempted && state.vehicleIdInput.isBlank()) {
                         "No code detected — tap to try again, or use manual entry"
                     } else {
-                        "Pairing code is single-use and expires in 10 minutes"
+                        // Deliberately does NOT say "pairing code" (this dash QR just encodes the
+                        // vehicle's rego, permanently reusable across every driver/shift — unlike
+                        // a real, single-use, admin-minted device-pairing code, which is a
+                        // completely separate concept only Settings ▸ Pair Meter deals in). The
+                        // previous copy here borrowed that language and was actively misleading:
+                        // it implied this screen was registering the device the way that flow
+                        // does, when neither this QR scan nor manual entry ever calls
+                        // POST /v1/fleet/devices/register — see DevicePairingStatus's class doc.
+                        "Binds this shift to the vehicle — does not register the tablet"
                     },
                     fontFamily = InterFamily,
                     fontSize = 14.sp,
@@ -702,6 +723,44 @@ private fun DeviceMismatchWarningDialog(message: String?, onDismiss: () -> Unit)
                 )
                 Text(
                     "Your shift has already started — this is just a heads-up, nothing to fix here right now.",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textMuted,
+                )
+                CaptainButton(text = "OK, continue", modifier = Modifier.fillMaxWidth(), onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * "This tablet isn't registered with fleet dispatch" advisory — see
+ * [LoginVehicleBindUiState.showUnpairedDeviceNotice]'s doc for exactly when this fires and why it
+ * is not a blocking gate. Same [CaptainDialogScrim]/[CaptainPanel] shape as
+ * [DeviceMismatchWarningDialog] just above (including scrim-tap dismissing exactly like its own
+ * button, per that composable's existing convention) — a single acknowledgement, not a form.
+ */
+@Composable
+private fun UnpairedDeviceNoticeDialog(visible: Boolean, onDismiss: () -> Unit) {
+    CaptainDialogScrim(visible = visible, onDismissRequest = onDismiss) {
+        CaptainPanel(modifier = Modifier.width(520.dp), cornerRadiusDp = 20, raised = true) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
+                    Text("Tablet not registered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+                }
+                Text(
+                    "This tablet has never been paired with fleet dispatch. It can still run fares " +
+                        "normally, but your operator's dashboard cannot see it, and it will not " +
+                        "receive remote lock, locate or force-update commands.",
+                    fontFamily = InterFamily,
+                    fontSize = 15.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+                Text(
+                    "Pairing needs a one-time code your operator generates for this vehicle — " +
+                        "Settings ▸ About ▸ Device heartbeat, or Settings ▸ Pair Meter. You can " +
+                        "start your shift without it; this is just a heads-up.",
                     fontFamily = InterFamily,
                     fontSize = 13.sp,
                     color = CaptainPalette.textMuted,

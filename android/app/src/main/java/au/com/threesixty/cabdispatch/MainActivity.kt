@@ -18,8 +18,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.DevicePairingStatus
 import au.com.threesixty.cabdispatch.domain.KioskLockController
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchNavHost
+import au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner
 import au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner
 import au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner
 import au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner
@@ -39,12 +41,18 @@ import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
  *    `LOCK_TASK_MODE_LOCKED` state (a DPC/Knox lock this app did not start) is never released from
  *    here — only a pin this app itself put in `PINNED` mode ever is.
  * 2. **The fleet-command/connectivity banners** — [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner],
+ *    [au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner],
  *    [au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner], and
  *    [au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner] are composed once here, `Box`-stacked
  *    over [CabDispatchNavHost], so they follow the driver across every screen instead of living
- *    inside whichever screen happens to be open — see that file's own doc. Unlike the other two,
+ *    inside whichever screen happens to be open — see that file's own doc. Unlike the others,
  *    [OfflineBanner] is unconditional (not gated behind an `if` here) — it reads live connectivity
  *    state itself and renders nothing when online with nothing queued, see its own doc.
+ *    [DeviceUnpairedBanner] (2026-09-06) is gated on [DevicePairingStatus.isUnpaired] reading
+ *    `commandState.deviceId` — the exact same field [DeviceCommandHeartbeat] itself gates its whole
+ *    poll loop on, so this banner is on precisely when that loop is off. See
+ *    [au.com.threesixty.cabdispatch.domain.DevicePairingStatus]'s class doc for the onboarding
+ *    defect this closes.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,6 +125,9 @@ private fun CabDispatchScreenRoot() {
                     }
                     if (commandState.forceUpdatePending) {
                         ForceUpdatePendingBanner()
+                    }
+                    if (DevicePairingStatus.isUnpaired(commandState.deviceId)) {
+                        DeviceUnpairedBanner()
                     }
                     // Unconditional: OfflineBanner reads live connectivity + outbox state itself
                     // and renders nothing when there's nothing honest to say — see its own doc.

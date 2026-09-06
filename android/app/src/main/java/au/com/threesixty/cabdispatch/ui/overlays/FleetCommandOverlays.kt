@@ -80,6 +80,17 @@ import kotlinx.coroutines.launch
  * rounded-corner backdrop is touched, not its readable text/icons — the same "not free, but the
  * right trade-off for an app-wide signal" reasoning [ForceUpdatePendingBanner] above already
  * accepts for the exact same reason.
+ *
+ * [DeviceUnpairedBanner] (2026-09-06, onboarding-visibility defect pass) reuses [KioskLockedBanner]'s
+ * exact bottom-START corner rather than claiming a fourth position, on a deliberate, documented
+ * invariant: the two are mutually exclusive. `kioskLocked` can only ever be `true` off a value this
+ * device *read back from a successful device-command-heartbeat poll* (see [DeviceCommandState]'s
+ * doc), and that poll does not exist at all while unpaired ([DeviceCommandHeartbeat] hard-gates its
+ * whole loop on [SessionHolder.deviceId] being non-null) — so a tablet showing this banner has
+ * never once been in a position to read a `kioskLocked=true` back. If that invariant is ever broken
+ * (e.g. a future change stops resetting [DeviceCommandState] to its defaults on unpairing), these
+ * two would need separate corners; until then, sharing one is a deliberate simplicity choice, not
+ * an oversight.
  */
 
 /**
@@ -307,6 +318,68 @@ fun KioskLockedBanner(modifier: Modifier = Modifier) {
                 fontSize = 12.sp,
                 color = Deck.info,
             )
+        }
+    }
+}
+
+/**
+ * A quiet, permanent, non-blocking indicator that this tablet has never completed
+ * `POST /v1/fleet/devices/register` — see [au.com.threesixty.cabdispatch.domain.DevicePairingStatus]'s
+ * class doc for the full defect writeup and why the rego-bind path in "Bind to vehicle" cannot
+ * close this gap on its own.
+ *
+ * Deliberately the same quiet-chip shape as [KioskLockedBanner] (same corner too — see this file's
+ * "Placement" doc for the mutual-exclusivity invariant that makes sharing it safe) rather than
+ * [ForceUpdatePendingBanner]'s louder top-centre panel: this is a standing operational fact a
+ * driver or operator should be able to glance at and confirm, not a fresh event demanding
+ * immediate action — the onboarding-time advisory in
+ * [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen] is what actually surfaces
+ * this at the one moment a decision could be made about it; this banner's job is only to keep it
+ * from ever going quiet again afterwards. Static text, no animation (see this app's standing
+ * "no new looping/timer-driven animation" rule) — it appears and disappears solely by composing in
+ * or out of [au.com.threesixty.cabdispatch.MainActivity]'s `if`, exactly like [KioskLockedBanner]/
+ * [ForceUpdatePendingBanner] above.
+ *
+ * Not hit-testable (no `clickable`/`pointerInput`), same reasoning as [KioskLockedBanner]: the real
+ * fix lives in Settings ▸ About ▸ Device heartbeat (or ▸ Pair Meter), which needs a code only an
+ * operator can generate — this banner cannot honestly offer a one-tap fix for something it cannot
+ * do itself, so it names where the fix lives in text instead of pretending a tap here would do it.
+ */
+@Composable
+fun DeviceUnpairedBanner(modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 10.dp, bottom = 10.dp)
+                .clip(RoundedCornerShape(Deck.R_SM.dp))
+                .background(Deck.panel.copy(alpha = 0.9f))
+                .border(1.dp, Deck.stopped.copy(alpha = 0.6f), RoundedCornerShape(Deck.R_SM.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Deck.stopped),
+            )
+            Column {
+                Text(
+                    text = "TABLET NOT REGISTERED",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = Deck.stopped,
+                )
+                Text(
+                    text = "Remote lock/locate/update unavailable — pair via Settings ▸ About",
+                    fontFamily = InterFamily,
+                    fontSize = 10.sp,
+                    color = Deck.textSecondary,
+                )
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.UserDto
+import au.com.threesixty.cabdispatch.domain.DevicePairingStatus
 import au.com.threesixty.cabdispatch.domain.DriverLoginResult
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
@@ -92,6 +93,21 @@ data class LoginVehicleBindUiState(
      * of continuing straight on to [CabDispatchRoutes.SHIFT_START][au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.SHIFT_START] —
      * [LoginVehicleBindViewModel.dismissDeviceMismatchWarning] does that once acknowledged. */
     val deviceMismatchWarning: String? = null,
+    /**
+     * Set the moment [LoginVehicleBindViewModel.bindVehicle] completes on a tablet
+     * [DevicePairingStatus.isUnpaired] — i.e. neither the QR-scan nor the manual-rego path just
+     * taken has ever registered this device (see [DevicePairingStatus]'s class doc: *neither* path
+     * on this screen calls `POST /v1/fleet/devices/register`; both only resolve a rego to a
+     * fleet-vehicle UUID). Surfaced as a single dismissible advisory
+     * ([au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindScreen]'s
+     * `UnpairedDeviceNoticeDialog`) at the one moment in onboarding a driver could actually act on
+     * it, rather than only in Settings ▸ About two navigation levels deep. Deliberately advisory,
+     * not blocking — see [startShift]'s doc for why pairing is not a hard prerequisite to earning.
+     * [dismissUnpairedDeviceNotice] clears it; re-set on every subsequent [bindVehicle] call (e.g.
+     * a driver binding again next shift) for as long as the tablet stays unpaired, so this cannot
+     * be dismissed once and then forgotten permanently.
+     */
+    val showUnpairedDeviceNotice: Boolean = false,
 ) {
     val allChecklistItemsChecked: Boolean get() = checklist.values.all { it }
 }
@@ -206,7 +222,18 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     fun bindVehicle() {
         val vehicleId = _uiState.value.vehicleIdInput.trim()
         if (vehicleId.isBlank()) return
-        _uiState.update { it.copy(boundVehicleId = vehicleId, resolvedVehicleUuid = null, step = LoginStep.INSPECTION) }
+        _uiState.update {
+            it.copy(
+                boundVehicleId = vehicleId,
+                resolvedVehicleUuid = null,
+                step = LoginStep.INSPECTION,
+                // Neither path into this method (QR scan or manual rego, see this screen's own
+                // doc) ever registers this tablet as a Device — see DevicePairingStatus's class
+                // doc — so this is the one honest moment in onboarding to say so, before the
+                // driver is three screens further in and still has no idea.
+                showUnpairedDeviceNotice = DevicePairingStatus.isUnpaired(SessionHolder.deviceId),
+            )
+        }
         // Resolve rego -> real fleet-vehicle UUID in the background (see DriverSession.vehicleUuid's
         // doc for why). Deliberately does not block the bind flow's transition to INSPECTION above —
         // same "don't stall the driver on a background lookup" posture the rest of this app's
@@ -225,6 +252,11 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(checklist = it.checklist + (key to !(it.checklist[key] ?: false))) }
     }
 
+    /** Acknowledges [LoginVehicleBindUiState.showUnpairedDeviceNotice] — a one-off dismiss for this
+     * viewing, not a permanent "don't tell me again": see that field's own doc on why it is re-set
+     * on every future [bindVehicle] call for as long as the tablet actually stays unpaired. */
+    fun dismissUnpairedDeviceNotice() = _uiState.update { it.copy(showUnpairedDeviceNotice = false) }
+
     /** Non-null only for the brief window between a successful [startShift] that carried a
      * [LoginVehicleBindUiState.deviceMismatchWarning] and the driver dismissing that dialog —
      * see [dismissDeviceMismatchWarning]. The shift itself is already open by the time this is
@@ -232,6 +264,38 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
      * given, so the driver sees the warning before moving on to the shift-start screen. */
     private var pendingOnShiftStarted: (() -> Unit)? = null
 
+    /**
+     * ### Deliberately does NOT gate on [DevicePairingStatus.isUnpaired] (2026-09-06 review)
+     * Argued both ways before landing here, because both sides are genuine:
+     *
+     * FOR hard-blocking: an unpaired tablet cannot be remotely kiosk-locked, located, or
+     * force-updated ([DeviceCommandHeartbeat] simply never polls for it — see that class's own
+     * doc). For a kiosk fleet that is a real operational and safety gap, not a cosmetic one — it is
+     * exactly the gap this whole pass exists to close, and a warning a driver can tap past does
+     * not, by itself, guarantee an operator ever follows up.
+     *
+     * AGAINST hard-blocking, and the reason it loses: registering a device needs a pairing code
+     * only an admin/owner role can mint (`POST /v1/fleet/vehicles/{id}/pairing-code` is
+     * `_require_admin` server-side — see [DevicePairingStatus]'s class doc). A driver's own session
+     * can never produce one. Blocking shift-start on pairing would therefore not be "go get paired
+     * and then start your shift" — it would be "your ability to earn today now depends on whether a
+     * depot admin who may not be awake, on-site, or reachable issues you a code in the next few
+     * minutes." [ForceUpdatePendingBanner]'s own doc already rejected exactly this shape of trade-off
+     * for a *lesser* stake (an available-but-unapplied app update) as "actively harmful... would
+     * permanently brick a revenue-earning meter". Bricking the START of a shift over a depot's
+     * pairing backlog is the same mistake with a worse victim: a driver who did nothing wrong,
+     * blocked from earning at all, with — per this task's own hard constraint — no guarantee of a
+     * way forward if the one person who could unblock them is unreachable.
+     *
+     * So the chosen shape is: loud and repeated (the onboarding advisory below fires on every
+     * unpaired bind, not once-and-forgotten; the app-wide
+     * [au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner] stays up for the entire
+     * unpaired shift), but never a hard stop. If a fleet operator later decides the safety case
+     * outweighs this, the natural place to add a real block is here — checking
+     * [DevicePairingStatus.isUnpaired] before the network call below — but that is a deliberate
+     * policy decision for this app's owner to make with eyes open, not a default this pass reaches
+     * for on its own.
+     */
     fun startShift(onShiftStarted: () -> Unit) {
         val state = _uiState.value
         val driverId = state.loggedInDriverId ?: return
