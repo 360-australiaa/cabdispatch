@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
 import java.util.UUID
@@ -97,6 +98,14 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 passengerCount = tripContext.passengerCount,
                 wheelchairHiring = tripContext.wheelchairHiring,
                 airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
+                // "Set Price" fix (product-reported, 2026-09): this was already persisted to Room
+                // (openTripInRoom below) and already billed correctly at Close & Pay
+                // (reconstructFareState wires TripEntity.negotiatedTotal into the pure engine's
+                // close()) — but the LIVE engine never learned about it, so the dial kept showing
+                // the ordinary metered accrual for a trip the driver had already fixed a price on.
+                // See FareState.negotiatedTotal/.total's doc for what this changes (display only,
+                // never what gets billed).
+                negotiatedTotal = tripContext.negotiatedTotal?.let { runCatching { BigDecimal(it) }.getOrNull() },
             )
             openTripInRoom(tripContext)
 
