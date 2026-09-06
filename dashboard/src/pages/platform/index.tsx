@@ -165,7 +165,8 @@ const EMPTY_RELEASE_FORM = { version_code: "", version_name: "", release_notes: 
 function AppReleasesSection() {
   const [skip, setSkip] = useState(0);
   const releasesQuery = useAppReleases(skip);
-  const publishRelease = usePublishAppRelease();
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const publishRelease = usePublishAppRelease(setUploadProgress);
   const setActive = useSetAppReleaseActive();
 
   const [formOpen, setFormOpen] = useState(false);
@@ -177,6 +178,7 @@ function AppReleasesSection() {
     setForm(EMPTY_RELEASE_FORM);
     setFile(null);
     setFormError(null);
+    setUploadProgress(null);
     setFormOpen(true);
   }
 
@@ -195,6 +197,7 @@ function AppReleasesSection() {
       setFormError("Choose the built .apk file to upload.");
       return;
     }
+    setUploadProgress(0);
     try {
       await publishRelease.mutateAsync({
         version_code: versionCode,
@@ -204,7 +207,13 @@ function AppReleasesSection() {
       });
       setFormOpen(false);
     } catch (err) {
+      // A session that expired mid-upload now retries once against a freshly
+      // refreshed token (see apiClient.ts) instead of losing the upload
+      // outright — this branch is a real remaining failure (network drop,
+      // duplicate version_code, refresh token itself expired), not that.
       setFormError(errorMessage(err));
+    } finally {
+      setUploadProgress(null);
     }
   }
 
@@ -288,16 +297,22 @@ function AppReleasesSection() {
 
       <Modal
         open={formOpen}
-        onClose={() => setFormOpen(false)}
+        onClose={() => {
+          // Closing this doesn't cancel the in-flight axios request, but
+          // hiding the modal mid-upload would lose the progress readout and
+          // invite a confused second attempt — keep it open until this one
+          // actually resolves.
+          if (!publishRelease.isPending) setFormOpen(false);
+        }}
         title="Publish release"
         description="Uploads a real APK to our own server — nothing goes through the Play Store. Every tablet flagged for update downloads and SHA-256-verifies this exact file before installing it."
         footer={
           <>
-            <Button variant="outline" onClick={() => setFormOpen(false)}>
+            <Button variant="outline" onClick={() => setFormOpen(false)} disabled={publishRelease.isPending}>
               Cancel
             </Button>
             <Button onClick={submitPublish} disabled={publishRelease.isPending}>
-              {publishRelease.isPending ? "Uploading…" : "Publish"}
+              {publishRelease.isPending ? `Uploading… ${uploadProgress ?? 0}%` : "Publish"}
             </Button>
           </>
         }
@@ -306,15 +321,36 @@ function AppReleasesSection() {
           {formError && (
             <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{formError}</p>
           )}
+          {publishRelease.isPending && (
+            <div className="flex flex-col gap-1">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-brand-primary transition-[width] duration-150"
+                  style={{ width: `${uploadProgress ?? 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {uploadProgress === 100
+                  ? "Upload complete — verifying on the server…"
+                  : `Uploading — ${uploadProgress ?? 0}% (large APKs can take a few minutes; don't close this).`}
+              </p>
+            </div>
+          )}
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">APK file</span>
-            <Input type="file" accept=".apk" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <Input
+              type="file"
+              accept=".apk"
+              disabled={publishRelease.isPending}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">Version code</span>
             <Input
               type="number"
               value={form.version_code}
+              disabled={publishRelease.isPending}
               onChange={(e) => setForm((v) => ({ ...v, version_code: e.target.value }))}
               placeholder="Must be higher than every tablet's current versionCode"
             />
@@ -323,6 +359,7 @@ function AppReleasesSection() {
             <span className="font-medium text-foreground">Version name</span>
             <Input
               value={form.version_name}
+              disabled={publishRelease.isPending}
               onChange={(e) => setForm((v) => ({ ...v, version_name: e.target.value }))}
               placeholder="1.2.0"
             />
@@ -331,6 +368,7 @@ function AppReleasesSection() {
             <span className="font-medium text-foreground">Release notes (optional)</span>
             <Input
               value={form.release_notes}
+              disabled={publishRelease.isPending}
               onChange={(e) => setForm((v) => ({ ...v, release_notes: e.target.value }))}
               placeholder="What changed in this build"
             />

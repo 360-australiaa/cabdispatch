@@ -42,7 +42,12 @@ export function useAppReleases(skip: number) {
   });
 }
 
-export function usePublishAppRelease() {
+/** [onProgress] fires with a real 0-100 (never fabricated smoothing/estimate)
+ * on every `onUploadProgress` tick axios reports for the multipart POST — a
+ * 144MB APK over a real connection takes real minutes, and the caller (the
+ * Publish release modal) renders this as a literal progress bar instead of
+ * the old, silent "Uploading…" with no sense of whether it's stuck. */
+export function usePublishAppRelease(onProgress?: (percent: number) => void) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (values: PublishReleaseValues) => {
@@ -53,7 +58,13 @@ export function usePublishAppRelease() {
         formData.append("release_notes", values.release_notes.trim());
       }
       formData.append("file", values.file);
-      const { data } = await apiClient.post<AppRelease>("/v1/platform/app-releases", formData);
+      const { data } = await apiClient.post<AppRelease>("/v1/platform/app-releases", formData, {
+        onUploadProgress: (event) => {
+          if (onProgress && event.total) {
+            onProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        },
+      });
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["platform", "app-releases"] }),
