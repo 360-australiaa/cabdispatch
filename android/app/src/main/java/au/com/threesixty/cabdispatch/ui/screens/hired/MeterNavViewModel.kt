@@ -121,6 +121,13 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
     /** Step index whose instruction has already been spoken for the current route (-1 = none). */
     private var lastSpokenStepIndex = -1
 
+    /** Which of [NavProgress.TURN_ALERT_THRESHOLDS_M] have already fired for the CURRENT step
+     * (2026-09-06 graduated-alert pass, see that constant's own doc). Cleared every time the step
+     * advances (same sites that reset [lastSpokenStepIndex] — a fresh step means fresh thresholds
+     * to cross again), never partially — a threshold is either "already announced for this step"
+     * or not, there is no notion of un-announcing one. */
+    private val announcedThresholdsForStep = mutableSetOf<Double>()
+
     init {
         observeQuery()
         observeFixes()
@@ -201,6 +208,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
         announcer.flushAll()
         offRouteTracker.reset()
         lastSpokenStepIndex = -1
+        announcedThresholdsForStep.clear()
         typedQuery.value = ""
         _uiState.value = MeterNavUiState(voiceEnabled = _uiState.value.voiceEnabled)
     }
@@ -251,6 +259,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
     private fun installRoute(route: DirectionsRoute, fix: LocationFix) {
         offRouteTracker.reset()
         lastSpokenStepIndex = -1
+        announcedThresholdsForStep.clear()
         val stepIndex = 0
         val remainingM = NavProgress.remainingDistanceM(fix.lat, fix.lng, route.steps, stepIndex)
         val remainingS = NavProgress.remainingDurationS(remainingM, route)
@@ -299,6 +308,7 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
 
         // Step advance + spoken instruction (once per step).
         val nextIndex = NavProgress.advanceStepIndex(fix.lat, fix.lng, route.steps, state.currentStepIndex)
+        val distanceToManeuver = NavProgress.distanceToCurrentManeuverM(fix.lat, fix.lng, route.steps, nextIndex)
         val remainingM = NavProgress.remainingDistanceM(fix.lat, fix.lng, route.steps, nextIndex)
         val remainingS = NavProgress.remainingDurationS(remainingM, route)
         _uiState.update {
@@ -306,20 +316,47 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
                 offRoute = false,
                 currentStepIndex = nextIndex,
                 currentInstruction = route.steps.getOrNull(nextIndex)?.instruction,
-                distanceToNextManeuverM = NavProgress.distanceToCurrentManeuverM(fix.lat, fix.lng, route.steps, nextIndex),
+                distanceToNextManeuverM = distanceToManeuver,
                 remainingDistanceM = remainingM,
                 remainingDurationS = remainingS,
                 etaEpochMillis = NavProgress.etaEpochMillis(System.currentTimeMillis(), remainingS),
             )
         }
-        if (nextIndex != state.currentStepIndex) speakStep(route, nextIndex)
+        if (nextIndex != state.currentStepIndex) {
+            speakStep(route, nextIndex)
+        } else {
+            // Same step as last fix -- the graduated re-announce this step's own instruction gets
+            // closer to the maneuver (see NavProgress.TURN_ALERT_THRESHOLDS_M's own doc). speakStep()
+            // itself only ever fires once per NEW step (its lastSpokenStepIndex dedup), which is
+            // exactly why this needs to be a separate call, not folded into it.
+            maybeAnnounceApproach(route, nextIndex, distanceToManeuver)
+        }
     }
 
     private fun speakStep(route: DirectionsRoute, index: Int) {
+        announcedThresholdsForStep.clear()
         if (index == lastSpokenStepIndex) return
         lastSpokenStepIndex = index
         val instruction = route.steps.getOrNull(index)?.instruction ?: return
         if (_uiState.value.voiceEnabled) announcer.announce(instruction, SpeechPriority.NAV)
+    }
+
+    /**
+     * Real driver feedback (2026-09-06): the instruction was only ever spoken once, right as the
+     * driver committed to a leg, then silently never mentioned again — easy to forget by the time
+     * a long leg's turn actually arrives. Re-announces the SAME instruction [speakStep] already
+     * spoke once, each time [distanceM] drops at/below one of [NavProgress.TURN_ALERT_THRESHOLDS_M]
+     * for the first time on this step (checked farthest-first so a fix that skips straight past an
+     * earlier threshold — a coarse GPS jump — doesn't also fire the one(s) before it out of order).
+     */
+    private fun maybeAnnounceApproach(route: DirectionsRoute, index: Int, distanceM: Double) {
+        val instruction = route.steps.getOrNull(index)?.instruction ?: return
+        for (threshold in NavProgress.TURN_ALERT_THRESHOLDS_M) {
+            if (distanceM <= threshold && announcedThresholdsForStep.add(threshold)) {
+                if (_uiState.value.voiceEnabled) announcer.announce(instruction, SpeechPriority.NAV)
+                break
+            }
+        }
     }
 
     // ---------------------------------------------------------------- persistence

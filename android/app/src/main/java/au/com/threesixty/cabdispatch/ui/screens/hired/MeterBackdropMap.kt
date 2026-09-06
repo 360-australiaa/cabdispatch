@@ -26,7 +26,6 @@ import au.com.threesixty.cabdispatch.ui.theme.createGlowLine
 import au.com.threesixty.cabdispatch.ui.theme.toMapboxHex
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
-import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
@@ -82,12 +81,14 @@ internal data class MapPoint(val lat: Double, val lng: Double)
  *   (nothing drawn) until a route has actually been fetched.
  *
  * **Camera.** With no [plannedRoute] (the ordinary metered mockup-#3 backdrop) the camera frames
- * once on the first real position then eases to follow the vehicle at a fixed zoom, exactly as
- * before. Once a real [plannedRoute] exists (mockup-#4's "TRIP IN PROGRESS" pane) the camera
- * instead fits the whole picture — route + vehicle + destination — via `MapboxMap
- * .cameraForCoordinates(points, EdgeInsets, bearing = null, pitch = null)`, re-fit whenever the
- * route reference changes (a fresh route or a reroute), so the driver sees the full trip context
- * rather than a tight follow-cam that would hide the destination off-screen.
+ * once on the first real position then eases to follow the vehicle at a fixed zoom ([BACKDROP_ZOOM]),
+ * exactly as before. Once a real [plannedRoute] exists (mockup-#4's "TRIP IN PROGRESS" pane, real
+ * turn-by-turn) the camera instead live-follows the vehicle at a tighter [NAVIGATION_ZOOM],
+ * rotating to match the real direction of travel ([LocationFix.heading]) on every fix — direct
+ * driver feedback (2026-09-06): a prior version of this only re-framed the WHOLE route on a
+ * reroute and otherwise sat still, so an upcoming turn was never actually visible forming on the
+ * map ahead of time. A live, rotating, direction-of-travel view is what every real turn-by-turn
+ * app does while actively navigating, for exactly this reason.
  *
  * Gestures are fully disabled (`gestures.updateSettings`) — this is a backdrop the dial floats
  * over, not a map to pan. Scale bar and compass are hidden (they'd sit under the dim overlay
@@ -196,31 +197,36 @@ internal fun MeterBackdropMap(
         )
     }
 
-    // Bounds-fit camera (navigator mode only) — re-fit whenever the route reference changes (a
-    // fresh route or a reroute) or the destination moves, so the whole trip stays in frame rather
-    // than a tight follow-cam hiding the destination off-screen. `cameraForCoordinates` is the
-    // synchronous overload (the map's already loaded by the time a route can exist), padded so the
-    // route never touches the pane's edge (where the dial/cards sit in the caller's layout).
-    LaunchedEffect(mapReady, plannedRoute, destination) {
+    // Live-follow-with-bearing camera (navigator mode only) — replaces a prior static bounds-fit
+    // that framed the WHOLE route+vehicle+destination once and then only re-fit on a reroute (real
+    // driver feedback, 2026-09-06: "before he take a right or left, he should see on the map that
+    // he have to take a right or left" — a camera that only moves on reroute can't show that; the
+    // driver needs a tight, live, direction-of-travel-oriented view, the same thing every real
+    // turn-by-turn app (Google Maps, Waze) does while actively navigating). `bearing` comes from the
+    // real fix ([LocationFix.heading], wired through from `Location.getBearing()` — see that
+    // property's own doc) — genuinely null while stationary/no bearing fix, in which case the
+    // camera keeps whatever bearing it last had rather than snapping to a fabricated north-up
+    // orientation. `followKey` (~10m quantised, see its own doc above) plus a coarse (~5°) bearing
+    // quantisation are both in the effect key so a stationary cab's GPS jitter doesn't restart an
+    // ease every second. First arrival (not yet [cameraFramed]) jumps straight there with
+    // `setCamera` — an ease from the ambient follow-cam's old wide zoom would otherwise be a slow,
+    // disorienting zoom-and-spin right as the driver most needs their bearings.
+    val bearingKey = liveFix?.heading?.let { (it / 5.0).roundToInt() * 5 }
+    LaunchedEffect(mapReady, hasPlannedRoute, followKey, bearingKey) {
         if (!mapReady || !hasPlannedRoute) return@LaunchedEffect
         val holder = mapHolder.value ?: return@LaunchedEffect
-        val points = buildList {
-            plannedRoute.forEach { add(Point.fromLngLat(it.lng, it.lat)) }
-            vehicle?.let { add(Point.fromLngLat(it.lng, it.lat)) }
-            destination?.let { add(Point.fromLngLat(it.lng, it.lat)) }
+        val target = vehicle ?: return@LaunchedEffect
+        val camera = CameraOptions.Builder()
+            .center(Point.fromLngLat(target.lng, target.lat))
+            .zoom(NAVIGATION_ZOOM)
+            .apply { liveFix?.heading?.let { bearing(it) } }
+            .build()
+        if (!cameraFramed) {
+            holder.mapView.mapboxMap.setCamera(camera)
+            cameraFramed = true
+        } else {
+            holder.mapView.camera.easeTo(camera, MapAnimationOptions.mapAnimationOptions { duration(700) })
         }
-        if (points.size < 2) return@LaunchedEffect
-        runCatching {
-            val fitted = holder.mapView.mapboxMap.cameraForCoordinates(
-                points,
-                CameraOptions.Builder().build(),
-                EdgeInsets(BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX, BOUNDS_FIT_PADDING_PX),
-                null,
-                null,
-            )
-            holder.mapView.camera.easeTo(fitted, MapAnimationOptions.mapAnimationOptions { duration(900) })
-        }
-        cameraFramed = true
     }
 
     // Layer refresh on data change only (never moves the camera): the planned route (if any) and
@@ -311,7 +317,13 @@ internal fun MeterBackdropMap(
 }
 
 private const val BACKDROP_ZOOM = 14.5
-private const val BOUNDS_FIT_PADDING_PX = 56.0
+
+/** Closer than [BACKDROP_ZOOM] — the ambient/ordinary-metered zoom is tuned for "where roughly am
+ * I", this one for "which lane/turn is coming up", the same tighter-zoom convention every real
+ * turn-by-turn app uses while actively navigating (see the live-follow camera effect's own doc). A
+ * chosen default, not a value derived from any spec — tune if it reads too tight/too wide on a
+ * real device. */
+private const val NAVIGATION_ZOOM = 17.0
 
 private data class BackdropHolder(
     val mapView: MapView,

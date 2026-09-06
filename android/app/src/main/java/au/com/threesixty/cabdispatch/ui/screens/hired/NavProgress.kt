@@ -31,6 +31,18 @@ object NavProgress {
     /** Within this many metres of the current maneuver point, the step counts as reached. */
     const val STEP_ARRIVE_M = 30.0
 
+    /**
+     * Graduated spoken/visual turn-alert distances, farthest first (2026-09-06, direct driver
+     * feedback: the instruction for a step used to be spoken exactly once, right as the driver
+     * became committed to that leg — on a long leg it was easy to forget by the time the turn
+     * actually arrived, since nothing spoke or visually escalated again as it got close). Each
+     * entry the vehicle crosses (distance-to-maneuver drops at/below it) for the CURRENT step
+     * fires once — see [MeterNavViewModel]'s own re-announce tracking for how "once per threshold
+     * per step" is enforced. Chosen defaults (typical suburban-street sight/reaction distances),
+     * not values derived from any spec — tune if they read too early/late on a real device.
+     */
+    val TURN_ALERT_THRESHOLDS_M = listOf(150.0, 50.0)
+
     /** Farther than this from every route vertex is "off the line" for one fix. */
     const val OFF_ROUTE_M = 80.0
 

@@ -409,7 +409,11 @@ fun DeckHomeScreen(
             // pill's HIRED state (see HeaderStatus' own doc for what is NOT derivable here).
             hasActiveTrip = hasActiveTrip,
             onShowDriverId = { showDriverId = true },
-            onOpenProfile = { navController.navigate(CabDispatchRoutes.PROFILE) },
+            // Same lock as the rail's dispatch() guard above -- the header avatar is a second,
+            // easy-to-miss escape hatch to Profile that a driver could tap mid-fare (found live:
+            // it bypasses CaptainNavRail entirely, so fixing dispatch() alone did not close this
+            // one). No-op while a trip is open, same as every other non-METER rail action.
+            onOpenProfile = { if (!hasActiveTrip) navController.navigate(CabDispatchRoutes.PROFILE) },
             onToggleAvailability = { viewModel.setAvailable(!state.isAvailable) },
             onSos = { AppContainer.duressController.trigger(state.session?.vehicleId, state.session?.driverId) },
         )
@@ -569,6 +573,13 @@ fun DeckHomeScreen(
                     // the ring + "Break in" + "Working until" + the TAKE BREAK button at
                     // arm's-length sizes, which needs the extra 16dp.
                     Row(modifier = Modifier.height(152.dp).fillMaxWidth()) {
+                        // SystemStatusCard (GPS/network/printer/meter, bottom-right) removed
+                        // 2026-09-06 on direct driver feedback -- redundant with the header strip's
+                        // own StatusDot row (CaptainHeader, ~line 903) which already shows the same
+                        // GPS/network/printer/battery state, just persistently repeated a second
+                        // time here. ShiftStatsBar now simply fills the whole row instead of sharing
+                        // it -- weight(1f) with no sibling already stretches full-width, no extra
+                        // width math needed.
                         ShiftStatsBar(
                             state = state,
                             extras = homeExtras,
@@ -577,10 +588,6 @@ fun DeckHomeScreen(
                             onTakeBreak = { viewModel.setAvailable(false) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
-                        Spacer(Modifier.width(16.dp))
-                        // 230dp -> 268dp so the 2x2 GPS / 4G-or-WIFI / PRINTER / METER cells
-                        // fit their tone dot + label + value without wrapping.
-                        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
                     }
                 }
             }
@@ -636,9 +643,13 @@ fun DeckHomeScreen(
         DriverIdCard(
             session = state.session,
             verified = homeExtras.verified,
+            // Third escape hatch to Profile found live (rail dispatch() and the header avatar
+            // were the other two) -- same "no-op while a trip is open" guard as both.
             onOpenProfile = {
-                showDriverId = false
-                navController.navigate(CabDispatchRoutes.PROFILE)
+                if (!hasActiveTrip) {
+                    showDriverId = false
+                    navController.navigate(CabDispatchRoutes.PROFILE)
+                }
             },
             onDismiss = { showDriverId = false },
         )
@@ -953,13 +964,6 @@ private fun networkTone(networkType: String?): HudTone = when (networkType) {
 private fun networkIcon(networkType: String?): ImageVector =
     if (networkType == "wifi") Icons.Rounded.Wifi else Icons.Rounded.SignalCellularAlt
 
-/** [SystemStatusCard]'s network cell value for the same real signal ("ONLINE"/"OFFLINE"/"—"). */
-private fun networkCellValue(networkType: String?): String = when (networkType) {
-    "wifi", "4g" -> "ONLINE"
-    "offline" -> "OFFLINE"
-    else -> "—"
-}
-
 /** Tone for the real GPS fix-quality tier (`DashboardStatusStrip.gpsQuality`). GOOD/FAIR are
  * exactly what [au.com.threesixty.cabdispatch.domain.GpsQualityClassifier.isOk] calls ok (green),
  * POOR is a real-but-degraded fix (amber), no fix / permission denied is red. */
@@ -967,14 +971,6 @@ private fun gpsTone(quality: GpsQuality): HudTone = when (quality) {
     GpsQuality.GOOD, GpsQuality.FAIR -> HudTone.Success
     GpsQuality.POOR -> HudTone.Warning
     GpsQuality.NO_FIX, GpsQuality.PERMISSION_DENIED -> HudTone.Danger
-}
-
-private fun gpsValueLabel(quality: GpsQuality): String = when (quality) {
-    GpsQuality.GOOD -> "GOOD"
-    GpsQuality.FAIR -> "FAIR"
-    GpsQuality.POOR -> "POOR"
-    GpsQuality.NO_FIX -> "NO FIX"
-    GpsQuality.PERMISSION_DENIED -> "DENIED"
 }
 
 /** One header system-strip entry: tone-tinted icon, label, and a [PulsingDot] that breathes only
@@ -1730,64 +1726,13 @@ private fun NextBreakTile(
     }
 }
 
-/**
- * SYSTEM STATUS on a [GlassCard]: a 2x2 grid of small tone-tinted cells — GPS (real fix-quality
- * tier), the real transport type (4G / WI-FI, or NETWORK when offline/unknown), PRINTER and METER
- * (tariff signed and cached = READY; otherwise WAIT, amber — waiting for a tariff is not a fault).
- * Green / amber / red come from [gpsTone]/[networkTone] — the same mapping the header strip uses.
- */
-@Composable
-private fun SystemStatusCard(state: WheelDashboardUiState, modifier: Modifier = Modifier) {
-    val meterReady = state.tariff != null
-    GlassCard(modifier = modifier, cornerRadiusDp = 18) {
-        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Shield, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(16.dp))
-                Text(
-                    "SYSTEM STATUS",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    letterSpacing = 1.sp,
-                    color = CaptainPalette.textMuted,
-                    modifier = Modifier.padding(start = 6.dp),
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SystemStatusCell("GPS", gpsValueLabel(state.status.gpsQuality), gpsTone(state.status.gpsQuality), Modifier.weight(1f))
-                    SystemStatusCell(networkStatusLabel(state.status.networkType), networkCellValue(state.status.networkType), networkTone(state.status.networkType), Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SystemStatusCell("PRINTER", if (state.status.printerOk) "ON" else "OFF", if (state.status.printerOk) HudTone.Success else HudTone.Danger, Modifier.weight(1f))
-                    SystemStatusCell("METER", if (meterReady) "READY" else "WAIT", if (meterReady) HudTone.Success else HudTone.Warning, Modifier.weight(1f))
-                }
-            }
-        }
-    }
-}
-
-/** One SYSTEM STATUS cell: tone-tinted fill/border, a [PulsingDot] that breathes only when
- * something needs attention (amber/red), muted label, tone-coloured value. */
-@Composable
-private fun SystemStatusCell(label: String, value: String, tone: HudTone, modifier: Modifier = Modifier) {
-    val toneColor = tone.color()
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(toneColor.copy(alpha = 0.10f))
-            .border(1.dp, toneColor.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PulsingDot(color = toneColor, animated = tone == HudTone.Danger || tone == HudTone.Warning, size = 8.dp)
-        Column(modifier = Modifier.padding(start = 8.dp)) {
-            Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 0.5.sp, color = CaptainPalette.textMuted, maxLines = 1)
-            Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = toneColor, maxLines = 1)
-        }
-    }
-}
+// SystemStatusCard/SystemStatusCell (the bottom-right SYSTEM STATUS tile: GPS/network/printer/
+// meter) removed 2026-09-06 on direct driver feedback -- it duplicated the header strip's own
+// StatusDot row (CaptainHeader, ~line 903) with no removal ever having landed before now (checked
+// git history and HANDOFF.md -- no prior removal attempt is recorded). gpsValueLabel/
+// networkCellValue below were this composable's own value-formatting helpers, unused by anything
+// else, and are removed with it; networkStatusLabel/gpsTone/networkTone are kept -- the header
+// strip still uses those three.
 
 // --- Shift-time formatting helpers (real session.shiftStartAt, no fabricated numbers) ---------
 
@@ -1900,7 +1845,22 @@ private fun CaptainNavRail(
     onLogOff: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Real bug fix (2026-09-06, live driver testing): a driver could tap any other rail item
+    // mid-fare and land on it -- the Dashboard pane would then show its OWN "METER STATUS: OFF /
+    // Tap to start a new fare" dial, directly contradicting the still-green METER tile and the
+    // "1 Active" trip count, while the actual fare kept accruing unattended underneath. `hasActiveTrip`
+    // was already computed and passed in here (see this composable's own doc) but nothing ever
+    // consulted it before dispatching -- every action fired unconditionally. Fixed at this single
+    // choke point every rail tap and header/rail navigation action already funnels through: while a
+    // trip is open, the ONLY action that's allowed through is switching TO the METER pane itself
+    // (already-selected METER taps, or re-tapping METER from METER, are harmless no-ops here).
+    // Everything else (DASHBOARD/TRIPS/DISPATCH/EARNINGS/HISTORY/ZONES/PRICING/VOUCHERS/MESSAGES/MAP,
+    // DRIVER, SETTINGS, LOG OUT, and the Vouchers info dialog) is a no-op until the trip is
+    // genuinely closed-and-paid (CloseAndPayViewModel.finalizeClose flips hasActiveTrip back to
+    // false, per DeckHomeScreen's own observeActiveTrip() read above). `RailTile` below dims these
+    // locked tiles so the no-op doesn't look like a stalled tap.
     fun dispatch(action: RailAction) {
+        if (hasActiveTrip && action != RailAction.ToPane(CaptainPane.METER)) return
         when (action) {
             is RailAction.ToPane -> onSelectPane(action.pane)
             RailAction.OpenVouchers -> onOpenVouchers()
@@ -1938,6 +1898,10 @@ private fun CaptainNavRail(
                     badge = if (target == CaptainPane.DISPATCH && dispatchOfferCount > 0) dispatchOfferCount else null,
                     // METER's target is CaptainPane.METER only while a fare is actually open.
                     live = hasActiveTrip && target == CaptainPane.METER,
+                    // Same condition dispatch() itself gates on above -- kept in sync deliberately
+                    // (both read hasActiveTrip + compare against the same METER action) rather than
+                    // exposed as a shared val, since this one also needs `item.action` per-tile.
+                    locked = hasActiveTrip && item.action != RailAction.ToPane(CaptainPane.METER),
                     onClick = { dispatch(item.action) },
                 )
             }
@@ -1951,9 +1915,16 @@ private fun CaptainNavRail(
  * fare is open) breathes a green halo instead so the driver can see at a glance that a meter is
  * running from any pane; [badge] is the red offer-count dot on DISPATCH. Press feedback is the
  * same bouncy spring squash every tappable surface in this app uses.
+ *
+ * [locked] (2026-09-06, real driver-testing fix): true for every tile except METER while a trip
+ * is open -- `onClick` still fires (dispatch() itself is the actual guard, see CaptainNavRail's
+ * own doc), so this is purely the honest visual half of that fix: a locked tile that looked fully
+ * normal would read as a broken/unresponsive tap, not an intentional "finish this trip first"
+ * state. Plain reduced opacity, no motion -- this app's standing rule against decorative
+ * animation on driver-facing chrome applies here same as anywhere else.
  */
 @Composable
-private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boolean, onClick: () -> Unit) {
+private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boolean, locked: Boolean, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -1977,11 +1948,13 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
         else -> null
     }
     val shape = RoundedCornerShape(16.dp)
+    val lockedAlpha by animateFloatAsState(if (locked) 0.35f else 1f, label = "rail-locked-alpha")
     Box(
         modifier = Modifier
             .width(96.dp)
             .height(72.dp)
             .scale(scale)
+            .alpha(lockedAlpha)
             .then(if (halo != null) Modifier.neonGlow(halo, 16.dp, strength = breathe) else Modifier)
             .clip(shape)
             .background(fill)
@@ -2125,8 +2098,6 @@ private fun PreviewShiftStatsBar() {
             onTakeBreak = {},
             modifier = Modifier.weight(1f).fillMaxHeight(),
         )
-        Spacer(Modifier.width(16.dp))
-        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
     }
 }
 
@@ -2142,8 +2113,6 @@ private fun PreviewShiftStatsBarLight() {
             onTakeBreak = {},
             modifier = Modifier.weight(1f).fillMaxHeight(),
         )
-        Spacer(Modifier.width(16.dp))
-        SystemStatusCard(state = state, modifier = Modifier.width(268.dp).fillMaxHeight())
     }
 }
 

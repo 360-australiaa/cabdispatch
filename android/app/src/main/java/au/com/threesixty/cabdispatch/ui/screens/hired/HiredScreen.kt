@@ -565,12 +565,19 @@ private class MeterActions(
 )
 
 // Column proportions for the two-column shape every state of this pane uses (2026-09-04b redesign:
-// DIAL LEFT | MAP RIGHT, no third column — see MeterPaneLayout's doc). Equal weights, not fixed dp,
-// so each panel genuinely fills half of whatever width/height DeckHomeScreen's slot gives this Row
-// (which is already the full footer-collapsed height for the whole time this pane is shown) — per
-// the direct correction that both the dial and the map should grow to fill their half, not just one
-// of them.
-private const val DIAL_COL_WEIGHT = 1f
+// DIAL LEFT | MAP RIGHT, no third column — see MeterPaneLayout's doc). Weighted, not fixed dp, so
+// each panel genuinely fills its share of whatever width/height DeckHomeScreen's slot gives this
+// Row (which is already the full footer-collapsed height for the whole time this pane is shown).
+//
+// Rebalanced 2026-09-06 on direct driver feedback ("map should be the center, so driver should see
+// the route very straight") -- an equal 50/50 split (the original 2026-09-04b correction, kept as
+// a code comment below for context) still left the map sharing the screen with the dial rather
+// than reading as the dominant, centred element the driver actually needs while navigating. This
+// keeps BOTH panels as their own real, clearly bounded surface (the ORIGINAL 2026-09-04b
+// correction this preserves: "never a backdrop the dial sits on top of" -- rebalancing the weights
+// is not the same change as making one float over the other, and does not undo that fix) -- just
+// gives the map a clear majority (roughly 58%) of the width instead of an even split.
+private const val DIAL_COL_WEIGHT = 0.72f
 private const val MAP_COL_WEIGHT = 1f
 private val COL_GAP = 16.dp
 
@@ -644,7 +651,9 @@ private fun SectionLabel(text: String, color: Color = CaptainPalette.textPrimary
  * width, and both inherit the full footer-collapsed height [DeckHomeScreen] already gives this pane
  * for the entire time it is shown (see that file's own "Meter-focus collapse" comment) — so the
  * dial's own `min(width, height)` sizing (see [MeterDial]) and the map panel both end up visibly
- * bigger, not just padded.
+ * bigger. [DIAL_COL_WEIGHT]/[MAP_COL_WEIGHT] give the map a clear majority share rather than an
+ * even split (2026-09-06 rebalance, see those constants' own doc) — the driver still gets a full,
+ * real dial panel, just alongside a map that reads as the dominant element, not an equal partner.
  *
  * Everything that used to sit in the permanent third column — NIGHT/DAY FARE, SET PRICE/ADD
  * TOLL/PAUSE FARE/MORE, FARE BREAKDOWN/DETAILS, TRIP DETAILS — is unchanged in substance but moved
@@ -1470,6 +1479,10 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
         GlowingSpeedometer(
             speedKmh = fareState.currentSpeedKmh.toFloat(),
             modifier = Modifier.size(d),
+            // Real-motion take two (2026-09-06), explicitly requested and explicitly opt-in here
+            // only — see GlowingSpeedometer's [motion] doc. Flip this to false to revert instantly
+            // if it reproduces the earlier "moving circle" distress; nothing else needs to change.
+            motion = true,
         ) {
             GlassCard(
                 modifier = Modifier.size(inner),

@@ -35,11 +35,15 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -312,6 +316,18 @@ fun GlowingMeterGauge(
  * flat `0.85`, itself spring-smoothed since it rides [animatedSpeed]) — a quiet, real readout, not
  * a decorative loop, and it never moves *positionally* the way the reverted highlight did. Sitting
  * still or crawling in traffic, the ring simply sits at its calm resting brightness.
+ *
+ * **Ember motion, take two (2026-09-06, opt-in via [motion]).** Direct request to try real motion
+ * again, on the explicit understanding it gets tested live and reverted instantly if it reproduces
+ * the same distress. The design is deliberately NOT the reverted effect: that one orbited the full
+ * ring continuously, on its own clock, whether the vehicle was moving or not — a treadmill running
+ * under a parked car. This one is [rememberEmberPhase]'s single soft spark, confined to the
+ * *already-lit* stretch of the arc (never touches the dark, off track), drifting slowly back and
+ * forth rather than orbiting, at a speed that scales with real `speedKmh` and drops to a dead stop
+ * within its own spring settle time once the vehicle stops — parked or waiting at a light shows a
+ * static ring, exactly like the calm-only version, because there is nothing happening to animate.
+ * [motion] defaults to `false`; every existing call site (previews, tests, anywhere not the running
+ * meter) is unaffected. The one call site that turns it on is [au.com.threesixty.cabdispatch.ui.screens.hired.MeterDial]'s [GlowingSpeedometer].
  */
 @Composable
 fun GlowingSpeedometer(
@@ -322,6 +338,7 @@ fun GlowingSpeedometer(
     sweepDeg: Float = 270f,
     startDeg: Float = 135f,
     showLabels: Boolean = true,
+    motion: Boolean = false,
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     val safeMax = maxKmh.coerceAtLeast(5f)
@@ -331,6 +348,8 @@ fun GlowingSpeedometer(
         label = "hud-speed",
     )
     val glowPaint = rememberHudGlowPaint()
+    val emberPaint = rememberEmberPaint()
+    val emberPhase = rememberEmberPhase(enabled = motion, speedKmh = animatedSpeed, maxKmh = safeMax)
     val labelArgb = CaptainPalette.textSecondary.toArgb()
     val labelPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -343,6 +362,7 @@ fun GlowingSpeedometer(
             val g = HudArcGeometry.fit(this, strokeWidthDp.dp.toPx(), HUD_ARC_INSET.toPx())
             val speedFraction = (animatedSpeed / safeMax).coerceIn(0f, 1f)
             drawHudArc(g, speedFraction, startDeg, sweepDeg, glowPaint, glowAlpha = 0.55f + 0.45f * speedFraction)
+            if (motion) drawEmber(g, emberPhase.value, speedFraction, startDeg, sweepDeg, emberPaint)
 
             // Ticks + labels — MeterDialArt's geometry.
             val cx = g.center.x
@@ -380,6 +400,90 @@ fun GlowingSpeedometer(
         content()
     }
 }
+
+// ------------------------------------------------------------------------------------------
+// Ember motion (2026-09-06) — see GlowingSpeedometer's [motion] doc for why this is safe to
+// try again after the reverted always-orbiting highlight.
+// ------------------------------------------------------------------------------------------
+
+/** How far the ember can drift per second at full speed, as a fraction of the *lit* arc's own
+ * length (not the whole ring) — 0.35 laps/sec of the lit stretch at 120 km/h, scaling linearly
+ * down to a dead stop at 0 km/h. Deliberately slow: this is a shimmer inside the neon tube, not
+ * a marker racing around the dial. */
+private const val EMBER_MAX_CYCLES_PER_SEC = 0.35f
+
+/** Tracks one soft spark's back-and-forth position along the lit arc. Returns a [State] whose
+ * `.value` is a phase in radians for [drawEmber]'s `sin` — always returned (never null) so the
+ * composable call itself is unconditional per Compose's rules; when [enabled] is false the phase
+ * is simply never advanced, so [drawEmber] is never invoked at [enabled]'s call site and this
+ * state sits inert. Advancing is a plain `withFrameNanos` accumulator, not [animateFloatAsState]:
+ * the rate itself changes continuously with [speedKmh], which a single target-value animation
+ * can't express.
+ */
+@Composable
+private fun rememberEmberPhase(enabled: Boolean, speedKmh: Float, maxKmh: Float): State<Float> {
+    val phase = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(enabled) {
+        if (!enabled) return@LaunchedEffect
+        var lastNanos = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { nowNanos ->
+                val dtSeconds = ((nowNanos - lastNanos).coerceAtLeast(0)) / 1_000_000_000f
+                lastNanos = nowNanos
+                val speedFraction = (speedKmh / maxKmh).coerceIn(0f, 1f)
+                val cyclesPerSec = EMBER_MAX_CYCLES_PER_SEC * speedFraction
+                phase.floatValue += (cyclesPerSec * 2f * Math.PI.toFloat()) * dtSeconds
+            }
+        }
+    }
+    return phase
+}
+
+/** The ember's own small blurred paint — same [BlurMaskFilter] technique as [rememberHudGlowPaint]
+ * but a tighter radius and the sweep's mid colour, so it reads as one bright bead of light inside
+ * the existing glow rather than a second, competing halo. */
+@Composable
+private fun rememberEmberPaint(): android.graphics.Paint = remember {
+    Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        color = CaptainPalette.hudSweepMid.toArgb()
+        maskFilter = BlurMaskFilter(HUD_GLOW_BLUR_PX / 2f, BlurMaskFilter.Blur.NORMAL)
+    }
+}
+
+/**
+ * Draws one soft spark at a position oscillating along the *lit* stretch of the arc only
+ * (`[startDeg, startDeg + sweepDeg * speedFraction]`) — never on the dark, off-track portion, so
+ * it always reads as motion inside the existing glow, never a marker escaping it. `sin(phase)`
+ * maps to `[0, 1]` for a smooth back-and-forth drift (never a hard reset/jump at the ends, unlike
+ * a sawtooth). Skipped entirely below [EMBER_MIN_LIT_DEG] of lit arc — at a near-standstill there
+ * is nothing to travel along, matching the calm-glow pass's "sitting still shows a static ring".
+ */
+private fun DrawScope.drawEmber(
+    g: HudArcGeometry,
+    phase: Float,
+    speedFraction: Float,
+    startDeg: Float,
+    sweepDeg: Float,
+    paint: android.graphics.Paint,
+) {
+    val litDeg = sweepDeg * speedFraction
+    if (litDeg < EMBER_MIN_LIT_DEG) return
+    val t = (kotlin.math.sin(phase) + 1f) / 2f
+    val angleDeg = startDeg + litDeg * t
+    val rad = Math.toRadians(angleDeg.toDouble())
+    val x = g.center.x + cos(rad).toFloat() * g.radius
+    val y = g.center.y + sin(rad).toFloat() * g.radius
+    drawIntoCanvas { canvas ->
+        paint.strokeWidth = g.strokePx * 0.9f
+        paint.alpha = 235
+        canvas.nativeCanvas.drawPoint(x, y, paint)
+    }
+}
+
+private const val EMBER_MIN_LIT_DEG = 8f
 
 /** Breathing room between the arc's outer stroke edge and the composable's bounds. */
 private val HUD_ARC_INSET: Dp = 6.dp
