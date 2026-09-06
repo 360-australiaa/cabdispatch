@@ -29,6 +29,7 @@ import au.com.threesixty.cabdispatch.domain.DevicePairingStore
 import au.com.threesixty.cabdispatch.domain.MaxiVehicleStore
 import au.com.threesixty.cabdispatch.domain.SessionStore
 import au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore
+import au.com.threesixty.cabdispatch.domain.TokenStore
 import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
@@ -116,26 +117,45 @@ object AppContainer {
         private set
 
     /**
-     * Mutable holder for the current session's bearer token, read by
-     * [authInterceptor] on every request. Updated on login/refresh/logout
-     * rather than rebuilding [apiService]. `null` = unauthenticated (auth
-     * endpoints only).
+     * Durable half of [accessToken]/[refreshToken] — see [TokenStore]'s own doc for the real bug
+     * (a process restart silently losing all auth) this and the write-through setters below close.
+     * `private set`, same convention as [devicePairingStore]: callers read/write
+     * [accessToken]/[refreshToken] directly, never this store.
+     */
+    lateinit var tokenStore: TokenStore
+        private set
+
+    /**
+     * Mutable holder for the current session's bearer token, read by [authInterceptor] on every
+     * request. Updated on login/refresh/logout rather than rebuilding [apiService]. `null` =
+     * unauthenticated (auth endpoints only). Every assignment write-throughs to [tokenStore] (see
+     * that class's doc) so the token survives a process restart instead of silently reverting to
+     * `null` and 401ing every authenticated call until the driver's next full PIN re-login — the
+     * `::tokenStore.isInitialized` guard exists only because this property's own `= null` default
+     * runs before [init] has constructed [tokenStore] yet; no real caller ever assigns this before
+     * [init] completes.
      */
     var accessToken: String? = null
+        set(value) {
+            field = value
+            if (::tokenStore.isInitialized) tokenStore.setAccessToken(value)
+        }
 
     /**
      * The refresh token [DriverAuthRepository][au.com.threesixty.cabdispatch.domain.DriverAuthRepository]'s
      * two login call sites capture alongside [accessToken] — added 2026-09-06 alongside
-     * [tokenAuthenticator]. Real gap this closes: [DriverLoginResponseDto][au.com.threesixty.cabdispatch.data.remote.DriverLoginResponseDto]
+     * [tokenAuthenticator]. Real gap this closed: [DriverLoginResponseDto][au.com.threesixty.cabdispatch.data.remote.DriverLoginResponseDto]
      * carried a `refresh_token` field the whole time and nothing ever read it, so a 401 from an
      * expired [accessToken] (`ACCESS_TOKEN_EXPIRE_MINUTES`, 30 by default) had no way to recover —
      * every call after that point just failed, same "HTTP 401 Unauthorized" shape observed live on
-     * the Live Dispatch panel and at least one trip sync this session. In-memory only, same as
-     * [accessToken] — process-restart re-login is a separate, larger, deliberate scope decision
-     * (see [SessionStore]'s own doc on why no credential is persisted there), not something to
-     * bolt on here.
+     * the Live Dispatch panel and at least one trip sync. Write-throughs to [tokenStore] exactly
+     * like [accessToken] — see that property's doc.
      */
     var refreshToken: String? = null
+        set(value) {
+            field = value
+            if (::tokenStore.isInitialized) tokenStore.setRefreshToken(value)
+        }
 
     /** Held for the process lifetime — see [ConnectivitySyncTrigger] doc. */
     lateinit var connectivitySyncTrigger: ConnectivitySyncTrigger
@@ -172,6 +192,17 @@ object AppContainer {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+
+        // Restore the bearer/refresh token pair across process death (2026-09-06, real bug found
+        // live: "HTTP 401 Unauthorized" permanently stuck on Live Dispatch, a trip stuck "hasn't
+        // synced") — see TokenStore's own doc. Must run before anything makes an authenticated
+        // call (the OkHttpClient/Retrofit setup below), and assigning through the accessToken/
+        // refreshToken properties themselves (not a separate restore path) means every other
+        // write site (DriverAuthRepository's two logins, tokenAuthenticator's refresh, every
+        // logout) automatically keeps this store in sync with zero further changes needed there.
+        tokenStore = TokenStore(appContext)
+        accessToken = tokenStore.getAccessToken()
+        refreshToken = tokenStore.getRefreshToken()
 
         // Restore the paired device id across process death (2026-08-28 device-pairing pass) —
         // SessionHolder.deviceId is in-memory only; without this, every cold start forgot pairing
