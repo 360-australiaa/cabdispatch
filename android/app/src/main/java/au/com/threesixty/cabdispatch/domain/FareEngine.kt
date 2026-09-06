@@ -125,6 +125,11 @@ interface FareEngine {
      * @param airportRankRequestedMaxi True only when the hirer specifically requested a maxi taxi
      *   at a Sydney Airport rank — the one scenario the maxi rate applies independent of
      *   [passengerCount].
+     * @param negotiatedTotal "Set Price" amount agreed with the passenger before the meter started
+     *   ([au.com.threesixty.cabdispatch.domain.TripContext.negotiatedTotal]), or `null` for an
+     *   ordinary metered trip (the default — every pre-existing call site that never named this
+     *   keeps behaving exactly as before). See [FareState.negotiatedTotal]/`.total` for how this
+     *   changes what the live dial shows without changing what actually gets billed at close.
      */
     fun startTrip(
         tariff: TariffDto,
@@ -134,6 +139,7 @@ interface FareEngine {
         passengerCount: Int = 1,
         wheelchairHiring: Boolean = false,
         airportRankRequestedMaxi: Boolean = false,
+        negotiatedTotal: BigDecimal? = null,
     )
     fun pause()
     fun resume()
@@ -197,6 +203,19 @@ interface FareEngine {
  *    one, but a real one: a driver watching the meter mid-trip saw a total the passenger was very
  *    unlikely to actually be charged.
  *
+ * **2026-09 update — PSL is back, deliberately, and for a different reason than #4 above got it
+ * removed:** the driver-optional `includePsl` toggle #4 describes is now gone entirely — the PSL
+ * is a mandatory Fares Order pass-through, unconditionally added at Close & Pay
+ * ([au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel.loadTariffAndInit]'s
+ * `includePsl = true`, no remaining toggle to turn it off) — so #4's actual finding ("the live
+ * total overstated what would be billed") can no longer happen: PSL is now ALWAYS billed, so a live
+ * total that always shows it is always honest, never an overstatement. Product report (2026-09):
+ * the meter should start at flagfall + PSL (e.g. $5.17 + $1.32), not flagfall alone, because that
+ * is what the passenger will actually pay from the first second — [startTrip] now seeds
+ * [FareBreakdown.psl] from `domainTariff.pslAmount` (never hardcoded) instead of leaving it at
+ * zero for the trip's whole duration. See [FareState.total]'s doc for the same "show what will
+ * actually be charged, from the start" fix applied to tolls/waiting/negotiated-price display too.
+ *
  * Rather than patch each symptom by hand, this class now delegates every accrual computation to a
  * private [CalcFareEngine] instance driving a shadow [CalcFareState] — the exact same tested code
  * path [TripFareReconstruction] already trusts — and maps its output onto this class's own
@@ -234,6 +253,7 @@ class FareEngineImpl(
         passengerCount: Int,
         wheelchairHiring: Boolean,
         airportRankRequestedMaxi: Boolean,
+        negotiatedTotal: BigDecimal?,
     ) {
         this.tariff = tariff
         val domainTariff = tariff.toDomainTariff()
@@ -248,6 +268,7 @@ class FareEngineImpl(
             passengerCount = passengerCount,
             wheelchairHiring = wheelchairHiring,
             airportRankRequestedMaxi = airportRankRequestedMaxi,
+            negotiatedTotal = negotiatedTotal,
         )
         calcState = newCalcState
 
@@ -258,9 +279,15 @@ class FareEngineImpl(
             mode = AccrualMode.WAITING,
             band = TariffBand.BAND_1,
             timeClass = timeClass,
-            // PSL deliberately NOT included here — see this class's own doc, point 4. It is a
-            // driver decision made later, at Close & Pay, never baked into the live display.
-            breakdown = FareBreakdown(flagFall = domainTariff.flagFall, peakAmount = peak),
+            // Point-to-Point Levy fix (product-reported, 2026-09): the live meter must start at
+            // flagfall + PSL, not flagfall alone (the PSL is a mandatory Fares Order pass-through —
+            // see CloseAndPayViewModel's own `includePsl = true` doc — never a driver-optional
+            // extra the way the old, now-removed includePsl toggle treated it). Sourced from
+            // domainTariff.pslAmount, never hardcoded, so a tariff change changes this too. This
+            // does NOT change what gets billed: Close & Pay always added PSL at close time
+            // already (unconditionally, since the 2026-09-05 fix removed the driver toggle) — this
+            // only stops the live dial from hiding it until the very end.
+            breakdown = FareBreakdown(flagFall = domainTariff.flagFall, peakAmount = peak, psl = domainTariff.pslAmount),
             // Point to Point Transport (Fares) Order 2026 UI-wiring pass: passengerCount/
             // maxiRateApplied copied verbatim off the pure engine's own shadow state — see
             // FareState (domain/TripModels.kt)'s doc on why the UI must never re-derive this
@@ -269,6 +296,11 @@ class FareEngineImpl(
             passengerCount = newCalcState.passengerCount,
             wheelchairHiring = newCalcState.wheelchairHiring,
             maxiRateApplied = newCalcState.maxiRateApplied,
+            // "Set Price" fix (product-reported, 2026-09): copied verbatim off the pure engine's
+            // own shadow state, same pattern as maxiRateApplied above — see FareState.negotiatedTotal/
+            // `.total`'s doc for how this changes what the dial shows without changing the close()
+            // math (which already handled this correctly; only the live display didn't know).
+            negotiatedTotal = newCalcState.negotiatedTotal,
         )
         startTicking()
     }

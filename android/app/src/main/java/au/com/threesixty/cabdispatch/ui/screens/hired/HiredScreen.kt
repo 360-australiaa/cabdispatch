@@ -945,6 +945,7 @@ private fun ControlsDrawer(
                 nightMultiplierLabel = nightMultiplierLabel(tripContext?.tariff),
                 expanded = breakdownExpanded,
                 onToggle = onToggleBreakdown,
+                negotiatedTotal = fareState.negotiatedTotal,
             )
             // Dropped once the map panel already carries the same PICK UP/DESTINATION pair — the
             // two must never show the same address/time twice.
@@ -1566,7 +1567,11 @@ private fun MeterDial(
                         style = glowStyle(stateColor, if (isPaused) 20f else pulseBlur),
                     )
                     Text(
-                        "${fareState.band.label.uppercase()} + EXTRAS",
+                        // "Set Price" fix (product-reported, 2026-09): a fixed-fare trip's dial
+                        // shows FIXED PRICE here instead of the tariff band — the figure above is
+                        // the agreed amount (+ tolls/PSL/extras, see FareState.total's doc), not a
+                        // metered band total, so labelling it as one would be actively misleading.
+                        if (fareState.negotiatedTotal != null) "FIXED PRICE" else "${fareState.band.label.uppercase()} + EXTRAS",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Medium,
                         fontSize = 12.sp,
@@ -1982,6 +1987,16 @@ private fun FareBreakdownCard(
     nightMultiplierLabel: String?,
     expanded: Boolean,
     onToggle: () -> Unit,
+    /**
+     * "Set Price" fix (product-reported, 2026-09) — non-null only for a fixed-fare trip
+     * ([FareState.negotiatedTotal], threaded straight through). When set, the dial's ACTIVE FARE
+     * figure is this amount plus tolls/PSL/extras (see [FareState.total]'s doc), NOT the sum of the
+     * "Base fare"/"Distance"/"Time" rows below — those three keep showing the real metered accrual
+     * for reference/compliance evidence (the meter genuinely keeps running, per the product
+     * requirement), so without this parameter the card's itemisation would silently stop summing
+     * to what the dial shows, with no explanation. The extra row this adds is the fix.
+     */
+    negotiatedTotal: BigDecimal? = null,
 ) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
@@ -2014,7 +2029,19 @@ private fun FareBreakdownCard(
             }
             AnimatedVisibility(visible = expanded, enter = fadeIn(tween(180)), exit = fadeOut(tween(140))) {
                 Column(modifier = Modifier.padding(top = 8.dp)) {
-                    BreakdownRow("Base fare", breakdown.flagFall.toMoneyString(), CaptainPalette.success)
+                    if (negotiatedTotal != null) {
+                        BreakdownRow("Fixed price (agreed)", negotiatedTotal.toMoneyString(), CaptainPalette.hudAccent)
+                    }
+                    // Base fare/Distance/Time keep showing the real metered accrual even on a
+                    // fixed-price trip — "reference only" (not what's charged; the row above is)
+                    // once negotiatedTotal is set, but still real numbers: the meter genuinely
+                    // keeps running for the trip record/compliance evidence, per the product
+                    // requirement — never frozen or hidden just because the price is fixed.
+                    BreakdownRow(
+                        if (negotiatedTotal != null) "Base fare (metered, reference)" else "Base fare",
+                        breakdown.flagFall.toMoneyString(),
+                        if (negotiatedTotal != null) CaptainPalette.textMuted else CaptainPalette.success,
+                    )
                     BreakdownRow("Distance", breakdown.distanceAmount.toMoneyString(), CaptainPalette.success)
                     BreakdownRow("Time", breakdown.waitingAmount.toMoneyString(), CaptainPalette.success)
                     // Informational only: the night-rate uplift is already baked into Distance/Time

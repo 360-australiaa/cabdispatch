@@ -539,4 +539,80 @@ class FareEngineTest {
         val overMaxBookedDto = overMaxUrbanDto.copy(id = "tariff-booked", booked = true)
         validateAgainstFaresOrder(overMaxBookedDto.toDomainTariff(), URBAN_TARIFF, booked = overMaxBookedDto.booked)
     }
+
+    // ------------------------------------------------------------------------------------------
+    // 2026-09 live-display pass (product-reported): the meter must START at flagfall + PSL, the
+    // RUNNING display must always show the full amount the passenger will pay (tolls/waiting
+    // included from the moment they accrue, not only at close), and a negotiated ("Set Price")
+    // trip must actually charge — and NOW display — the agreed amount, not the metered accrual.
+    // These four tests pin the CLOSE-TIME math these display fixes must never disturb: [close] and
+    // [FareState.negotiatedTotal] handling here are UNCHANGED by this pass (they already worked —
+    // see testR above) — what changed is only in `domain.FareEngineImpl`/`domain.FareState` (the
+    // UI-facing live-display layer), which cannot be exercised from this plain-engine test file.
+    // These tests exist to PROVE that unrelated layer's fix didn't quietly change what this file's
+    // close() computes.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    fun testT_flagfallOnlyTripClosesAtExactlyFlagfallPlusPslNoDoubleCounting() {
+        // A trip with zero accrual at all (no tick() calls) — the purest form of "the meter never
+        // moved" case the product report described. Regression pin: this must close at EXACTLY
+        // flagFall + pslAmount, matching the user's own worked example (flagfall + levy = total)
+        // and confirming PSL is added exactly ONCE, not doubled by any interaction between the live
+        // display's new PSL seeding (domain.FareEngineImpl.startTrip) and this close() call — the
+        // two are structurally incapable of double-counting (this pure engine has no knowledge of
+        // the UI-facing FareBreakdown at all), but this test is the hard proof, not an assumption.
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.DAY)
+
+        val breakdown = engine.close(state, includePsl = true)
+
+        assertEquals(BigDecimal("0.00"), breakdown.distanceCharge)
+        assertEquals(BigDecimal("0.00"), breakdown.waitingCharge)
+        assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
+        // flag_fall 5.17 + psl 1.32 = 6.49 (this tariff's current 2026 rate card figure — the same
+        // "flagfall + levy" shape as the product owner's own $5.00 + $1.32 = $6.32 example, just
+        // against this file's current $5.17 flagfall rather than the superseded $5.00 one).
+        assertEquals(URBAN_TARIFF.flagFall.add(URBAN_TARIFF.pslAmount), breakdown.fareTotal)
+        assertEquals(breakdown.fareTotal, breakdown.grandTotal)
+    }
+
+    @Test
+    fun testU_sameTripClosesIdenticallyRegardlessOfLiveDisplayChanges() {
+        // Direct "final total is unchanged" regression: a real, non-trivial metered trip (matches
+        // testB's own numbers) closes at the exact same figure this pass started with — proving
+        // the live-display-only fix (domain.FareEngineImpl seeding PSL/negotiatedTotal into what
+        // the DRIVER SEES) never touched this engine's own close() computation, which is the only
+        // thing that determines what the passenger is actually billed / what device_total carries.
+        val engine = FareEngine()
+        var state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.NIGHT, isPeak = true)
+        state = engine.tick(state, speedKmh = 40, distanceDeltaKm = 16, elapsedSeconds = 1440)
+
+        val breakdown = engine.close(state, includePsl = true)
+
+        // first 12km @ 3.10 = 37.20, next 4km @ 2.82 = 11.28 -> distance 48.48
+        assertEquals(BigDecimal("48.48"), breakdown.distanceCharge)
+        // subtotal = flag_fall 5.17 + peak 2.65 + 48.48 + psl 1.32 = 57.62
+        assertEquals(BigDecimal("57.62"), breakdown.fareTotal)
+        assertEquals(BigDecimal("57.62"), breakdown.grandTotal)
+    }
+
+    @Test
+    fun testV_negotiatedFixedPriceTripClosesAtTheAgreedAmountEvenWhenMeteredWouldBeLess() {
+        // Mirror of testR (which proves the agreed amount wins when the meter would have charged
+        // MORE) for the other direction: the meter barely moved (a short 1km hop), but the driver
+        // had agreed $50 up front. Act s79(3) cuts both ways — an agreed price is what's charged,
+        // not a floor the metered fare must exceed, and not a ceiling it must stay under either.
+        // subtotal = negotiated_total 50.00 + psl 1.32 = 51.32 (no tolls/extras in this scenario)
+        val engine = FareEngine()
+        var state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.DAY, negotiatedTotal = BigDecimal("50.00"))
+        state = engine.tick(state, speedKmh = 40, distanceDeltaKm = 1, elapsedSeconds = 90)
+
+        val breakdown = engine.close(state, includePsl = true)
+
+        assertTrue("metered distance charge should be small", breakdown.distanceCharge < BigDecimal("50.00"))
+        assertEquals(BigDecimal("50.00"), breakdown.negotiatedTotal)
+        assertEquals(BigDecimal("51.32"), breakdown.fareTotal)
+        assertEquals(BigDecimal("51.32"), breakdown.grandTotal)
+    }
 }
