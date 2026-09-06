@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
+import { errorMessage } from "./format";
 import type { Page as LiveOpsPage, VehicleLiveRead } from "@/pages/live-map/types";
 import type {
   ComplianceExpiryItem,
@@ -265,8 +266,11 @@ export function useForceUpdate() {
  * bulk endpoint on the backend, so this fetches up to `LOOKUP_LIMIT` devices
  * (same "good enough for one fleet" cap `useDeviceOptions` already accepts)
  * and fires the existing one-at-a-time `/force-update` call for each one
- * that isn't already pending, in parallel. Returns how many were actually
- * (re)flagged so the confirming UI can say something real, not just "done".
+ * that isn't already pending. Sequential, not `Promise.all` -- see
+ * `deleteAllSequentially`'s doc above for why a burst of concurrent writes
+ * against this backend isn't safe to assume will all land; a flagged count
+ * that undercounts because a couple of calls got dropped is honest, a bulk
+ * action that throws and flags none of them because ONE call dropped is not.
  */
 export function useForceUpdateAll() {
   const qc = useQueryClient();
@@ -276,12 +280,19 @@ export function useForceUpdateAll() {
         params: { skip: 0, limit: LOOKUP_LIMIT },
       });
       const targets = data.items.filter((d) => !d.force_update_pending);
-      await Promise.all(
-        targets.map((d) =>
-          apiClient.post<Device>(`/v1/fleet/devices/${d.id}/force-update`, { enabled: true }),
-        ),
-      );
-      return { flagged: targets.length, total: data.items.length };
+      let flagged = 0;
+      for (const d of targets) {
+        try {
+          await apiClient.post<Device>(`/v1/fleet/devices/${d.id}/force-update`, { enabled: true });
+          flagged += 1;
+        } catch {
+          // Best-effort -- one device's flakiness shouldn't stop the rest of
+          // the fleet from getting flagged. `flagged` undercounting `total`
+          // in the result already tells the confirming UI something didn't
+          // fully land.
+        }
+      }
+      return { flagged, total: data.items.length };
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
   });
@@ -613,6 +624,49 @@ export interface WipeAllFleetDataResult {
   vehiclesDeleted: number;
   driversDeleted: number;
   devicesDeleted: number;
+  /** Rows that failed to delete (id + a short reason), one entry per failed
+   * row across all three collections. Empty on a fully clean wipe. See
+   * `deleteAllSequentially`'s doc for why this can be non-empty even on a
+   * healthy backend. */
+  failures: { kind: "vehicle" | "driver" | "device"; id: string; reason: string }[];
+}
+
+/**
+ * Deletes every item one at a time (NOT `Promise.all`) and keeps going past
+ * individual failures, rather than aborting the whole batch on the first one.
+ *
+ * This replaced an all-at-once `Promise.all` version (2026-09-06) that a real
+ * bulk wipe against production reliably broke: firing every DELETE in a
+ * collection simultaneously produced a mix of HTTP 503s and bare axios
+ * "Network Error"s (no response at all) -- the single backend process
+ * (`entrypoint.sh` runs one uvicorn worker, no reverse proxy in front of it,
+ * see docker-compose.yml) plus its Postgres connection pool visibly couldn't
+ * absorb a burst of a dozen-plus concurrent write requests while the page's
+ * own background polling (compliance-expiry, live vehicle options) was also
+ * in flight. `Promise.all` then meant that ONE dropped connection killed the
+ * entire wipe with zero rows actually confirmed deleted. One-at-a-time keeps
+ * the backend's concurrent load at 1 regardless of fleet size, and catching
+ * each row's own error means a single flaky row (or a genuinely undeletable
+ * one) no longer blocks every row after it.
+ */
+async function deleteAllSequentially<T>(
+  items: T[],
+  kind: WipeAllFleetDataResult["failures"][number]["kind"],
+  idOf: (item: T) => string,
+  del: (id: string) => Promise<unknown>,
+): Promise<{ deleted: number; failures: WipeAllFleetDataResult["failures"] }> {
+  let deleted = 0;
+  const failures: WipeAllFleetDataResult["failures"] = [];
+  for (const item of items) {
+    const id = idOf(item);
+    try {
+      await del(id);
+      deleted += 1;
+    } catch (err) {
+      failures.push({ kind, id, reason: errorMessage(err) });
+    }
+  }
+  return { deleted, failures };
 }
 
 export function useWipeAllFleetData() {
@@ -627,19 +681,31 @@ export function useWipeAllFleetData() {
       // Devices first (they reference a vehicle), then vehicles, then drivers --
       // purely for a sane order to read in logs if one step fails partway
       // through; no FK actually requires this order (see module note above).
-      await Promise.all(
-        devicesPage.data.items.map((d) => apiClient.delete(`/v1/fleet/devices/${d.id}`)),
+      // Each collection is deleted one row at a time -- see
+      // deleteAllSequentially's doc for why this replaced a Promise.all.
+      const devicesResult = await deleteAllSequentially(
+        devicesPage.data.items,
+        "device",
+        (d) => d.id,
+        (id) => apiClient.delete(`/v1/fleet/devices/${id}`),
       );
-      await Promise.all(
-        vehiclesPage.data.items.map((v) => apiClient.delete(`/v1/fleet/vehicles/${v.id}`)),
+      const vehiclesResult = await deleteAllSequentially(
+        vehiclesPage.data.items,
+        "vehicle",
+        (v) => v.id,
+        (id) => apiClient.delete(`/v1/fleet/vehicles/${id}`),
       );
-      await Promise.all(
-        driversPage.data.items.map((d) => apiClient.delete(`/v1/users/${d.id}`)),
+      const driversResult = await deleteAllSequentially(
+        driversPage.data.items,
+        "driver",
+        (d) => d.id,
+        (id) => apiClient.delete(`/v1/users/${id}`),
       );
       return {
-        vehiclesDeleted: vehiclesPage.data.items.length,
-        driversDeleted: driversPage.data.items.length,
-        devicesDeleted: devicesPage.data.items.length,
+        vehiclesDeleted: vehiclesResult.deleted,
+        driversDeleted: driversResult.deleted,
+        devicesDeleted: devicesResult.deleted,
+        failures: [...devicesResult.failures, ...vehiclesResult.failures, ...driversResult.failures],
       };
     },
     onSuccess: () => {

@@ -71,10 +71,18 @@ function WipeAllFleetDataButton() {
         onClose={() => {
           if (!wipeAll.isPending) setOpen(false);
         }}
-        title={result ? "Fleet data wiped" : "Wipe every vehicle, driver, and device?"}
+        title={
+          result
+            ? result.failures.length > 0
+              ? "Fleet data partially wiped"
+              : "Fleet data wiped"
+            : "Wipe every vehicle, driver, and device?"
+        }
         description={
           result
-            ? `Deleted ${result.vehiclesDeleted} vehicle${result.vehiclesDeleted === 1 ? "" : "s"}, ${result.driversDeleted} driver${result.driversDeleted === 1 ? "" : "s"}, and ${result.devicesDeleted} device${result.devicesDeleted === 1 ? "" : "s"}. The fleet is now empty — ready for a fresh onboarding test.`
+            ? result.failures.length > 0
+              ? `Deleted ${result.vehiclesDeleted} vehicle${result.vehiclesDeleted === 1 ? "" : "s"}, ${result.driversDeleted} driver${result.driversDeleted === 1 ? "" : "s"}, and ${result.devicesDeleted} device${result.devicesDeleted === 1 ? "" : "s"}, but ${result.failures.length} row${result.failures.length === 1 ? "" : "s"} failed to delete (see below). Run it again to retry just the leftovers.`
+              : `Deleted ${result.vehiclesDeleted} vehicle${result.vehiclesDeleted === 1 ? "" : "s"}, ${result.driversDeleted} driver${result.driversDeleted === 1 ? "" : "s"}, and ${result.devicesDeleted} device${result.devicesDeleted === 1 ? "" : "s"}. The fleet is now empty — ready for a fresh onboarding test.`
             : "This is temporary, testing-only tooling — it permanently deletes EVERY vehicle, driver, and device on this tenant in one action, including any linked to real trip history. This cannot be undone. Type DELETE to confirm."
         }
         footer={
@@ -116,6 +124,16 @@ function WipeAllFleetDataButton() {
               />
             </label>
           </div>
+        )}
+
+        {result && result.failures.length > 0 && (
+          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {result.failures.map((f) => (
+              <li key={`${f.kind}-${f.id}`}>
+                {f.kind} {f.id.slice(0, 8)}…: {f.reason}
+              </li>
+            ))}
+          </ul>
         )}
       </Modal>
     </>
