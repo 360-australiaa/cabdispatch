@@ -584,3 +584,68 @@ export async function downloadVehicleEvidencePack(vehicle: Pick<Vehicle, "id" | 
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// ---------------------------------------------------------------------------
+// TEMPORARY testing-only bulk wipe (2026-09-07, direct product instruction:
+// "make the option in admin panel to delete all drivers, vehicles and
+// devices in one go temporary until we finish all testing") — meant to be
+// removed once onboarding/pairing testing is done, not a permanent fleet
+// feature. No new backend endpoint: loops the existing per-item DELETE
+// endpoints (DELETE /v1/fleet/vehicles/{id}, /v1/fleet/devices/{id},
+// /v1/users/{id}) the same way useForceUpdateAll loops the per-device
+// force-update endpoint above, since none of these rows are FK-constrained
+// against each other (see app/models/jobs.py's own "DEVIATION" doc for why
+// this codebase already accepts unconstrained string ids between these
+// domains) -- deleting in any order is safe.
+// ---------------------------------------------------------------------------
+
+export function useDeleteDriver() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/v1/users/${id}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "drivers"] }),
+  });
+}
+
+export interface WipeAllFleetDataResult {
+  vehiclesDeleted: number;
+  driversDeleted: number;
+  devicesDeleted: number;
+}
+
+export function useWipeAllFleetData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<WipeAllFleetDataResult> => {
+      const [vehiclesPage, driversPage, devicesPage] = await Promise.all([
+        apiClient.get<Page<Vehicle>>("/v1/fleet/vehicles", { params: { skip: 0, limit: LOOKUP_LIMIT } }),
+        apiClient.get<Page<Driver>>("/v1/drivers", { params: { skip: 0, limit: LOOKUP_LIMIT } }),
+        apiClient.get<Page<Device>>("/v1/fleet/devices", { params: { skip: 0, limit: LOOKUP_LIMIT } }),
+      ]);
+      // Devices first (they reference a vehicle), then vehicles, then drivers --
+      // purely for a sane order to read in logs if one step fails partway
+      // through; no FK actually requires this order (see module note above).
+      await Promise.all(
+        devicesPage.data.items.map((d) => apiClient.delete(`/v1/fleet/devices/${d.id}`)),
+      );
+      await Promise.all(
+        vehiclesPage.data.items.map((v) => apiClient.delete(`/v1/fleet/vehicles/${v.id}`)),
+      );
+      await Promise.all(
+        driversPage.data.items.map((d) => apiClient.delete(`/v1/users/${d.id}`)),
+      );
+      return {
+        vehiclesDeleted: vehiclesPage.data.items.length,
+        driversDeleted: driversPage.data.items.length,
+        devicesDeleted: devicesPage.data.items.length,
+      };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fleet", "vehicles"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "drivers"] });
+      qc.invalidateQueries({ queryKey: ["fleet", "devices"] });
+    },
+  });
+}
