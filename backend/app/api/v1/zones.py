@@ -14,20 +14,28 @@ Role policy:
   - `GET /`, `GET /{id}`, `GET /stats`: any authenticated tenant user --
     dispatchers AND drivers both need to see the zone list/stats (a driver
     picks a zone to plot into from this same list).
-  - `POST /`, `PUT /{id}`, `DELETE /{id}`: `owner`/`admin` only, same
-    role restriction as the sibling `geofences` domain's admin CRUD.
+  - `POST /`, `PUT /{id}`, `DELETE /{id}`: platform-owner only (product
+    decision, 2026: "as an admin, we are setting up the plotting, not the
+    network") -- `require_platform_owner`, the same gate
+    `app/api/v1/app_releases.py`'s platform_router uses (see
+    `app/api/v1/platform.py`). An ordinary tenant owner/admin can no longer
+    create/edit/delete a zone, only read the list/stats a platform admin has
+    set up for them.
   - `POST /{id}/plot`, `POST /unplot`: any authenticated tenant user -- a
     driver acting on their own current shift (identity-scoped via
     `get_current_user`, not restricted by role), same pattern as
-    `POST /v1/jobs/availability`.
+    `POST /v1/jobs/availability`. Unaffected by the platform-owner gate above
+    -- this is an operational action a driver takes on shift, not zone
+    configuration.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.core.security import get_current_tenant_id, get_current_user
 from app.schemas.zones import (
     Page,
     ZoneCreate,
@@ -39,10 +47,6 @@ from app.schemas.zones import (
 from app.services import zones as zones_service
 
 router = APIRouter(prefix="/v1/zones", tags=["zones"])
-
-# Admin-only dependency reused across the write endpoints below, same pattern
-# as app.api.v1.geofences._require_admin.
-_require_admin = require_role("owner", "admin")
 
 
 def _zones_error_to_http(exc: zones_service.ZonesError) -> HTTPException:
@@ -143,7 +147,7 @@ async def create_zone(
     payload: ZoneCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     try:
         return await zones_service.create_zone(session, tenant_id=tenant_id, **payload.model_dump())
@@ -170,7 +174,7 @@ async def update_zone(
     payload: ZoneUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     try:
         zone = await zones_service.get_zone_or_404(session, tenant_id=tenant_id, zone_id=zone_id)
@@ -184,7 +188,7 @@ async def delete_zone(
     zone_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    _owner=Depends(require_platform_owner),
 ):
     try:
         zone = await zones_service.get_zone_or_404(session, tenant_id=tenant_id, zone_id=zone_id)

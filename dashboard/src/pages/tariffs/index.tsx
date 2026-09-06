@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
   useDeleteTariffMutation,
   useTariffsQuery,
@@ -42,12 +43,14 @@ const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
 ];
 
 export default function TariffsPage() {
-  // Create/edit/delete a Fares-Order-regulated rate card is now owner/admin
-  // gated server-side (backend/app/api/v1/tariffs.py) — mirrors the same
-  // `canWrite` pattern already used by the sibling Zones page. Change-log
-  // (read-only) stays visible to every role.
+  // Pricing is platform-admin-only (product decision, 2026): create/edit/
+  // delete a rate card is gated server-side to require_platform_owner
+  // (backend/app/api/v1/tariffs.py), the same gate the Platform Admin
+  // console itself uses (src/lib/platformAdmin.ts) — an ordinary tenant
+  // owner/admin can no longer write tariffs at all, only read them.
+  // Change-log (read-only) stays visible to every role.
   const { user } = useAuth();
-  const canWrite = user?.role === "owner" || user?.role === "admin";
+  const canWrite = isPlatformOwner(user);
 
   const [tab, setTab] = useState<TariffStudioTab>("tariffs");
   const [regionFilter, setRegionFilter] = useState<Region | "">("");
