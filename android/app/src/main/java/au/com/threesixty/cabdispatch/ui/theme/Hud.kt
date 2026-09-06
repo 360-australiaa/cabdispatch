@@ -370,8 +370,12 @@ fun GlowingSpeedometer(
             val tickOuter = g.radius - g.strokePx
             val majorLen = 11.dp.toPx()
             val minorLen = 5.dp.toPx()
-            val labelR = tickOuter - majorLen - 9.dp.toPx()
-            labelPaint.textSize = 10.sp.toPx()
+            // Label size/margin bumped 2026-09-06 (direct feedback: "the speedometer ten, twenty,
+            // sixty... should be very prominent, make it big") — the extra 2dp of margin (9dp ->
+            // 11dp) gives the bigger glyphs the same clearance from the tick ring the old 10sp
+            // size had at 9dp, rather than letting them crowd the major ticks.
+            val labelR = tickOuter - majorLen - 11.dp.toPx()
+            labelPaint.textSize = 13.sp.toPx()
             labelPaint.color = labelArgb
             val steps = (safeMax / 5f).toInt() // one tick per 5 km/h
             for (i in 0..steps) {

@@ -555,7 +555,27 @@ fun DeckHomeScreen(
                         // mid-trip taps another rail item directly (all still reachable, per the
                         // "header/footer/nav-rail visible while HIRED" decision), never a literal
                         // "back" out of the meter. See HiredScreen's own doc for the rest of this pane.
-                        CaptainPane.METER -> HiredScreen(navController = navController)
+                        CaptainPane.METER -> {
+                            // Real bug found live, 2026-09-06: a process restart mid-fare (crash,
+                            // OS kill, an OTA self-update taking effect) leaves a real Room
+                            // OPEN trip with no live FareEngine ever attached to it in THIS
+                            // process — HiredScreen's dial would show a freshly-reset "OFF" while
+                            // the nav rail above stays correctly locked for a trip the driver has
+                            // no way to see or end. SessionHolder.liveTripClientUuid mismatching
+                            // the real active trip's clientUuid is exactly that case — see its own
+                            // doc — and gets the same "the active trip lives elsewhere" redirect
+                            // TripsWheelContent's onOpenActiveTrip already uses above, since
+                            // CloseAndPayViewModel reconstructs a full, correct bill from Room
+                            // alone, no live FareEngine required.
+                            val liveTripClientUuid by SessionHolder.liveTripClientUuid.collectAsState()
+                            if (hasActiveTrip && activeTrip?.clientUuid != liveTripClientUuid) {
+                                LaunchedEffect(activeTrip?.clientUuid) {
+                                    navController.navigate(CabDispatchRoutes.CLOSE_PAY)
+                                }
+                            } else {
+                                HiredScreen(navController = navController)
+                            }
+                        }
                     }
                 }
                 // Meter-focus collapse (2026-09-04): while a fare is actually live on the METER

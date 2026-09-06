@@ -82,6 +82,15 @@ class TripRepository(
         type: String,
         startLat: Double,
         startLng: Double,
+        /** Minted by the caller, not here, as of 2026-09-06 — see
+         * [au.com.threesixty.cabdispatch.domain.SessionHolder.liveTripClientUuid]'s doc for the
+         * real race this closes: [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.openTripInRoom]
+         * needs the id BEFORE this suspend function's first DB write (which is when
+         * [observeActiveTrip]'s Flow can first observe the new row), so it can mark the trip
+         * "live" for this process strictly before that write happens, closing the window rather
+         * than racing it. Defaulted so this stays source-compatible with any future caller that
+         * doesn't care. */
+        clientUuid: String = UUID.randomUUID().toString(),
         paymentMethod: String = "cash",
         timeClass: String = "day",
         isPeak: Boolean = false,
@@ -123,7 +132,7 @@ class TripRepository(
         // fabricated address, for that case.
         val pendingContext = SessionHolder.pendingTrip.value
         val trip = TripEntity(
-            clientUuid = UUID.randomUUID().toString(),
+            clientUuid = clientUuid,
             vehicleId = vehicleId,
             driverId = driverId,
             shiftId = shiftId,

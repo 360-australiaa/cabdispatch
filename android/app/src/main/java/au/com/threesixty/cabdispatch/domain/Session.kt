@@ -201,6 +201,50 @@ object SessionHolder {
     }
 
     /**
+     * Which `TripEntity.clientUuid` (if any) THIS process has a live
+     * [au.com.threesixty.cabdispatch.domain.FareEngine] actually attached to — set by
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel] the moment it opens a
+     * trip in Room, `null` again once this process has never opened one (a cold start) or that
+     * fare has closed. Deliberately process-scoped, in-memory only, no persistence — that is
+     * exactly what makes it useful.
+     *
+     * ### The real bug this closes (found live, 2026-09-06)
+     * [TripRepository.observeActiveTrip]'s `status == OPEN` read is durable and survives a
+     * process restart (crash, OS kill, an OTA self-update taking effect — see
+     * `SilentInstaller`'s "never yank the meter mid-fare" doc for why that specific case is rare
+     * but real) — but `FareEngine` is not: it only ever starts from
+     * [SessionHolder.pendingTrip], a one-shot, in-memory hand-off. A tablet that restarts mid-fare
+     * therefore comes back with a real `OPEN` `TripEntity` in Room and a `FareEngine` that has
+     * never heard of it — `HiredScreen`'s live dial would show a freshly-reset "OFF" while
+     * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s nav-rail lock (driven
+     * by that same real `OPEN` row, correctly) stays engaged with no way to reach the fare that is
+     * supposedly blocking it. `DeckHomeScreen` compares this value against the active trip's own
+     * `clientUuid`: a mismatch means "Room says a trip is open, but nothing in this process ever
+     * attached to it", and routes straight to Close & Pay instead of the live dial — the exact
+     * jump [au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent]'s own
+     * `onOpenActiveTrip` already uses for this same "the active trip lives elsewhere" case, since
+     * `CloseAndPayViewModel` already reconstructs a full, correct bill from Room alone (real
+     * `distanceM`/`movingS`/`waitingS`/`tolls`, persisted on every tick — see
+     * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState]), with no dependency on a
+     * live `FareEngine` at all.
+     */
+    private val _liveTripClientUuid = MutableStateFlow<String?>(null)
+    val liveTripClientUuid: StateFlow<String?> = _liveTripClientUuid.asStateFlow()
+
+    /** Called once, right after [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]
+     * succeeds for a freshly-started trip — see [liveTripClientUuid]'s doc. */
+    fun markTripLive(clientUuid: String) {
+        _liveTripClientUuid.value = clientUuid
+    }
+
+    /** Called once a trip this process was tracking closes, so a *later*, unrelated `OPEN` trip
+     * (there should never be two at once, but this stays honest rather than assuming) is never
+     * mistaken for still being this process's live one. */
+    fun clearLiveTrip() {
+        _liveTripClientUuid.value = null
+    }
+
+    /**
      * Observable form of [deviceId], added by the 2026-08-29 fleet-command pass so
      * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat] can *react* to this tablet
      * being paired (or reset) instead of sampling it once at process start. Without this, a tablet

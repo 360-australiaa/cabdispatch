@@ -393,6 +393,7 @@ fun HiredScreen(
                     hasDestination = hasDestination,
                     speechEnabled = speechEnabled,
                     onEndFare = onEndFare,
+                    onTogglePause = viewModel::togglePause,
                     onOpenNavigation = { target -> openInMaps(context, target) },
                     onToggleVoice = { viewModel.toggleSpeech(!speechEnabled) },
                     onRetryRoute = meterNavViewModel::retryRoute,
@@ -569,15 +570,17 @@ private class MeterActions(
 // each panel genuinely fills its share of whatever width/height DeckHomeScreen's slot gives this
 // Row (which is already the full footer-collapsed height for the whole time this pane is shown).
 //
-// Rebalanced 2026-09-06 on direct driver feedback ("map should be the center, so driver should see
-// the route very straight") -- an equal 50/50 split (the original 2026-09-04b correction, kept as
-// a code comment below for context) still left the map sharing the screen with the dial rather
-// than reading as the dominant, centred element the driver actually needs while navigating. This
-// keeps BOTH panels as their own real, clearly bounded surface (the ORIGINAL 2026-09-04b
-// correction this preserves: "never a backdrop the dial sits on top of" -- rebalancing the weights
-// is not the same change as making one float over the other, and does not undo that fix) -- just
-// gives the map a clear majority (roughly 58%) of the width instead of an even split.
-private const val DIAL_COL_WEIGHT = 0.72f
+// Rebalanced twice on direct driver feedback. First (2026-09-06 AM): "map should be the center, so
+// driver should see the route very straight" -- moved off an even 50/50 split to give the map a
+// clear ~58% majority. Then reverted the same day (2026-09-06 PM), same driver, on a second real-
+// world test: the fare/distance/time/tariff text needs to be readable by a PASSENGER sitting to the
+// side of the vehicle, not just the driver navigating -- "make it prominent... fifty percent should
+// have the speedometer, and fifty percent should have the map... the text will be increased." Back
+// to an even split, and MeterDial's own text sizes are bumped alongside this (see that function).
+// This still keeps BOTH panels as their own real, clearly bounded surface (the original 2026-09-04b
+// correction: "never a backdrop the dial sits on top of" -- an equal split is not the same change
+// as making one float over the other, and does not undo that fix).
+private const val DIAL_COL_WEIGHT = 1f
 private const val MAP_COL_WEIGHT = 1f
 private val COL_GAP = 16.dp
 
@@ -651,9 +654,10 @@ private fun SectionLabel(text: String, color: Color = CaptainPalette.textPrimary
  * width, and both inherit the full footer-collapsed height [DeckHomeScreen] already gives this pane
  * for the entire time it is shown (see that file's own "Meter-focus collapse" comment) — so the
  * dial's own `min(width, height)` sizing (see [MeterDial]) and the map panel both end up visibly
- * bigger. [DIAL_COL_WEIGHT]/[MAP_COL_WEIGHT] give the map a clear majority share rather than an
- * even split (2026-09-06 rebalance, see those constants' own doc) — the driver still gets a full,
- * real dial panel, just alongside a map that reads as the dominant element, not an equal partner.
+ * bigger. [DIAL_COL_WEIGHT]/[MAP_COL_WEIGHT] are back to an even split (2026-09-06, see those
+ * constants' own doc for the two-round rebalance) — a passenger seated beside the dial needs the
+ * fare/distance/time text at real size, which needs the dial at its full half-share, not a map
+ * majority.
  *
  * Everything that used to sit in the permanent third column — NIGHT/DAY FARE, SET PRICE/ADD
  * TOLL/PAUSE FARE/MORE, FARE BREAKDOWN/DETAILS, TRIP DETAILS — is unchanged in substance but moved
@@ -682,6 +686,7 @@ private fun RowScope.MeterPaneLayout(
     hasDestination: Boolean,
     speechEnabled: Boolean,
     onEndFare: () -> Unit,
+    onTogglePause: () -> Unit,
     onOpenNavigation: (NavigationTarget) -> Unit,
     onToggleVoice: () -> Unit,
     onRetryRoute: () -> Unit,
@@ -700,6 +705,7 @@ private fun RowScope.MeterPaneLayout(
                 fareState = fareState,
                 isPaused = isPaused,
                 onEndFare = onEndFare,
+                onTogglePause = onTogglePause,
                 modifier = Modifier.fillMaxSize().padding(6.dp),
             )
         }
@@ -1467,7 +1473,13 @@ private fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
  * whatever the maxi/wheelchair banners do to the pane's height.
  */
 @Composable
-private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> Unit, modifier: Modifier = Modifier) {
+private fun MeterDial(
+    fareState: FareState,
+    isPaused: Boolean,
+    onEndFare: () -> Unit,
+    onTogglePause: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val stateColor by animateColorAsState(
         targetValue = if (isPaused) CaptainPalette.warning else CaptainPalette.hudAccent,
         animationSpec = tween(300),
@@ -1497,13 +1509,13 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                         Icons.Rounded.DirectionsCar,
                         contentDescription = null,
                         tint = stateColor,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(26.dp),
                     )
                     Text(
                         "ACTIVE FARE",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
+                        fontSize = 13.sp,
                         letterSpacing = 2.sp,
                         color = CaptainPalette.textSecondary,
                         modifier = Modifier.padding(top = 2.dp),
@@ -1524,7 +1536,11 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                     }
                     RollingMoneyText(
                         amount = totalText,
-                        fontSize = if (totalText.length > 8) 46.sp else 60.sp,
+                        // Bumped 2026-09-06 (direct passenger-readability feedback — see
+                        // MeterPaneLayout's DIAL_COL_WEIGHT doc for the matching 50/50 layout
+                        // change this pairs with): a passenger seated beside the dial should be
+                        // able to read the running total at a glance, not just the driver.
+                        fontSize = if (totalText.length > 8) 58.sp else 76.sp,
                         modifier = Modifier
                             .padding(top = 2.dp)
                             .scale(tickScale.value),
@@ -1544,7 +1560,7 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                         if (isPaused) "PAUSED" else "RUNNING",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
+                        fontSize = 16.sp,
                         letterSpacing = 3.sp,
                         color = stateColor,
                         style = glowStyle(stateColor, if (isPaused) 20f else pulseBlur),
@@ -1553,14 +1569,14 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                         "${fareState.band.label.uppercase()} + EXTRAS",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Medium,
-                        fontSize = 9.sp,
+                        fontSize = 12.sp,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                     // The dial OWNS these three live readouts (dedupe pass) — they appear nowhere
                     // else on the screen. WAITING goes amber while actually accruing.
-                    Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(modifier = Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         DialReadout("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM")
                         DialReadout("TIME", "%d:%02d".format(fareState.movingSeconds / 60, fareState.movingSeconds % 60))
                         DialReadout(
@@ -1569,30 +1585,63 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                             valueColor = if (isPaused) CaptainPalette.warning else CaptainPalette.textPrimary,
                         )
                     }
-                    // END FARE — inside the dial, per the mockup. Same endTrip { navigate(CLOSE_PAY) }
-                    // call the old full-width END TRIP bar made (see the caller).
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .width(140.dp)
-                            .height(36.dp)
-                            .neonGlow(CaptainPalette.primary, 18.dp, strength = 0.9f, spread = 4.dp)
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(Brush.horizontalGradient(listOf(CaptainPalette.primary, CaptainPalette.hudAccent)))
-                            .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.9f), RoundedCornerShape(18.dp))
-                            .gameClick(onClick = onEndFare, shape = RoundedCornerShape(18.dp)),
-                        contentAlignment = Alignment.Center,
+                    // PAUSE/RESUME + END FARE — both inside the dial now (2026-09-06, direct
+                    // feedback: "there should be one button, pause the meter and resume the
+                    // meter... on the speedometer" — PAUSE FARE already existed, but only inside
+                    // the ControlsHandle drawer, an extra tap away). This is the SAME
+                    // onTogglePause/togglePause() call PauseFareTile (the drawer's own 2×2 grid)
+                    // already makes — one real toggle, now reachable from two places rather than a
+                    // second, competing pause state.
+                    Row(
+                        modifier = Modifier.padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(
-                            "END FARE",
-                            fontFamily = InterFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            letterSpacing = 2.sp,
-                            // onAccent (fixed white), not textPrimary — this label sits on a solid
-                            // primary/hudAccent gradient fill (see CaptainPalette.onAccent's doc).
-                            color = CaptainPalette.onAccent,
-                        )
+                        Box(
+                            modifier = Modifier
+                                .width(96.dp)
+                                .height(44.dp)
+                                .neonGlow(stateColor, 18.dp, strength = 0.7f, spread = 3.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(CaptainPalette.hudGlass)
+                                .border(1.dp, stateColor.copy(alpha = 0.9f), RoundedCornerShape(18.dp))
+                                .gameClick(onClick = onTogglePause, shape = RoundedCornerShape(18.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (isPaused) "RESUME" else "PAUSE",
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                letterSpacing = 1.sp,
+                                color = stateColor,
+                            )
+                        }
+                        // END FARE — inside the dial, per the mockup. Same
+                        // endTrip { navigate(CLOSE_PAY) } call the old full-width END TRIP bar made
+                        // (see the caller).
+                        Box(
+                            modifier = Modifier
+                                .width(150.dp)
+                                .height(44.dp)
+                                .neonGlow(CaptainPalette.primary, 18.dp, strength = 0.9f, spread = 4.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Brush.horizontalGradient(listOf(CaptainPalette.primary, CaptainPalette.hudAccent)))
+                                .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.9f), RoundedCornerShape(18.dp))
+                                .gameClick(onClick = onEndFare, shape = RoundedCornerShape(18.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "END FARE",
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                letterSpacing = 2.sp,
+                                // onAccent (fixed white), not textPrimary — this label sits on a
+                                // solid primary/hudAccent gradient fill (see
+                                // CaptainPalette.onAccent's doc).
+                                color = CaptainPalette.onAccent,
+                            )
+                        }
                     }
                 }
             }
@@ -1605,16 +1654,16 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
                     fareState.currentSpeedKmh.roundToInt().toString(),
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
+                    fontSize = 24.sp,
                     color = CaptainPalette.hudAccent,
                 )
                 Text(
                     " km/h",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp,
+                    fontSize = 14.sp,
                     color = CaptainPalette.textMuted,
-                    modifier = Modifier.padding(bottom = 2.dp),
+                    modifier = Modifier.padding(bottom = 3.dp),
                 )
             }
         }
@@ -1623,9 +1672,11 @@ private fun MeterDial(fareState: FareState, isPaused: Boolean, onEndFare: () -> 
 
 @Composable
 private fun DialReadout(label: String, value: String, valueColor: Color = CaptainPalette.textPrimary) {
-    Column(modifier = Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 8.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = valueColor, maxLines = 1)
+    // Bumped alongside the rest of MeterDial (2026-09-06 passenger-readability pass) — width grown
+    // to match so three of these in a Row don't crowd the bigger value text.
+    Column(modifier = Modifier.width(80.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, color = valueColor, maxLines = 1)
     }
 }
 

@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.math.RoundingMode
+import java.util.UUID
 
 class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -115,11 +116,26 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openTripInRoom(tripContext: TripContext) {
+        // Generated here, synchronously, and marked live BEFORE the coroutine below ever touches
+        // Room — see SessionHolder.liveTripClientUuid's doc for the real race this closes. Room's
+        // observeActiveTrip() Flow can emit the new OPEN row the instant tripDao.insert() commits,
+        // which is BEFORE tripRepository.openTrip() (two suspend DB writes: insert, then the
+        // outbox upsert) returns to this coroutine — so setting SessionHolder.markTripLive only
+        // after openTrip() returns left a real, if narrow, window where DeckHomeScreen could see
+        // `activeTrip != null` and `liveTripClientUuid` still stale, misreading a fare that is
+        // still opening as an orphaned one and redirecting straight to Close & Pay (found live,
+        // 2026-09-06, on the very first trip started after the fix that introduced the check).
+        // Generating the id here and threading it into tripRepository.openTrip(clientUuid = ...)
+        // instead of letting that function mint its own means the two never have a chance to
+        // disagree in the first place.
+        val clientUuid = UUID.randomUUID().toString()
+        SessionHolder.markTripLive(clientUuid)
         viewModelScope.launch {
             // fareEngine.startTrip() above set the initial state synchronously
             // (status/timeClass/peak breakdown), so this read is safe here.
             val initial = fareState.value
             val trip = tripRepository.openTrip(
+                clientUuid = clientUuid,
                 vehicleId = tripContext.vehicleId,
                 driverId = tripContext.driverId,
                 shiftId = tripContext.shiftId,
@@ -251,6 +267,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             doPersistTick(clientUuid, closedState)
+            SessionHolder.clearLiveTrip()
             onClosed()
         }
     }
