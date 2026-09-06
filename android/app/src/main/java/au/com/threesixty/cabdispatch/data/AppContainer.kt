@@ -11,6 +11,8 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
+import au.com.threesixty.cabdispatch.data.remote.RefreshRequestDto
+import au.com.threesixty.cabdispatch.data.remote.RefreshResponseDto
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.AppUpdateChecker
 import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
@@ -58,9 +60,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import okhttp3.Authenticator
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Route
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -109,11 +117,25 @@ object AppContainer {
 
     /**
      * Mutable holder for the current session's bearer token, read by
-     * [authInterceptor] on every request. The auth/session sibling agent
-     * should update this on login/refresh/logout rather than rebuilding
-     * [apiService]. `null` = unauthenticated (auth endpoints only).
+     * [authInterceptor] on every request. Updated on login/refresh/logout
+     * rather than rebuilding [apiService]. `null` = unauthenticated (auth
+     * endpoints only).
      */
     var accessToken: String? = null
+
+    /**
+     * The refresh token [DriverAuthRepository][au.com.threesixty.cabdispatch.domain.DriverAuthRepository]'s
+     * two login call sites capture alongside [accessToken] — added 2026-09-06 alongside
+     * [tokenAuthenticator]. Real gap this closes: [DriverLoginResponseDto][au.com.threesixty.cabdispatch.data.remote.DriverLoginResponseDto]
+     * carried a `refresh_token` field the whole time and nothing ever read it, so a 401 from an
+     * expired [accessToken] (`ACCESS_TOKEN_EXPIRE_MINUTES`, 30 by default) had no way to recover —
+     * every call after that point just failed, same "HTTP 401 Unauthorized" shape observed live on
+     * the Live Dispatch panel and at least one trip sync this session. In-memory only, same as
+     * [accessToken] — process-restart re-login is a separate, larger, deliberate scope decision
+     * (see [SessionStore]'s own doc on why no credential is persisted there), not something to
+     * bolt on here.
+     */
+    var refreshToken: String? = null
 
     /** Held for the process lifetime — see [ConnectivitySyncTrigger] doc. */
     lateinit var connectivitySyncTrigger: ConnectivitySyncTrigger
@@ -196,6 +218,7 @@ object AppContainer {
         okHttpClient = OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
             .addInterceptor(loggingInterceptor)
+            .authenticator(tokenAuthenticator)
             .build()
 
         val retrofit = Retrofit.Builder()
@@ -253,6 +276,95 @@ object AppContainer {
             original
         }
         chain.proceed(request)
+    }
+
+    /**
+     * OkHttp [Authenticator] counterpart to [authInterceptor] — added 2026-09-06.
+     * [authInterceptor] only ever attaches whatever [accessToken] currently holds; this is what
+     * actually recovers from an expired one instead of leaving every call after that point 401
+     * forever (see [refreshToken]'s doc for the bug this closes).
+     *
+     * Runs synchronously on OkHttp's own thread (the [Authenticator] contract) — the refresh call
+     * below is a plain blocking [okhttp3.Call.execute] against [plainOkHttpClient], not a suspend
+     * call through [apiService]; bridging that into a blocking context here would be more complex
+     * than one raw request for no benefit. `synchronized(this)` means concurrent 401s from several
+     * in-flight requests queue behind one real refresh call rather than each firing their own —
+     * the first one through re-checks whether [accessToken] already moved past what ITS specific
+     * request failed with (another thread's refresh may have already landed while this one waited
+     * for the lock) before deciding a fresh refresh call is actually needed.
+     *
+     * Returning `null` is OkHttp's own "give up" contract, which propagates the original 401 to
+     * the caller — every real caller in this app already treats a 401 as a real, user-facing
+     * failure (there is no separate "silently retrying" state to show), so giving up cleanly here
+     * (no refresh token to use, or the refresh call itself failed/was rejected) is the right
+     * default rather than looping.
+     */
+    private val tokenAuthenticator = Authenticator { _, response ->
+        val path = response.request.url.encodedPath
+        // Never try to refresh a 401 from the refresh call itself (a real "this refresh token is
+        // itself invalid/expired" answer) or a request this authenticator already retried once
+        // (the fresh token was ALSO rejected — refreshing again would not help).
+        if (path.endsWith("/v1/auth/refresh") || responseChainLength(response) >= 2) {
+            return@Authenticator null
+        }
+        val currentRefreshToken = refreshToken ?: return@Authenticator null
+        val failedAccessToken = response.request.header("Authorization")?.removePrefix("Bearer ")
+
+        synchronized(this) {
+            val newAccessToken = if (accessToken != null && accessToken != failedAccessToken) {
+                accessToken
+            } else {
+                runCatching { performBlockingTokenRefresh(currentRefreshToken) }.getOrNull()
+            }
+            newAccessToken?.let {
+                response.request.newBuilder().header("Authorization", "Bearer $it").build()
+            }
+        }
+    }
+
+    /** A bare, interceptor/authenticator-free client for [tokenAuthenticator]'s own refresh call —
+     * deliberately not [okHttpClient] itself (which carries [tokenAuthenticator]): the real
+     * refresh token travels in this request's BODY, not an Authorization header, so
+     * [authInterceptor] attaching a stale bearer token would be harmless but pointless, and
+     * reusing a client that carries this same authenticator risks a confusing recursive-
+     * authenticate path for no benefit. */
+    private val plainOkHttpClient = OkHttpClient()
+
+    /** The actual `POST /v1/auth/refresh` call [tokenAuthenticator] makes — real request/response,
+     * no fabricated fallback. Updates [accessToken]/[refreshToken] in place on success (so the
+     * *next* 401 anywhere reads the new pair) and returns the new access token for
+     * [tokenAuthenticator] to retry the failed request with immediately. `null` on any failure
+     * (network error, non-2xx, malformed body) — [tokenAuthenticator] treats that as "give up",
+     * never as "pretend it worked". */
+    private fun performBlockingTokenRefresh(currentRefreshToken: String): String? {
+        val requestBody = cabDispatchJson
+            .encodeToString(RefreshRequestDto.serializer(), RefreshRequestDto(currentRefreshToken))
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url("${BuildConfig.API_BASE_URL}/v1/auth/refresh")
+            .post(requestBody)
+            .build()
+        plainOkHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val body = response.body?.string() ?: return null
+            val tokens = cabDispatchJson.decodeFromString(RefreshResponseDto.serializer(), body)
+            accessToken = tokens.accessToken
+            refreshToken = tokens.refreshToken
+            return tokens.accessToken
+        }
+    }
+
+    /** How many times this exact request has already been retried, per OkHttp's own
+     * `response.priorResponse` chain — the standard way to bound an [Authenticator]'s retries
+     * without a separate counter field. `1` for a fresh (never-retried) response. */
+    private fun responseChainLength(response: okhttp3.Response): Int {
+        var count = 1
+        var prior = response.priorResponse
+        while (prior != null) {
+            count++
+            prior = prior.priorResponse
+        }
+        return count
     }
 
     // --- Offline sync engine (B7): trip queue, tariff cache, sync outbox ---

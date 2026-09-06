@@ -448,6 +448,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         else -> {
                             withContext(Dispatchers.IO) { AppContainer.database.clearAllTables() }
                             AppContainer.accessToken = null
+                            AppContainer.refreshToken = null
                             SessionHolder.clear()
                             _uiState.update {
                                 it.copy(factoryResetInProgress = false, factoryResetComplete = true)

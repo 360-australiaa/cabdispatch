@@ -23,23 +23,23 @@ import java.time.Instant
  * semantics fight over the same file.
  *
  * ### What is deliberately NOT persisted here
- * - [au.com.threesixty.cabdispatch.data.AppContainer.accessToken] (the bearer token): this store
- *   holds no credential at all, on purpose. [DriverSession] itself carries no token/PIN/credential
- *   either — it is who-and-what-shift metadata, not an auth artifact — so restoring it does not
- *   let this app "act as the driver" any more than an in-memory session already could; the actual
- *   authentication boundary
- *   ([SharedPreferencesDriverAuthRepository]'s offline-PIN cache, and the online bearer token) is
- *   completely untouched by this class. A resumed session with no access token simply means calls
- *   that need one 401 until a fresh one is issued — an honest, already-familiar shape in this app
- *   (see e.g. [DeviceCommandHeartbeat]'s own doc on the parked-tablet token gap it had to work
- *   around for a *different* endpoint), not a new failure mode invented here. There is also no
- *   existing wired token-refresh path to hook a silent resume-refresh into:
- *   [au.com.threesixty.cabdispatch.data.remote.ApiService.refresh] is declared on the interface but
- *   is never called anywhere in this app, and the refresh token
- *   [au.com.threesixty.cabdispatch.data.remote.TokenResponseDto] carries back from login is never
- *   even captured by [SharedPreferencesDriverAuthRepository]. Wiring a real silent-refresh-on-resume
- *   path is a bigger, separate change through files outside this pass's scope (`ApiService.kt`,
- *   `DriverAuthRepository.kt`), not something to bolt on silently in here.
+ * - [au.com.threesixty.cabdispatch.data.AppContainer.accessToken]/[au.com.threesixty.cabdispatch.data.AppContainer.refreshToken]
+ *   (the bearer/refresh tokens): this store holds no credential at all, on purpose. [DriverSession]
+ *   itself carries no token/PIN/credential either — it is who-and-what-shift metadata, not an auth
+ *   artifact — so restoring it does not let this app "act as the driver" any more than an
+ *   in-memory session already could; the actual authentication boundary
+ *   ([SharedPreferencesDriverAuthRepository]'s offline-PIN cache, and the online bearer/refresh
+ *   tokens) is completely untouched by this class. A resumed session after a process restart still
+ *   has no tokens at all and calls that need one 401 until a fresh login — an honest, already-
+ *   familiar shape in this app (see e.g. [DeviceCommandHeartbeat]'s own doc on the parked-tablet
+ *   token gap it had to work around for a *different* endpoint), not a new failure mode invented
+ *   here. Real silent recovery WITHIN one already-running process now exists (2026-09-06,
+ *   [au.com.threesixty.cabdispatch.data.AppContainer]'s `tokenAuthenticator` calls
+ *   `POST /v1/auth/refresh` on a 401 instead of leaving it unrecovered) — what's described here is
+ *   specifically the *cross-process-restart* case, where there is no token of either kind left to
+ *   refresh from, by design; persisting a refresh token durably enough to survive that would be a
+ *   further, separate, deliberate decision (on-disk credential storage has its own security
+ *   tradeoffs), not something to fold into this pass.
  * - [SessionHolder.pendingTrip]/[TripContext]: a same-process S2->S3 hand-off, not session state —
  *   see that property's own doc. Once a trip has actually started, its data already lives durably
  *   in Room ([au.com.threesixty.cabdispatch.data.repository.TripRepository]/`TripEntity`); a driver

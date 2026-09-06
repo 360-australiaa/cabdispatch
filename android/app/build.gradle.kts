@@ -41,8 +41,8 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

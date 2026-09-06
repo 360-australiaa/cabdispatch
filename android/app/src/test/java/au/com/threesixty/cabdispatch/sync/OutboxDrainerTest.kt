@@ -42,6 +42,7 @@ import au.com.threesixty.cabdispatch.data.remote.ReceiptEmailResponseDto
 import au.com.threesixty.cabdispatch.data.remote.ReceiptSmsRequestDto
 import au.com.threesixty.cabdispatch.data.remote.ReceiptSmsResponseDto
 import au.com.threesixty.cabdispatch.data.remote.RefreshRequestDto
+import au.com.threesixty.cabdispatch.data.remote.RefreshResponseDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftEndDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftReportDto
@@ -533,7 +534,7 @@ private class FakeApiService : ApiService {
 
     // --- Everything below is unused by the code under test. ---
     override suspend fun login(body: LoginRequestDto): TokenResponseDto = notUsed()
-    override suspend fun refresh(body: RefreshRequestDto): TokenResponseDto = notUsed()
+    override suspend fun refresh(body: RefreshRequestDto): RefreshResponseDto = notUsed()
     override suspend fun me(): UserDto = notUsed()
     override suspend fun logout(): Unit = notUsed()
     override suspend fun registerDevice(body: DeviceRegisterRequestDto): DeviceDto = notUsed()

@@ -80,6 +80,10 @@ class SharedPreferencesDriverAuthRepository(
             val user = response.user
             if (accessToken != null && user != null) {
                 AppContainer.accessToken = accessToken
+                // Real gap closed 2026-09-06: this field existed on the response the whole time
+                // and was simply never read — see AppContainer.refreshToken's doc for the 401s
+                // that went unrecovered without it.
+                AppContainer.refreshToken = response.refreshToken
                 cacheDriver(driverId, pin, user)
                 return DriverLoginResult.Success(user)
             }
@@ -116,6 +120,7 @@ class SharedPreferencesDriverAuthRepository(
     ): Result<UserDto> = runCatching {
         val token = apiService.mfaLogin(MfaLoginRequestDto(mfaToken = mfaToken, code = code))
         AppContainer.accessToken = token.accessToken
+        AppContainer.refreshToken = token.refreshToken
         cacheDriver(driverId, pin, token.user)
         token.user
     }

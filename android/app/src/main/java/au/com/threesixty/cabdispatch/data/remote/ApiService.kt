@@ -70,7 +70,7 @@ interface ApiService {
     suspend fun mfaLogin(@Body body: MfaLoginRequestDto): TokenResponseDto
 
     @POST("/v1/auth/refresh")
-    suspend fun refresh(@Body body: RefreshRequestDto): TokenResponseDto
+    suspend fun refresh(@Body body: RefreshRequestDto): RefreshResponseDto
 
     @GET("/v1/auth/me")
     suspend fun me(): UserDto
@@ -686,6 +686,20 @@ data class MfaLoginRequestDto(
 
 @Serializable
 data class RefreshRequestDto(@SerialName("refresh_token") val refreshToken: String)
+
+/** Real bug fixed 2026-09-06: [ApiService.refresh] used to declare [TokenResponseDto] as its
+ * return type, which requires a non-null `user` field — but the backend's real
+ * `POST /v1/auth/refresh` response (`app/schemas/auth.py`'s `RefreshResponse`) never carries one.
+ * Never noticed because nothing called [ApiService.refresh] at all until
+ * [au.com.threesixty.cabdispatch.data.AppContainer]'s token authenticator started calling it — a
+ * real call against the old declared type would have thrown a deserialization error on every
+ * refresh. */
+@Serializable
+data class RefreshResponseDto(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("token_type") val tokenType: String = "bearer",
+)
 
 @Serializable
 data class TokenResponseDto(
