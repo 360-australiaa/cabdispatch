@@ -36,6 +36,25 @@
          a Knox Manage admin adds a per-app allowlist exception for this app's package name. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Battery-optimisation (Doze) exemption. REQUIRED for the permissions checklist's
+         "Disable battery optimisation" item to do anything at all: Android silently ignores
+         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS unless the caller holds this
+         permission, and PermissionsChecklistScreen.openBatteryOptimisation()'s runCatching
+         swallows the failure — so without this line the driver taps the tile, nothing happens,
+         and nothing anywhere says why. Found 2026-09-07 driving a genuine first-run onboarding
+         on a wiped tablet: the tile stayed "Not exempt", `dumpsys deviceidle whitelist` confirmed
+         the app was never whitelisted, and no activity was ever launched.
+
+         This matters operationally, not just cosmetically: this is an all-day in-vehicle meter
+         whose heartbeat, GPS trace and dispatch polling must keep running with the screen off.
+         Doze throttling those is exactly the failure this exemption exists to prevent.
+
+         Play Store note: Google restricts this permission to apps whose core function genuinely
+         requires exemption. That is not a distribution concern here — this app ships by fleet OTA
+         / Knox Manage to dedicated kiosk tablets (see REQUEST_INSTALL_PACKAGES above and
+         docs/OTA_UPDATE_ROLLOUT.md), not through the Play Store. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".CabDispatchApp"
         android:allowBackup="false"
