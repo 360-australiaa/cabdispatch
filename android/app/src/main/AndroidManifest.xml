@@ -27,6 +27,15 @@
     <!-- Sync/duress/shift-report notifications (Android 13+ runtime permission) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Real OTA self-update (2026-09-06, domain/AppUpdateChecker.kt) — lets this app launch the
+         system "install this app?" flow for an APK it downloaded itself. This app is NOT Device
+         Owner, so this permission only arms the standard human-confirmed install prompt, never a
+         silent install — see AppUpdateChecker's class doc. Also see docs/OTA_UPDATE_ROLLOUT.md:
+         on a real Knox Manage-enrolled tablet, Knox's own unknown-sources policy
+         (docs/KNOX_LOCKDOWN_RUNBOOK.md §3.2) still blocks this permission's effect fleet-wide until
+         a Knox Manage admin adds a per-app allowlist exception for this app's package name. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:name=".CabDispatchApp"
         android:allowBackup="false"
@@ -53,6 +62,24 @@
              sync worker's provider here if a custom Configuration.Provider is
              needed, or rely on default WorkManager init since CabDispatchApp
              does not implement Configuration.Provider yet. -->
+
+        <!-- Real OTA self-update (2026-09-06, domain/AppUpdateChecker.kt): exposes the
+             downloaded-APK subdirectory (res/xml/file_paths.xml) to the system Package
+             Installer as a content:// Uri, per Android's standard "share a file with another
+             app" pattern, required because a plain file:// Uri is rejected by
+             Intent.ACTION_VIEW/android.permission.REQUEST_INSTALL_PACKAGES on API 24+.
+             android:exported="false" + grantUriPermissions="true": no other app can query this
+             provider generally, only the specific Uri this app explicitly grants via
+             FLAG_GRANT_READ_URI_PERMISSION on the install Intent (see AppUpdateChecker.promptInstall). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

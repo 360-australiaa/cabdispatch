@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.AppUpdateChecker
 import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
 import au.com.threesixty.cabdispatch.domain.DriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
@@ -456,6 +457,18 @@ object AppContainer {
     val driverEngagementRepository: DriverEngagementRepository by lazy {
         RemoteBackedDriverEngagementRepository(apiService)
     }
+
+    /**
+     * Real OTA self-update checker (2026-09-06) — see [AppUpdateChecker]'s own class doc for the
+     * full flow and, critically, the Knox Manage / one-system-tap constraints it does not paper
+     * over. Thin network+IO-only wrapper around [apiService]/[okHttpClient]/[appContext], same
+     * "no own scope needed" shape as [mapboxGeocoding]/[mapboxDirections] above — unlike
+     * [deviceCommandHeartbeat]/[livePositionHeartbeat] this is not a self-driving background loop,
+     * every call into it ([AppUpdateChecker.checkForUpdate]/[AppUpdateChecker.downloadAndVerify])
+     * is explicitly triggered by
+     * [ForceUpdatePendingBanner][au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner].
+     */
+    val appUpdateChecker: AppUpdateChecker by lazy { AppUpdateChecker(apiService, okHttpClient, appContext) }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:
     // val fooDao: FooDao by lazy { database.fooDao() }

@@ -309,6 +309,20 @@ interface ApiService {
         @Query("limit") limit: Int = 20,
     ): FatigueAlertPageDto
 
+    // ---- App releases (real Android OTA self-update, 2026-09-06 — see
+    // domain/AppUpdateChecker.kt and docs/OTA_UPDATE_ROLLOUT.md). Publishing
+    // (`POST /v1/platform/app-releases`) is platform-owner-only and has no client
+    // call site in this app — only the device-facing read below is used here. ----
+
+    /** `GET /v1/app-releases/latest` — the highest `version_code` among published, `is_active`
+     * releases. Any authenticated tenant/device bearer token (not platform-owner-gated — this is a
+     * read). Compared against `BuildConfig.VERSION_CODE` by
+     * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.checkForUpdate]; 404s (surfaced as a
+     * thrown [retrofit2.HttpException], caught by that function's `runCatching`) when no release
+     * has ever been published. */
+    @GET("/v1/app-releases/latest")
+    suspend fun latestAppRelease(): LatestAppReleaseDto
+
     // ---- Vouchers / Corporate Accounts (Close & Pay payment-grid pass, real backend endpoints
     // added by the SaaS-platform Phase 3 voucher-ledger workstream, commit 1f93840) ----
 
@@ -784,6 +798,19 @@ data class DeviceDto(
      * on the driver-bearer path unmodified until it next re-pairs.
      */
     @SerialName("device_secret") val deviceSecret: String? = null,
+    /**
+     * Real OTA self-update hint (2026-09-06 — see [au.com.threesixty.cabdispatch.domain.AppUpdateChecker]
+     * and `docs/OTA_UPDATE_ROLLOUT.md`), stamped by the backend from its own current
+     * `GET /v1/app-releases/latest` answer on every heartbeat response (`app/api/v1/fleet.py`'s
+     * `device_heartbeat`) — a low-cost hint riding this existing 60s poll. `null` means either "no
+     * active release has ever been published" or simply that this response didn't carry the hint
+     * (older backend) — [DeviceCommandHeartbeat] treats both the same: not "you are up to date",
+     * just "no hint this tick". [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.checkForUpdate]'s
+     * own dedicated `GET /v1/app-releases/latest` call remains the source of truth used to actually
+     * drive the update flow — this field only lets [DeviceCommandState] show *that* an update is
+     * known to be pending without a second network round trip.
+     */
+    @SerialName("latest_version_code") val latestVersionCode: Int? = null,
 )
 
 /**
@@ -1765,6 +1792,23 @@ data class FatigueAlertPageDto(
     val total: Int,
     val skip: Int,
     val limit: Int,
+)
+
+/** Mirrors the backend's `LatestAppReleaseRead` (`GET /v1/app-releases/latest`,
+ * `app/schemas/app_releases.py`) — the real OTA self-update contract, see
+ * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker]. [downloadUrl] is a relative path
+ * (`/v1/app-releases/{id}/download`) resolved against `BuildConfig.API_BASE_URL` by
+ * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.downloadAndVerify], not an absolute URL —
+ * same relative-path convention as [UserDto.photoUrl]. [sha256] is always server-computed at
+ * publish time; [AppUpdateChecker] verifies the downloaded bytes against it before this app will
+ * ever consider installing them. */
+@Serializable
+data class LatestAppReleaseDto(
+    @SerialName("version_code") val versionCode: Int,
+    @SerialName("version_name") val versionName: String,
+    @SerialName("release_notes") val releaseNotes: String? = null,
+    @SerialName("download_url") val downloadUrl: String,
+    val sha256: String,
 )
 
 /** Mirrors the backend's duress-snapshot upload response (`app/schemas/duress.py`, or the

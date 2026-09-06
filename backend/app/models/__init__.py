@@ -11,6 +11,7 @@ every sibling domain's models are already guaranteed to be on `Base.metadata`
 by the time this module runs.
 """
 from app.core.database import Base
+from app.models.app_release import AppRelease
 from app.models.audit_log import AuditLog
 from app.models.billing import Subscription
 from app.models.compliance import ComplianceDocument

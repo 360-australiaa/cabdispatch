@@ -1,7 +1,9 @@
 package au.com.threesixty.cabdispatch.ui.overlays
 
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,17 +23,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.AppUpdateState
 import au.com.threesixty.cabdispatch.ui.theme.Deck
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * App-level indicators for the fleet-command flags and connectivity state a driver should be able
@@ -39,12 +45,16 @@ import kotlinx.coroutines.delay
  * follow the driver across every screen rather than living inside whichever screen happens to be
  * open.
  *
- * All three follow [DuressActiveBanner]'s precedent in this package: a full-size [Box] with no
- * `pointerInput`/`clickable` modifier anywhere, so none is hit-testable and the meter,
- * dashboard and every dialog underneath stay fully usable. None is a [androidx.compose.ui.window.Dialog]
- * or `Popup` on purpose — those are hosted in separate windows that keep system density, which
- * would render them at a visibly different scale from the rest of the app (see
- * [au.com.threesixty.cabdispatch.MainActivity]'s `FixedDesignCanvas` doc).
+ * [KioskLockedBanner] and [OfflineBanner] follow [DuressActiveBanner]'s precedent in this package: a
+ * full-size [Box] with no `pointerInput`/`clickable` modifier anywhere, so neither is hit-testable
+ * and the meter, dashboard and every dialog underneath stay fully usable. [ForceUpdatePendingBanner]
+ * is the one deliberate exception (2026-09-06, real OTA self-update pass) — it now carries an actual
+ * "UPDATE NOW"/"INSTALL" action, so its own action row (and only that row, via a `clickable`
+ * modifier scoped to it, not the surrounding full-size [Box]) is hit-testable; see that composable's
+ * own doc. None of these is a [androidx.compose.ui.window.Dialog] or `Popup` on purpose — those are
+ * hosted in separate windows that keep system density, which would render them at a visibly
+ * different scale from the rest of the app (see [au.com.threesixty.cabdispatch.MainActivity]'s
+ * `FixedDesignCanvas` doc).
  *
  * ### Placement
  * [DuressActiveBanner]'s stealth lamp owns bottom-END, so kiosk lock — a small, quiet chip — takes
@@ -75,31 +85,54 @@ import kotlinx.coroutines.delay
 /**
  * `Device.force_update_pending` — a fleet admin has flagged this tablet as needing a newer build.
  *
- * ### Why this is a notice and not an "Update now" button
- * This app has no self-update channel of any kind, and this banner deliberately does not imply
- * one. The fleet tablets are Samsung Knox Manage kiosks with app install/uninstall blocked from
- * any source *and* unknown-sources installs blocked (`docs/KNOX_LOCKDOWN_RUNBOOK.md` §3.2); the
- * manifest declares no `REQUEST_INSTALL_PACKAGES`, so the app could not install a downloaded APK
- * even if Knox allowed it; Play Store packaging is on `PROJECT_HANDOFF.md`'s "not done anywhere"
- * list, so there is no in-app-update path either; and the API carries no target-version or APK-URL
- * field anywhere, so the app cannot even name the version it is supposed to be on. Updates reach
- * these tablets only via Knox Manage's console app-deployment, performed by a human at the depot.
- * The copy therefore states only what is true and actionable, names no version number, offers no
- * button, and runs no countdown.
+ * ### Real self-update, added 2026-09-06 — read the caveats below before assuming this is silent
+ * This app can now genuinely check for, download, verify and launch the install of a newer build
+ * on its own (`domain/AppUpdateChecker.kt`, `GET /v1/app-releases/latest`,
+ * `POST /v1/platform/app-releases` on the publishing side) — the manifest now declares
+ * `REQUEST_INSTALL_PACKAGES` and a `FileProvider`, and this banner drives that flow end to end.
+ * This REPLACES the earlier "this tablet cannot update itself" copy, which is no longer true.
+ *
+ * It is still **not** a silent, zero-tap update, and this banner must never claim otherwise:
+ * 1. **Knox Manage blocks it by default.** These tablets are Samsung Knox Manage device-owner
+ *    enrolments, and Knox Manage's current documented policy blocks installs from unknown sources
+ *    fleet-wide (`docs/KNOX_LOCKDOWN_RUNBOOK.md` §3.2). Until a Knox Manage admin adds a
+ *    per-app allowlist exception for this app's package name (see `docs/OTA_UPDATE_ROLLOUT.md`),
+ *    the system install step below will be refused by the OS on a real locked-down tablet — this
+ *    banner cannot detect or work around that from inside the app, it can only report the
+ *    `Failed` state OkHttp/PackageInstaller hands back.
+ * 2. **One system confirmation tap is unavoidable.** This app is not Device Owner, so it cannot
+ *    call `PackageInstaller`/`DevicePolicyManager` to install silently — [AppUpdateChecker.promptInstall]
+ *    always hands off to the standard Android "install this app?" dialog, which a human at the
+ *    tablet must accept. "INSTALL" below arms that handoff; it does not complete the install itself.
  *
  * ### Why non-blocking
  * A full-screen block was considered and rejected as actively harmful: the backend's heartbeat
- * clears no flag, and the dashboard's only affordance posts `{"enabled": true}` and then disables
- * its own button — so `force_update_pending` latches with no un-set path in the UI. A blocking
- * modal would permanently brick a revenue-earning meter with no way out for the admin who pressed
- * the button. This banner will likewise stay visible until an admin clears the flag through the
- * API, which is exactly why it must not get in the driver's way — non-blocking, not hit-testable,
- * and out of the bottom CTA band (see this file's Placement note).
+ * clears no `force_update_pending` flag either, and the dashboard's only affordance posts
+ * `{"enabled": true}` and then disables its own button — so the flag latches with no un-set path
+ * in the UI. A blocking modal would permanently brick a revenue-earning meter for anyone who
+ * cannot complete the Knox-exception + install-tap flow above right now. This banner stays
+ * visible until an admin clears the flag through the API, which is exactly why it must not get in
+ * the driver's way — non-blocking, out of the bottom CTA band (see this file's Placement note),
+ * and the only clickable surface is its own compact action row (see this file's header doc).
  */
 @Composable
 fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
+    val activity = LocalContext.current as? Activity
+    val checker = AppContainer.appUpdateChecker
+    val updateState by checker.state.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    // Kick off exactly one check per time this banner appears (force_update_pending flips true) —
+    // not on every recomposition. A retry after Failed is a deliberate re-tap (see the "Retry"
+    // action below), not this effect firing again.
+    LaunchedEffect(Unit) {
+        if (updateState is AppUpdateState.Idle) {
+            checker.checkForUpdate()
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
-        Row(
+        Column(
             modifier = Modifier
                 // Top-centre, cleared past the 44dp status strip — deliberately NOT bottom-centre,
                 // which is every v2 screen's primary-CTA band. See this file's Placement note.
@@ -110,29 +143,129 @@ fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
                 .background(Deck.panel)
                 .border(1.dp, Deck.stopped.copy(alpha = 0.8f), RoundedCornerShape(Deck.R_MD.dp))
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(Deck.stopped),
-            )
-            Text(
-                text = "UPDATE PENDING",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = Deck.stopped,
-            )
-            Text(
-                text = "The depot needs to install a newer meter build — this tablet cannot update itself.",
-                fontFamily = InterFamily,
-                fontSize = 14.sp,
-                color = Deck.textSecondary,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(Deck.stopped),
+                )
+                Text(
+                    text = "UPDATE PENDING",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = Deck.stopped,
+                )
+                Text(
+                    text = "The depot has flagged this tablet for a newer meter build.",
+                    fontFamily = InterFamily,
+                    fontSize = 14.sp,
+                    color = Deck.textSecondary,
+                )
+            }
+
+            when (val s = updateState) {
+                is AppUpdateState.Idle, is AppUpdateState.Checking -> {
+                    Text(
+                        text = "Checking for an update…",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = Deck.textSecondary,
+                    )
+                }
+
+                is AppUpdateState.UpToDate -> {
+                    // Honest: the admin's flag and the publish record disagree. Never invent a
+                    // version to update to.
+                    Text(
+                        text = "No newer build has been published yet — nothing to update to.",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = Deck.textSecondary,
+                    )
+                }
+
+                is AppUpdateState.Available -> {
+                    UpdateActionChip(
+                        label = "UPDATE TO ${s.release.versionName}",
+                        onClick = { scope.launch { checker.downloadAndVerify(s.release) } },
+                    )
+                }
+
+                is AppUpdateState.Downloading -> {
+                    Text(
+                        text = "Downloading update… ${s.percent}%",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = Deck.textSecondary,
+                    )
+                }
+
+                is AppUpdateState.Verifying -> {
+                    Text(
+                        text = "Verifying download…",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = Deck.textSecondary,
+                    )
+                }
+
+                is AppUpdateState.ReadyToInstall -> {
+                    // Tapping this hands off to Android's own system "install this app?"
+                    // confirmation — see this composable's class doc, point 2. It is not itself the
+                    // install; it only arms the one unavoidable system-confirmed step.
+                    UpdateActionChip(
+                        label = "INSTALL ${s.release.versionName}",
+                        onClick = {
+                            activity?.let { checker.promptInstall(it, s.apkFile) }
+                        },
+                    )
+                }
+
+                is AppUpdateState.Failed -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = s.message,
+                            fontFamily = InterFamily,
+                            fontSize = 13.sp,
+                            color = Deck.hired,
+                        )
+                        UpdateActionChip(
+                            label = "RETRY",
+                            onClick = { scope.launch { checker.checkForUpdate() } },
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+/** Small tappable pill shared by every [ForceUpdatePendingBanner] action state above — the one
+ * hit-testable surface this file's [ForceUpdatePendingBanner] introduces (see this file's header
+ * doc on why every other banner here stays non-hit-testable). */
+@Composable
+private fun UpdateActionChip(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(Deck.R_SM.dp))
+            .background(Deck.yellow)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Deck.onYellow,
+        )
     }
 }
 

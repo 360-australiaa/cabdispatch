@@ -85,11 +85,30 @@ literal `/v1/trips/{id}/rating` path (Close & Pay's post-close rating hook)
 verified not to collide with any route in the trips router itself -- same
 "literal path owned by a sibling router" precedent as live_ops. See
 app/models/driver_engagement.py for the "derived, never stored" rule.
+
+app_releases (/v1/app-releases + /v1/platform/app-releases) is new in this
+pass: real OTA self-update publishing for the Android meter app. Two
+routers under distinct prefixes -- same convention as payments/tariffs
+above. `POST /v1/platform/app-releases` (platform-owner only, same gate as
+the rest of `/v1/platform/...`) uploads a new APK; `GET
+/v1/app-releases/latest` and `GET /v1/app-releases/{id}/download` are open
+to any authenticated tenant/device user (not platform-owner-gated -- these
+are reads, and every tenant's devices run the same one app build). See
+app/models/app_release.py for why this table is platform-wide, not
+tenant-scoped. HONEST CAVEAT this pass does not paper over: these tablets
+are Knox Manage device-owner-enrolled, and Knox Manage's current policy
+blocks installs from unknown sources (see
+docs/KNOX_LOCKDOWN_RUNBOOK.md/docs/OTA_UPDATE_ROLLOUT.md) -- a Knox Manage
+policy exception is still required per-fleet before this works end-to-end,
+and every install still needs one Android system confirmation tap (this
+app is not Device Owner, so it cannot install silently).
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.announcements import router as announcements_router
+from app.api.v1.app_releases import platform_router as app_releases_platform_router
+from app.api.v1.app_releases import router as app_releases_router
 from app.api.v1.audit_log import router as audit_log_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
@@ -169,3 +188,5 @@ app.include_router(wallet_router)
 app.include_router(ratings_router)
 app.include_router(announcements_router)
 app.include_router(incentives_router)
+app.include_router(app_releases_router)
+app.include_router(app_releases_platform_router)

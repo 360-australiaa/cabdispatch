@@ -68,6 +68,13 @@ data class DeviceCommandState(
      * self-update path whatsoever; see [DeviceCommandHeartbeat]'s "Force update" section. */
     val forceUpdatePending: Boolean = false,
     val locate: LocateOutcome = LocateOutcome.None,
+    /** `DeviceDto.latestVersionCode`, as seen on the last successful poll — see that field's own
+     * doc. Purely informational here (not persisted, not acted on by this class): the real update
+     * flow is driven independently by
+     * [au.com.threesixty.cabdispatch.data.AppContainer.appUpdateChecker]'s own
+     * `GET /v1/app-releases/latest` call, not by this heartbeat hint. `null` means "no hint on the
+     * last poll", never "you are up to date". */
+    val latestVersionCode: Int? = null,
 )
 
 /**
@@ -356,6 +363,7 @@ class DeviceCommandHeartbeat(
                 lastPollSucceeded = true,
                 kioskLocked = device.kioskLocked,
                 forceUpdatePending = device.forceUpdatePending,
+                latestVersionCode = device.latestVersionCode,
             )
         }
         // Durable copy of the last known-good command state, so a reboot/process kill comes back up

@@ -633,5 +633,9 @@ private class FakeApiService : ApiService {
     override suspend fun myAnnouncements(): au.com.threesixty.cabdispatch.data.remote.AnnouncementListDto = notUsed()
     override suspend fun myIncentives(): au.com.threesixty.cabdispatch.data.remote.IncentiveProgressListDto = notUsed()
 
+    // App releases (real OTA self-update, 2026-09-06) — read by AppUpdateChecker only, never by
+    // the outbox drainer under test here.
+    override suspend fun latestAppRelease(): au.com.threesixty.cabdispatch.data.remote.LatestAppReleaseDto = notUsed()
+
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }

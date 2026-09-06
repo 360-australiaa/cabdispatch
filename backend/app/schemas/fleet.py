@@ -144,6 +144,15 @@ class DeviceRead(BaseModel):
     calibration_due: date | None
     created_at: datetime
     updated_at: datetime
+    # Not a Device column -- populated only by POST /devices/{id}/heartbeat
+    # (see app/api/v1/fleet.py's device_heartbeat), which sets it from the
+    # current GET /v1/app-releases/latest answer so a device learns about an
+    # available update on its existing 60s poll without a second network
+    # round-trip. `None` on every other DeviceRead response (plain CRUD
+    # reads never populate it) and also `None` here if no active release has
+    # ever been published -- never treat `None` as "you are up to date",
+    # only as "no hint was computed this response".
+    latest_version_code: int | None = None
 
 
 # --- Device pairing / heartbeat / admin flag endpoints -----------------------------

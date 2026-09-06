@@ -39,6 +39,7 @@ from app.schemas.fleet import (
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
 )
+from app.services import app_releases as app_releases_service
 from app.services import compliance_expiry as compliance_expiry_service
 from app.services import evidence_pack as evidence_pack_service
 from app.services import fleet as fleet_service
@@ -503,19 +504,31 @@ async def device_heartbeat(
     """Updates last_seen_at/battery/network and returns the current device row —
     including `kiosk_locked` / `force_update_pending` / `locate_requested` /
     `reboot_requested`, which is how the device learns an admin has flagged it
-    for kiosk-lock, a forced app update, a locate request, or a reboot request."""
+    for kiosk-lock, a forced app update, a locate request, or a reboot request.
+
+    Also stamps `latest_version_code` from the current
+    `GET /v1/app-releases/latest` answer (None if no active release has ever
+    been published) — a low-cost hint riding this existing 60s poll so a
+    device can learn about an OTA update without a second network round-trip.
+    The dedicated `GET /v1/app-releases/latest` endpoint still exists
+    independently for a manual "check for updates" pull."""
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
-    return await fleet_service.record_heartbeat(
+    device = await fleet_service.record_heartbeat(
         session,
         device,
         battery=payload.battery,
         network=payload.network,
         app_version=payload.app_version,
     )
+
+    latest_release = await app_releases_service.get_latest_active_release(session)
+    response = DeviceRead.model_validate(device)
+    response.latest_version_code = latest_release.version_code if latest_release is not None else None
+    return response
 
 
 @router.post("/devices/{device_id}/kiosk-lock", response_model=DeviceRead)

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider path spec for the real OTA self-update flow (2026-09-06,
+  domain/AppUpdateChecker.kt). Grants the system Package Installer read
+  access to exactly one subdirectory of this app's own app-private external
+  storage: context.getExternalFilesDir(null)/updates/, where
+  AppUpdateChecker.downloadAndVerify writes a downloaded, SHA-256-verified
+  APK before AppUpdateChecker.promptInstall hands its content:// Uri to
+  Intent.ACTION_VIEW. Nothing else on external storage is exposed through
+  this provider.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-files-path name="app_updates" path="updates/" />
+</paths>

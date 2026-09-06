@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.models.fleet import Device, DevicePairingCode, Vehicle  # noqa: F401
 from app.models.shift import Shift
@@ -494,6 +495,48 @@ async def test_reboot_is_admin_only_and_visible_on_heartbeat(client, session):
         f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": False}, headers=admin_headers
     )
     assert resp.json()["reboot_requested"] is False
+
+
+async def test_heartbeat_carries_latest_version_code_hint(client, session):
+    """POST .../heartbeat stamps `latest_version_code` from the current
+    GET /v1/app-releases/latest answer (see app/api/v1/fleet.py's
+    device_heartbeat) -- a low-cost hint riding the existing 60s poll.
+
+    App releases are platform-wide, not tenant-scoped (see
+    app.models.app_release.AppRelease's docstring), and this suite shares one
+    DB across every test file in the session -- tests/test_app_releases.py may
+    already have published releases by the time this runs, so this asserts
+    the hint tracks a NEW highest version_code this test itself publishes,
+    rather than assuming a None starting point no other test file's state can
+    guarantee."""
+    from app.core.security import PLATFORM_TENANT_ID
+    from app.models.tenant import Tenant
+
+    headers = await auth_headers(client, session, role="admin", tenant_name="OTA Hint Tenant")
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-ota-hint-1"}, headers=headers
+    )
+    device_id = resp.json()["id"]
+
+    result = await session.execute(select(Tenant).where(Tenant.id == PLATFORM_TENANT_ID))
+    if result.scalar_one_or_none() is None:
+        session.add(Tenant(id=PLATFORM_TENANT_ID, name="TCT", plan="platform"))
+        await session.commit()
+    platform_headers = await auth_headers(client, session, role="owner", tenant_id=PLATFORM_TENANT_ID)
+    # A very high version_code -- guaranteed higher than any other release any
+    # sibling test file in this session publishes -- so this deterministically
+    # becomes (and stays) the platform-wide "latest" for the rest of the run.
+    resp = await client.post(
+        "/v1/platform/app-releases",
+        data={"version_code": "999999", "version_name": "99.99.99"},
+        files={"file": ("r.apk", b"bytes", "application/vnd.android.package-archive")},
+        headers=platform_headers,
+    )
+    assert resp.status_code == 201
+
+    resp = await client.post(f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["latest_version_code"] == 999999
 
 
 async def test_locate_and_reboot_flags_are_independent(client, session):
