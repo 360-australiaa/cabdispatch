@@ -41,6 +41,36 @@ import androidx.compose.ui.graphics.Color
  * light-mode crisp-ring-plus-soft-shadow treatment (see those files' own docs for why a blurred
  * neon glow that reads as "a lit sign" on a near-black background reads as a muddy smear on a
  * light one, and what replaces it).
+ *
+ * ### Futuristic HUD reskin (2026-09-07, dark mode only)
+ * Direct product brief: "futuristic, high-contrast aesthetic... deep indigo (#5B3FD6) and royal
+ * purple (#6E3FF3) as the base thematic colors for structural elements... bright neon cyan for
+ * active states, glowing accents, and high-priority controls." [hudSweepStart]/[hudAccent] already
+ * carried those exact two hex values from the earlier HUD-kit pass, so this pass's real work is
+ * threading a genuine neon-cyan token ([neonCyan] + its two alpha washes) through the tokens that
+ * already stand for "this is good/active/online" — [success] and [glowSuccessSoft] — rather than
+ * inventing a parallel colour system next to them, plus deepening [primary]/[accent] onto the
+ * brief's own indigo/purple so a CTA fill and the meter-ring/nav-highlight colour agree with
+ * [hudAccent] exactly. [hudGlassBorderWhite] (the glass-card border's second gradient stop) moves
+ * from a plain low-alpha white to a low-alpha [neonCyan] tint — the brief's "thin semi-transparent
+ * cyan or purple border" becomes a purple→cyan edge instead of a purple→white one. [bg] deepens a
+ * hair further into a blue-black "slate" per the brief's "deep, dark slate" background, and
+ * [textSecondary] shifts a few points bluer for the brief's "muted icy blue" secondary-label ask.
+ *
+ * **Dark mode only, deliberately** (see this pass's own delivery notes and constraint #4): the
+ * brief describes a dark, neon aesthetic by name ("futuristic, high-contrast... deep, dark slate
+ * background"), and [LightTokens] below is a real, already-shipped, separately-tuned WCAG-AA
+ * daylight palette from the 2026-09-04 day-mode pass — repainting it neon would undo that pass's
+ * own contrast work for a request that never asked for a light variant. [LightTokens] gains the
+ * same three new fields (interface-required) but keeps its own already-correct values for every
+ * token this pass touches in dark mode; only [neonCyan] and its washes get a genuinely new
+ * (AA-deepened, teal-leaning) light value in case something reads it in light mode.
+ *
+ * **No motion added.** Every value below is a static colour; nothing here starts a new
+ * `rememberInfiniteTransition`/timer-driven loop — see [Hud.kt]'s `GlowingMeterGauge`/
+ * `GlowingSpeedometer` doc for the one already-approved motion pattern (real-speed-tied ember) and
+ * why a second decorative loop is explicitly out of scope after the reverted always-orbiting
+ * highlight.
  */
 object CaptainPalette {
     /** True once [applyTheme] has been called with `isLight = true`. Read (never written) from
@@ -157,6 +187,23 @@ object CaptainPalette {
      * themes (it names the gradient's second stop, not literally "always white"). */
     var hudGlassBorderWhite: Color by mutableStateOf(DarkTokens.hudGlassBorderWhite); private set
 
+    // --- Futuristic HUD reskin tokens (2026-09-07) — see this object's class doc, "Futuristic HUD
+    // reskin" section, for why these are new fields rather than repainting an existing one, and why
+    // only DarkTokens gets a genuinely neon value.
+
+    /** Bright neon cyan — the brief's colour for "active states, glowing accents, and high-priority
+     * controls": the Start Meter button's gradient, the holographic meter dial's outer bezel, and
+     * (via [success] now resolving to this same hue in dark mode) every "good/active/online" tone
+     * this app already had a token for (GPS/Wi-Fi/Printer status dots, AVAILABLE/VERIFIED pills,
+     * the Trips/Earnings stat tiles). Deepened to a legible teal in light mode (see class doc). */
+    var neonCyan: Color by mutableStateOf(DarkTokens.neonCyan); private set
+
+    /** Low-alpha neon-cyan wash (~16%) for background glows, matching [glowPurpleSoft]'s alpha. */
+    var neonCyanGlowSoft: Color by mutableStateOf(DarkTokens.neonCyanGlowSoft); private set
+
+    /** Stronger neon-cyan glow (~33%) for a focal halo, matching [glowPurpleStrong]'s alpha. */
+    var neonCyanGlowStrong: Color by mutableStateOf(DarkTokens.neonCyanGlowStrong); private set
+
     // --- Fallback "illustrative map" tokens (2026-09-04 day-mode pass) -----------------------
     // [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `IllustrativeStreetGrid`
     // (and, until it was deleted as confirmed-dead code 2026-09-05, a duplicate of it in the
@@ -214,6 +261,9 @@ object CaptainPalette {
         hudGlass = t.hudGlass
         hudGlassBorderPurple = t.hudGlassBorderPurple
         hudGlassBorderWhite = t.hudGlassBorderWhite
+        neonCyan = t.neonCyan
+        neonCyanGlowSoft = t.neonCyanGlowSoft
+        neonCyanGlowStrong = t.neonCyanGlowStrong
         mapBg = t.mapBg
         mapStreet = t.mapStreet
         mapArterial = t.mapArterial
@@ -254,6 +304,9 @@ object CaptainPalette {
         val hudGlass: Color
         val hudGlassBorderPurple: Color
         val hudGlassBorderWhite: Color
+        val neonCyan: Color
+        val neonCyanGlowSoft: Color
+        val neonCyanGlowStrong: Color
         val mapBg: Color
         val mapStreet: Color
         val mapArterial: Color
@@ -264,17 +317,29 @@ object CaptainPalette {
      * pass, verbatim. The app's default (a device that has never touched Settings -> Display keeps
      * today's exact look). */
     private object DarkTokens : TokenSet {
-        override val bg = Color(0xFF05070D)
+        // bg deepened a hair further into a blue-black "slate" (2026-09-07 futuristic-HUD pass) —
+        // was a near-neutral 0xFF05070D, now carries a touch more blue so it reads as "deep dark
+        // slate" per the brief rather than plain near-black.
+        override val bg = Color(0xFF080B14)
         override val panel = Color(0xFF12131C)
         override val panelBorder = Color(0xFF222433)
         override val raised = Color(0xFF171B2A)
         override val inset = Color(0xFF181C2B)
         override val textPrimary = Color(0xFFF5F7FB)
-        override val textSecondary = Color(0xFF8D93A6)
+        // A few points bluer (2026-09-07): the brief's "muted icy blue" for secondary labels — was
+        // a neutral grey-blue 0xFF8D93A6.
+        override val textSecondary = Color(0xFF93AAD1)
         override val textMuted = Color(0xFF5F6478)
-        override val primary = Color(0xFF7C2CFF)
-        override val accent = Color(0xFFA855F7)
-        override val success = Color(0xFF39E27A)
+        // primary/accent deepened onto the brief's own two named hexes (2026-09-07) — matching
+        // hudAccent/hudSweepEnd exactly so a CTA fill, the meter-ring/nav-highlight colour and the
+        // HUD kit's own accent all agree; was 0xFF7C2CFF / 0xFFA855F7 (a lighter violet pair).
+        override val primary = Color(0xFF5B3FD6)
+        override val accent = Color(0xFF6E3FF3)
+        // success retinted to the brief's neon cyan (2026-09-07) — "bright neon cyan for active
+        // states"; was green (0xFF39E27A). Cascades to every "good/active/online" surface that
+        // already read this token (GPS/Wi-Fi/Printer status dots, AVAILABLE/VERIFIED pills, Trips/
+        // Earnings stat tiles) — see class doc.
+        override val success = Color(0xFF00E5FF)
         override val warning = Color(0xFFFFB51B)
         override val danger = Color(0xFFEF4444)
         override val dialNeutral = Color(0xFF34384C)
@@ -282,7 +347,7 @@ object CaptainPalette {
         override val cardBottom = Color(0xFF0D0E18)
         override val glowPurpleSoft = Color(0x2AA855F7)
         override val glowPurpleStrong = Color(0x55A855F7)
-        override val glowSuccessSoft = Color(0x2439E27A)
+        override val glowSuccessSoft = Color(0x2400E5FF)
         override val glowWarningSoft = Color(0x24FFB51B)
         override val glowDangerSoft = Color(0x24EF4444)
         override val hudBg = Color(0xFF0B0B10)
@@ -293,7 +358,13 @@ object CaptainPalette {
         override val hudTrack = Color(0xFF1E1A2D)
         override val hudGlass = Color(0xCC0D0D12)
         override val hudGlassBorderPurple = Color(0x669E77FF)
-        override val hudGlassBorderWhite = Color(0x33FFFFFF)
+        // Border's 2nd gradient stop moves from low-alpha white to low-alpha neon cyan (2026-09-07)
+        // — the brief's "thin semi-transparent cyan or purple border" reads as a purple-to-cyan lit
+        // edge instead of a purple-to-white one; was 0x33FFFFFF.
+        override val hudGlassBorderWhite = Color(0x4D00E5FF)
+        override val neonCyan = Color(0xFF00E5FF)
+        override val neonCyanGlowSoft = Color(0x2A00E5FF)
+        override val neonCyanGlowStrong = Color(0x5500E5FF)
         override val mapBg = Color(0xFF0D1420)
         override val mapStreet = Color(0xFF1C2940)
         override val mapArterial = Color(0xFF243352)
@@ -350,6 +421,14 @@ object CaptainPalette {
         override val hudGlass = Color(0xE6FFFFFF)
         override val hudGlassBorderPurple = Color(0x8A7C3AED)
         override val hudGlassBorderWhite = Color(0x40000000)
+        // neonCyan (2026-09-07, futuristic-HUD pass): the ONLY new-to-this-pass field LightTokens
+        // gives a genuinely new value — everything else this pass touches in dark mode keeps its
+        // already-shipped, AA-checked light value unchanged (see class doc, "Dark mode only,
+        // deliberately"). Deepened to a legible teal-cyan (5.1:1 against `bg`) in case a future
+        // caller reads this token in light mode; nothing in this pass's own scope does.
+        override val neonCyan = Color(0xFF0E7A8C)
+        override val neonCyanGlowSoft = Color(0x1D0E7A8C)
+        override val neonCyanGlowStrong = Color(0x400E7A8C)
         override val mapBg = Color(0xFFE7E5F0)
         override val mapStreet = Color(0xFFD3CFE3)
         override val mapArterial = Color(0xFFB7B0D2)

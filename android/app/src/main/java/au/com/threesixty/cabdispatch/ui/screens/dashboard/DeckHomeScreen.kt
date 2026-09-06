@@ -97,7 +97,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -145,6 +144,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
+import au.com.threesixty.cabdispatch.ui.theme.GlowingMeterGauge
 import au.com.threesixty.cabdispatch.ui.theme.HudRing
 import au.com.threesixty.cabdispatch.ui.theme.HudStatTile
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
@@ -173,8 +173,6 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Captain Taxis dashboard — the 2026-08-29 visual pass against the Captain Taxis Figma file
@@ -383,6 +381,12 @@ fun DeckHomeScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
+    // Futuristic-HUD reskin (2026-09-07, design brief item 1: "Overlay a subtle, very low-opacity
+    // wireframe map or tech-grid pattern"). Drawn first, behind everything else, deliberately at a
+    // very low, fixed alpha (see TechGridBackdrop's own doc) — this sits behind real fare/status
+    // text a driver reads while driving, so legibility comes first; verified visually against every
+    // panel below rather than assumed safe at a glance.
+    TechGridBackdrop()
     // Prominence pass (2026-09-02): two large, soft ambient glow washes behind the whole screen —
     // "lots of shades", not a single flat fill — positioned near the header and the nav rail so
     // the wash reads as ambient depth rather than a literal spotlight on one element. Plain Boxes
@@ -704,6 +708,35 @@ private sealed interface MeterStartPhase {
 /** The rail's fixed destinations (`01 · HOME — Collapsed Rail` / `02 · HOME — Expanded Menu`) —
  * see this file's class doc for exactly which Figma items are aliased, dropped, or added and why. */
 private enum class CaptainPane { DASHBOARD, DISPATCH, TRIPS, EARNINGS, SHIFT, ZONES, PRICING, VOUCHERS, MESSAGES, MAP, METER }
+
+/**
+ * Design brief item 1's "wireframe map or tech-grid pattern" (2026-09-07 futuristic-HUD reskin) —
+ * a fixed, static grid of thin lines spanning the whole dashboard background, at a fixed 5% alpha
+ * (see constraint on this pass: "must never reduce legibility" — every panel drawn on top of this
+ * is a full opaque/glass surface, never a bare text-on-grid layer, so the grid is only ever visible
+ * in the gaps between panels). Plain `Canvas`, drawn once per composition/recomposition like any
+ * other static background — no animation, no per-frame state, nothing on a clock.
+ */
+@Composable
+private fun TechGridBackdrop() {
+    val lineColor = CaptainPalette.hudAccent.copy(alpha = TECH_GRID_ALPHA)
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val step = TECH_GRID_STEP_DP.dp.toPx()
+        var x = 0f
+        while (x < size.width) {
+            drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+            x += step
+        }
+        var y = 0f
+        while (y < size.height) {
+            drawLine(lineColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+            y += step
+        }
+    }
+}
+
+private const val TECH_GRID_ALPHA = 0.05f
+private const val TECH_GRID_STEP_DP = 64
 
 /** `rememberCoroutineScope()`, spelled out under a distinct name only so this file's own
  * [kotlinx.coroutines.launch] call above reads unambiguously next to the unrelated
@@ -1029,7 +1062,15 @@ private fun StatusDot(icon: ImageVector, label: String, tone: HudTone) {
             color = CaptainPalette.textPrimary,
             modifier = Modifier.padding(start = 6.dp),
         )
-        PulsingDot(color = toneColor, animated = tone == HudTone.Danger, size = 9.dp, modifier = Modifier.padding(start = 7.dp))
+        // Static glowing shadow (2026-09-07, design brief item 6: "neon cyan and red dots with a
+        // glowing shadow modifier") — the existing neonGlow primitive at a small, fixed strength;
+        // Success now resolves to CaptainPalette.neonCyan (see that token's own doc), so a healthy
+        // GPS/Wi-Fi/Printer reading is a genuinely neon-cyan glowing dot and a failed one a red one,
+        // with zero new colour logic here. Only the already-existing Danger case still breathes —
+        // this glow itself never animates.
+        Box(modifier = Modifier.padding(start = 7.dp).neonGlow(toneColor, 5.dp, strength = 0.9f, spread = 4.dp)) {
+            PulsingDot(color = toneColor, animated = tone == HudTone.Danger, size = 9.dp)
+        }
     }
 }
 
@@ -1053,17 +1094,12 @@ private fun MeterCard(
     modifier: Modifier = Modifier,
 ) {
     val fixedFareActive = negotiatedTotal != null
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            // Prominence pass (2026-09-02): a subtle top-to-bottom gradient instead of a flat
-            // panel fill, plus a faint accent-tinted border — every major Home card gets this
-            // same "gently lit, not flat" treatment (see LiveDispatchCard/ShiftStatsBar/
-            // SystemStatusCard below).
-            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, Brush.linearGradient(listOf(CaptainPalette.accent.copy(alpha = 0.3f), CaptainPalette.panelBorder)), RoundedCornerShape(18.dp))
-            .padding(20.dp),
-    ) {
+    // Glassmorphism pass (2026-09-07, design brief item 3): the single most prominent dashboard
+    // container — was its own one-off gradient-fill + solid-border panel; now the shared GlassCard
+    // (see Hud.kt's own doc) so the meter panel matches Live Dispatch/Shift Time/Trips/Earnings
+    // instead of being the one card left on the old flat-panel look.
+    GlassCard(modifier = modifier, cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
+    Box(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         NightFareTile(tariff = state.tariff, modifier = Modifier.align(Alignment.TopStart))
         MeterDial(
             meterPhase = meterPhase,
@@ -1091,6 +1127,7 @@ private fun MeterCard(
                 onClick = onVouchers,
             )
         }
+    }
     }
 }
 
@@ -1191,10 +1228,27 @@ private fun QuickActionTile(
 }
 
 /**
- * The circular meter gauge — Figma's ~20 concentric-ellipse soft-glow ring is approximated with a
- * single [Canvas] draw (a few concentric strokes + a tick ring) rather than ported layer-for-layer;
- * materially cheaper to recompose and visually equivalent at this size. Ticks alternate accent/
- * neutral every 3rd position, matching the design's own rhythm.
+ * The circular meter gauge — the "Holographic Central Meter" (2026-09-07 futuristic-HUD reskin,
+ * design brief item 5). Was its own bespoke [Canvas] with a continuously-rotating sweep highlight
+ * and an idle breathing loop (`rememberInfiniteTransition`s on a 1.4-7s clock, plus five "spark"
+ * points orbiting with it) — precisely the always-running, positionally-moving decorative pattern
+ * that caused real user distress the one other time this app tried it on a meter dial (see
+ * [au.com.threesixty.cabdispatch.ui.theme.GlowingSpeedometer]'s own `motion` doc for the reverted
+ * "moving circle... pain in my head" incident and the ONE approved motion pattern since). Rebuilt
+ * on the shared [GlowingMeterGauge] (full 360° circle: `sweepDeg = 360f, startDeg = -90f`, matching
+ * this dial's original full-ring look) instead, which:
+ * - draws the brief's holographic bezel — dashed cyan→purple gradient ring + secondary blurred
+ *   glow + static scattered particle dots (see [au.com.threesixty.cabdispatch.ui.theme.drawHoloRing]) —
+ *   for free, shared with every other gauge in the kit rather than a second bespoke implementation;
+ * - replaces the rotating sweep/orbiting sparks with [GlowingMeterGauge]'s own progress arc, driven
+ *   by real [meterPhase] state (`0f` idle, `1f` starting) through one settling [hudSpring] — a
+ *   value-driven transition, not a clock;
+ * - replaces the idle "breathing" alpha loop and the icon's continuous pulse with a single one-shot
+ *   spring on the car icon's scale, tied to [starting] the same way — settles once and holds, never
+ *   loops.
+ *
+ * No call site needs to change: same four parameters, same [Column] of METER STATUS / OFF-STARTING
+ * label / sub-copy / Start-or-Cancel button underneath.
  */
 @Composable
 private fun MeterDial(
@@ -1205,87 +1259,26 @@ private fun MeterDial(
     modifier: Modifier = Modifier,
 ) {
     val starting = meterPhase is MeterStartPhase.Starting
-    // Ring/glow brighten from neutral to full accent the moment a real Start Meter tap is in
-    // flight — driven by [meterPhase], never a decorative loop on its own; see this file's class
-    // doc for why the copy stays honest ("STARTING METER…") while the visual treatment below is
-    // free to be as lively as the reference calls for.
-    val ringColor by animateColorAsState(if (starting) CaptainPalette.accent else CaptainPalette.panelBorder, label = "ring-color")
-    // Idle state gently BREATHES (0.32-0.5) rather than sitting at one flat value — a resting HUD
-    // that's never perfectly static reads as "alive and waiting for you", not "off/broken", which
-    // matters most for exactly the moment this control is trying hardest to invite a tap.
-    val restPulse by rememberInfiniteFloat(enabled = !starting, from = 0.32f, to = 0.5f, durationMs = 2200)
-    val glowStrength by animateFloatAsState(if (starting) 1f else restPulse, animationSpec = tween(500), label = "glow-strength")
-    // Slow ambient rotation always running (the reference's light-sweep look); speeds up while
-    // starting so the transition reads as "working", not just a colour change.
-    val sweepAngle by rememberInfiniteTransition(label = "sweep").let { t ->
-        t.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(tween(if (starting) 1400 else 7000, easing = LinearEasing)),
-            label = "sweep-angle",
-        )
-    }
-    val pulse by rememberInfiniteFloat(enabled = true, from = 0.5f, to = 1f, durationMs = 1800)
+    // Icon scale settles to a slightly larger size the moment Start Meter is in flight, then holds
+    // — a real state-driven spring (see class doc), not a continuous pulse.
+    val iconScale by animateFloatAsState(if (starting) 1.15f else 1f, animationSpec = hudSpring(), label = "meter-icon-scale")
 
-    // 398dp -> 414dp: bigger than the original, but pulled back from an earlier 430dp pass that
-    // visibly collided with the (also-bigger) corner tiles — see MeterCard's own width comment;
-    // this size was picked by measuring the real overlap live, not guessed twice.
-    Box(modifier = modifier.size(414.dp), contentAlignment = Alignment.Center) {
-        // Soft outer glow — a few oversized, low-alpha radial-gradient circles standing in for
-        // Figma's ~20-layer concentric-ellipse blur (see this composable's own doc above for why
-        // that is a deliberate approximation, not a missed detail).
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            val maxR = size.minDimension / 2f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(CaptainPalette.accent.copy(alpha = 0.22f * glowStrength * pulse), Color.Transparent),
-                    center = Offset(cx, cy),
-                    radius = maxR,
-                ),
-                radius = maxR,
-                center = Offset(cx, cy),
-            )
-            val strokeW = 2.dp.toPx()
-            val radius = maxR - strokeW
-            drawCircle(color = ringColor, radius = radius, style = Stroke(width = strokeW))
-            // The rotating "sweep" highlight — one bright arc riding around the ring.
-            drawArc(
-                color = CaptainPalette.accent.copy(alpha = 0.9f * glowStrength),
-                startAngle = sweepAngle,
-                sweepAngle = 46f,
-                useCenter = false,
-                topLeft = Offset(cx - radius, cy - radius),
-                size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
-                style = Stroke(width = strokeW * 2, cap = androidx.compose.ui.graphics.StrokeCap.Round),
-            )
-            val tickRadiusOuter = radius - 14.dp.toPx()
-            val tickRadiusInner = tickRadiusOuter - 10.dp.toPx()
-            val tickCount = 36
-            for (i in 0 until tickCount) {
-                val angle = (2 * Math.PI * i / tickCount)
-                val accentTick = i % 3 == 0
-                val color = if (accentTick) CaptainPalette.accent.copy(alpha = 0.6f + 0.4f * glowStrength) else CaptainPalette.dialNeutral
-                val start = Offset(cx + (tickRadiusInner * cos(angle)).toFloat(), cy + (tickRadiusInner * sin(angle)).toFloat())
-                val end = Offset(cx + (tickRadiusOuter * cos(angle)).toFloat(), cy + (tickRadiusOuter * sin(angle)).toFloat())
-                drawLine(color = color, start = start, end = end, strokeWidth = if (accentTick) 3.dp.toPx() else 2.dp.toPx())
-            }
-            // A handful of orbiting "spark" points riding the same sweep angle, offset around the
-            // ring — the reference's particle-like glints, not literal physics.
-            repeat(5) { i ->
-                val a = Math.toRadians((sweepAngle + i * 72).toDouble())
-                val r = radius - 4.dp.toPx()
-                val p = Offset(cx + (r * cos(a)).toFloat(), cy + (r * sin(a)).toFloat())
-                drawCircle(color = CaptainPalette.accent.copy(alpha = 0.5f * glowStrength), radius = 2.5.dp.toPx(), center = p)
-            }
-        }
+    // 398dp -> 414dp (2026-08-29 prominence pass, kept): bigger than the original, but pulled back
+    // from an earlier 430dp pass that visibly collided with the (also-bigger) corner tiles — see
+    // MeterCard's own width comment; this size was picked by measuring the real overlap live.
+    GlowingMeterGauge(
+        progress = if (starting) 1f else 0f,
+        modifier = modifier.size(414.dp),
+        strokeWidthDp = 14,
+        sweepDeg = 360f,
+        startDeg = -90f,
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Rounded.DirectionsCar,
                 contentDescription = null,
-                tint = CaptainPalette.accent,
-                modifier = Modifier.size(36.dp).scale(if (starting) pulse else 1f),
+                tint = CaptainPalette.hudAccent,
+                modifier = Modifier.size(36.dp).scale(iconScale),
             )
             Text(
                 "METER STATUS",
@@ -1302,7 +1295,9 @@ private fun MeterDial(
                 is MeterStartPhase.Failed -> "OFF" to meterPhase.message
             }
             // 62sp -> 76sp: the single biggest number on the screen, on purpose — an older driver
-            // glancing over should never have to squint to know whether the meter is running.
+            // glancing over should never have to squint to know whether the meter is running. Bold
+            // stark white (design brief item 6: primary data points in "a bold, stark white
+            // sans-serif font") via CaptainPalette.textPrimary.
             AnimatedContent(
                 targetState = label,
                 transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.85f)).togetherWith(fadeOut() + scaleOut(targetScale = 1.1f)) },
@@ -1332,9 +1327,44 @@ private fun MeterDial(
             if (meterPhase is MeterStartPhase.Starting) {
                 CaptainButton(text = "CANCEL", outline = true, widthDp = 240, heightDp = 76, fontSize = 22.sp, onClick = onCancelStart)
             } else {
-                CaptainButton(text = "▶  START METER", widthDp = 240, heightDp = 76, fontSize = 22.sp, enabled = enabled, onClick = onStartMeter)
+                StartMeterButton(widthDp = 240, heightDp = 76, fontSize = 22.sp, enabled = enabled, onClick = onStartMeter)
             }
         }
+    }
+}
+
+/**
+ * The primary "Start Meter" CTA (2026-09-07 futuristic-HUD reskin, design brief item 4): "a
+ * vibrant, horizontal gradient background that transitions from neon cyan to royal purple... a
+ * custom drop shadow or glowing modifier with a large blur radius using the cyan hex code to
+ * simulate a neon light emitting from the button." A dedicated composable rather than a new
+ * [CaptainButton] parameter — every OTHER CaptainButton in the app (CANCEL here, ACCEPT on a
+ * dispatch offer, every dialog confirm) keeps its existing flat [CaptainPalette.primary] fill; this
+ * treatment is for the one button the brief singles out by name, not a global button restyle.
+ * Static glow (`neonGlow` at a wide [spread] — see that modifier's own doc for the no-RenderEffect,
+ * SM-T575 frame-budget reasoning): a fixed alpha, not a pulse — no new decorative loop.
+ */
+@Composable
+private fun StartMeterButton(
+    widthDp: Int,
+    heightDp: Int,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier = Modifier
+            .width(widthDp.dp)
+            .height(heightDp.dp)
+            .neonGlow(CaptainPalette.neonCyan, 16.dp, strength = if (enabled) 1f else 0.25f, spread = 14.dp)
+            .clip(shape)
+            .background(Brush.horizontalGradient(listOf(CaptainPalette.neonCyan, CaptainPalette.hudAccent)))
+            .alpha(if (enabled) 1f else 0.45f)
+            .gameClick(onClick = onClick, shape = shape, glowColor = CaptainPalette.neonCyan, enabled = enabled),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("▶  START METER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = fontSize, color = CaptainPalette.onAccent)
     }
 }
 
@@ -1349,12 +1379,13 @@ private fun LiveDispatchCard(
     onViewAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Glassmorphism pass (2026-09-07, design brief item 3): was a flat gradient-fill + solid border
+    // panel; now the shared GlassCard (hudGlass fill + blurred sheen + 1dp purple->cyan gradient
+    // border — see Hud.kt's own doc) so this card matches every other reskinned dashboard container
+    // instead of carrying its own one-off panel styling.
+    GlassCard(modifier = modifier, cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
     Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, Brush.linearGradient(listOf(CaptainPalette.accent.copy(alpha = 0.3f), CaptainPalette.panelBorder)), RoundedCornerShape(18.dp))
-            .padding(20.dp),
+        modifier = Modifier.fillMaxSize().padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("LIVE DISPATCH", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
@@ -1421,6 +1452,7 @@ private fun LiveDispatchCard(
         ) {
             Text("VIEW ALL JOBS   →", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
         }
+    }
     }
 }
 

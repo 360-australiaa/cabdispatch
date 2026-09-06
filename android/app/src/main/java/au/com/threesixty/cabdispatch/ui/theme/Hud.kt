@@ -25,9 +25,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LocalTaxi
@@ -46,12 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -80,6 +84,7 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.random.Random
 
 /**
  * The shared automotive-cockpit / game-HUD component kit (2026-09-03) — every glowing gauge,
@@ -261,6 +266,106 @@ private fun DrawScope.drawHudArc(
     }
 }
 
+// ------------------------------------------------------------------------------------------
+// Holographic bezel (2026-09-07, futuristic-HUD reskin, design brief item 5) — a fixed, static
+// decorative ring drawn just outside every gauge's own track/sweep arc. See [drawHoloRing]'s own
+// doc for the three passes; [rememberHoloParticles]'s own doc for why the scatter is computed once
+// and never re-seeded or animated, matching [GlowingSpeedometer]'s "no new decorative loop" rule.
+// ------------------------------------------------------------------------------------------
+
+private const val HUD_HOLO_PARTICLE_COUNT = 14
+private const val HUD_HOLO_DASH_ON_PX = 14f
+private const val HUD_HOLO_DASH_GAP_PX = 10f
+private const val HUD_HOLO_OUTER_GLOW_BLUR_PX = 46f
+
+/** One scattered perimeter dot: a fixed angle/radius/alpha/size baked in at creation — see
+ * [rememberHoloParticles]. */
+private data class HoloParticle(val angleDeg: Float, val radiusFraction: Float, val alpha: Float, val radiusPx: Float)
+
+/**
+ * A fixed scatter of [count] dots around the holographic bezel, computed once via a seeded
+ * [Random] and `remember`-cached for the composable's lifetime — **not** reseeded or advanced on
+ * any clock, so the dots sit exactly where they were first placed for as long as the gauge is
+ * composed. This is the literal "static/scattered, not animated/twinkling" requirement from this
+ * pass's own constraints (see [GlowingSpeedometer]'s motion doc for the one already-approved motion
+ * pattern in this file — this is not it, and doesn't try to be).
+ */
+@Composable
+private fun rememberHoloParticles(count: Int = HUD_HOLO_PARTICLE_COUNT, seed: Int = 1): List<HoloParticle> =
+    remember(count, seed) {
+        val rng = Random(seed)
+        List(count) {
+            HoloParticle(
+                angleDeg = rng.nextFloat() * 360f,
+                radiusFraction = 0.86f + rng.nextFloat() * 0.24f,
+                alpha = 0.22f + rng.nextFloat() * 0.45f,
+                radiusPx = 1.2f + rng.nextFloat() * 1.8f,
+            )
+        }
+    }
+
+/** The holo bezel's own blurred paint — same [BlurMaskFilter] technique as [rememberHudGlowPaint],
+ * fixed to [CaptainPalette.neonCyan] regardless of theme (the outer glow is a decorative accent,
+ * not a state indicator, so it doesn't need the light-mode shadow substitution [rememberHudGlowPaint]
+ * makes for the real progress arc). */
+@Composable
+private fun rememberHoloGlowPaint(): android.graphics.Paint = remember {
+    Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        color = CaptainPalette.neonCyan.toArgb()
+        maskFilter = BlurMaskFilter(HUD_HOLO_OUTER_GLOW_BLUR_PX, BlurMaskFilter.Blur.NORMAL)
+    }
+}
+
+/**
+ * The design brief's "Holographic Central Meter" bezel — three static passes drawn as a full circle
+ * just outside [g]'s own track/sweep arc, never touching or replacing that arc's own progress
+ * drawing:
+ * 1. A secondary, blurred, thicker stroke (full circle, [glowPaint]) — the brief's own "outer glow".
+ * 2. A crisp, **dashed** stroke (`PathEffect.dashPathEffect` — a real dashed line, not a solid ring
+ *    that merely looks segmented) swept through a cyan → purple → cyan gradient — the brief's own
+ *    "dashed stroke colored with a cyan-to-purple gradient".
+ * 3. [particles] — [rememberHoloParticles]'s fixed scatter of dots around the bezel's radius.
+ */
+private fun DrawScope.drawHoloRing(g: HudArcGeometry, particles: List<HoloParticle>, glowPaint: android.graphics.Paint) {
+    val cx = g.center.x
+    val cy = g.center.y
+    val bezelRadius = g.radius + g.strokePx * 0.9f
+
+    drawIntoCanvas { canvas ->
+        glowPaint.strokeWidth = g.strokePx * 0.6f
+        glowPaint.alpha = 130
+        canvas.nativeCanvas.drawCircle(cx, cy, bezelRadius, glowPaint)
+    }
+
+    drawCircle(
+        brush = Brush.sweepGradient(
+            colorStops = arrayOf(
+                0f to CaptainPalette.neonCyan,
+                0.5f to CaptainPalette.hudAccent,
+                1f to CaptainPalette.neonCyan,
+            ),
+            center = Offset(cx, cy),
+        ),
+        radius = bezelRadius,
+        center = Offset(cx, cy),
+        style = Stroke(
+            width = g.strokePx * 0.22f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(HUD_HOLO_DASH_ON_PX, HUD_HOLO_DASH_GAP_PX), 0f),
+        ),
+    )
+
+    particles.forEach { p ->
+        val rad = Math.toRadians(p.angleDeg.toDouble())
+        val r = bezelRadius * p.radiusFraction
+        val x = cx + (cos(rad) * r).toFloat()
+        val y = cy + (sin(rad) * r).toFloat()
+        drawCircle(color = CaptainPalette.neonCyan.copy(alpha = p.alpha), radius = p.radiusPx, center = Offset(x, y))
+    }
+}
+
 // ============================================================================================
 // 1. GlowingMeterGauge / GlowingSpeedometer
 // ============================================================================================
@@ -288,9 +393,12 @@ fun GlowingMeterGauge(
         label = "hud-gauge-progress",
     )
     val glowPaint = rememberHudGlowPaint()
+    val holoGlowPaint = rememberHoloGlowPaint()
+    val holoParticles = rememberHoloParticles()
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val g = HudArcGeometry.fit(this, strokeWidthDp.dp.toPx(), HUD_ARC_INSET.toPx())
+            drawHoloRing(g, holoParticles, holoGlowPaint)
             drawHudArc(g, animated, startDeg, sweepDeg, glowPaint)
         }
         content()
@@ -348,6 +456,8 @@ fun GlowingSpeedometer(
         label = "hud-speed",
     )
     val glowPaint = rememberHudGlowPaint()
+    val holoGlowPaint = rememberHoloGlowPaint()
+    val holoParticles = rememberHoloParticles()
     val emberPaint = rememberEmberPaint()
     val emberPhase = rememberEmberPhase(enabled = motion, speedKmh = animatedSpeed, maxKmh = safeMax)
     val labelArgb = CaptainPalette.textSecondary.toArgb()
@@ -360,6 +470,7 @@ fun GlowingSpeedometer(
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val g = HudArcGeometry.fit(this, strokeWidthDp.dp.toPx(), HUD_ARC_INSET.toPx())
+            drawHoloRing(g, holoParticles, holoGlowPaint)
             val speedFraction = (animatedSpeed / safeMax).coerceIn(0f, 1f)
             drawHudArc(g, speedFraction, startDeg, sweepDeg, glowPaint, glowAlpha = 0.55f + 0.45f * speedFraction)
             if (motion) drawEmber(g, emberPhase.value, speedFraction, startDeg, sweepDeg, emberPaint)
@@ -596,15 +707,24 @@ private const val HUD_ROLL_MS = 220
 
 /**
  * The floating-over-map glass surface: [CaptainPalette.hudGlass] fill (80% alpha, so the map
- * reads through), a 1dp purple→white low-alpha gradient border, and an optional outer neon halo
- * via the existing [neonGlow] (placed before `clip` so it lands outside the surface).
+ * reads through), a fixed decorative blurred "sheen" corner highlight, a 1dp purple→cyan low-alpha
+ * gradient border, and an optional outer neon halo via the existing [neonGlow] (placed before
+ * `clip` so it lands outside the surface).
  *
- * **No backdrop blur, deliberately.** Compose's `Modifier.blur(16.dp)` blurs the content of the
- * layer it's applied to — there is no "blur what's behind me" modifier — and the map behind a
- * card is a separate `AndroidView` (`MapView`) whose pixels a Compose layer can't sample. The only
- * ways to fake it are (a) blurring the card *including* its own text, which is unacceptable, or
- * (b) a `RenderEffect` blur on the full-screen map layer, which is banned for the SM-T575 frame
- * budget. So the glass effect is the alpha fill + gradient border alone.
+ * **No backdrop blur of the content behind the card, deliberately.** Compose's `Modifier.blur()`
+ * blurs the content of the layer it's applied to — there is no "blur what's behind me" modifier —
+ * and the map behind a card is a separate `AndroidView` (`MapView`) whose pixels a Compose layer
+ * can't sample. The only ways to fake THAT are (a) blurring the card *including* its own text,
+ * which is unacceptable, or (b) a `RenderEffect` blur on the full-screen map layer, which is
+ * banned for the SM-T575 frame budget. So the glass surface's own text/content is never blurred.
+ *
+ * **[sheenBlurDp] is a real, small, bounded `Modifier.blur()`** (2026-09-07 futuristic-HUD pass,
+ * design brief item 3: "a background blur effect (`Modifier.blur`)") — a fixed-size ([SHEEN_SIZE])
+ * soft cyan/purple highlight blob in the card's top-left corner, clipped to the card's own shape so
+ * it never spills over real content. Its cost is bounded by its own small, constant size regardless
+ * of the card's size, unlike blurring the whole panel (or the map behind it), so it doesn't reopen
+ * the SM-T575 frame-budget concern above — it's a decorative accent layer, not a backdrop blur.
+ * Static (no animation): drawn once per composition, never re-blurred on a clock.
  */
 @Composable
 fun GlassCard(
@@ -618,15 +738,37 @@ fun GlassCard(
         modifier = modifier
             .then(if (glow != null) Modifier.neonGlow(glow, cornerRadiusDp.dp) else Modifier)
             .clip(shape)
-            .background(CaptainPalette.hudGlass)
-            .border(
-                width = 1.dp,
-                brush = Brush.linearGradient(listOf(CaptainPalette.hudGlassBorderPurple, CaptainPalette.hudGlassBorderWhite)),
-                shape = shape,
-            ),
-        content = content,
-    )
+            .background(CaptainPalette.hudGlass),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(GLASS_SHEEN_SIZE)
+                .align(Alignment.TopStart)
+                .offset(x = -(GLASS_SHEEN_SIZE / 3), y = -(GLASS_SHEEN_SIZE / 3))
+                .blur(GLASS_SHEEN_BLUR)
+                .background(
+                    Brush.radialGradient(listOf(CaptainPalette.neonCyanGlowStrong, Color.Transparent)),
+                    CircleShape,
+                ),
+        )
+        Box(modifier = Modifier.matchParentSize(), content = content)
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .border(
+                    width = 1.dp,
+                    brush = Brush.linearGradient(listOf(CaptainPalette.hudGlassBorderPurple, CaptainPalette.hudGlassBorderWhite)),
+                    shape = shape,
+                ),
+        )
+    }
 }
+
+/** Fixed size of [GlassCard]'s decorative blurred sheen corner highlight — small and constant
+ * regardless of the card's own size, so its `Modifier.blur()` cost stays bounded (see that
+ * composable's own doc). */
+private val GLASS_SHEEN_SIZE = 96.dp
+private val GLASS_SHEEN_BLUR = 28.dp
 
 // ============================================================================================
 // 4. GlowLineLayers (Mapbox)
