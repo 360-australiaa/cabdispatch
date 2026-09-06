@@ -21,6 +21,7 @@ import {
   TIME_CLASS_LABELS,
   TRIP_TYPE_LABELS,
 } from "./format";
+import { TripRouteMap } from "./TripRouteMap";
 
 export interface TripDetailModalProps {
   open: boolean;
@@ -271,6 +272,25 @@ export function TripDetailModal({
             <p className="text-xs text-muted-foreground">Receipt</p>
             <p className="font-medium text-foreground">{trip.receipt_ref ?? "—"}</p>
           </div>
+        </div>
+
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Route
+          </p>
+          <TripRouteMap
+            startLat={trip.start_lat}
+            startLng={trip.start_lng}
+            endLat={trip.end_lat}
+            endLng={trip.end_lng}
+            // The dashboard has no field for the actual driven GPS trace yet
+            // -- see TripRouteMap's own `trace` prop doc for exactly why
+            // (backend/app/schemas/trips.py's TripRead only exposes
+            // gps_trace_ref, an opaque string with no endpoint that resolves
+            // it back to real points). Omitted here, not fabricated -- the
+            // map below degrades honestly to the A/B markers + labeled
+            // straight-line stand-in.
+          />
         </div>
 
         <div className="rounded-lg border border-border p-3">
