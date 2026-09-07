@@ -1,0 +1,530 @@
+"""Tests for the NSW toll-road registry (`app.models.toll` /
+`app.services.tolls`) — the real per-road, per-gantry, direction-aware
+replacement for the old flat-circle `Geofence(kind="toll")` auto-detection.
+
+Covers, end-to-end through `PATCH /v1/trips/{id}/tick` (the same integration
+style as `tests/test_trips.py::test_tick_through_toll_geofence_auto_adds_toll_once`
+for the old mechanism):
+  - once-per-road charging across multiple gantries of the same road
+  - a directional (one-way) road NOT charging the untolled direction
+  - distance-model pricing (M7-style) respecting its published cap
+  - time-of-day band selection (Sydney Harbour Bridge/Tunnel-style)
+  - a trip crossing two DIFFERENT roads being charged for both
+  - zone_flat / unpriced roads being flagged, never charged a guessed amount
+
+Also covers the read-only `/v1/toll-roads` API and the platform-owner-gated
+price-revision endpoint.
+
+Test fixtures use synthetic ids/coordinates/prices (same convention
+`tests/test_geofences.py` already uses for its own toll geofences) — the
+real seeded data (13 roads, 141 real gantries) is exercised by
+`scripts/seed_toll_roads.py` directly (see `tests/test_seed_toll_roads.py`),
+not re-derived here.
+"""
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from itertools import count
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import PLATFORM_TENANT_ID
+from app.models.tenant import Tenant
+from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
+from app.services.tolls import (
+    classify_bearing,
+    direction_allows_charge,
+    haversine_m,
+    select_time_of_day_price,
+)
+from tests.conftest import auth_headers
+from tests.test_trips import _create_trip, _seed_tariff, _tenant_of
+
+pytestmark = pytest.mark.asyncio
+
+_EFFECTIVE_DATE = date(2026, 7, 1)
+
+# `toll_gantries` is a global, un-tenant-scoped table (see app.models.toll's
+# module docstring) that persists across every test in this session-scoped
+# test database -- so two tests that placed a gantry at the same literal
+# lat/lng would see EACH OTHER's gantries within the 150m detection radius
+# and cross-contaminate their tolls. `_next_zone` hands each test its own
+# base coordinate at least 1 degree (~110km) away from every other test's,
+# far beyond that radius, so tests never interfere with each other.
+_zone_seq = count()
+
+
+def _next_zone() -> tuple[float, float]:
+    n = next(_zone_seq)
+    return (-10.0 - n, 140.0)
+
+
+async def _make_road(
+    session: AsyncSession,
+    *,
+    road_id: str,
+    pricing_model: str,
+    directional: str = "both",
+    price_class_a: str | None = "5.00",
+    cap_class_a: str | None = None,
+    derived_corridor_km: str | None = None,
+    time_of_day_rates_class_a: list[dict] | None = None,
+    confidence: str = "verified",
+) -> TollRoad:
+    road = TollRoad(
+        id=road_id,
+        api_code=None,
+        name=f"{road_id} Motorway",
+        operator="Test Operator",
+        pricing_model=pricing_model,
+        directional=directional,
+        derived_corridor_km=Decimal(derived_corridor_km) if derived_corridor_km else None,
+    )
+    session.add(road)
+    await session.commit()
+
+    if pricing_model != "unpriced":
+        session.add(
+            TollRoadPriceRevision(
+                toll_road_id=road_id,
+                price_class_a_min=Decimal(price_class_a) if price_class_a else None,
+                price_class_a_max=Decimal(price_class_a) if price_class_a else None,
+                price_class_b_min=None,
+                price_class_b_max=None,
+                cap_class_a=Decimal(cap_class_a) if cap_class_a else None,
+                cap_class_b=None,
+                time_of_day_rates_class_a=time_of_day_rates_class_a,
+                currency="AUD",
+                gst_included=True,
+                effective_date=_EFFECTIVE_DATE,
+                indexation="quarterly",
+                confidence=confidence,
+            )
+        )
+        await session.commit()
+    return road
+
+
+async def _add_gantry(session: AsyncSession, *, road_id: str, gantry_id: str, lat: float, lng: float) -> TollGantry:
+    gantry = TollGantry(
+        id=gantry_id, toll_road_id=road_id, location=gantry_id, ramp=None, direction=None,
+        latitude=lat, longitude=lng,
+    )
+    session.add(gantry)
+    await session.commit()
+    return gantry
+
+
+async def _tick(client: AsyncClient, headers: dict, trip_id: str, *, lat: float, lng: float, ts: datetime, speed_kmh: float = 80.0):
+    resp = await client.patch(
+        f"/v1/trips/{trip_id}/tick",
+        json={"points": [{"lat": lat, "lng": lng, "speed_kmh": speed_kmh, "ts": ts.isoformat()}]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+# --- pure helpers --------------------------------------------------------------
+
+
+def test_classify_bearing_none_when_too_close():
+    assert classify_bearing(-34.0, 151.0, -34.0, 151.0) is None
+
+
+def test_classify_bearing_north_south():
+    # Moving from further south to further north -> north.
+    assert classify_bearing(-34.002, 151.0, -34.000, 151.0) == "north"
+    # Moving from further north to further south -> south.
+    assert classify_bearing(-34.000, 151.0, -34.002, 151.0) == "south"
+
+
+def test_direction_allows_charge_both_and_one_way_never_need_bearing():
+    assert direction_allows_charge("both", None) is True
+    assert direction_allows_charge("one_way", None) is True
+
+
+def test_direction_allows_charge_northbound_only():
+    assert direction_allows_charge("northbound_only", "north") is True
+    assert direction_allows_charge("northbound_only", "south") is False
+    assert direction_allows_charge("northbound_only", None) is None
+
+
+def test_select_time_of_day_price_picks_matching_band():
+    rates = [
+        {"band": "peak", "price": "4.55"},
+        {"band": "off_peak", "price": "3.41"},
+        {"band": "night", "price": "2.85"},
+    ]
+    # Wednesday 07:00 -> weekday peak window (06:30-09:30).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 7, 0, tzinfo=UTC)) == Decimal("4.55")
+    # Wednesday 12:00 -> weekday off-peak window (09:30-16:00).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 12, 0, tzinfo=UTC)) == Decimal("3.41")
+    # Wednesday 23:00 -> night.
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 23, 0, tzinfo=UTC)) == Decimal("2.85")
+    # Saturday 10:00 -> weekend off-peak window (08:00-20:00).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 18, 10, 0, tzinfo=UTC)) == Decimal("3.41")
+
+
+# --- once per road, not per gantry ----------------------------------------------
+
+
+async def test_tick_charges_road_once_across_multiple_gantries(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTFLAT", pricing_model="flat", directional="both", price_class_a="5.00")
+    zone_lat, zone_lng = _next_zone()
+    gantry_a = (zone_lat, zone_lng)
+    gantry_b = (zone_lat - 0.002, zone_lng)  # ~222m away -- a different real gantry on the same road
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTFLAT:a", lat=gantry_a[0], lng=gantry_a[1])
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTFLAT:b", lat=gantry_b[0], lng=gantry_b[1])
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_a[0], start_lng=gantry_a[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body1 = await _tick(client, headers, trip["id"], lat=gantry_a[0], lng=gantry_a[1], ts=t0 + timedelta(seconds=5))
+    assert Decimal(body1["tolls"]) == Decimal("5.00")
+    assert body1["auto_tolled_roads"] == {"TESTFLAT": "5.00"}
+
+    # Crossing a SECOND, physically different gantry on the SAME road must
+    # not charge again -- this is exactly the once-per-gantry overcharge bug
+    # the old flat-circle model had (M7's 45 gantries, Lane Cove's 6, etc.).
+    body2 = await _tick(client, headers, trip["id"], lat=gantry_b[0], lng=gantry_b[1], ts=t0 + timedelta(seconds=30))
+    assert Decimal(body2["tolls"]) == Decimal("5.00")
+    assert body2["auto_tolled_roads"] == {"TESTFLAT": "5.00"}
+
+
+# --- directionality ---------------------------------------------------------------
+
+
+async def test_northbound_only_road_does_not_charge_southbound_crossing(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTED", pricing_model="flat", directional="northbound_only", price_class_a="10.48")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTED:g", lat=gantry_lat, lng=gantry_lng)
+
+    # Trip starts NORTH of the gantry and drives south INTO it -- the
+    # untolled direction on a northbound-only road.
+    start_lat = gantry_lat + 0.0015  # ~167m north of the gantry
+    trip = await _create_trip(client, headers, tariff.id, start_lat=start_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=10))
+    assert body["tolls"] == "0.00"
+    assert body["auto_tolled_roads"] == {}
+
+
+async def test_northbound_only_road_charges_northbound_crossing(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTED2", pricing_model="flat", directional="northbound_only", price_class_a="10.48")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTED2:g", lat=gantry_lat, lng=gantry_lng)
+
+    # Trip starts SOUTH of the gantry and drives north INTO it -- the real
+    # tolled direction.
+    start_lat = gantry_lat - 0.0015  # ~167m south of the gantry
+    trip = await _create_trip(client, headers, tariff.id, start_lat=start_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=10))
+    assert Decimal(body["tolls"]) == Decimal("10.48")
+    assert body["auto_tolled_roads"] == {"TESTED2": "10.48"}
+
+
+async def test_one_way_road_charges_without_needing_a_bearing(client: AsyncClient, session: AsyncSession):
+    """Military Road E-Ramp-style: `directional="one_way"` charges on any
+    detected crossing, unlike northbound_only/southbound_only which need a
+    matching bearing."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTRAMP", pricing_model="flat", directional="one_way", price_class_a="2.15")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTRAMP:g", lat=gantry_lat, lng=gantry_lng)
+
+    # Start AT the gantry itself (zero movement -> no reliable bearing at
+    # all) -- must still charge, since one_way needs no bearing.
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=10))
+    assert Decimal(body["tolls"]) == Decimal("2.15")
+
+
+# --- distance-model pricing (M7-style), respecting the cap -----------------------
+
+
+async def test_distance_model_respects_cap(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # $1.00/km (cap 10.00 / corridor 10.000km), so the maths below are exact.
+    road = await _make_road(
+        session, road_id="TESTM7", pricing_model="distance", directional="both",
+        price_class_a=None, cap_class_a="10.00", derived_corridor_km="10.000",
+    )
+    zone_lat, zone_lng = _next_zone()
+    entry = (zone_lat, zone_lng)
+    mid = (zone_lat + 0.045, zone_lng)   # ~5km along the corridor from entry
+    far = (zone_lat + 0.135, zone_lng)   # ~15km along -- exceeds the cap
+    for i, (lat, lng) in enumerate([entry, mid, far]):
+        await _add_gantry(session, road_id=road.id, gantry_id=f"TESTM7:g{i}", lat=lat, lng=lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=entry[0], start_lng=entry[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    # Entry gantry: zero distance travelled yet -> zero charge so far, but the
+    # road is now marked "entered" (tracked in toll_road_progress).
+    body0 = await _tick(client, headers, trip["id"], lat=entry[0], lng=entry[1], ts=t0 + timedelta(seconds=1))
+    assert Decimal(body0["tolls"]) == Decimal("0.00")
+
+    mid_distance_km = Decimal(str(round(haversine_m(*entry, *mid) / 1000.0, 6)))
+    body1 = await _tick(client, headers, trip["id"], lat=mid[0], lng=mid[1], ts=t0 + timedelta(minutes=3))
+    expected_mid = min(mid_distance_km * Decimal("1.00"), Decimal("10.00")).quantize(Decimal("0.01"))
+    assert Decimal(body1["tolls"]) == expected_mid
+    assert 4 < expected_mid < 6  # sanity: really is ~$5, not the cap yet
+
+    # Still ONE line item for this road even though the amount has revised.
+    assert body1["auto_tolled_roads"].keys() == {"TESTM7"}
+
+    body2 = await _tick(client, headers, trip["id"], lat=far[0], lng=far[1], ts=t0 + timedelta(minutes=8))
+    assert Decimal(body2["tolls"]) == Decimal("10.00")  # capped, not ~15.00
+    assert body2["auto_tolled_roads"] == {"TESTM7": "10.00"}
+
+
+# --- time-of-day pricing (Sydney Harbour Bridge/Tunnel-style) -------------------
+
+
+async def test_time_of_day_selects_peak_band(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(
+        session, road_id="TESTSHB", pricing_model="time_of_day", directional="southbound_only",
+        price_class_a=None,
+        time_of_day_rates_class_a=[
+            {"band": "peak", "price": "4.55"},
+            {"band": "off_peak", "price": "3.41"},
+            {"band": "night", "price": "2.85"},
+        ],
+    )
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTSHB:g", lat=gantry_lat, lng=gantry_lng)
+
+    # Southbound = travelling from north to south, so start NORTH of the gantry.
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat + 0.0015, start_lng=gantry_lng)
+    # 2026-07-15 is a Wednesday. 07:00 UTC falls in the peak window (06:30-09:30).
+    peak_ts = datetime(2026, 7, 15, 7, 0, tzinfo=UTC)
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=peak_ts)
+    assert Decimal(body["tolls"]) == Decimal("4.55")
+
+
+async def test_time_of_day_selects_off_peak_band(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(
+        session, road_id="TESTSHB2", pricing_model="time_of_day", directional="southbound_only",
+        price_class_a=None,
+        time_of_day_rates_class_a=[
+            {"band": "peak", "price": "4.55"},
+            {"band": "off_peak", "price": "3.41"},
+            {"band": "night", "price": "2.85"},
+        ],
+    )
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTSHB2:g", lat=gantry_lat, lng=gantry_lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat + 0.0015, start_lng=gantry_lng)
+    # Wednesday 12:00 -> off-peak window (09:30-16:00).
+    off_peak_ts = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=off_peak_ts)
+    assert Decimal(body["tolls"]) == Decimal("3.41")
+
+
+# --- two different roads both charged --------------------------------------------
+
+
+async def test_crossing_two_different_roads_charges_both(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road_a = await _make_road(session, road_id="TESTROADA", pricing_model="flat", directional="both", price_class_a="6.06")
+    road_b = await _make_road(session, road_id="TESTROADB", pricing_model="flat", directional="both", price_class_a="4.30")
+    zone_lat, zone_lng = _next_zone()
+    point_a = (zone_lat, zone_lng)
+    point_b = (zone_lat, zone_lng + 0.05)  # far enough away to be a distinct road/gantry
+    await _add_gantry(session, road_id=road_a.id, gantry_id="TESTROADA:g", lat=point_a[0], lng=point_a[1])
+    await _add_gantry(session, road_id=road_b.id, gantry_id="TESTROADB:g", lat=point_b[0], lng=point_b[1])
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=point_a[0], start_lng=point_a[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body1 = await _tick(client, headers, trip["id"], lat=point_a[0], lng=point_a[1], ts=t0 + timedelta(seconds=5))
+    assert Decimal(body1["tolls"]) == Decimal("6.06")
+
+    body2 = await _tick(client, headers, trip["id"], lat=point_b[0], lng=point_b[1], ts=t0 + timedelta(minutes=5))
+    assert Decimal(body2["tolls"]) == Decimal("6.06") + Decimal("4.30")
+    assert body2["auto_tolled_roads"] == {"TESTROADA": "6.06", "TESTROADB": "4.30"}
+
+
+# --- zone_flat / unpriced: flagged, never guessed ---------------------------------
+
+
+async def test_zone_flat_road_is_flagged_not_charged(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTZONE", pricing_model="zone_flat", directional="both", price_class_a="3.15")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTZONE:g", lat=gantry_lat, lng=gantry_lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=5))
+    assert body["tolls"] == "0.00"
+    assert body["auto_tolled_roads"] == {}
+    assert body["unpriced_toll_road_ids"] == ["TESTZONE"]
+
+
+async def test_unpriced_road_is_flagged_not_charged(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTUNPRICED", pricing_model="unpriced", directional="both")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTUNPRICED:g", lat=gantry_lat, lng=gantry_lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=5))
+    assert body["tolls"] == "0.00"
+    assert body["unpriced_toll_road_ids"] == ["TESTUNPRICED"]
+
+
+# --- /v1/toll-roads read API -------------------------------------------------------
+
+
+async def test_list_toll_roads_shows_gantry_count_and_current_price(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    road = await _make_road(session, road_id="TESTLIST", pricing_model="flat", directional="both", price_class_a="4.30")
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTLIST:g1", lat=-34.0, lng=151.0)
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTLIST:g2", lat=-34.1, lng=151.1)
+
+    resp = await client.get("/v1/toll-roads", headers=headers)
+    assert resp.status_code == 200, resp.text
+    by_id = {row["id"]: row for row in resp.json()}
+    assert by_id["TESTLIST"]["gantry_count"] == 2
+    assert by_id["TESTLIST"]["current_price"]["price_class_a_max"] == "4.30"
+    assert by_id["TESTLIST"]["pricing_model"] == "flat"
+
+
+async def test_get_toll_road_detail_includes_gantries_and_price_history(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    road = await _make_road(session, road_id="TESTDETAIL", pricing_model="flat", directional="both", price_class_a="4.30")
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTDETAIL:g1", lat=-34.0, lng=151.0)
+
+    resp = await client.get("/v1/toll-roads/TESTDETAIL", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["gantries"]) == 1
+    assert len(body["price_history"]) == 1
+
+
+async def test_get_unknown_toll_road_is_404(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    resp = await client.get("/v1/toll-roads/DOES-NOT-EXIST", headers=headers)
+    assert resp.status_code == 404
+
+
+# --- price revisions: platform-owner-only, additive not destructive -------------
+
+
+async def _platform_owner_headers(client, session):
+    result = await session.execute(select(Tenant).where(Tenant.id == PLATFORM_TENANT_ID))
+    if result.scalar_one_or_none() is None:
+        session.add(Tenant(id=PLATFORM_TENANT_ID, name="TCT", plan="platform"))
+        await session.commit()
+    return await auth_headers(client, session, role="owner", tenant_id=PLATFORM_TENANT_ID)
+
+
+async def test_tenant_admin_cannot_create_price_revision(client: AsyncClient, session: AsyncSession):
+    await _make_road(session, road_id="TESTREV", pricing_model="flat", directional="both", price_class_a="4.30")
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await client.post(
+        "/v1/toll-roads/TESTREV/price-revisions",
+        json={
+            "price_class_a_min": "4.50", "price_class_a_max": "4.50",
+            "effective_date": "2026-10-01", "indexation": "quarterly", "confidence": "verified",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
+async def test_platform_owner_adds_price_revision_without_destroying_old_one(client: AsyncClient, session: AsyncSession):
+    road = await _make_road(session, road_id="TESTREV2", pricing_model="flat", directional="both", price_class_a="4.30")
+    owner_headers = await _platform_owner_headers(client, session)
+
+    # A date strictly between the original 2026-07-01 revision and "today"
+    # (this suite's fixed reference "now" is 2026-09), so the new revision
+    # is genuinely the CURRENT one, not a future-dated one that hasn't taken
+    # effect yet -- app.services.tolls.current_price_revision only ever picks
+    # a revision whose effective_date has arrived.
+    resp = await client.post(
+        "/v1/toll-roads/TESTREV2/price-revisions",
+        json={
+            "price_class_a_min": "4.50", "price_class_a_max": "4.50",
+            "effective_date": "2026-08-01", "indexation": "quarterly", "confidence": "verified",
+        },
+        headers=owner_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    detail = await client.get(f"/v1/toll-roads/{road.id}", headers=owner_headers)
+    prices = {row["effective_date"]: row["price_class_a_max"] for row in detail.json()["price_history"]}
+    # Both the original (seeded via _make_road, effective 2026-07-01) AND the
+    # new quarterly revision must be present -- the old one is never deleted.
+    assert prices["2026-07-01"] == "4.30"
+    assert prices["2026-08-01"] == "4.50"
+    # And the road now PRICES at the new revision going forward.
+    assert detail.json()["current_price"]["price_class_a_max"] == "4.50"
+
+
+async def test_duplicate_effective_date_price_revision_is_409(client: AsyncClient, session: AsyncSession):
+    await _make_road(session, road_id="TESTREV3", pricing_model="flat", directional="both", price_class_a="4.30")
+    owner_headers = await _platform_owner_headers(client, session)
+
+    resp = await client.post(
+        "/v1/toll-roads/TESTREV3/price-revisions",
+        json={
+            "price_class_a_min": "4.30", "price_class_a_max": "4.30",
+            "effective_date": "2026-07-01", "indexation": "quarterly", "confidence": "verified",
+        },
+        headers=owner_headers,
+    )
+    assert resp.status_code == 409

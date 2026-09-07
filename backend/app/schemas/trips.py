@@ -370,6 +370,10 @@ class TripRead(BaseModel):
     variance_pct: Decimal | None
     receipt_ref: str | None
     auto_tolls_applied: list[str] | None = Field(default_factory=list)
+    # NSW toll-registry auto-detection (app.services.tolls) -- see
+    # app.models.trips.Trip's doc comments on these three columns.
+    auto_tolled_roads: dict[str, str] | None = Field(default_factory=dict)
+    unpriced_toll_road_ids: list[str] | None = Field(default_factory=list)
     flagged_for_review: bool
     review_notes: str | None
     voucher_code: str | None
