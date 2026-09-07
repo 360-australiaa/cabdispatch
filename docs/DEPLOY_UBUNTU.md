@@ -107,7 +107,7 @@ sudo ufw enable
 ## 6. Build and start
 
 ```bash
-docker compose --env-file .env.production up -d --build
+docker compose --env-file .env.production up -d --build --wait
 ```
 
 First build takes a few minutes (Postgres/Redis images pull, backend/dashboard
@@ -135,6 +135,18 @@ docker compose --env-file .env.production exec backend python scripts/seed.py
 ```bash
 docker compose --env-file .env.production exec backend python scripts/seed_toll_roads.py
 ```
+
+**Wait for the backend to be healthy before running this.** `up -d` returns
+when the container has STARTED, not when its entrypoint has finished
+`alembic upgrade head` -- run the seed back-to-back with the deploy and it
+queries a schema the migration has not reached yet, failing with
+`column toll_roads.charging_policy does not exist`. That is why the deploy
+command above passes `--wait` (Compose then blocks until the backend's
+healthcheck passes). If you deployed without it, `docker compose --env-file
+.env.production ps` until backend shows `healthy`, then seed. Nothing is
+written on that failure and the script is idempotent, so re-running is always
+safe -- and the script itself now says so instead of only printing a
+traceback.
 
 Loads the real toll roads, their published prices and all 141 physical gantry
 coordinates from `app/data/nsw_toll_roads.json` / `nsw_toll_gantries.csv`.
@@ -179,7 +191,7 @@ and log in with the same demo credentials.
 ```bash
 cd /opt/cabdispatch
 git pull
-docker compose --env-file .env.production up -d --build
+docker compose --env-file .env.production up -d --build --wait
 ```
 
 That's the whole update workflow -- rebuilds only what changed, migrations

@@ -78,12 +78,14 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import sys
 from datetime import date
 from decimal import Decimal
 from itertools import combinations
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 import app.models  # noqa: F401 -- populate Base.metadata before any query runs
 from app.core.database import AsyncSessionLocal
@@ -433,5 +435,57 @@ async def seed_toll_roads() -> None:
     print(f"Done: {len(roads_by_id)} toll roads seeded.")
 
 
+_SCHEMA_MISMATCH_HINT = """
+The toll tables are not at the schema this script expects.
+
+Almost always this means the backend container is still applying its Alembic
+migrations -- `docker compose up -d` returns before they finish. Nothing was
+written; wait for the backend to report healthy, then run this again:
+
+  docker compose --env-file .env.production ps          # wait for backend: healthy
+  docker compose --env-file .env.production exec backend python scripts/seed_toll_roads.py
+
+Passing --wait to `up` avoids the race entirely (see docs/DEPLOY_UBUNTU.md).
+
+If it still fails once the backend is healthy, the migration genuinely has not
+been applied -- check `docker compose logs backend` for an Alembic error.
+"""
+
+
+def run_cli() -> None:
+    """Entry point for `python scripts/seed_toll_roads.py`.
+
+    A real function rather than bare code under `if __name__`, so the
+    schema-mismatch guard below is directly testable -- that guard exists
+    precisely because it fires during a deploy, which is the worst possible
+    time to discover it does not work.
+
+    A missing column/table here means one specific, very likely thing, and it
+    deserves better than a 100-line SQLAlchemy traceback that reads like the
+    deploy broke.
+
+    `docker compose up -d` returns as soon as the backend container has
+    STARTED, not when its entrypoint has finished `alembic upgrade head`. Run
+    this script in that window -- which is exactly what the deploy runbook
+    used to tell you to do, back to back -- and it queries a schema the
+    migration has not reached yet. Nothing has been written at that point
+    (the very first read is what fails) and this script is idempotent, so the
+    fix really is just "wait and run it again". The runbook now passes
+    `--wait` so the window does not exist, but a human typing the two
+    commands by hand can still land in it.
+
+    Deliberately still re-raises: this narrows a confusing failure to a clear
+    one, it does not hide it, and a genuinely un-applied migration must never
+    look like a success.
+    """
+    try:
+        asyncio.run(seed_toll_roads())
+    except ProgrammingError as exc:
+        message = str(exc)
+        if "does not exist" in message or "UndefinedColumn" in message or "UndefinedTable" in message:
+            print(_SCHEMA_MISMATCH_HINT, file=sys.stderr)
+        raise
+
+
 if __name__ == "__main__":
-    asyncio.run(seed_toll_roads())
+    run_cli()
