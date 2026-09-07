@@ -5,6 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigDecimal
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
@@ -17,7 +18,9 @@ import java.time.ZonedDateTime
  */
 class TollDetectorTest {
 
-    private val ts: ZonedDateTime = ZonedDateTime.of(2026, 9, 7, 10, 0, 0, 0, ZoneOffset.UTC) // Monday, off-peak-ish
+    // NSW local -- every time-of-day rule in the app classifies in NSW_FARE_ZONE, so a fixture
+    // timestamp written in any other zone means a different band than it reads as.
+    private val ts: ZonedDateTime = ZonedDateTime.of(2026, 9, 7, 10, 0, 0, 0, NSW_FARE_ZONE) // Monday, off-peak
 
     // A fixed gantry point and a "300m away" approach point outside the 150m detection radius, so
     // the first onFix call at the approach point establishes a real previousFix WITHOUT itself
@@ -383,15 +386,40 @@ class TollDetectorTest {
             TimeOfDayRateRef("off_peak", 3.41),
             TimeOfDayRateRef("night", 2.85),
         )
-        val mondayPeak = ZonedDateTime.of(2026, 9, 7, 7, 0, 0, 0, ZoneOffset.UTC) // Mon 07:00
-        val mondayOffPeak = ZonedDateTime.of(2026, 9, 7, 11, 0, 0, 0, ZoneOffset.UTC) // Mon 11:00
-        val mondayNight = ZonedDateTime.of(2026, 9, 7, 23, 0, 0, 0, ZoneOffset.UTC) // Mon 23:00
-        val saturdayDay = ZonedDateTime.of(2026, 9, 12, 12, 0, 0, 0, ZoneOffset.UTC) // Sat 12:00 -> off_peak
+        // NSW local, because that is what the published SHB/SHT windows are stated in. These were
+        // originally written in UTC and asserted against the raw UTC hour, which passed only
+        // because shbShtBand read the hour as given -- the same defect that mis-billed the night
+        // fare. Sydney is UTC+10/+11, so "Mon 07:00" written as UTC is actually Monday EVENING
+        // here, and the old expectations were off by a whole band.
+        val mondayPeak = ZonedDateTime.of(2026, 9, 7, 7, 0, 0, 0, NSW_FARE_ZONE) // Mon 07:00
+        val mondayOffPeak = ZonedDateTime.of(2026, 9, 7, 11, 0, 0, 0, NSW_FARE_ZONE) // Mon 11:00
+        val mondayNight = ZonedDateTime.of(2026, 9, 7, 23, 0, 0, 0, NSW_FARE_ZONE) // Mon 23:00
+        val saturdayDay = ZonedDateTime.of(2026, 9, 12, 12, 0, 0, 0, NSW_FARE_ZONE) // Sat 12:00
 
         assertEquals(BigDecimal("4.55"), selectTimeOfDayPrice(rates, mondayPeak))
         assertEquals(BigDecimal("3.41"), selectTimeOfDayPrice(rates, mondayOffPeak))
         assertEquals(BigDecimal("2.85"), selectTimeOfDayPrice(rates, mondayNight))
         assertEquals(BigDecimal("3.41"), selectTimeOfDayPrice(rates, saturdayDay))
+    }
+
+    @Test
+    fun `the band follows NSW local time, not the zone the timestamp arrives in`() {
+        val rates = listOf(
+            TimeOfDayRateRef("peak", 4.55),
+            TimeOfDayRateRef("off_peak", 3.41),
+            TimeOfDayRateRef("night", 2.85),
+        )
+        // One instant -- Monday 07:00 Sydney, which is 21:00 the previous day in UTC. Expressed in
+        // three zones, it must price identically in all three: the passenger pays for WHEN they
+        // crossed the bridge, not for how the tablet happened to be configured.
+        val crossing = ZonedDateTime.of(2026, 9, 7, 7, 0, 0, 0, NSW_FARE_ZONE)
+        for (zone in listOf(NSW_FARE_ZONE, ZoneOffset.UTC, ZoneId.of("Asia/Karachi"))) {
+            assertEquals(
+                "same instant, expressed in $zone",
+                BigDecimal("4.55"),
+                selectTimeOfDayPrice(rates, crossing.withZoneSameInstant(zone)),
+            )
+        }
     }
 
     @Test
@@ -411,7 +439,7 @@ class TollDetectorTest {
             ),
         )
         val registry = TollRegistrySnapshot(mapOf(road.id to road), listOf(TollGantryRef("g1", road.id, gantryLat, gantryLng)))
-        val morningPeak = ZonedDateTime.of(2026, 9, 7, 7, 0, 0, 0, ZoneOffset.UTC)
+        val morningPeak = ZonedDateTime.of(2026, 9, 7, 7, 0, 0, 0, NSW_FARE_ZONE)
 
         // Northbound crossing at peak time -> never charged (wrong direction), regardless of price.
         val northState = TollDetectionState()

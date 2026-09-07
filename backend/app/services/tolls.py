@@ -37,7 +37,7 @@ from app.models.toll import (
     TollRoad,
     TollRoadPriceRevision,
 )
-from app.services.fare_engine import round_half_up
+from app.services.fare_engine import NSW_FARE_ZONE, round_half_up
 
 # Pricing models whose charge is computed from running distance-since-entry
 # rather than a single fixed amount -- see `TollRoad.charging_policy ==
@@ -179,9 +179,16 @@ def _shb_sht_band(ts: datetime) -> str:
     the JSON; only the *shape* of the schedule is encoded here, from the same
     real source text.
 
-    Deliberately uses `ts`'s own hour/weekday exactly as given — no timezone
-    conversion — same established convention as
-    app.services.fare_engine.resolve_time_class_and_peak."""
+    Classified in NSW LOCAL time (`NSW_FARE_ZONE`), like every other
+    time-of-day rule in this codebase. Those published windows are Sydney wall
+    clock, and devices sync `ts` as UTC — reading the raw hour shifted every
+    band by 10-11 hours, so the weekday morning peak was billed at the night
+    rate and vice versa. (This is the same defect, and the same fix, as
+    app.services.fare_engine.resolve_time_class_and_peak; see its doc for the
+    live trip that surfaced it.) A naive `ts` is taken to be NSW local already,
+    matching that function and keeping existing callers' meaning intact."""
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(NSW_FARE_ZONE)
     weekday = ts.weekday()  # Monday=0 ... Sunday=6
     is_weekend = weekday >= 5
     minute_of_day = ts.hour * 60 + ts.minute

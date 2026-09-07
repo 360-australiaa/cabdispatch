@@ -198,7 +198,17 @@ def classify_time_of_day(at: datetime) -> str:
     rule, just the one already specified. Holiday/public-holiday detection
     is out of scope here (no calendar of NSW public holidays exists anywhere
     in this backend to reuse) — this only distinguishes day vs night.
+
+    Classified in NSW LOCAL time (`fare_engine.NSW_FARE_ZONE`), like every
+    other time-of-day rule in this codebase. This one only composes a
+    suggestion string — no money moves on it — but `at` arrives as UTC from
+    the API layer, and Sydney is UTC+10/+11, so reading the raw hour told
+    drivers "night rates apply" over their mid-morning coffee and said nothing
+    at 11pm. A naive `at` is taken to be NSW local already, matching
+    `resolve_time_class_and_peak`.
     """
+    if at.tzinfo is not None:
+        at = at.astimezone(fe.NSW_FARE_ZONE)
     hour = at.hour
     return fe.TimeClass.NIGHT.value if (hour >= 22 or hour < 6) else fe.TimeClass.DAY.value
 

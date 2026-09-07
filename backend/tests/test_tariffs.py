@@ -27,6 +27,7 @@ from app.core.security import PLATFORM_TENANT_ID
 from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
 from app.services import fare_engine as fe
+from app.services.fare_engine import NSW_FARE_ZONE
 from app.services.tariff_signing import RATE_FIELDS
 from app.services.tariffs import classify_time_of_day
 from tests.conftest import auth_headers
@@ -812,11 +813,21 @@ _SYDNEY_AIRPORT_LNG = 151.1753
 
 
 async def test_classify_time_of_day_boundaries():
-    assert classify_time_of_day(datetime(2026, 1, 1, 21, 59, tzinfo=UTC)) == "day"
-    assert classify_time_of_day(datetime(2026, 1, 1, 22, 0, tzinfo=UTC)) == "night"
-    assert classify_time_of_day(datetime(2026, 1, 1, 5, 59, tzinfo=UTC)) == "night"
-    assert classify_time_of_day(datetime(2026, 1, 1, 6, 0, tzinfo=UTC)) == "day"
-    assert classify_time_of_day(datetime(2026, 1, 1, 13, 0, tzinfo=UTC)) == "day"
+    # NSW local, because that is the window the Fares Order states. Written in UTC
+    # originally, which passed only while the classifier read the raw hour.
+    assert classify_time_of_day(datetime(2026, 1, 1, 21, 59, tzinfo=NSW_FARE_ZONE)) == "day"
+    assert classify_time_of_day(datetime(2026, 1, 1, 22, 0, tzinfo=NSW_FARE_ZONE)) == "night"
+    assert classify_time_of_day(datetime(2026, 1, 1, 5, 59, tzinfo=NSW_FARE_ZONE)) == "night"
+    assert classify_time_of_day(datetime(2026, 1, 1, 6, 0, tzinfo=NSW_FARE_ZONE)) == "day"
+    assert classify_time_of_day(datetime(2026, 1, 1, 13, 0, tzinfo=NSW_FARE_ZONE)) == "day"
+
+
+async def test_classify_time_of_day_reads_nsw_local_not_the_senders_zone():
+    """A UTC timestamp -- which is what the API layer actually passes -- is
+    converted, not read raw. 13:00Z is 11pm in Sydney (AEDT in January); 00:00Z
+    is 11am. Reading the hour as given got both exactly backwards."""
+    assert classify_time_of_day(datetime(2026, 1, 1, 13, 0, tzinfo=UTC)) == "night"
+    assert classify_time_of_day(datetime(2026, 1, 1, 0, 0, tzinfo=UTC)) == "day"
 
 
 async def test_suggest_tariff_404_when_nothing_effective(client, session):

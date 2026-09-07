@@ -199,12 +199,16 @@ fun directionAllowsCharge(directional: String?, compass: String?): Boolean? {
  *   peak:     Mon-Fri 06:30-09:30 and 16:00-19:00
  *   off_peak: Mon-Fri 09:30-16:00; Sat-Sun 08:00-20:00
  *   night:    Mon-Fri 19:00-06:30; Sat-Sun 20:00-08:00
- * Deliberately uses [ts]'s own hour/weekday exactly as given — no timezone conversion — same
- * established convention as [au.com.threesixty.cabdispatch.domain.FareEngineImpl.resolveTimeClass].
+ * Classified in NSW local time ([NSW_FARE_ZONE]), whatever zone [ts] arrives in. Those published
+ * windows are Sydney wall clock, so a tablet set to another timezone would otherwise bill the
+ * weekday morning peak at the night price and vice versa — the same defect (and the same fix) as
+ * [au.com.threesixty.cabdispatch.domain.FareEngineImpl.resolveTimeClass], and matching the server's
+ * `app.services.tolls._shb_sht_band`, which the two MUST agree with or the trip flags a variance.
  */
 private fun shbShtBand(ts: ZonedDateTime): String {
-    val isWeekend = ts.dayOfWeek == DayOfWeek.SATURDAY || ts.dayOfWeek == DayOfWeek.SUNDAY
-    val minuteOfDay = ts.hour * 60 + ts.minute
+    val local = ts.withZoneSameInstant(NSW_FARE_ZONE)
+    val isWeekend = local.dayOfWeek == DayOfWeek.SATURDAY || local.dayOfWeek == DayOfWeek.SUNDAY
+    val minuteOfDay = local.hour * 60 + local.minute
     fun t(hour: Int, minute: Int = 0) = hour * 60 + minute
 
     if (!isWeekend) {

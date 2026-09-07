@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
 import au.com.threesixty.cabdispatch.domain.fare.AreaClass
+import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import java.time.DayOfWeek
 import java.time.ZonedDateTime
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
@@ -521,7 +522,8 @@ class FareEngineImpl(
             registry,
             lat = fix.lat,
             lng = fix.lng,
-            ts = ZonedDateTime.now(),
+            // NSW local: SHB/SHT's time-of-day bands are Sydney wall clock (see shbShtBand).
+            ts = ZonedDateTime.now(NSW_FARE_ZONE),
             cumulativeDistanceKm = cs.cumulativeDistanceKm,
         )
         if (result.isEmpty) return
@@ -605,12 +607,21 @@ class FareEngineImpl(
      * calendar this doc used to flag as out of scope is now folded in — see
      * [resolveTimeClassFor]'s doc for the actual (now holiday-calendar-aware) classification
      * rule this delegates to.
+     *
+     * **Clock:** [NSW_FARE_ZONE], not the tablet's own zone. Plain `ZonedDateTime.now()` reads the
+     * device's configured timezone, which silently makes the regulated night window follow the
+     * tablet rather than the Fares Order -- a unit set to the wrong zone, or a field-test tablet in
+     * another country (exactly how this surfaced, 2026-09-07), charges the night rate at the wrong
+     * hours with nothing on screen to suggest anything is wrong. The server's classifier is pinned
+     * to the same zone and the two MUST agree, or every night fare fails the fare-variance check on
+     * sync.
      */
-    private fun resolveTimeClass(area: AreaClass): TimeClass = resolveTimeClassFor(ZonedDateTime.now(), area)
+    private fun resolveTimeClass(area: AreaClass): TimeClass =
+        resolveTimeClassFor(ZonedDateTime.now(NSW_FARE_ZONE), area)
 
     /** Peak Time Hiring Charge: urban, hiring commences 10pm-6am Fri/Sat/pre-holiday (spec B6) —
      * see [resolveIsPeakFor]'s doc for the actual rule. */
-    private fun resolveIsPeak(): Boolean = resolveIsPeakFor(ZonedDateTime.now())
+    private fun resolveIsPeak(): Boolean = resolveIsPeakFor(ZonedDateTime.now(NSW_FARE_ZONE))
 }
 
 /**
@@ -620,7 +631,7 @@ class FareEngineImpl(
  * distance rate at all, so urban never returns [TimeClass.HOLIDAY]); everything else is
  * [TimeClass.DAY]. A top-level function (not a private method) taking an explicit [now] so it is
  * unit-testable without needing to fake the system clock — [FareEngineImpl.resolveTimeClass] is a
- * thin `ZonedDateTime.now()`-supplying wrapper around this.
+ * thin `ZonedDateTime.now(NSW_FARE_ZONE)`-supplying wrapper around this.
  */
 fun resolveTimeClassFor(now: ZonedDateTime, area: AreaClass): TimeClass {
     val hour = now.hour

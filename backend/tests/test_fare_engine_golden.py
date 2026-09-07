@@ -8,11 +8,13 @@ comment) is wrong and must be fixed.
 """
 from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.services.fare_engine import (
     COUNTRY_TARIFF,
+    NSW_FARE_ZONE,
     URBAN_TARIFF,
     AreaClass,
     FareEngine,
@@ -513,11 +515,18 @@ def test_i2_validate_against_fares_order_also_catches_an_over_cap_cleaning_fee()
 # hour rules, never accidentally also tripping the public-holiday branch.
 
 
+# These five pin the night/peak/holiday WINDOW BOUNDARIES, which the Fares Order
+# defines in NSW local time -- so they construct their instants in NSW_FARE_ZONE.
+# They previously used UTC, which read identically only because the classifier
+# used the raw hour; once it started converting properly (see
+# test_night_window_is_classified_in_nsw_local_time_not_utc and the live 9.03%
+# variance that prompted it) a UTC 22:00 became 08:00 in Sydney and these tests
+# correctly stopped passing. The boundaries they assert are unchanged.
 def test_j_resolve_time_class_and_peak_night_window_boundary_both_sides():
     """10pm-6am is NIGHT on both areas; the peak window shares the same
     10pm boundary. 21:59 is still DAY/not-peak; 22:00 flips both."""
-    just_before = datetime(2026, 7, 17, 21, 59, tzinfo=UTC)  # Friday
-    at_boundary = datetime(2026, 7, 17, 22, 0, tzinfo=UTC)  # Friday
+    just_before = datetime(2026, 7, 17, 21, 59, tzinfo=NSW_FARE_ZONE)  # Friday
+    at_boundary = datetime(2026, 7, 17, 22, 0, tzinfo=NSW_FARE_ZONE)  # Friday
 
     time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=just_before)
     assert time_class == TimeClass.DAY
@@ -531,8 +540,8 @@ def test_j_resolve_time_class_and_peak_night_window_boundary_both_sides():
 def test_j2_resolve_time_class_and_peak_morning_night_window_boundary_both_sides():
     """05:59 is still NIGHT; 06:00 flips back to DAY. A Saturday morning, so
     is_peak is also exercised: true right up to 05:59, false at 06:00."""
-    just_before = datetime(2026, 7, 18, 5, 59, tzinfo=UTC)  # Saturday
-    at_boundary = datetime(2026, 7, 18, 6, 0, tzinfo=UTC)  # Saturday
+    just_before = datetime(2026, 7, 18, 5, 59, tzinfo=NSW_FARE_ZONE)  # Saturday
+    at_boundary = datetime(2026, 7, 18, 6, 0, tzinfo=NSW_FARE_ZONE)  # Saturday
 
     time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=just_before)
     assert time_class == TimeClass.NIGHT
@@ -548,8 +557,8 @@ def test_j3_resolve_time_class_and_peak_23_59_to_00_00_rollover_stays_night():
     day/night rollover artifact -- both instants are within the 10pm-6am
     window and must both resolve to NIGHT, and neither Wednesday nor Thursday
     is Friday/Saturday/pre-holiday, so is_peak stays False on both sides."""
-    wed_late = datetime(2026, 7, 15, 23, 59, tzinfo=UTC)  # Wednesday
-    thu_early = datetime(2026, 7, 16, 0, 1, tzinfo=UTC)  # Thursday
+    wed_late = datetime(2026, 7, 15, 23, 59, tzinfo=NSW_FARE_ZONE)  # Wednesday
+    thu_early = datetime(2026, 7, 16, 0, 1, tzinfo=NSW_FARE_ZONE)  # Thursday
 
     time_class, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=wed_late)
     assert time_class == TimeClass.NIGHT
@@ -565,9 +574,9 @@ def test_j4_resolve_time_class_and_peak_country_sunday_and_public_holiday():
     gazetted public holiday (2026-01-01, a Thursday), both resolve to
     HOLIDAY; the same instants on URBAN never do (urban has no holiday
     band); an ordinary country weekday stays DAY."""
-    sunday_afternoon = datetime(2026, 1, 4, 14, 0, tzinfo=UTC)  # a Sunday
-    new_years_day = datetime(2026, 1, 1, 14, 0, tzinfo=UTC)  # Thursday, gazetted holiday
-    wednesday_afternoon = datetime(2026, 1, 7, 14, 0, tzinfo=UTC)  # plain Wednesday
+    sunday_afternoon = datetime(2026, 1, 4, 14, 0, tzinfo=NSW_FARE_ZONE)  # a Sunday
+    new_years_day = datetime(2026, 1, 1, 14, 0, tzinfo=NSW_FARE_ZONE)  # Thursday, gazetted holiday
+    wednesday_afternoon = datetime(2026, 1, 7, 14, 0, tzinfo=NSW_FARE_ZONE)  # plain Wednesday
 
     assert resolve_time_class_and_peak(tariff=COUNTRY_TARIFF, occurred_at=sunday_afternoon)[0] == TimeClass.HOLIDAY
     assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=sunday_afternoon)[0] == TimeClass.DAY
@@ -580,8 +589,77 @@ def test_j5_resolve_time_class_and_peak_night_before_public_holiday_is_peak():
     before a gazetted public holiday. 2025-12-31 23:30 is a Wednesday night,
     ordinarily not peak-eligible, but 2026-01-01 (New Year's Day) is gazetted
     -> is_peak is True. The following (ordinary) Wednesday night is not."""
-    night_before_new_year = datetime(2025, 12, 31, 23, 30, tzinfo=UTC)  # Wednesday
-    ordinary_wednesday_night = datetime(2026, 1, 7, 23, 30, tzinfo=UTC)  # Wednesday, no holiday follows
+    night_before_new_year = datetime(2025, 12, 31, 23, 30, tzinfo=NSW_FARE_ZONE)  # Wednesday
+    ordinary_wednesday_night = datetime(2026, 1, 7, 23, 30, tzinfo=NSW_FARE_ZONE)  # Wednesday, no holiday follows
 
     assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=night_before_new_year)[1] is True
     assert resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=ordinary_wednesday_night)[1] is False
+
+
+# --- the fare-time clock -----------------------------------------------------------
+#
+# Found live 2026-09-07: a trip commencing 11:08pm Sydney synced its start_at as
+# 13:08Z, the server classified it DAY on the raw UTC hour, and the night rate
+# dropped off the reconstruction -- device $31.28 vs server $28.69, a 9.03%
+# variance that auto-flagged the trip for dispute review. Sydney runs UTC+10/+11,
+# so this was not a boundary case: it mis-priced most of the day, in both
+# directions.
+
+
+def test_night_window_is_classified_in_nsw_local_time_not_utc():
+    """The regression itself. 13:08Z is 11:08pm in Sydney -- squarely inside the
+    Fares Order night window -- and must classify NIGHT however the timestamp
+    happens to be expressed."""
+    at = datetime(2026, 9, 7, 13, 8, tzinfo=UTC)
+
+    time_class, _ = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=at)
+
+    assert time_class is TimeClass.NIGHT
+
+
+def test_a_utc_hour_inside_the_night_window_is_still_daytime_in_sydney():
+    """The other direction, which would have OVERCHARGED. 02:00Z reads as night
+    on the raw hour, but it is midday in Sydney."""
+    at = datetime(2026, 9, 7, 2, 0, tzinfo=UTC)
+
+    time_class, _ = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=at)
+
+    assert time_class is TimeClass.DAY
+
+
+def test_classification_is_independent_of_the_senders_timezone():
+    """The same instant expressed in three zones is one instant, and a regulated
+    fare cannot depend on which one the device happened to send."""
+    sydney = ZoneInfo("Australia/Sydney")
+    instant = datetime(2026, 9, 7, 23, 8, tzinfo=sydney)
+
+    results = {
+        resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=instant.astimezone(tz))[0]
+        for tz in (sydney, UTC, ZoneInfo("Asia/Karachi"))
+    }
+
+    assert results == {TimeClass.NIGHT}
+
+
+def test_a_naive_timestamp_is_still_read_as_nsw_local():
+    """Naive datetimes mean local wall-clock and must keep meaning that -- every
+    other test in this file passes them, and silently reinterpreting them as UTC
+    would move the night window under all of them."""
+    assert resolve_time_class_and_peak(
+        tariff=URBAN_TARIFF, occurred_at=datetime(2026, 9, 7, 23, 8)  # noqa: DTZ001 -- naive on purpose
+    )[0] is TimeClass.NIGHT
+    assert resolve_time_class_and_peak(
+        tariff=URBAN_TARIFF, occurred_at=datetime(2026, 9, 7, 12, 0)  # noqa: DTZ001 -- naive on purpose
+    )[0] is TimeClass.DAY
+
+
+def test_the_peak_hiring_window_follows_nsw_local_time_too():
+    """Peak is Fri/Sat 10pm-6am NSW local. 13:00Z on Friday 11 Sept 2026 is
+    11pm Friday in Sydney -- peak. On the raw UTC hour it is a Friday lunchtime
+    and would not be."""
+    at = datetime(2026, 9, 11, 13, 0, tzinfo=UTC)
+
+    _, is_peak = resolve_time_class_and_peak(tariff=URBAN_TARIFF, occurred_at=at)
+
+    assert is_peak is True
+

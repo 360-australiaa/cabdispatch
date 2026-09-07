@@ -2,6 +2,7 @@ package au.com.threesixty.cabdispatch.domain.fare
 
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.ZoneId
 
 /**
  * NSW tariff-switching fare engine — pure Kotlin port of the backend reference
@@ -86,6 +87,22 @@ private fun divide(a: BigDecimal, b: BigDecimal): BigDecimal = a.divide(b, DIVIS
 private fun d(value: Number): BigDecimal = if (value is BigDecimal) value else BigDecimal(value.toString())
 
 // --- time classification ------------------------------------------------------
+
+/**
+ * The clock every fare-time and toll-time classification is made against — NSW local time.
+ *
+ * NSW's Fares Order defines the night window, the Sunday/public-holiday country rate and the
+ * Friday/Saturday peak hiring charge in NSW LOCAL time, and the published SHB/SHT toll bands are
+ * Sydney wall clock too. So neither the device's own timezone nor UTC is the right clock: a tablet
+ * set to the wrong zone, or carried interstate, must not move the night rate.
+ *
+ * Mirrors `app.services.fare_engine.NSW_FARE_ZONE` and is pinned to the same string deliberately —
+ * the device and the server classify the same trip independently and a disagreement here surfaces
+ * as a fare-variance flag on every synced night trip (which is exactly how it was found, on a
+ * field-test tablet running on another country's time: device $31.28 with the 1.19x night rate,
+ * server $28.69 without it, auto-flagged for dispute review at 9.03% variance).
+ */
+val NSW_FARE_ZONE: ZoneId = ZoneId.of("Australia/Sydney")
 
 enum class TimeClass {
     DAY,

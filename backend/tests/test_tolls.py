@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from itertools import count
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
@@ -42,6 +43,7 @@ from app.models.toll import (
     TollRoad,
     TollRoadPriceRevision,
 )
+from app.services.fare_engine import NSW_FARE_ZONE
 from app.services.tolls import (
     classify_bearing,
     direction_allows_charge,
@@ -209,20 +211,45 @@ def test_direction_allows_charge_northbound_only():
     assert direction_allows_charge("northbound_only", None) is None
 
 
+# SHB/SHT's published bands are Sydney wall clock, so every timestamp in these
+# tests is NSW local. They used to be written in UTC and asserted against the raw
+# UTC hour, which only worked while _shb_sht_band read the hour as given -- the
+# same defect that mis-billed the night fare. Sydney is UTC+10/+11, so "07:00"
+# written as UTC is 17:00 here: a whole band away.
+_NSW = NSW_FARE_ZONE
+
+
 def test_select_time_of_day_price_picks_matching_band():
     rates = [
         {"band": "peak", "price": "4.55"},
         {"band": "off_peak", "price": "3.41"},
         {"band": "night", "price": "2.85"},
     ]
-    # Wednesday 07:00 -> weekday peak window (06:30-09:30).
-    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 7, 0, tzinfo=UTC)) == Decimal("4.55")
-    # Wednesday 12:00 -> weekday off-peak window (09:30-16:00).
-    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 12, 0, tzinfo=UTC)) == Decimal("3.41")
-    # Wednesday 23:00 -> night.
-    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 23, 0, tzinfo=UTC)) == Decimal("2.85")
-    # Saturday 10:00 -> weekend off-peak window (08:00-20:00).
-    assert select_time_of_day_price(rates, datetime(2026, 7, 18, 10, 0, tzinfo=UTC)) == Decimal("3.41")
+    # Wednesday 07:00 NSW -> weekday peak window (06:30-09:30).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 7, 0, tzinfo=_NSW)) == Decimal("4.55")
+    # Wednesday 12:00 NSW -> weekday off-peak window (09:30-16:00).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 12, 0, tzinfo=_NSW)) == Decimal("3.41")
+    # Wednesday 23:00 NSW -> night.
+    assert select_time_of_day_price(rates, datetime(2026, 7, 15, 23, 0, tzinfo=_NSW)) == Decimal("2.85")
+    # Saturday 10:00 NSW -> weekend off-peak window (08:00-20:00).
+    assert select_time_of_day_price(rates, datetime(2026, 7, 18, 10, 0, tzinfo=_NSW)) == Decimal("3.41")
+
+
+def test_the_band_follows_nsw_local_time_not_the_senders_zone():
+    """One instant, three zones, one price.
+
+    The band a passenger is charged must depend on when they crossed the bridge,
+    not on which timezone the device happened to send the timestamp in -- and
+    devices sync UTC, so this is the real production path, not a hypothetical.
+    """
+    rates = [
+        {"band": "peak", "price": "4.55"},
+        {"band": "off_peak", "price": "3.41"},
+        {"band": "night", "price": "2.85"},
+    ]
+    crossing = datetime(2026, 7, 15, 7, 0, tzinfo=_NSW)  # Wed 07:00 Sydney = Tue 21:00 UTC
+    for zone in (_NSW, UTC, ZoneInfo("Asia/Karachi")):
+        assert select_time_of_day_price(rates, crossing.astimezone(zone)) == Decimal("4.55"), zone
 
 
 # --- once per road, not per gantry ----------------------------------------------
@@ -386,8 +413,8 @@ async def test_time_of_day_selects_peak_band(client: AsyncClient, session: Async
 
     # Southbound = travelling from north to south, so start NORTH of the gantry.
     trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat + 0.0015, start_lng=gantry_lng)
-    # 2026-07-15 is a Wednesday. 07:00 UTC falls in the peak window (06:30-09:30).
-    peak_ts = datetime(2026, 7, 15, 7, 0, tzinfo=UTC)
+    # 2026-07-15 is a Wednesday. 07:00 NSW falls in the peak window (06:30-09:30).
+    peak_ts = datetime(2026, 7, 15, 7, 0, tzinfo=_NSW)
 
     body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=peak_ts)
     assert Decimal(body["tolls"]) == Decimal("4.55")
@@ -411,8 +438,8 @@ async def test_time_of_day_selects_off_peak_band(client: AsyncClient, session: A
     await _add_gantry(session, road_id=road.id, gantry_id="TESTSHB2:g", lat=gantry_lat, lng=gantry_lng)
 
     trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat + 0.0015, start_lng=gantry_lng)
-    # Wednesday 12:00 -> off-peak window (09:30-16:00).
-    off_peak_ts = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    # Wednesday 12:00 NSW -> off-peak window (09:30-16:00).
+    off_peak_ts = datetime(2026, 7, 15, 12, 0, tzinfo=_NSW)
 
     body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=off_peak_ts)
     assert Decimal(body["tolls"]) == Decimal("3.41")

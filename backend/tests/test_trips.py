@@ -36,7 +36,7 @@ from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip, TripGpsTrace
 from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
-from app.services.fare_engine import round_down, round_half_up
+from app.services.fare_engine import NSW_FARE_ZONE, round_down, round_half_up
 from app.services.trips import compute_variance_pct, haversine_km
 from tests.conftest import auth_headers
 
@@ -52,7 +52,13 @@ pytestmark = pytest.mark.asyncio
 # resolved server-side from the trip's real start_at (see
 # app.services.fare_engine.resolve_time_class_and_peak) rather than trusted
 # verbatim from the request body.
-_FIXED_DAY_START_AT = datetime(2026, 7, 15, 14, 0, 0, tzinfo=UTC)
+#
+# NSW local, not UTC. It was written as 14:00 UTC, which is 00:00 Sydney — so
+# once resolve_time_class_and_peak started (correctly) classifying in NSW local
+# time, this "ordinary Wednesday daytime" constant became Thursday midnight and
+# four tests here started billing the night rate. The instant that matters to
+# every assertion below is the NSW wall clock, so that is what it now names.
+_FIXED_DAY_START_AT = datetime(2026, 7, 15, 14, 0, 0, tzinfo=NSW_FARE_ZONE)
 
 
 # --- fixtures / helpers ---------------------------------------------------

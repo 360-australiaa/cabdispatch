@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 # --- rounding helpers --------------------------------------------------------
 
@@ -324,6 +325,21 @@ def is_day_before_nsw_public_holiday(d: date) -> bool:
     return (d + timedelta(days=1)) in NSW_PUBLIC_HOLIDAYS
 
 
+# The clock every fare-time classification in this module is made against.
+#
+# NSW's Fares Order defines the night window (10pm-6am), the Sunday/public-
+# holiday country rate and the Friday/Saturday peak hiring charge in NSW LOCAL
+# time. Devices sync timestamps as UTC, so classifying on the raw value silently
+# shifted every one of those windows by 10-11 hours -- see
+# resolve_time_class_and_peak's own doc for the live trip this was found on.
+#
+# A fixed zone rather than the server's local time: the backend can be deployed
+# anywhere, and the fare a NSW passenger pays must not depend on where the
+# container happens to run. ZoneInfo handles the AEST/AEDT switch, which matters
+# because the offset is +10 for part of the year and +11 for the rest.
+NSW_FARE_ZONE = ZoneInfo("Australia/Sydney")
+
+
 def resolve_time_class_and_peak(*, tariff: Tariff, occurred_at: datetime) -> tuple[TimeClass, bool]:
     """The authoritative, deterministic time_class/is_peak classification for
     a trip commencing at `occurred_at`, on `tariff` -- see this module's own
@@ -360,12 +376,33 @@ def resolve_time_class_and_peak(*, tariff: Tariff, occurred_at: datetime) -> tup
     Android original -- this function itself is area-agnostic; the tariff's
     own zero peak charge for country is what makes it a no-op there.
 
-    Deliberately uses `occurred_at`'s own hour/weekday/date exactly as given
-    -- no timezone conversion is applied here, matching the established
-    precedent this codebase's other time-of-day classifier already set
-    (app.services.tariffs.classify_time_of_day) rather than introducing a
-    second, inconsistent convention.
+    Classified in NSW LOCAL time (`NSW_FARE_ZONE`), never in whatever zone the
+    timestamp happens to arrive in.
+
+    This used to read `occurred_at.hour` exactly as given, on the reasoning
+    that it matched `app.services.tariffs.classify_time_of_day`'s existing
+    convention. Both were wrong, and the consequence was real: devices sync
+    `start_at` as UTC, so a trip commencing 11:08pm Sydney arrived as 13:08Z
+    and was classified DAY -- the night rate silently dropped off the server's
+    reconstruction. Found 2026-09-07 on a live trip, where the device billed
+    $31.28 with the 1.19x night rate and the server recomputed $28.69 without
+    it, a 9.03% variance that auto-flagged the trip for dispute review.
+
+    Sydney runs UTC+10/+11, so the error is not an edge case at the boundary:
+    the entire NSW night window (22:00-06:00 local) lands in UTC hours
+    12:00-20:00 and reads as DAY, while mid-morning local (UTC 00:00-04:00)
+    reads as NIGHT. It mis-priced in BOTH directions for most of the day --
+    undercharging real night fares and overcharging ordinary morning ones.
+
+    The Fares Order defines the night window in NSW local time, so that is the
+    only correct clock here: not UTC, and not the device's own zone (a tablet
+    set to the wrong timezone, or carried interstate, must not move the night
+    rate). A NAIVE datetime is taken to be NSW local already and used as-is,
+    which keeps the existing callers and tests that pass local wall-clock
+    times meaning exactly what they meant before.
     """
+    if occurred_at.tzinfo is not None:
+        occurred_at = occurred_at.astimezone(NSW_FARE_ZONE)
     hour = occurred_at.hour
     is_late_night = hour >= 22 or hour < 6
     occurred_date = occurred_at.date()
