@@ -288,6 +288,11 @@ async def sync_trips(
             shift_id=item.shift_id,
             tariff_id=item.tariff_id,
             type=item.type,
+            # Carried straight through from the device -- see Trip.simulated. The
+            # server cannot detect a simulated trip on its own (the trace replays
+            # cleanly, which is the whole problem), so the honest flag is the one
+            # the device that fabricated the fixes sends.
+            simulated=item.simulated,
             status=TRIP_STATUS_CLOSED,
             time_class=time_class.value,
             is_peak=is_peak,

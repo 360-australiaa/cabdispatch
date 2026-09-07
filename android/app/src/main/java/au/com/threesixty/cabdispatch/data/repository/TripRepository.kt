@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
@@ -146,6 +147,11 @@ class TripRepository(
             shiftId = shiftId,
             tariffId = tariffId,
             type = type,
+            // Read from the simulator's own live state rather than taken as a parameter, so no
+            // screen can open a trip on fabricated GPS and forget to say so -- see
+            // TripEntity.simulated for why an unflagged simulated trip is a real problem and not
+            // just untidy.
+            simulated = GpsSimulator.isSimulating(),
             status = TripStatus.OPEN,
             timeClass = timeClass,
             isPeak = isPeak,
@@ -419,6 +425,7 @@ class TripRepository(
             shiftId = trip.shiftId,
             tariffId = trip.tariffId,
             type = trip.type,
+            simulated = trip.simulated,
             startAt = trip.startAt,
             endAt = trip.endAt,
             startLat = trip.startLat,

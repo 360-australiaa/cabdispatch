@@ -1405,6 +1405,10 @@ data class TripCloseRequestDto(
  */
 @Serializable
 data class TripSyncItemDto(
+    /** True when this trip ran on fabricated GPS (see TripEntity.simulated). Sent so the
+     * server can keep a test trip out of real revenue and compliance reporting -- without it
+     * a simulated fare is indistinguishable from a real one. */
+    val simulated: Boolean = false,
     @SerialName("client_uuid") val clientUuid: String,
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("driver_id") val driverId: String,

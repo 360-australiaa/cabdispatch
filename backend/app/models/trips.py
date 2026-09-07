@@ -157,6 +157,23 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=TRIP_STATUS_OPEN, index=True)
 
+    # True when the device drove this trip on FABRICATED GPS from its own test
+    # simulator rather than a real road (`GpsSimulator` in the Android app).
+    #
+    # This is not a diagnostic flag, it is an integrity one. A simulated trip's
+    # `gps_trace` is internally consistent and replays cleanly through
+    # `app.services.trips.recompute_from_trace`, so it passes the fare-variance
+    # check exactly like a genuine fare -- which means that without this column
+    # a test drive is indistinguishable from real revenue in an operator's
+    # ledger, and from real evidence for a fare-regulated meter.
+    #
+    # Indexed because the whole point is filtering it out of (or into) reporting.
+    # Defaults false, so every pre-existing trip and every real trip is real: a
+    # trip is only ever marked by a device that knows it fabricated the fixes.
+    simulated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
+
     # --- journey-commencement fare-engine inputs, fixed for trip lifetime (see
     # module docstring, deviation #3) ---
     time_class: Mapped[str] = mapped_column(String(10), nullable=False, default="day")

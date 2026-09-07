@@ -164,7 +164,15 @@ export default function TripsPage() {
     {
       key: "type",
       header: "Type",
-      render: (row) => TRIP_TYPE_LABELS[row.type],
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          {TRIP_TYPE_LABELS[row.type]}
+          {/* A simulated trip passes every validity check a real one does (see the
+              `simulated` field's own doc), so nothing else on this row distinguishes
+              it from real revenue. The badge is the only signal. */}
+          {row.simulated && <Badge variant="destructive">Simulated</Badge>}
+        </div>
+      ),
     },
     {
       key: "status",

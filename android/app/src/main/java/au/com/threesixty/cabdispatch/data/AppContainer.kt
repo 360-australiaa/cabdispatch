@@ -38,6 +38,8 @@ import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.SpeedSource
+import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
+import au.com.threesixty.cabdispatch.domain.location.SwitchableSpeedSource
 import au.com.threesixty.cabdispatch.domain.RemoteTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
@@ -511,7 +513,25 @@ object AppContainer {
      * fallback for tests/previews — this property just no longer constructs it by default.
      */
     val speedSource: SpeedSource by lazy {
-        RealLocationProvider(appContext, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        SwitchableSpeedSource(
+            real = RealLocationProvider(appContext, CoroutineScope(SupervisorJob() + Dispatchers.Default)),
+            simulator = gpsSimulator,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+    }
+
+    /**
+     * Fabricated-GPS test harness (see [GpsSimulator], and read its doc before using it).
+     *
+     * Constructed unconditionally rather than behind `BuildConfig.DEBUG`, because the tablet in
+     * the field runs a DEBUG build against the production backend -- a debug gate here would give
+     * the appearance of protection while providing none. What actually keeps a simulated trip out
+     * of the real ledger is `TripEntity.simulated`, stamped from the simulator's own state and
+     * synced through to the server and dashboard. Idle until something starts it, and its only
+     * entry point is the Settings screen's diagnostics section.
+     */
+    val gpsSimulator: GpsSimulator by lazy {
+        GpsSimulator(CoroutineScope(SupervisorJob() + Dispatchers.Default))
     }
 
     // --- Wheel redesign shared foundation (jobs/offers + messages, spec §9) ---

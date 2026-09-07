@@ -608,6 +608,11 @@ private fun AboutTabContent(
         LocateTile(state, Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(24.dp))
+        SectionLabel("GPS SIMULATOR (TESTING)")
+        Spacer(Modifier.height(12.dp))
+        GpsSimulatorPanel(modifier = Modifier.fillMaxWidth())
+
+        Spacer(Modifier.height(24.dp))
         SectionLabel("ADVANCED")
         Spacer(Modifier.height(12.dp))
         ActionTile(

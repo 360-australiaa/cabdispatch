@@ -253,6 +253,10 @@ fun HiredScreen(
     val duressState by viewModel.duressState.collectAsState()
     val breakdownExpanded by viewModel.breakdownExpanded.collectAsState()
     val isPaused = fareState.status == TripStatus.STOPPED
+    // Read straight from the simulator rather than from the trip row, so the banner is live the
+    // instant simulation starts or stops -- including on a trip that was opened before it was
+    // switched on. See the banner itself, below.
+    val simulatingGps by AppContainer.gpsSimulator.active.collectAsState()
     val context = LocalContext.current
 
     // Real correctness fix (fare-reset-on-renavigation bug): this pane is reached only while
@@ -370,6 +374,33 @@ fun HiredScreen(
             // engine's own derived flag, copied through by FareEngineImpl — never recomputed here
             // from isMaxiVehicle/passengerCount/wheelchairHiring directly, so this banner can never
             // drift from what is actually being charged. Take vertical room only while visible.
+            // Fabricated GPS in use. Deliberately NOT an AnimatedVisibility fade like the
+            // banners below it, and deliberately the loudest colour on the palette: a driver (or
+            // anyone glancing at the tablet) must never be able to look at a running meter and
+            // not know the position, distance and fare are being driven by a simulator rather
+            // than the road. See GpsSimulator's own doc -- this banner is one of the two things
+            // that make that tool safe to have in the app at all.
+            if (simulatingGps) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CaptainPalette.danger)
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "⚠  SIMULATED GPS — NOT A REAL FARE",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.bg,
+                    )
+                }
+            }
             AnimatedVisibility(visible = fareState.maxiRateApplied, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
                 Row(
                     modifier = Modifier

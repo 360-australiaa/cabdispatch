@@ -199,6 +199,7 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_points_tollRoadId` ON `toll_points` (`tollRoadId`)")
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_gantries_tollRoadId` ON `toll_gantries` (`tollRoadId`)")
+        db.execSQL("ALTER TABLE trips ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE trips ADD COLUMN autoTolledRoadsJson TEXT NOT NULL DEFAULT '{}'")
         db.execSQL("ALTER TABLE trips ADD COLUMN unpricedTollRoadIdsJson TEXT NOT NULL DEFAULT '[]'")
     }

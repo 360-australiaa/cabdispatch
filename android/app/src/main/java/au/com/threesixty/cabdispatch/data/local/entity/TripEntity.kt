@@ -51,6 +51,21 @@ data class TripEntity(
     val shiftId: String?,
     val tariffId: String,
     val type: String, // rank_hail | booked | airport_fixed | multi_hire
+    /**
+     * True when this trip was driven on FABRICATED GPS from
+     * [GpsSimulator][au.com.threesixty.cabdispatch.domain.location.GpsSimulator], not a real road.
+     *
+     * Load-bearing, not diagnostic. A simulated trip's gps_trace is internally consistent and
+     * replays cleanly through the server's own `reconstruct_fare`, so without this column it is
+     * indistinguishable from a real fare -- it would sit in the operator's ledger as real revenue
+     * and stand as real compliance evidence for a fare-regulated meter. Set from the simulator's
+     * own live state when the trip is opened (see TripRepository.openTrip), never passed in by a
+     * screen, so it cannot be forgotten at a call site.
+     *
+     * Synced to the server (`TripSyncItemDto.simulated` -> `Trip.simulated`) and badged on the
+     * dashboard. Defaults false so every pre-existing row, and every ordinary trip, is real.
+     */
+    val simulated: Boolean = false,
 
     /** [TripStatus]: OPEN while HIRED, CLOSED once fare is finalized on-device, SYNCED once the server has confirmed it. */
     val status: String,

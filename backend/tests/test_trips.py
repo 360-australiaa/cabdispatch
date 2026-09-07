@@ -814,6 +814,54 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     assert Decimal(trip["total"]) == expected_fare_total
 
 
+async def test_sync_records_a_simulated_trip_as_simulated(client: AsyncClient, session: AsyncSession):
+    """A trip driven on the meter's GPS simulator must arrive flagged.
+
+    This is the integrity property the flag exists for: a simulated trace is
+    internally consistent, so it replays cleanly and passes the variance check
+    exactly like a real fare. Both are asserted together here deliberately --
+    the trip is simultaneously "valid" and "not real", and an implementation
+    that achieved the flag by making simulated trips fail validation would be
+    wrong in a way a flag-only assertion would not catch.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00", simulated=True)
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["simulated"] is True
+    assert trip["status"] == "closed"
+
+
+async def test_sync_defaults_to_real_when_the_device_says_nothing(
+    client: AsyncClient, session: AsyncSession
+):
+    """A device predating the simulator sends no `simulated` field at all. The
+    absence of the flag must mean "real", never "unknown" -- an unflagged trip
+    is counted as revenue, so defaulting any other way would either silently
+    exclude real fares or require a migration of every existing row."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+    assert "simulated" not in item  # the point of the test
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["trip"]["simulated"] is False
+
+
 def test_compute_variance_pct_clamps_to_column_precision():
     # Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug
     # found live (2026-08-27): an unclamped wildly-wrong device_total produced a

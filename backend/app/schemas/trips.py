@@ -259,6 +259,10 @@ class TripSyncItem(BaseModel):
     driver_id: str
     shift_id: str | None = None
     tariff_id: str
+    # See `app.models.trips.Trip.simulated`. Defaulted so a device predating the
+    # GPS simulator still syncs, and so the absence of the field always means
+    # "real" -- never "unknown".
+    simulated: bool = False
     type: TripType
     start_at: datetime
     end_at: datetime
@@ -339,6 +343,10 @@ class TripRead(BaseModel):
     shift_id: str | None
     tariff_id: str
     type: str
+    # See `app.models.trips.Trip.simulated`. Exposed on the read model, not just
+    # stored: the dashboard has to be able to badge a test trip, and an operator
+    # reconciling revenue has to be able to see which rows are not real money.
+    simulated: bool
     status: str
     time_class: str
     is_peak: bool

@@ -34,6 +34,12 @@ export interface Trip {
   shift_id: string | null;
   tariff_id: string;
   type: TripType;
+  /** True when the meter drove this trip on FABRICATED GPS from its built-in test
+   * simulator, not a real road. A simulated trip's trace replays cleanly and passes
+   * the server's fare-variance check exactly like a real fare, so this flag is the
+   * only thing distinguishing a test drive from real revenue — surface it wherever a
+   * trip is shown as money. See backend `app/models/trips.py::Trip.simulated`. */
+  simulated: boolean;
   status: TripStatus;
   time_class: TimeClass;
   is_peak: boolean;
