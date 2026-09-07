@@ -400,13 +400,15 @@ private fun FareCard(state: TripDetailUiState.Loaded) {
                 FareLineRow("Distance", b.distanceCharge.asMoney())
                 FareLineRow("Waiting", b.waitingCharge.asMoney())
                 if (b.maxiRateApplied) {
-                    // Pre-multiplier components only ("the fare" per the Fares Order) — real
-                    // breakdown fields times the tariff's own real maxiMultiplier, never a
-                    // hardcoded ×1.5. See CloseAndPayScreen.kt's TotalCol for the identical logic.
-                    val meteredBase = b.flagFall + b.peakCharge + b.distanceCharge + b.waitingCharge
-                    val uplift = meteredBase * (state.tariff.maxiMultiplier - java.math.BigDecimal.ONE)
+                    // Pre-multiplier components only ("the fare" per the Fares Order), so this row
+                    // is the multiplier's whole contribution. Taken from the engine rather than
+                    // re-derived as `meteredBase * (maxiMultiplier - 1)`: that computed the right
+                    // quantity but rounded it independently of the total, so the rows could add up
+                    // to a cent more than the TOTAL beneath them. FareBreakdown.maxiUplift is
+                    // defined as whatever makes these rows reconcile exactly. See
+                    // CloseAndPayScreen.kt's TotalCol for the identical logic.
                     val multiplierLabel = state.tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
-                    FareLineRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", uplift.asMoney())
+                    FareLineRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", b.maxiUplift.asMoney())
                 }
             }
             if (b.tolls.signum() > 0) FareLineRow("Tolls", b.tolls.asMoney())

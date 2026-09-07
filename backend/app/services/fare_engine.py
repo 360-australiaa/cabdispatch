@@ -493,6 +493,14 @@ class FareBreakdown:
     cleaning_fee: Decimal
     extras: Decimal
     maxi_applied: bool
+    # The maxi-rate uplift as its own line: fare_total minus every other
+    # component, so the itemised figures in this breakdown always SUM to
+    # fare_total exactly. Zero unless `maxi_applied`. Derived rather than
+    # computed as `base * (multiplier - 1)` on purpose -- see close()'s
+    # reconciliation note. A receipt whose lines do not add up to its total is
+    # not a valid tax invoice, and the UI used to re-derive this figure itself
+    # and round it independently, which is how it stopped adding up.
+    maxi_uplift: Decimal
     fare_total: Decimal  # after maxi multiplier, before non-cash surcharge
     surcharge: Decimal
     grand_total: Decimal  # fare_total + surcharge — amount actually charged
@@ -611,6 +619,9 @@ class FareEngine:
                 cleaning_fee=cleaning_fee,
                 extras=Decimal(0),
                 maxi_applied=state.maxi_applied,
+                # An all-inclusive agreed price is not itemised, so there is no
+                # uplift line to reconcile -- fare_total IS the agreed number.
+                maxi_uplift=Decimal(0),
                 fare_total=fare_total,
                 surcharge=surcharge,
                 grand_total=grand_total,
@@ -671,6 +682,7 @@ class FareEngine:
                 cleaning_fee=cleaning_fee,
                 extras=state.extras,
                 maxi_applied=maxi_applied,
+                maxi_uplift=Decimal(0),  # see the fixed-fare branch above
                 fare_total=fare_total,
                 surcharge=surcharge,
                 grand_total=grand_total,
@@ -697,7 +709,47 @@ class FareEngine:
 
         subtotal = metered_fare + state.tolls + psl + state.extras + cleaning_fee
 
+        # Unchanged, and deliberately still built from the RAW accruals: cl 4(a)
+        # requires the fare charged to round DOWN, so the components must not be
+        # rounded up first (a 0.5c tail in waiting time would otherwise raise the
+        # regulated total by a cent). test_o pins this exact boundary.
         fare_total = round_down(subtotal)
+
+        # --- reporting: make the itemisation reconcile to fare_total ----------
+        #
+        # A receipt whose lines do not add up to its total is not a valid tax
+        # invoice, and this one is printed for passengers. A live trip on the
+        # tablet printed $5.00 + $0.76 + $3.86 + $1.32 above a TOTAL of $10.93 --
+        # the lines add to $10.94. The sub-cent tails were in the total (which
+        # rounds down) but not in the lines, which each rounded half-up on their
+        # own; nothing reconciled them.
+        #
+        # Nothing charged changes here. The components are rounded DOWN, the same
+        # direction as the total, so no line can ever overstate what it
+        # contributed, and the <=1c carry left over by the total's own rounding
+        # is given to the waiting line -- the last metered component to accrue,
+        # and the one already expressed in whole-cent-per-minute terms.
+        #
+        # This is invisible on the server at runtime, because _state_from_trip
+        # rebuilds a closing state from the already-rounded persisted
+        # trip.dist_amount/wait_amount, so every figure here is already cents.
+        # The DEVICE recomputes both accruals from raw metres and seconds, so it
+        # was the only side carrying sub-cent tails -- and the only side printing
+        # receipts. The rule lives here so both sides share one definition.
+        add_ons = state.tolls + psl + state.extras + cleaning_fee
+        metered_base_billed = round_down(
+            flag_fall + peak_charge + state.accrued_distance_charge + state.accrued_waiting_charge
+        )
+        distance_charge = round_down(state.accrued_distance_charge)
+        waiting_charge = metered_base_billed - flag_fall - peak_charge - distance_charge
+
+        # The multiplier's whole contribution, as its own line. Derived, not
+        # computed as `base * (multiplier - 1)` and rounded separately: that lands
+        # a cent away from what fare_total actually contains (base 10.01 x 1.5
+        # rounds down to 15.01, while a separately rounded 5.005 uplift shows 5.01
+        # and the lines read 15.02). Zero when the multiplier is 1, by the same
+        # arithmetic rather than by a special case.
+        maxi_uplift = (fare_total - add_ons) - metered_base_billed
 
         surcharge = Decimal(0)
         if payment_method == "card":
@@ -713,13 +765,14 @@ class FareEngine:
         return FareBreakdown(
             flag_fall=flag_fall,
             peak_charge=peak_charge,
-            distance_charge=round_half_up(state.accrued_distance_charge),
-            waiting_charge=round_half_up(state.accrued_waiting_charge),
+            distance_charge=distance_charge,
+            waiting_charge=waiting_charge,
             tolls=state.tolls,
             psl=psl,
             cleaning_fee=cleaning_fee,
             extras=state.extras,
             maxi_applied=maxi_applied,
+            maxi_uplift=maxi_uplift,
             fare_total=fare_total,
             surcharge=surcharge,
             grand_total=grand_total,

@@ -24,6 +24,7 @@ from app.services.fare_engine import (
     TimeClass,
     airport_fixed_fare,
     resolve_time_class_and_peak,
+    round_down,
     validate_against_fares_order,
 )
 
@@ -663,3 +664,110 @@ def test_the_peak_hiring_window_follows_nsw_local_time_too():
 
     assert is_peak is True
 
+
+
+# --- the itemised breakdown must reconcile to the total ------------------------
+
+
+def _itemised_sum(b) -> Decimal:
+    """Every line a receipt or the Close & Pay breakdown prints, added up."""
+    return (
+        b.flag_fall
+        + b.peak_charge
+        + b.distance_charge
+        + b.waiting_charge
+        + b.maxi_uplift
+        + b.tolls
+        + b.psl
+        + b.extras
+        + b.cleaning_fee
+    )
+
+
+@pytest.mark.parametrize(
+    ("distance_charge", "waiting_charge", "tolls", "maxi"),
+    [
+        # Sub-cent tails on both accrued components. This is the shape that
+        # produced the live receipt reading $5.00 + $0.76 + $3.86 + $1.32 above a
+        # TOTAL of $10.93 -- the lines add to $10.94.
+        (Decimal("0.7551"), Decimal("3.8557"), Decimal(0), False),
+        # A half-cent exactly, on each side of the rounding rule.
+        (Decimal("1.005"), Decimal("2.005"), Decimal(0), False),
+        (Decimal("1.004"), Decimal("2.004"), Decimal(0), False),
+        # Whole cents: must stay exactly as they were, not shift by rounding.
+        (Decimal("12.34"), Decimal("5.67"), Decimal("8.90"), False),
+        # Maxi. The uplift is where a separately-rounded x1.5 lands a cent away
+        # from what fare_total actually contains.
+        (Decimal("0.7551"), Decimal("3.8557"), Decimal(0), True),
+        (Decimal("2.42"), Decimal("2.42"), Decimal("7.13"), True),
+        (Decimal("0.01"), Decimal("0.01"), Decimal(0), True),
+        (Decimal(0), Decimal(0), Decimal(0), True),
+    ],
+)
+def test_the_itemised_breakdown_always_sums_to_the_fare_total(
+    distance_charge: Decimal, waiting_charge: Decimal, tolls: Decimal, maxi: bool
+):
+    """A receipt whose lines do not add up to its total is not a valid tax
+    invoice, and this one is printed for passengers.
+
+    The failure was invisible in this suite because every fixture used tidy
+    cent-denominated inputs, and invisible on the server at runtime because it
+    rebuilds a closing state from the already-rounded persisted trip columns.
+    The DEVICE recomputes both accruals from raw metres and seconds, so it was
+    the only place carrying sub-cent tails -- and the only place printing
+    receipts. These cases put the tails back.
+    """
+    engine = FareEngine()
+    state = FareState(
+        tariff=URBAN_TARIFF,
+        time_class=TimeClass.DAY,
+        is_maxi_vehicle=maxi,
+        passenger_count=5 if maxi else 1,
+    )
+    state.accrued_distance_charge = distance_charge
+    state.accrued_waiting_charge = waiting_charge
+    state.tolls = tolls
+
+    breakdown = engine.close(state, include_psl=True)
+
+    assert breakdown.maxi_applied is maxi
+    assert _itemised_sum(breakdown) == breakdown.fare_total
+
+    # No line may be negative -- reconciling by handing a carry to the waiting
+    # line is only honest while that line stays a real amount of waiting time.
+    assert breakdown.distance_charge >= Decimal(0)
+    assert breakdown.waiting_charge >= Decimal(0)
+    assert breakdown.maxi_uplift >= Decimal(0)
+    if not maxi:
+        assert breakdown.maxi_uplift == Decimal(0)
+
+    # And no line may claim more than that component actually accrued: the
+    # itemisation rounds DOWN, the same direction the regulated total does.
+    assert breakdown.distance_charge <= distance_charge
+    assert breakdown.waiting_charge <= waiting_charge + Decimal("0.01")
+
+    # The charged total is untouched by any of this -- still the round-DOWN of
+    # the raw subtotal, per cl 4(a). Recomputed here independently.
+    raw_base = URBAN_TARIFF.flag_fall + distance_charge + waiting_charge
+    raw_subtotal = (
+        raw_base * URBAN_TARIFF.maxi_multiplier if maxi else raw_base
+    ) + tolls + URBAN_TARIFF.psl_amount
+    assert breakdown.fare_total == round_down(raw_subtotal)
+
+
+def test_an_absorbed_fare_reports_no_uplift_line():
+    """Negotiated and Sydney-Airport-fixed prices are not itemised at all -- the
+    agreed number IS the total -- so an uplift line would be fiction."""
+    engine = FareEngine()
+
+    negotiated = engine.close(
+        FareState(tariff=URBAN_TARIFF, is_maxi_vehicle=True, passenger_count=5,
+                  negotiated_total=Decimal("50.00"))
+    )
+    airport = engine.close(
+        FareState(tariff=URBAN_TARIFF, is_maxi_vehicle=True, passenger_count=5,
+                  fixed_fare=airport_fixed_fare(maxi=True))
+    )
+
+    assert negotiated.maxi_uplift == Decimal(0)
+    assert airport.maxi_uplift == Decimal(0)

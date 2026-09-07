@@ -9,6 +9,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
+import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import au.com.threesixty.cabdispatch.domain.fare.Tariff
 import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
@@ -23,6 +24,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * S4 — Close & Pay (spec B5). Reads the single active trip straight from
@@ -233,6 +237,12 @@ sealed interface CloseAndPayUiState {
 private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(this) }.getOrNull()
 
 /** Formats a fare-engine [BigDecimal] money value for display — never use Float/Double, see ApiService.kt header. */
+/** Receipt date/time: "Mon 7 Sep 2026, 9:15 pm" — a NSW passenger reading a paper docket, not a
+ * machine parsing a log. Locale.ENGLISH pins the month/day names so the printed invoice does not
+ * change language with the tablet's locale setting. */
+private val RECEIPT_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE d MMM yyyy, h:mm a", Locale.ENGLISH)
+
 fun BigDecimal.money(): String = "$" + this.setScale(2, RoundingMode.HALF_UP).toPlainString()
 
 class CloseAndPayViewModel : ViewModel() {
@@ -629,6 +639,15 @@ class CloseAndPayViewModel : ViewModel() {
                 if (b.peakCharge.signum() > 0) add(ReceiptLine("Peak time charge", b.peakCharge.money()))
                 add(ReceiptLine("Distance", b.distanceCharge.money()))
                 add(ReceiptLine("Waiting", b.waitingCharge.money()))
+                // The maxi uplift. The four lines above are stored PRE-multiplier (see
+                // FareBreakdown.maxiUplift), so without this row a 5+ passenger trip printed a
+                // TAX INVOICE whose items came to two thirds of its own total — the on-screen
+                // Close & Pay breakdown has always shown this row, only the printed passenger
+                // copy was missing it.
+                if (b.maxiRateApplied) {
+                    val multiplier = state.tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
+                    add(ReceiptLine("Maxi-cab rate (×$multiplier, 5+ passengers)", b.maxiUplift.money()))
+                }
             }
             if (b.tolls.signum() > 0) {
                 add(ReceiptLine(if (isAbsorbedFare) "Tolls — included, not charged" else "Tolls", b.tolls.money()))
@@ -673,8 +692,8 @@ class CloseAndPayViewModel : ViewModel() {
             tripId = trip.clientUuid,
             vehicleId = trip.vehicleId,
             driverId = trip.driverId,
-            startedAt = trip.startAt,
-            closedAt = trip.endAt ?: "",
+            startedAt = receiptTime(trip.startAt),
+            closedAt = receiptTime(trip.endAt),
             fareLines = lines,
             subtotal = b.fareTotal.money(),
             surcharge = b.surcharge.money(),
@@ -685,6 +704,26 @@ class CloseAndPayViewModel : ViewModel() {
             paymentMethod = state.paymentMethod.label,
             receiptRef = trip.receiptRef,
         )
+    }
+
+    /**
+     * A trip timestamp as it should appear on a passenger's tax invoice: NSW local, readable.
+     *
+     * Trips store `startAt`/`endAt` as ISO-8601 instants (UTC), and the receipt printed them
+     * verbatim -- a live one read "2026-09-07T19:15:55.762Z -> 2026-09-07T19:20:...". That is
+     * machine text, it is not the time of day the passenger was in the taxi, and on a tablet whose
+     * timezone is wrong it is not even close. NSW_FARE_ZONE for the same reason the fare itself
+     * uses it: the trip happened on the NSW clock, and the receipt is a NSW tax invoice.
+     *
+     * Falls back to the raw string if it will not parse, rather than printing an empty line or
+     * throwing while the passenger is waiting -- an odd-looking timestamp on a receipt beats no
+     * receipt. A null/blank end time (the trip is still closing) renders as an em dash.
+     */
+    private fun receiptTime(iso: String?): String {
+        if (iso.isNullOrBlank()) return "—"
+        return runCatching {
+            Instant.parse(iso).atZone(NSW_FARE_ZONE).format(RECEIPT_TIME_FORMAT)
+        }.getOrDefault(iso)
     }
 
     fun setReceiptPhoneNumber(value: String) = updateReceipt { it.copy(phoneNumber = value, smsError = null) }

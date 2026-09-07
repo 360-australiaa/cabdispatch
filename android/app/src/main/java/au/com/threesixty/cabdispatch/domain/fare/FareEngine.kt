@@ -301,6 +301,16 @@ data class FareBreakdown(
     val cleaningFee: BigDecimal,
     val extras: BigDecimal,
     val maxiRateApplied: Boolean,
+    /**
+     * The maxi-rate uplift as its own line: [fareTotal] minus every other component, so the
+     * itemised figures here always SUM to [fareTotal] exactly. Zero unless [maxiRateApplied].
+     *
+     * Derived, rather than computed as `base * (multiplier - 1)` — see [FareEngine.close]'s
+     * reconciliation note. Close & Pay and the printed receipt used to re-derive this themselves
+     * and round it independently, which is how the itemisation stopped adding up. A receipt whose
+     * lines do not match its total is not a valid tax invoice, and this one goes to passengers.
+     */
+    val maxiUplift: BigDecimal,
     val fareTotal: BigDecimal, // after maxi multiplier / negotiated override, before non-cash surcharge
     val surcharge: BigDecimal,
     val grandTotal: BigDecimal, // fareTotal + surcharge — amount actually charged
@@ -428,6 +438,9 @@ class FareEngine {
                 cleaningFee = cappedCleaningFee,
                 extras = BigDecimal.ZERO,
                 maxiRateApplied = state.maxiRateApplied,
+                // An all-inclusive fixed price is not itemised, so there is no uplift line to
+                // reconcile — fareTotal IS the agreed number.
+                maxiUplift = BigDecimal.ZERO,
                 fareTotal = fareTotal,
                 surcharge = surcharge,
                 grandTotal = grandTotal,
@@ -497,16 +510,56 @@ class FareEngine {
         }
         val gstComponent = roundHalfUp(divide(grandTotal, BigDecimal(11)))
 
+        // --- reporting: make the itemisation reconcile to fareTotal ---------------------------
+        //
+        // A receipt whose lines do not add up to its total is not a valid tax invoice, and this one
+        // is printed for passengers. A live trip on the tablet printed $5.00 + $0.76 + $3.86 +
+        // $1.32 above a TOTAL of $10.93 — the lines add to $10.94. The sub-cent tails were in the
+        // total (which rounds DOWN, per cl 4(a)) but not in the lines, which each rounded HALF-UP
+        // on their own with nothing reconciling them.
+        //
+        // Nothing charged changes: [fareTotal] above is still the round-down of the RAW subtotal.
+        // The components are rounded DOWN too — the same direction — so no line can overstate what
+        // it contributed, and the <=1c carry the total's own rounding leaves behind goes to the
+        // waiting line, the last metered component to accrue.
+        //
+        // This was invisible on the backend, which rebuilds a closing state from the already-
+        // rounded persisted trip.dist_amount/wait_amount. The device recomputes both accruals from
+        // raw metres and seconds (see reconstructFareState), so it was the only side carrying
+        // sub-cent tails — and the only side printing receipts. Mirrors the identical block in
+        // `app.services.fare_engine.FareEngine.close`.
+        val addOns = state.tolls + psl + state.extras + cappedCleaningFee
+        val meteredBaseBilled = roundDownToCent(
+            flagFall + peakCharge + state.accruedDistanceCharge + state.accruedWaitingCharge,
+        )
+        val distanceCharge = roundDownToCent(state.accruedDistanceCharge)
+        val waitingCharge = meteredBaseBilled - flagFall - peakCharge - distanceCharge
+
+        // The multiplier's whole contribution, as its own line. Derived, not computed as
+        // `base * (multiplier - 1)` and rounded separately: that lands a cent away from what
+        // fareTotal actually contains (base 10.01 x 1.5 rounds down to 15.01, while a separately
+        // rounded 5.005 uplift shows 5.01 and the lines read 15.02). Zero when the multiplier is 1,
+        // by the same arithmetic rather than by a special case.
+        //
+        // A negotiated ("Set Price") total is all-inclusive and not itemised at all, so there is
+        // nothing to reconcile and no uplift to report.
+        val maxiUplift = if (negotiatedTotal != null) {
+            BigDecimal.ZERO
+        } else {
+            (fareTotal - addOns) - meteredBaseBilled
+        }
+
         return FareBreakdown(
             flagFall = flagFall,
             peakCharge = peakCharge,
-            distanceCharge = roundHalfUp(state.accruedDistanceCharge),
-            waitingCharge = roundHalfUp(state.accruedWaitingCharge),
+            distanceCharge = distanceCharge,
+            waitingCharge = waitingCharge,
             tolls = state.tolls,
             psl = psl,
             cleaningFee = cappedCleaningFee,
             extras = state.extras,
             maxiRateApplied = maxiRateApplied,
+            maxiUplift = maxiUplift,
             fareTotal = fareTotal,
             surcharge = surcharge,
             grandTotal = grandTotal,

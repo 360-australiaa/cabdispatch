@@ -313,13 +313,16 @@ private fun TotalCol(
                 if (breakdown.maxiRateApplied) {
                     // "The fare" per the Fares Order = flagfall + peak + distance + waiting — the
                     // ONLY component the maxi multiplier applies to (see FareEngine.close()'s own
-                    // comment). These four breakdown fields are stored PRE-multiplier, so the
-                    // uplift is genuinely this sum times (multiplier - 1), using the tariff's own
-                    // real maxiMultiplier field, not a hardcoded 1.5.
-                    val meteredBase = breakdown.flagFall + breakdown.peakCharge + breakdown.distanceCharge + breakdown.waitingCharge
-                    val uplift = meteredBase * (tariff.maxiMultiplier - BigDecimal.ONE)
+                    // comment). The four breakdown fields above are stored PRE-multiplier, so this
+                    // line is the multiplier's whole contribution.
+                    //
+                    // Taken from the engine rather than re-derived here as
+                    // `meteredBase * (maxiMultiplier - 1)`: that computed the right quantity but
+                    // rounded it independently of the total, so the rows could add up to a cent
+                    // more than the TOTAL beneath them. FareBreakdown.maxiUplift is defined as
+                    // whatever makes these rows reconcile exactly.
                     val multiplierLabel = tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
-                    BreakdownRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", uplift.money())
+                    BreakdownRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", breakdown.maxiUplift.money())
                 }
             }
             BreakdownRow("Tolls", breakdown.tolls.money())
