@@ -41,8 +41,13 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        // 4 / 0.4.0 (2026-09-07): automatic NSW toll detection with the corrected per-toll-point
+        // registry, the card-surcharge absorption ruling, and the GPS simulator. versionCode is
+        // what AppUpdateChecker compares against a published release, so it MUST increase for a
+        // build to reach a tablet over the air -- a build shipped at the same code is silently
+        // skipped as "already up to date".
+        versionCode = 4
+        versionName = "0.4.0"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
