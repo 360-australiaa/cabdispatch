@@ -1,15 +1,15 @@
 package au.com.threesixty.cabdispatch.ui.screens.readiness
 
 import android.app.Application
-import androidx.core.content.ContextCompat
-import android.content.pm.PackageManager
-import android.Manifest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.domain.AppUpdateState
 import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
+import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.domain.LockTaskMode
+import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import au.com.threesixty.cabdispatch.domain.DeviceReadiness
 import com.mapbox.common.MapboxOptions
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +32,8 @@ data class DeviceReadinessUiState(
     val pairing: Boolean = false,
     val pairError: String? = null,
     val mapDownloadMessage: String? = null,
+    /** Named rather than counted, so "Finish setup" can say what it is signing off. */
+    val missingPermissions: List<DeviceReadiness.MeterPermission> = emptyList(),
     /**
      * First-install setup, rather than the ordinary guard gate. A technician sees the whole
      * checklist and finishes it explicitly; a driver only ever sees this screen when something is
@@ -66,13 +68,28 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
     val uiState: StateFlow<DeviceReadinessUiState> = _uiState.asStateFlow()
 
     /**
-     * The two probes that need disk or a coroutine, cached once per screen rather than re-run on
-     * every recomposition. `null` means "not checked yet" and is rendered as exactly that —
-     * [DeviceReadiness] never lets an unchecked probe read as a failure.
+     * Everything the checklist learns by asking the tablet rather than the server, in one value.
+     *
+     * One flow rather than one per probe. The previous shape combined five separate flows, which is
+     * the maximum that `combine` overload takes — adding a sixth check would not have compiled —
+     * and `locationPermissionGranted` had to be smuggled in by re-assigning an unrelated flow to
+     * itself to force re-emission. A single value type has neither problem and reads honestly.
+     *
+     * `null` everywhere means "not looked at yet", which [DeviceReadiness] renders as exactly that.
+     * Nothing here defaults to a passing value.
      */
-    private val offlineMapsPresent = MutableStateFlow<Boolean?>(null)
-    private val signedTariffCached = MutableStateFlow<Boolean?>(null)
-    private val locationPermissionGranted = MutableStateFlow<Boolean?>(null)
+    private data class Probes(
+        val offlineMapsPresent: Boolean? = null,
+        val signedTariffCached: Boolean? = null,
+        val tariffSigningKeyCached: Boolean? = null,
+        val permissions: Map<DeviceReadiness.MeterPermission, Boolean> = emptyMap(),
+        val batteryOptimisationExempt: Boolean? = null,
+        val kiosk: DeviceReadiness.KioskState? = null,
+        val mapTokenPresent: Boolean? = null,
+        val vehicleClassDeclared: Boolean? = null,
+    )
+
+    private val probes = MutableStateFlow(Probes())
 
     init {
         // Re-evaluate whenever any input moves: the heartbeat landing, a pairing succeeding, the
@@ -82,13 +99,12 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
             combine(
                 AppContainer.deviceCommandHeartbeat.state,
                 AppContainer.appUpdateChecker.state,
-                offlineMapsPresent,
-                signedTariffCached,
                 // A real fix arriving, not merely the permission being held: a tablet can have the
                 // permission and still never see a satellite, and that tablet cannot charge a
                 // distance rate.
                 AppContainer.speedSource.locationFix,
-            ) { command, update, maps, tariff, fix ->
+                probes,
+            ) { command, update, fix, p ->
                 val inputs = DeviceReadiness.Inputs(
                     deviceId = command.deviceId,
                     deviceRejected = command.deviceRejected,
@@ -101,15 +117,37 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                         update is AppUpdateState.Verifying ||
                         update is AppUpdateState.ReadyToInstall,
                     heartbeatSucceeding = command.lastPollSucceeded,
-                    offlineMapsPresent = maps,
-                    signedTariffCached = tariff,
-                    locationPermissionGranted = locationPermissionGranted.value,
+                    offlineMapsPresent = p.offlineMapsPresent,
+                    signedTariffCached = p.signedTariffCached,
+                    locationPermissionGranted =
+                        p.permissions[DeviceReadiness.MeterPermission.FineLocation],
                     hasLocationFix = fix != null,
+                    permissions = p.permissions,
+                    batteryOptimisationExempt = p.batteryOptimisationExempt,
+                    // The depot's wish (kioskLocked) is only half the answer; the OS half is read
+                    // by the screen, which is the only thing here holding an Activity.
+                    kiosk = p.kiosk,
+                    mapTokenPresent = p.mapTokenPresent,
+                    tariffSigningKeyCached = p.tariffSigningKeyCached,
+                    vehicleClassDeclared = p.vehicleClassDeclared,
                 )
                 Triple(DeviceReadiness.evaluate(inputs), DeviceReadiness.blockingFailures(inputs), update)
             }.collect { (results, blocking, update) ->
                 _uiState.update {
-                    it.copy(results = results, blocking = blocking, updateState = update)
+                    it.copy(
+                        results = results,
+                        blocking = blocking,
+                        updateState = update,
+                        missingPermissions = DeviceReadiness.missingPermissions(
+                            DeviceReadiness.Inputs(
+                                deviceId = null, deviceRejected = false,
+                                forceUpdatePending = false, updateAvailable = false,
+                                heartbeatSucceeding = null, offlineMapsPresent = null,
+                                signedTariffCached = null,
+                                permissions = probes.value.permissions,
+                            ),
+                        ),
+                    )
                 }
             }
         }
@@ -123,20 +161,50 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
 
         probeOfflineMaps()
         probeSignedTariff()
-        refreshLocationPermission()
+        refreshDeviceState()
 
         _uiState.update { it.copy(commissioning = !AppContainer.commissioningStore.isCommissioned()) }
     }
 
-    /** Re-read after the technician returns from the system permission dialog. */
-    fun refreshLocationPermission() {
-        locationPermissionGranted.value = ContextCompat.checkSelfPermission(
-            getApplication(),
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-        // Nudge the combine so the row re-renders even when no other input moved.
-        signedTariffCached.value = signedTariffCached.value
+    /**
+     * Re-read everything the OS can answer synchronously.
+     *
+     * Called on every resume, because most of these are only settled by the technician leaving the
+     * app: a permission dialog, a Settings screen, Android's own pin confirmation. There is no
+     * callback for any of them — coming back IS the result.
+     *
+     * [kioskMode] is passed in rather than read here: it needs an Activity, and this is a
+     * ViewModel.
+     */
+    fun refreshDeviceState(kioskMode: LockTaskMode? = null) {
+        val context = getApplication<Application>()
+        val depotWantsKiosk = AppContainer.deviceCommandHeartbeat.state.value.kioskLocked
+        probes.update {
+            it.copy(
+                permissions = RuntimePermissions.snapshot(context),
+                batteryOptimisationExempt = RuntimePermissions.isIgnoringBatteryOptimisations(context),
+                mapTokenPresent = BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank(),
+                vehicleClassDeclared = AppContainer.maxiVehicleStore.isDeclared(),
+                kiosk = kioskMode?.let { mode -> kioskState(mode, depotWantsKiosk) } ?: it.kiosk,
+            )
+        }
     }
+
+    /**
+     * What the OS reports, against what the depot asked for.
+     *
+     * A DPC lock outranks everything — this app cannot cause it (it holds no Device Owner), so
+     * seeing it is proof a Knox policy is in force. Otherwise pinned is pinned; and a tablet the
+     * depot flagged that is NOT pinned is the one state worth a technician's attention, because it
+     * means a driver can still leave the meter despite the depot believing they cannot.
+     */
+    private fun kioskState(mode: LockTaskMode, depotWantsKiosk: Boolean): DeviceReadiness.KioskState =
+        when {
+            mode == LockTaskMode.LOCKED -> DeviceReadiness.KioskState.DpcLocked
+            mode == LockTaskMode.PINNED -> DeviceReadiness.KioskState.Pinned
+            depotWantsKiosk -> DeviceReadiness.KioskState.DepotWantsItButNotPinned
+            else -> DeviceReadiness.KioskState.NotRequested
+        }
 
     /**
      * Technician signs off first-install setup.
@@ -154,9 +222,10 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
 
     private fun probeOfflineMaps() {
         viewModelScope.launch {
-            offlineMapsPresent.value = runCatching {
+            val present = runCatching {
                 MapboxOfflineRegion.hasAnyRegion(MapboxOptions.accessToken)
             }.getOrNull()
+            probes.update { it.copy(offlineMapsPresent = present) }
         }
     }
 
@@ -166,9 +235,16 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
             // screen reports what the tablet is holding right now; fetching one here would make an
             // offline tablet look worse than it is and would slow the gate down for no gain, since
             // this check cannot block anyone anyway.
-            signedTariffCached.value = runCatching {
+            val tariff = runCatching {
                 AppContainer.tariffCache.getActiveTariff("urban") != null
             }.getOrNull()
+            // The verifying key, separately: a tariff without it cannot have its signature checked
+            // offline, and a tariff-only test would go green on a tablet that cannot prove the
+            // prices it charges are the ones the depot signed.
+            val key = runCatching {
+                AppContainer.tariffSigningKeyCache.getCachedPublicKey() != null
+            }.getOrNull()
+            probes.update { it.copy(signedTariffCached = tariff, tariffSigningKeyCached = key) }
         }
     }
 
@@ -214,6 +290,17 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                 else -> AppContainer.appUpdateChecker.checkForUpdate()
             }
         }
+    }
+
+    /**
+     * Records the technician's answer to "is this a maxi taxi?".
+     *
+     * Both answers count as declaring it — "no" is the common case and still needs to have been
+     * decided by a person, because the rate charged rides on it. See MaxiVehicleStore.isDeclared.
+     */
+    fun declareVehicleClass(isMaxi: Boolean) {
+        AppContainer.maxiVehicleStore.setMaxiVehicle(isMaxi)
+        refreshDeviceState()
     }
 
     fun downloadOfflineMaps() {

@@ -41,6 +41,11 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 8 / 0.5.2 (2026-09-08): the commissioning checklist now covers what a technician has to
+        // configure -- every runtime permission (including the two that broke its own Scan QR and
+        // Install update buttons), battery-optimisation exemption, kiosk pinning, map token,
+        // tariff signing key, and the maxi declaration that sets the rate charged.
+        //
         // 7 / 0.5.1 (2026-09-08): technician commissioning checklist on first install; remote
         // locate answered on the device route (it used to publish a vehicle position, which 404'd
         // on a tablet whose vehicle had been deleted -- the "Location request failed to send"
@@ -64,8 +69,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 7
-        versionName = "0.5.1"
+        versionCode = 8
+        versionName = "0.5.2"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

@@ -33,10 +33,26 @@ class MaxiVehicleStore(context: Context) {
     fun isMaxiVehicle(): Boolean = prefs.getBoolean(KEY_IS_MAXI, false)
 
     fun setMaxiVehicle(value: Boolean) {
-        prefs.edit().putBoolean(KEY_IS_MAXI, value).apply()
+        prefs.edit().putBoolean(KEY_IS_MAXI, value).putBoolean(KEY_DECLARED, true).apply()
+    }
+
+    /**
+     * Whether anyone has ever answered the question, as distinct from [isMaxiVehicle]'s answer.
+     *
+     * `false` is a perfectly valid declaration — most taxis are not maxis — so the value alone
+     * cannot tell a technician who deliberately answered "no" from a tablet nobody ever asked. The
+     * commissioning checklist needs that distinction: it is asking "has this been decided for this
+     * vehicle?", and a 150% rate rides on the answer.
+     */
+    fun isDeclared(): Boolean = prefs.getBoolean(KEY_DECLARED, false)
+
+    /** Records the answer without changing it — for a technician confirming the default is right. */
+    fun markDeclared() {
+        prefs.edit().putBoolean(KEY_DECLARED, true).apply()
     }
 
     private companion object {
         const val KEY_IS_MAXI = "is_maxi_vehicle"
+        const val KEY_DECLARED = "declared"
     }
 }

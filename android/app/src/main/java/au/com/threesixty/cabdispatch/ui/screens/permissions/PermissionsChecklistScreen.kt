@@ -27,10 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BatteryFull
-import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Notifications
@@ -53,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
@@ -86,9 +86,13 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * is the "asks like every other app on first open" behaviour). "Continue" then proceeds to [next]
  * (login/home); when opened from Settings ([next] is null) it just pops back.
  *
- * Honesty rule carried over: no card claims a check this app doesn't really make. Bluetooth and
- * file-storage remain informational "Not required on this build" cards (the manifest declares no
- * Bluetooth permission; API 29+ scoped storage needs none) — those two are not tappable.
+ * Honesty rule carried over, and tightened: no card claims a check this app doesn't really make,
+ * and no card renders a green tick for a check it isn't making at all. Two informational cards
+ * (Bluetooth, file storage) used to sit here reporting `granted = true` — truthfully labelled "not
+ * required on this build", but a tick against nothing is noise on a list a technician signs off.
+ * They are replaced by Install updates, a real permission this app needs and never checked
+ * anywhere: without it the depot's forced update downloads and verifies an APK and then fails at
+ * the last step with nothing to say.
  */
 @Composable
 fun PermissionsChecklistScreen(navController: NavHostController, next: String? = null) {
@@ -147,7 +151,14 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
             PermKind.FOREGROUND_RUNTIME -> requestForeground()
             PermKind.BACKGROUND_LOCATION -> requestBackgroundLocation()
             PermKind.BATTERY -> openBatteryOptimisation()
-            PermKind.INFO -> Unit // informational card, no action
+            PermKind.INSTALL_PACKAGES ->
+                context.startActivity(
+                    RuntimePermissions.settingsIntentFor(
+                        context,
+                        au.com.threesixty.cabdispatch.domain.DeviceReadiness.MeterPermission.InstallPackages,
+                    ),
+                )
+            PermKind.INFO -> Unit // genuinely nothing to do -- see the notifications card
         }
     }
 
@@ -246,7 +257,7 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
 }
 
 /** What tapping a card should do. */
-private enum class PermKind { FOREGROUND_RUNTIME, BACKGROUND_LOCATION, BATTERY, INFO }
+private enum class PermKind { FOREGROUND_RUNTIME, BACKGROUND_LOCATION, BATTERY, INSTALL_PACKAGES, INFO }
 
 private data class PermCard(
     val icon: ImageVector,
@@ -282,6 +293,7 @@ private fun buildPermissionCards(context: Context): List<PermCard> {
     }
 
     val battery = isIgnoringBatteryOptimizations(context)
+    val installPackages = RuntimePermissions.canInstallPackages(context)
 
     return listOf(
         of(Icons.Rounded.LocationOn, "Location (while in use)", Manifest.permission.ACCESS_FINE_LOCATION, PermKind.FOREGROUND_RUNTIME),
@@ -305,10 +317,26 @@ private fun buildPermissionCards(context: Context): List<PermCard> {
             statusText = if (battery) "Exempt — meter won't be dozed mid-fare" else "Not exempt — tap to allow",
             kind = PermKind.BATTERY,
         ),
-        // The manifest declares no Bluetooth runtime permission (printer gateway is mocked) and
-        // API 29+ scoped storage needs no storage permission — stated plainly, not faked.
-        PermCard(Icons.Rounded.Bluetooth, "Bluetooth — nearby devices", granted = true, statusText = "Not required on this build", kind = PermKind.INFO),
-        PermCard(Icons.Rounded.Folder, "File storage", granted = true, statusText = "Not required — scoped storage", kind = PermKind.INFO),
+        // Install updates. A real permission this app genuinely needs and never checked anywhere:
+        // without the appop, the depot's forced-update flow downloads an APK, verifies its
+        // SHA-256, and then fails at the last step with nothing to tell the driver. Not a runtime
+        // dialog — it is a Settings screen, so the answer only arrives back on resume.
+        //
+        // This replaced two cards that reported `granted = true` unconditionally (Bluetooth and
+        // file storage). Both were honestly LABELLED "not required on this build", but both
+        // rendered as a green tick, and a tick against nothing is noise on a checklist a
+        // technician is signing off.
+        PermCard(
+            Icons.Rounded.Download,
+            "Install updates",
+            granted = installPackages,
+            statusText = if (installPackages) {
+                "Allowed — the depot can push a meter update"
+            } else {
+                "Not allowed — tap to let this app install its own updates"
+            },
+            kind = PermKind.INSTALL_PACKAGES,
+        ),
     )
 }
 

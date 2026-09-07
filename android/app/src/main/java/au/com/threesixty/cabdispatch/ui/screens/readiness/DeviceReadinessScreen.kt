@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.AppUpdateState
+import au.com.threesixty.cabdispatch.domain.KioskLockController
+import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import au.com.threesixty.cabdispatch.domain.DeviceReadiness
 import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
@@ -110,7 +112,14 @@ fun DeviceReadinessScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshLocationPermission()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // Every special-access answer arrives this way and only this way: a permission
+                // dialog, a Settings screen, Android's own pin confirmation. None of them has a
+                // result callback -- coming back IS the result.
+                viewModel.refreshDeviceState(
+                    kioskMode = (context as? Activity)?.let(KioskLockController::currentLockTaskMode),
+                )
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -183,6 +192,19 @@ fun DeviceReadinessScreen(
                     enabled = state.canFinishSetup,
                     onClick = { viewModel.finishSetup(onReady) },
                 )
+                if (warnings > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        // Named, not counted. A technician signing off with warnings is taking
+                        // responsibility for them, and cannot do that against a number.
+                        "Signing off: " + state.warnings.joinToString(", ") { it.check.label() },
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = CaptainPalette.warning,
+                        modifier = Modifier.width(320.dp),
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
             }
 
@@ -252,6 +274,96 @@ fun DeviceReadinessScreen(
             // driver can usefully take while they are standing here anyway.
             val outstanding = state.results.filter { !it.passed }.map { it.check }.toSet()
 
+            if (DeviceReadiness.ReadinessCheck.Permissions in outstanding) {
+                PermissionsPanel(
+                    missing = state.missingPermissions,
+                    onGrant = { permission ->
+                        (context as? Activity)?.let { activity -> grantPermission(activity, permission) }
+                    },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            if (DeviceReadiness.ReadinessCheck.Kiosk in outstanding) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CaptainButton(
+                        text = "Pin the meter",
+                        outline = true,
+                        modifier = Modifier.width(300.dp),
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        onClick = {
+                            (context as? Activity)?.let {
+                                KioskLockController.applyKioskLock(it, desiredLocked = true)
+                            }
+                        },
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        "Android will ask you to confirm",
+                        fontFamily = InterFamily,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
+            if (DeviceReadiness.ReadinessCheck.BatteryOptimisation in outstanding) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CaptainButton(
+                        text = "Exempt from battery optimisation",
+                        outline = true,
+                        modifier = Modifier.width(300.dp),
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        onClick = {
+                            context.startActivity(RuntimePermissions.batteryOptimisationIntent(context))
+                        },
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        "Find this app in the list and allow it",
+                        fontFamily = InterFamily,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
+            if (DeviceReadiness.ReadinessCheck.VehicleClass in outstanding) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CaptainButton(
+                        text = "Standard taxi",
+                        outline = true,
+                        modifier = Modifier.width(180.dp),
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        onClick = { viewModel.declareVehicleClass(isMaxi = false) },
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    CaptainButton(
+                        text = "Maxi (5+ seats)",
+                        outline = true,
+                        modifier = Modifier.width(180.dp),
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        onClick = { viewModel.declareVehicleClass(isMaxi = true) },
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        // The consequence, not the setting name -- a technician picking the wrong
+                        // one here mis-prices every fare in this vehicle.
+                        "A maxi charges 150% of the metered fare",
+                        fontFamily = InterFamily,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
             if (DeviceReadiness.ReadinessCheck.Location in outstanding) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CaptainButton(
@@ -293,6 +405,91 @@ fun DeviceReadinessScreen(
             }
         }
     }
+}
+
+/**
+ * The permissions still missing, each with its own button.
+ *
+ * Expanded rather than a count, because a technician cannot act on "2 missing" — and because the
+ * three kinds need different things: an ordinary dialog, a Settings screen, or (for background
+ * location) a second dialog that only works once foreground location is already held.
+ */
+@Composable
+private fun PermissionsPanel(
+    missing: List<DeviceReadiness.MeterPermission>,
+    onGrant: (DeviceReadiness.MeterPermission) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(CaptainPalette.panel)
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
+            .padding(horizontal = 22.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        missing.forEach { permission ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            permission.label,
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp,
+                            color = CaptainPalette.textPrimary,
+                        )
+                        if (permission.critical) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "meter cannot work without this",
+                                fontFamily = InterFamily,
+                                fontSize = 12.sp,
+                                color = CaptainPalette.warning,
+                            )
+                        }
+                    }
+                    Text(
+                        // What it is FOR, not what it is called -- so a technician granting it
+                        // knows what they are agreeing to on the driver's behalf.
+                        "Needed for ${permission.needs}",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Spacer(Modifier.width(16.dp))
+                CaptainButton(
+                    text = "Grant",
+                    outline = true,
+                    modifier = Modifier.width(120.dp),
+                    heightDp = 48,
+                    fontSize = 15.sp,
+                    onClick = { onGrant(permission) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Grants one permission, by whichever mechanism it actually needs.
+ *
+ * Install-packages is not a dialog at all -- it is a Settings screen; background location must be
+ * asked for alone and only after foreground location is held, or Android 11+ denies the whole
+ * request silently. The result comes back on resume, not through a callback.
+ */
+private fun grantPermission(activity: Activity, permission: DeviceReadiness.MeterPermission) {
+    RuntimePermissions.settingsIntentFor(activity, permission)?.let {
+        activity.startActivity(it)
+        return
+    }
+    val request = when (permission) {
+        DeviceReadiness.MeterPermission.BackgroundLocation ->
+            arrayOf(RuntimePermissions.backgroundLocationPermission)
+        else -> RuntimePermissions.foregroundRequestArray()
+    }
+    ActivityCompat.requestPermissions(activity, request, LOCATION_PERMISSION_REQUEST_CODE)
 }
 
 /**
@@ -372,7 +569,12 @@ private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
 private fun DeviceReadiness.ReadinessCheck.label(): String = when (this) {
     DeviceReadiness.ReadinessCheck.Registered -> "Registered with the depot"
     DeviceReadiness.ReadinessCheck.UpToDate -> "Meter software"
+    DeviceReadiness.ReadinessCheck.Permissions -> "Permissions"
     DeviceReadiness.ReadinessCheck.Location -> "Location \u0026 GPS"
+    DeviceReadiness.ReadinessCheck.BatteryOptimisation -> "Battery optimisation"
+    DeviceReadiness.ReadinessCheck.Kiosk -> "Kiosk lock"
+    DeviceReadiness.ReadinessCheck.MapService -> "Map service"
+    DeviceReadiness.ReadinessCheck.VehicleClass -> "Vehicle class"
     DeviceReadiness.ReadinessCheck.OfflineMaps -> "Offline maps"
     DeviceReadiness.ReadinessCheck.SignedTariff -> "Signed tariff"
     DeviceReadiness.ReadinessCheck.Heartbeat -> "Depot heartbeat"

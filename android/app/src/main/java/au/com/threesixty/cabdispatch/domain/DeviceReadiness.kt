@@ -66,14 +66,91 @@ object DeviceReadiness {
          */
         Location,
 
+        /**
+         * Every runtime permission the meter needs, as one row.
+         *
+         * One row rather than six because a technician reads a checklist, not a manifest — and
+         * because the interesting answer is "4 of 6", with the missing ones named. The individual
+         * grants are in [Inputs.permissions] so the screen can expand them.
+         *
+         * This is not housekeeping: two of them break the commissioning screen's OWN fix buttons.
+         * Scan QR needs the camera, and Install update needs the install-packages appop. A
+         * technician could previously stand in front of a checklist whose buttons silently did
+         * nothing.
+         */
+        Permissions,
+
+        /**
+         * The tablet is exempt from battery optimisation.
+         *
+         * There is no foreground service in this app — the meter's tick loop is a coroutine in the
+         * process (see FareEngineImpl.startTicking). Doze can therefore stop a running fare, which
+         * on a regulated meter is not a battery-life inconvenience; it is a trip that stops being
+         * charged for while the passenger is still in the car.
+         */
+        BatteryOptimisation,
+
+        /**
+         * The tablet is actually locked to the meter — "connected to the kiosk".
+         *
+         * Compares what the depot ASKED for against what the OS is DOING. A tablet the depot has
+         * flagged `kiosk_locked` that is not pinned is a real, silent misconfiguration a technician
+         * can fix on the spot, and nothing surfaced it before.
+         */
+        Kiosk,
+
         /** Map tiles cached for the area this tablet works in. */
         OfflineMaps,
 
-        /** A signed, in-force tariff cached locally. */
+        /**
+         * The map service is usable at all.
+         *
+         * A blank `MAPBOX_ACCESS_TOKEN` degrades every map in the app to a grid fallback and makes
+         * the offline-map download impossible — silently, which is the problem. A technician who
+         * has just tapped "Download offline maps" and watched nothing happen deserves to be told
+         * why.
+         */
+        MapService,
+
+        /**
+         * A signed, in-force tariff AND the key that verifies it, both cached locally.
+         *
+         * Both halves, deliberately: a tablet holding a tariff but no Ed25519 public key cannot
+         * verify that tariff's signature offline, and would pass a tariff-only check while being
+         * unable to prove the prices it is charging are the ones the depot signed.
+         */
         SignedTariff,
+
+        /**
+         * The vehicle's class has been declared for this tablet.
+         *
+         * Maxi taxis are charged at 150% of the metered fare (Fares Order cl 2(d)), and the
+         * declaration is a per-device setting a driver could previously only find buried in
+         * Settings. Getting it wrong overcharges or undercharges every fare in the vehicle, so it
+         * belongs in the technician's hands at install, once, deliberately.
+         *
+         * Note this is a self-declaration with no backend field behind it — see MaxiVehicleStore's
+         * own doc. The check is that someone has ANSWERED, not that the answer is true.
+         */
+        VehicleClass,
 
         /** The command heartbeat is currently reaching the server. */
         Heartbeat,
+    }
+
+    /**
+     * A runtime permission the meter needs, and what breaks without it.
+     *
+     * [critical] separates "the meter cannot do its job" from "a feature is degraded", so the
+     * screen can rank them and the summary line can say something more useful than a bare count.
+     */
+    enum class MeterPermission(val label: String, val critical: Boolean, val needs: String) {
+        FineLocation("Location", true, "measuring distance — the meter cannot charge a distance rate without it"),
+        BackgroundLocation("Background location", true, "keeping the fare running when the screen is off"),
+        Camera("Camera", false, "scanning a pairing QR code and duress cabin capture"),
+        Microphone("Microphone", false, "duress audio capture"),
+        Notifications("Notifications", false, "dispatch offers, sync and duress alerts"),
+        InstallPackages("Install updates", false, "installing a meter update the depot pushes"),
     }
 
     /**
@@ -110,7 +187,38 @@ object DeviceReadiness {
         /** True once a real fix has actually arrived — permission granted is not the same thing as
          * a working GPS, and a technician needs to know which one they are looking at. */
         val hasLocationFix: Boolean? = null,
+        /** Grant state per permission. A permission absent from the map has not been looked at;
+         * an empty map means nothing has been checked at all. */
+        val permissions: Map<MeterPermission, Boolean> = emptyMap(),
+        val batteryOptimisationExempt: Boolean? = null,
+        val kiosk: KioskState? = null,
+        val mapTokenPresent: Boolean? = null,
+        val tariffSigningKeyCached: Boolean? = null,
+        val vehicleClassDeclared: Boolean? = null,
     )
+
+    /**
+     * What the tablet's screen-pinning state actually is, against what the depot asked for.
+     *
+     * Kept as a small enum rather than two booleans so the screen renders one honest sentence per
+     * state instead of composing one from flags. Mirrors the shape KioskLockController.decideAction
+     * already uses for its own truth table.
+     */
+    enum class KioskState {
+        /** A DPC (Knox) holds the device in lock-task mode. The strongest state, and one this app
+         * provably did not cause — it holds no Device Owner. */
+        DpcLocked,
+
+        /** Pinned by this app via startLockTask, at the depot's request. */
+        Pinned,
+
+        /** The depot flagged this tablet for kiosk, but the OS reports it unpinned. The one state
+         * a technician can and should fix on the spot. */
+        DepotWantsItButNotPinned,
+
+        /** Not pinned, and the depot has not asked for it. Not a fault. */
+        NotRequested,
+    }
 
     /**
      * Every check, in the order a driver should read them: what is stopping you, then what you
@@ -119,11 +227,23 @@ object DeviceReadiness {
     fun evaluate(inputs: Inputs): List<ReadinessResult> = listOf(
         registered(inputs),
         upToDate(inputs),
+        permissions(inputs),
         location(inputs),
+        batteryOptimisation(inputs),
+        kiosk(inputs),
         offlineMaps(inputs),
+        mapService(inputs),
         signedTariff(inputs),
+        vehicleClass(inputs),
         heartbeat(inputs),
     )
+
+    /** The permissions still missing, worst first — for the screen's expandable sub-list and for
+     * naming them on the Finish setup button. */
+    fun missingPermissions(inputs: Inputs): List<MeterPermission> =
+        MeterPermission.entries
+            .filter { inputs.permissions[it] == false }
+            .sortedByDescending { it.critical }
 
     /** The failures that actually stop a driver. Empty means the tablet may be used. */
     fun blockingFailures(inputs: Inputs): List<ReadinessResult> =
@@ -181,6 +301,76 @@ object DeviceReadiness {
         },
     )
 
+    private fun permissions(inputs: Inputs): ReadinessResult {
+        val checked = MeterPermission.entries.filter { inputs.permissions.containsKey(it) }
+        val granted = checked.count { inputs.permissions[it] == true }
+        val missing = missingPermissions(inputs)
+        return ReadinessResult(
+            check = ReadinessCheck.Permissions,
+            passed = checked.size == MeterPermission.entries.size && missing.isEmpty(),
+            severity = Severity.ADVISORY,
+            detail = when {
+                checked.isEmpty() -> "Not checked"
+                missing.isEmpty() -> "All ${MeterPermission.entries.size} granted"
+                // Names them rather than counting them. "2 missing" sends a technician hunting;
+                // "Location, Camera" is something they can act on without opening another screen.
+                else -> "$granted of ${MeterPermission.entries.size} granted — missing " +
+                    missing.joinToString(", ") { it.label }
+            },
+        )
+    }
+
+    private fun batteryOptimisation(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.BatteryOptimisation,
+        passed = inputs.batteryOptimisationExempt == true,
+        severity = Severity.ADVISORY,
+        detail = when (inputs.batteryOptimisationExempt) {
+            true -> "Exempt — the meter keeps running with the screen off"
+            false -> "Not exempt — Android may stop a running fare to save battery"
+            null -> "Not checked"
+        },
+    )
+
+    private fun kiosk(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.Kiosk,
+        // NotRequested passes: a depot that has not asked for kiosk mode has not misconfigured
+        // anything, and a checklist that cries about it would teach technicians to ignore the row.
+        passed = inputs.kiosk == KioskState.DpcLocked ||
+            inputs.kiosk == KioskState.Pinned ||
+            inputs.kiosk == KioskState.NotRequested,
+        severity = Severity.ADVISORY,
+        detail = when (inputs.kiosk) {
+            KioskState.DpcLocked -> "Locked to the meter by the fleet policy"
+            KioskState.Pinned -> "Pinned to the meter"
+            KioskState.DepotWantsItButNotPinned ->
+                "The depot asked for kiosk mode but this tablet is not pinned — tap to pin it"
+            KioskState.NotRequested -> "Not requested by the depot"
+            null -> "Not checked"
+        },
+    )
+
+    private fun mapService(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.MapService,
+        passed = inputs.mapTokenPresent == true,
+        severity = Severity.ADVISORY,
+        detail = when (inputs.mapTokenPresent) {
+            true -> "Map service configured"
+            false -> "No map token in this build — maps and offline downloads will not work"
+            null -> "Not checked"
+        },
+    )
+
+    private fun vehicleClass(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.VehicleClass,
+        passed = inputs.vehicleClassDeclared == true,
+        severity = Severity.ADVISORY,
+        detail = when (inputs.vehicleClassDeclared) {
+            true -> "Declared for this vehicle"
+            false -> "Not declared — a maxi taxi charges 150%, so this must be answered"
+            null -> "Not checked"
+        },
+    )
+
     private fun offlineMaps(inputs: Inputs) = ReadinessResult(
         check = ReadinessCheck.OfflineMaps,
         passed = inputs.offlineMapsPresent == true,
@@ -194,12 +384,18 @@ object DeviceReadiness {
 
     private fun signedTariff(inputs: Inputs) = ReadinessResult(
         check = ReadinessCheck.SignedTariff,
-        passed = inputs.signedTariffCached == true,
+        // Both halves. A tariff without its verifying key cannot be checked offline, so a
+        // tariff-only test would go green on a tablet that cannot prove the prices it charges are
+        // the ones the depot signed.
+        passed = inputs.signedTariffCached == true && inputs.tariffSigningKeyCached == true,
         severity = Severity.ADVISORY,
-        detail = when (inputs.signedTariffCached) {
-            true -> "Signed tariff cached"
-            false -> "No signed tariff cached yet — the meter will fetch one before the first fare"
-            null -> "Not checked"
+        detail = when {
+            inputs.signedTariffCached == null || inputs.tariffSigningKeyCached == null -> "Not checked"
+            inputs.signedTariffCached == false ->
+                "No signed tariff cached yet — the meter will fetch one before the first fare"
+            inputs.tariffSigningKeyCached == false ->
+                "Tariff cached, but not the key that verifies it — signatures cannot be checked offline"
+            else -> "Signed tariff and verifying key cached"
         },
     )
 

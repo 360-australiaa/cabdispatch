@@ -83,8 +83,13 @@ object KioskLockController {
 
     /** Live [ActivityManager.getLockTaskModeState] mapped onto [LockTaskMode] — the only place in
      * this file that touches a real system service, kept separate from [decideAction] so that
-     * function stays instrumentation-free. */
-    private fun currentLockTaskMode(activity: Activity): LockTaskMode {
+     * function stays instrumentation-free.
+     *
+     * Public since 2026-09-08: the commissioning checklist reports whether the tablet is ACTUALLY
+     * pinned, against what the depot asked for. That comparison is the only way to see a tablet
+     * flagged `kiosk_locked` that the OS never pinned — silent until someone noticed the driver
+     * could still leave the meter. */
+    fun currentLockTaskMode(activity: Activity): LockTaskMode {
         val activityManager = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         return when (activityManager.lockTaskModeState) {
             ActivityManager.LOCK_TASK_MODE_LOCKED -> LockTaskMode.LOCKED

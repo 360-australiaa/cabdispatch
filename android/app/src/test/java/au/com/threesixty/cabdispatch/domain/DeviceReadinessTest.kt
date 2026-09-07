@@ -34,6 +34,13 @@ class DeviceReadinessTest {
         signedTariffCached: Boolean? = true,
         locationPermissionGranted: Boolean? = true,
         hasLocationFix: Boolean? = true,
+        permissions: Map<DeviceReadiness.MeterPermission, Boolean> =
+            DeviceReadiness.MeterPermission.entries.associateWith { true },
+        batteryOptimisationExempt: Boolean? = true,
+        kiosk: DeviceReadiness.KioskState? = DeviceReadiness.KioskState.Pinned,
+        mapTokenPresent: Boolean? = true,
+        tariffSigningKeyCached: Boolean? = true,
+        vehicleClassDeclared: Boolean? = true,
     ) = DeviceReadiness.Inputs(
         deviceId = deviceId,
         deviceRejected = deviceRejected,
@@ -44,6 +51,12 @@ class DeviceReadinessTest {
         signedTariffCached = signedTariffCached,
         locationPermissionGranted = locationPermissionGranted,
         hasLocationFix = hasLocationFix,
+        permissions = permissions,
+        batteryOptimisationExempt = batteryOptimisationExempt,
+        kiosk = kiosk,
+        mapTokenPresent = mapTokenPresent,
+        tariffSigningKeyCached = tariffSigningKeyCached,
+        vehicleClassDeclared = vehicleClassDeclared,
     )
 
     private fun blockedChecks(inputs: DeviceReadiness.Inputs) =
@@ -84,6 +97,12 @@ class DeviceReadinessTest {
             heartbeatSucceeding = false,
             offlineMapsPresent = null,
             signedTariffCached = null,
+            tariffSigningKeyCached = null,
+            permissions = emptyMap(),
+            batteryOptimisationExempt = null,
+            kiosk = null,
+            mapTokenPresent = null,
+            vehicleClassDeclared = null,
         )
 
         assertTrue(DeviceReadiness.blockingFailures(offline).isEmpty())
@@ -125,21 +144,146 @@ class DeviceReadinessTest {
     // --- advisories ------------------------------------------------------------------------
 
     @Test
-    fun `maps, tariff, location and heartbeat never block, however bad they look`() {
+    fun `every advisory can fail at once and still block nobody`() {
+        // The whole point of the severity split. A tablet in the worst state the advisories can
+        // describe -- no permissions, no maps, no tariff, no GPS, not pinned, dozing, no map token,
+        // undeclared -- still lets a driver work, because none of that is something they can fix at
+        // 4am and none of it stops the meter charging correctly.
         val everythingAdvisoryFailing = inputs(
             heartbeatSucceeding = false,
             offlineMapsPresent = false,
             signedTariffCached = false,
+            tariffSigningKeyCached = false,
             locationPermissionGranted = false,
             hasLocationFix = false,
+            permissions = DeviceReadiness.MeterPermission.entries.associateWith { false },
+            batteryOptimisationExempt = false,
+            kiosk = DeviceReadiness.KioskState.DepotWantsItButNotPinned,
+            mapTokenPresent = false,
+            vehicleClassDeclared = false,
         )
 
         assertTrue(DeviceReadiness.blockingFailures(everythingAdvisoryFailing).isEmpty())
 
-        val advisories = DeviceReadiness.evaluate(everythingAdvisoryFailing)
-            .filter { !it.passed }
-        assertEquals(4, advisories.size)
+        val advisories = DeviceReadiness.evaluate(everythingAdvisoryFailing).filter { !it.passed }
+        // Every check except the two blocking ones.
+        assertEquals(
+            DeviceReadiness.ReadinessCheck.entries.size - 2,
+            advisories.size,
+        )
         assertTrue(advisories.all { it.severity == DeviceReadiness.Severity.ADVISORY })
+    }
+
+    // --- permissions ----------------------------------------------------------------------
+
+    @Test
+    fun `missing permissions are named, not counted`() {
+        // "2 missing" sends a technician hunting through Settings; naming them is something they
+        // can act on without leaving the screen.
+        val partial = inputs(
+            permissions = mapOf(
+                DeviceReadiness.MeterPermission.FineLocation to true,
+                DeviceReadiness.MeterPermission.BackgroundLocation to true,
+                DeviceReadiness.MeterPermission.Camera to false,
+                DeviceReadiness.MeterPermission.Microphone to true,
+                DeviceReadiness.MeterPermission.Notifications to true,
+                DeviceReadiness.MeterPermission.InstallPackages to false,
+            ),
+        )
+
+        val row = DeviceReadiness.evaluate(partial)
+            .first { it.check == DeviceReadiness.ReadinessCheck.Permissions }
+
+        assertFalse(row.passed)
+        assertTrue(row.detail.contains("Camera"))
+        assertTrue(row.detail.contains("Install updates"))
+    }
+
+    @Test
+    fun `critical permissions are listed before optional ones`() {
+        // A technician fixes the top of the list first, so the two that stop the meter measuring
+        // distance must not sit below the one that scans QR codes.
+        val missing = DeviceReadiness.missingPermissions(
+            inputs(permissions = DeviceReadiness.MeterPermission.entries.associateWith { false }),
+        )
+
+        val firstOptional = missing.indexOfFirst { !it.critical }
+        val lastCritical = missing.indexOfLast { it.critical }
+        assertTrue(lastCritical < firstOptional)
+    }
+
+    @Test
+    fun `a permission nobody has looked at is not a failure`() {
+        val row = DeviceReadiness.evaluate(inputs(permissions = emptyMap()))
+            .first { it.check == DeviceReadiness.ReadinessCheck.Permissions }
+
+        assertFalse(row.passed)
+        assertEquals("Not checked", row.detail)
+    }
+
+    // --- kiosk ----------------------------------------------------------------------------
+
+    @Test
+    fun `kiosk passes when pinned, when DPC-locked, and when the depot never asked`() {
+        // NotRequested passes deliberately: a depot that has not asked for kiosk mode has not
+        // misconfigured anything, and a row that cried about it would teach technicians to ignore
+        // the whole checklist.
+        for (state in listOf(
+            DeviceReadiness.KioskState.Pinned,
+            DeviceReadiness.KioskState.DpcLocked,
+            DeviceReadiness.KioskState.NotRequested,
+        )) {
+            assertTrue(
+                state.name,
+                DeviceReadiness.evaluate(inputs(kiosk = state))
+                    .first { it.check == DeviceReadiness.ReadinessCheck.Kiosk }
+                    .passed,
+            )
+        }
+    }
+
+    @Test
+    fun `a tablet the depot flagged but the OS never pinned is the one kiosk failure`() {
+        // The silent misconfiguration this row exists for: the depot believes the driver cannot
+        // leave the meter, and they can.
+        val row = DeviceReadiness.evaluate(
+            inputs(kiosk = DeviceReadiness.KioskState.DepotWantsItButNotPinned),
+        ).first { it.check == DeviceReadiness.ReadinessCheck.Kiosk }
+
+        assertFalse(row.passed)
+        assertTrue(row.detail.contains("not pinned"))
+    }
+
+    // --- signed tariff needs its verifying key --------------------------------------------
+
+    @Test
+    fun `a tariff without the key that verifies it does not pass`() {
+        // Such a tablet cannot check the signature offline -- it would be charging prices it
+        // cannot prove the depot signed.
+        val row = DeviceReadiness.evaluate(
+            inputs(signedTariffCached = true, tariffSigningKeyCached = false),
+        ).first { it.check == DeviceReadiness.ReadinessCheck.SignedTariff }
+
+        assertFalse(row.passed)
+        assertTrue(row.detail.contains("key"))
+    }
+
+    // --- vehicle class --------------------------------------------------------------------
+
+    @Test
+    fun `vehicle class must be answered, and both answers count as answered`() {
+        // "Not a maxi" is the common case and still has to have been DECIDED -- a 150% rate rides
+        // on it, so an untouched default is not the same as a technician's "no".
+        assertTrue(
+            DeviceReadiness.evaluate(inputs(vehicleClassDeclared = true))
+                .first { it.check == DeviceReadiness.ReadinessCheck.VehicleClass }
+                .passed,
+        )
+        assertFalse(
+            DeviceReadiness.evaluate(inputs(vehicleClassDeclared = false))
+                .first { it.check == DeviceReadiness.ReadinessCheck.VehicleClass }
+                .passed,
+        )
     }
 
     // --- location -------------------------------------------------------------------------
