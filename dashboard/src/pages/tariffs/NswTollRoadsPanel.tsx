@@ -5,11 +5,13 @@ import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
   useCreateTollRoadPriceRevisionMutation,
+  useTollGantriesQuery,
   useTollRoadDetailQuery,
   useTollRoadsQuery,
   type TollRoad,
   type TollRoadPriceRevisionInput,
 } from "@/hooks/useTollRoads";
+import { TollGantryMap } from "./TollGantryMap";
 import { extractErrorMessage, formatDateTime, formatMoney } from "./format";
 
 /** "NSW Toll Roads" tab of Tariff Studio — read-mostly view of the real
@@ -29,6 +31,7 @@ export function NswTollRoadsPanel() {
   const canWrite = isPlatformOwner(user);
 
   const roadsQuery = useTollRoadsQuery();
+  const gantriesQuery = useTollGantriesQuery();
   const [detailRoad, setDetailRoad] = useState<TollRoad | null>(null);
   const [revisionRoad, setRevisionRoad] = useState<TollRoad | null>(null);
 
@@ -128,6 +131,21 @@ export function NswTollRoadsPanel() {
           />
         </CardContent>
       </Card>
+
+      <div className="mt-6">
+        <h3 className="mb-1 text-sm font-semibold">Toll points on the map</h3>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Every physical gantry in the registry, at its real coordinates. These are what the meter matches a GPS fix
+          against (within 150&nbsp;m) to decide a toll was crossed — so if a point here sits somewhere the road does
+          not, that is a toll the meter will get wrong. Hover a point for its name and coordinates.
+        </p>
+        <TollGantryMap
+          gantries={gantriesQuery.data ?? []}
+          roads={roads}
+          isLoading={gantriesQuery.isLoading}
+          isError={gantriesQuery.isError}
+        />
+      </div>
 
       <TollRoadDetailModal roadId={detailRoad?.id ?? null} onClose={() => setDetailRoad(null)} />
       <PriceRevisionModal road={revisionRoad} onClose={() => setRevisionRoad(null)} />
@@ -314,7 +332,12 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
                       <tr key={g.id} className="border-b border-border/50">
                         <td className="py-1 pr-2">{g.location}</td>
                         <td className="py-1 pr-2 text-muted-foreground">{g.ramp ?? "—"}</td>
-                        <td className="py-1 text-muted-foreground">{g.direction ?? "—"}</td>
+                        <td className="py-1 pr-2 text-muted-foreground">{g.direction ?? "—"}</td>
+                        {/* The coordinate IS the detection point -- see TollGantryMap's doc.
+                            Shown to 5dp (~1m), well inside the meter's 150m match radius. */}
+                        <td className="py-1 font-mono text-muted-foreground">
+                          {g.latitude.toFixed(5)}, {g.longitude.toFixed(5)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

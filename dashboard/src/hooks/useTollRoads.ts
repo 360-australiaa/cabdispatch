@@ -152,6 +152,7 @@ export interface TollRoadPriceRevisionInput {
 }
 
 const TOLL_ROADS_KEY = "toll-roads";
+const TOLL_GANTRIES_KEY = "toll-gantries";
 
 export function useTollRoadsQuery() {
   return useQuery({
@@ -160,6 +161,28 @@ export function useTollRoadsQuery() {
       const res = await apiClient.get<TollRoad[]>("/v1/toll-roads");
       return res.data;
     },
+  });
+}
+
+/**
+ * Every gantry in the registry, flat (141 rows for the NSW dataset) — what the
+ * "NSW Toll Roads" tab plots on its map. Deliberately its own request rather
+ * than stitching together one detail call per road: static reference data, one
+ * cheap response, and the map needs all of them at once or it isn't a map of
+ * the registry.
+ *
+ * Its own query key, not a child of [TOLL_ROADS_KEY], so adding a price
+ * revision (which invalidates the road list) doesn't needlessly refetch
+ * coordinates that a price change cannot possibly have moved.
+ */
+export function useTollGantriesQuery() {
+  return useQuery({
+    queryKey: [TOLL_GANTRIES_KEY],
+    queryFn: async () => {
+      const res = await apiClient.get<TollGantry[]>("/v1/toll-roads/gantries");
+      return res.data;
+    },
+    staleTime: 60 * 60 * 1000, // reference data; it changes when a road is built
   });
 }
 

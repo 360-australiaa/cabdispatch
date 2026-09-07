@@ -817,6 +817,41 @@ async def test_toll_roads_api_exposes_the_distance_formula_and_its_source(
     assert price["network_cap_class_a"] == "12.74"
 
 
+async def test_list_all_toll_gantries_returns_every_gantry_with_real_coordinates(
+    client: AsyncClient, session: AsyncSession
+):
+    """The dashboard plots the whole registry on one map from this. Coordinates
+    are the whole point of the endpoint, so they are asserted explicitly —
+    a gantry list without them is not a pinpoint, it is a name."""
+    headers = await auth_headers(client, session, role="driver")
+    road = await _make_road(session, road_id="TESTGANTRYALL", pricing_model="flat", price_class_a="4.30")
+    lat, lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTGANTRYALL:g1", lat=lat, lng=lng)
+
+    resp = await client.get("/v1/toll-roads/gantries", headers=headers)
+    assert resp.status_code == 200, resp.text
+    by_id = {row["id"]: row for row in resp.json()}
+    gantry = by_id["TESTGANTRYALL:g1"]
+    assert gantry["latitude"] == lat
+    assert gantry["longitude"] == lng
+    assert gantry["toll_road_id"] == "TESTGANTRYALL"
+
+
+async def test_gantries_path_is_not_shadowed_by_the_road_detail_route(
+    client: AsyncClient, session: AsyncSession
+):
+    """FastAPI matches routes in declaration order. If `GET /{road_id}` is ever
+    moved above `GET /gantries`, this path silently becomes a lookup for a road
+    literally named "gantries" and 404s — a regression no other test would
+    catch, because both routes keep working on their own."""
+    headers = await auth_headers(client, session, role="driver")
+
+    resp = await client.get("/v1/toll-roads/gantries", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert isinstance(resp.json(), list)
+
+
 async def test_get_unknown_toll_road_is_404(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="driver")
     resp = await client.get("/v1/toll-roads/DOES-NOT-EXIST", headers=headers)

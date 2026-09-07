@@ -139,6 +139,30 @@ async def list_toll_roads(
     return out
 
 
+@router.get("/gantries", response_model=list[TollGantryRead])
+async def list_all_toll_gantries(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+) -> list[TollGantryRead]:
+    """Every physical toll gantry in the registry, flat, with real
+    coordinates — 141 rows for the current NSW dataset.
+
+    Exists so the dashboard can plot the whole registry on ONE map. The
+    per-road detail endpoint already returns a road's own gantries, but
+    building a registry-wide view from it costs one request per road and
+    still leaves the caller stitching them together. 141 small rows is a
+    single cheap response, and this is static reference data.
+
+    MUST stay declared above `GET /{road_id}` — FastAPI matches routes in
+    declaration order, so with the two swapped this path is swallowed as a
+    road whose id is the literal string "gantries" and 404s.
+    """
+    gantries = (
+        await session.execute(select(TollGantry).order_by(TollGantry.toll_road_id, TollGantry.id))
+    ).scalars().all()
+    return [TollGantryRead.model_validate(g) for g in gantries]
+
+
 @router.get("/{road_id}", response_model=TollRoadDetailRead)
 async def get_toll_road(
     road_id: str,
