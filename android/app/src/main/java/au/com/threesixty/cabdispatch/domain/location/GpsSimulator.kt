@@ -89,7 +89,7 @@ class GpsSimulator(private val scope: CoroutineScope) {
                 // A finished route parks the vehicle: still emitting fixes (a real device does
                 // not stop reporting when you arrive) but at 0 km/h, so the meter correctly
                 // switches to waiting mode instead of the trip appearing to vanish.
-                val speed = if (position.finished) 0.0 else route.speedKmh
+                val speed = if (position.finished) 0.0 else route.speedAt(elapsedSeconds)
                 _speedKmh.value = speed
                 _fix.value = LocationFix(
                     lat = position.point.lat,

@@ -41,6 +41,10 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 9 / 0.6.0 (2026-09-08): the meter dial animates on the TARIFF's own bands -- waiting time
+        // under 26 km/h, distance above it, energetic past 60 -- and the speed-reactive ember it
+        // already had is fixed (it captured speed once at composition, so it had been static).
+        //
         // 8 / 0.5.2 (2026-09-08): the commissioning checklist now covers what a technician has to
         // configure -- every runtime permission (including the two that broke its own Scan QR and
         // Install update buttons), battery-optimisation exemption, kiosk pinning, map token,
@@ -69,8 +73,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 8
-        versionName = "0.5.2"
+        versionCode = 9
+        versionName = "0.6.0"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

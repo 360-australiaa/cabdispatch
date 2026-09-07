@@ -25,6 +25,70 @@ import kotlin.math.sqrt
  * the device's own cached registry and drives that road's actual gantries in order, so a
  * simulated crossing is a crossing of the same coordinate the meter matches against.
  */
+/**
+ * A speed that changes over time, for routes that need to ramp rather than hold one figure.
+ *
+ * Every existing route is constant-speed, which is fine for exercising toll detection but cannot
+ * demonstrate anything that depends on CHANGING speed — the meter dial's animation bands, for
+ * instance, whose whole point is what happens at 26 and 60 km/h. Testing those by switching routes
+ * shows the three states but never a transition between them.
+ *
+ * Segments are linear ramps, so distance over a segment is the trapezoid area and has a closed
+ * form. Pure Kotlin and unit-tested, because a wrong integral would put the simulated taxi in the
+ * wrong place rather than merely at the wrong speed.
+ */
+data class SpeedProfile(val segments: List<Segment>) {
+    /** One ramp: [durationS] seconds moving linearly from [fromKmh] to [toKmh]. A hold is a
+     * segment whose two speeds are equal. */
+    data class Segment(val durationS: Double, val fromKmh: Double, val toKmh: Double) {
+        init {
+            require(durationS > 0) { "a segment needs a positive duration, got $durationS" }
+            require(fromKmh >= 0 && toKmh >= 0) { "speeds cannot be negative: $fromKmh -> $toKmh" }
+        }
+
+        /** Metres covered over the whole segment: the trapezoid under the speed ramp. */
+        val distanceM: Double get() = (fromKmh + toKmh) / 2.0 / 3.6 * durationS
+    }
+
+    init {
+        require(segments.isNotEmpty()) { "a speed profile needs at least one segment" }
+    }
+
+    val totalDurationS: Double get() = segments.sumOf { it.durationS }
+
+    /** Speed at [elapsedS]. Past the end this holds the final speed rather than wrapping — a route
+     * that has finished leaves the vehicle where it stopped, as the constant-speed path does. */
+    fun speedAt(elapsedS: Double): Double {
+        var t = elapsedS.coerceAtLeast(0.0)
+        for (seg in segments) {
+            if (t <= seg.durationS) {
+                val fraction = if (seg.durationS == 0.0) 0.0 else t / seg.durationS
+                return seg.fromKmh + (seg.toKmh - seg.fromKmh) * fraction
+            }
+            t -= seg.durationS
+        }
+        return segments.last().toKmh
+    }
+
+    /** Metres covered by [elapsedS] — the integral of [speedAt], segment by segment. */
+    fun distanceM(elapsedS: Double): Double {
+        var t = elapsedS.coerceAtLeast(0.0)
+        var total = 0.0
+        for (seg in segments) {
+            if (t <= seg.durationS) {
+                val fraction = if (seg.durationS == 0.0) 0.0 else t / seg.durationS
+                val speedHere = seg.fromKmh + (seg.toKmh - seg.fromKmh) * fraction
+                total += (seg.fromKmh + speedHere) / 2.0 / 3.6 * t
+                return total
+            }
+            total += seg.distanceM
+            t -= seg.durationS
+        }
+        // Past the end: keep going at the final speed, matching speedAt.
+        return total + segments.last().toKmh / 3.6 * t
+    }
+}
+
 data class SimulatedRoute(
     val id: String,
     val name: String,
@@ -32,12 +96,20 @@ data class SimulatedRoute(
     val description: String,
     /** At least two points. Consecutive points are driven in a straight line at [speedKmh]. */
     val waypoints: List<LatLng>,
+    /** The route's speed, or its nominal/peak speed when [speedProfile] is set. */
     val speedKmh: Double,
+    /** When set, the speed varies over time and [speedKmh] is only the headline figure shown in
+     * the picker. Null — every existing route — keeps the constant-speed path exactly as it was. */
+    val speedProfile: SpeedProfile? = null,
 ) {
     init {
         require(waypoints.size >= 2) { "a route needs at least two waypoints, got ${waypoints.size}" }
         require(speedKmh > 0) { "speedKmh must be positive, got $speedKmh" }
     }
+
+    /** Speed at [elapsedSeconds] — the profile's, or the constant. */
+    fun speedAt(elapsedSeconds: Double): Double =
+        speedProfile?.speedAt(elapsedSeconds) ?: speedKmh
 
     /** Total ground distance, metres. */
     val lengthM: Double
@@ -55,8 +127,8 @@ data class SimulatedRoute(
      * destination, which is what a real trip does, not teleport back to the start.
      */
     fun positionAt(elapsedSeconds: Double): RoutePosition {
-        val metresPerSecond = speedKmh / 3.6
-        var remaining = elapsedSeconds * metresPerSecond
+        var remaining = speedProfile?.distanceM(elapsedSeconds)
+            ?: (elapsedSeconds * (speedKmh / 3.6))
 
         for ((from, to) in waypoints.zipWithNext()) {
             val legLength = haversineM(from, to)
@@ -224,6 +296,51 @@ object SimulatedRoutes {
             LatLng(-33.9800, 151.4400),
         ),
         speedKmh = speedKmh,
+    )
+
+    /**
+     * Ramps up through both animation bands and back down again.
+     *
+     * Every other route holds one speed, which shows the meter dial's three characters but never a
+     * TRANSITION between them -- and the transitions are the thing worth watching: the crossfade at
+     * the tariff's 26 km/h line, and the hysteresis that stops the dial strobing when the speed
+     * hovers there.
+     *
+     * The profile deliberately crosses 26 and 60 twice each, and dwells at 55-60 on the way down so
+     * FAST can be seen holding through its exit margin rather than dropping the instant the speed
+     * does. It ends stopped, which is the state the whole calm-motion design is judged on: the ring
+     * should be completely still.
+     *
+     * About 2.5 minutes end to end.
+     */
+    fun bandSweep(): SimulatedRoute = SimulatedRoute(
+        id = "bands",
+        name = "Band sweep (0 -> 90 -> 0)",
+        description = "Ramps through waiting -> distance -> fast and back. The dial should change " +
+            "character at 26 and 60 km/h, hold FAST down to 55, and go completely still at the end.",
+        // The same open-water line as plainDrive, extended: this profile covers roughly 2.4 km, and
+        // a route that ran out of waypoints would clamp to its last one and stop early.
+        waypoints = listOf(
+            LatLng(-33.8900, 151.3200),
+            LatLng(-33.9200, 151.3600),
+            LatLng(-33.9500, 151.4000),
+            LatLng(-33.9800, 151.4400),
+            LatLng(-34.0100, 151.4800),
+        ),
+        speedKmh = 90.0,
+        speedProfile = SpeedProfile(
+            listOf(
+                SpeedProfile.Segment(15.0, 3.0, 3.0),    // crawling: WAITING
+                SpeedProfile.Segment(25.0, 3.0, 45.0),   // through 26: WAITING -> DISTANCE
+                SpeedProfile.Segment(15.0, 45.0, 45.0),  // hold DISTANCE
+                SpeedProfile.Segment(20.0, 45.0, 90.0),  // through 60: DISTANCE -> FAST
+                SpeedProfile.Segment(20.0, 90.0, 90.0),  // hold FAST
+                SpeedProfile.Segment(15.0, 90.0, 57.0),  // down to 57: still FAST (exit is 55)
+                SpeedProfile.Segment(10.0, 57.0, 57.0),  // dwell there -- the hysteresis proof
+                SpeedProfile.Segment(15.0, 57.0, 0.0),   // all the way down
+                SpeedProfile.Segment(15.0, 0.0, 0.0),    // stopped: the ring must be static
+            ),
+        ),
     )
 
     /**

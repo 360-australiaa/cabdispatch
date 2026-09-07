@@ -6,6 +6,8 @@ import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -39,6 +41,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -54,6 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -76,6 +81,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import au.com.threesixty.cabdispatch.domain.SpeedBand
 import com.mapbox.geojson.Point
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotation
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationManager
@@ -211,6 +218,16 @@ private fun DrawScope.drawHudArc(
     sweepDeg: Float,
     glowPaint: android.graphics.Paint,
     glowAlpha: Float = 0.85f,
+    /** Sweep-gradient stops, start -> mid -> end. Defaults to the palette's own, which is what
+     * every gauge other than the speedometer wants. */
+    sweepStops: Triple<Color, Color, Color> = Triple(
+        CaptainPalette.hudSweepStart,
+        CaptainPalette.hudSweepMid,
+        CaptainPalette.hudSweepEnd,
+    ),
+    /** Multiplier on the blurred glow pass's stroke width. The speedometer widens this at speed;
+     * nothing else changes it. */
+    glowStrokeMultiplier: Float = 1.5f,
 ) {
     drawArc(
         color = CaptainPalette.hudTrack,
@@ -227,7 +244,7 @@ private fun DrawScope.drawHudArc(
     val effectiveGlowAlpha = if (isLight) glowAlpha * 0.4f else glowAlpha
     rotate(degrees = startDeg, pivot = g.center) {
         drawIntoCanvas { canvas ->
-            glowPaint.strokeWidth = g.strokePx * 1.5f
+            glowPaint.strokeWidth = g.strokePx * glowStrokeMultiplier
             glowPaint.alpha = (effectiveGlowAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
             canvas.nativeCanvas.drawArc(
                 g.topLeft.x, g.topLeft.y, g.topLeft.x + g.size.width, g.topLeft.y + g.size.height,
@@ -238,10 +255,10 @@ private fun DrawScope.drawHudArc(
         drawArc(
             brush = Brush.sweepGradient(
                 colorStops = arrayOf(
-                    0f to CaptainPalette.hudSweepStart,
-                    full * 0.5f to CaptainPalette.hudSweepMid,
-                    full to CaptainPalette.hudSweepEnd,
-                    1f to CaptainPalette.hudSweepEnd,
+                    0f to sweepStops.first,
+                    full * 0.5f to sweepStops.second,
+                    full to sweepStops.third,
+                    1f to sweepStops.third,
                 ),
                 center = g.center,
             ),
@@ -447,19 +464,50 @@ fun GlowingSpeedometer(
     startDeg: Float = 135f,
     showLabels: Boolean = true,
     motion: Boolean = false,
+    /** The tariff's own waiting/distance line, marked on the dial and used to band the animation.
+     * Defaults to the Fares Order urban figure for previews. */
+    thresholdKmh: Double = SpeedBand.DEFAULT_THRESHOLD_KMH,
+    /** The band to render. Pass the one the caller already computed with [rememberSpeedBand] so the
+     * ring and the caller's own readout cannot disagree; null computes it here, which is what the
+     * previews want. */
+    band: SpeedBand? = null,
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     val safeMax = maxKmh.coerceAtLeast(5f)
-    val animatedSpeed by animateFloatAsState(
+    // Kept as a State and read only inside the draw lambda. Delegating it here with `by` would
+    // recompose this whole composable on every frame of the spring; reading it in draw invalidates
+    // the draw phase alone.
+    val animatedSpeed = animateFloatAsState(
         targetValue = speedKmh.coerceIn(0f, safeMax),
         animationSpec = hudSpring(),
         label = "hud-speed",
     )
+    val effectiveBand = band ?: rememberSpeedBand(animatedSpeed, thresholdKmh).value
+
+    // One scalar carries the whole band character, so a change is a continuous crossfade rather
+    // than a jump. A tween, deliberately not hudSpring(): a spring overshooting past 0.5 on a
+    // WAITING -> DISTANCE change would flash the FAST colouring on the way.
+    val energy = remember { Animatable(effectiveBand.energy) }
+    // One bloom on a band change, then hold. This is the entire "something just happened" signal —
+    // there is no repeating pulse anywhere in this composable.
+    val flash = remember { Animatable(0f) }
+    var seenFirstBand by remember { mutableStateOf(false) }
+    LaunchedEffect(effectiveBand) {
+        if (!seenFirstBand) {
+            seenFirstBand = true
+            energy.snapTo(effectiveBand.energy)
+            return@LaunchedEffect
+        }
+        launch { energy.animateTo(effectiveBand.energy, tween(BAND_FADE_MS, easing = FastOutSlowInEasing)) }
+        flash.snapTo(1f)
+        flash.animateTo(0f, tween(BAND_FLASH_MS, easing = FastOutSlowInEasing))
+    }
+
     val glowPaint = rememberHudGlowPaint()
     val holoGlowPaint = rememberHoloGlowPaint()
     val holoParticles = rememberHoloParticles()
     val emberPaint = rememberEmberPaint()
-    val emberPhase = rememberEmberPhase(enabled = motion, speedKmh = animatedSpeed, maxKmh = safeMax)
+    val clock = rememberSpeedClock(enabled = motion, speed = animatedSpeed, maxKmh = safeMax)
     val labelArgb = CaptainPalette.textSecondary.toArgb()
     val labelPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -471,9 +519,64 @@ fun GlowingSpeedometer(
         Canvas(modifier = Modifier.matchParentSize()) {
             val g = HudArcGeometry.fit(this, strokeWidthDp.dp.toPx(), HUD_ARC_INSET.toPx())
             drawHoloRing(g, holoParticles, holoGlowPaint)
-            val speedFraction = (animatedSpeed / safeMax).coerceIn(0f, 1f)
-            drawHudArc(g, speedFraction, startDeg, sweepDeg, glowPaint, glowAlpha = 0.55f + 0.45f * speedFraction)
-            if (motion) drawEmber(g, emberPhase.value, speedFraction, startDeg, sweepDeg, emberPaint)
+
+            val speed = animatedSpeed.value
+            val speedFraction = (speed / safeMax).coerceIn(0f, 1f)
+            val e = energy.value
+            // Two 0..1 ramps out of the single energy scalar: WAITING->DISTANCE, then
+            // DISTANCE->FAST. Every band-dependent value below lerps against these, so nothing
+            // branches on the band and the crossfade is continuous.
+            val toDistance = (e * 2f).coerceIn(0f, 1f)
+            val toFast = (e * 2f - 1f).coerceIn(0f, 1f)
+
+            val litColor = lerp(CaptainPalette.hudAccent, CaptainPalette.neonCyan, toDistance)
+            val hotColor = lerp(litColor, CaptainPalette.hudSweepHot, toFast)
+            glowPaint.color = hotColor.toArgb()
+
+            // The hum is the FAST band's only new motion, and it is brightness, never position.
+            // Amplitude is zero below FAST and its rate is speed-tied, so it stops dead at a stop.
+            val hum = HUM_AMPLITUDE * toFast * kotlin.math.sin(clock.hum.value)
+            val glowAlpha = 0.55f + 0.45f * speedFraction + BAND_FLASH_GLOW * flash.value + hum
+
+            drawHudArc(
+                g, speedFraction, startDeg, sweepDeg, glowPaint,
+                glowAlpha = glowAlpha,
+                sweepStops = Triple(
+                    lerp(CaptainPalette.hudSweepStart, CaptainPalette.hudSweepMid, toFast),
+                    lerp(CaptainPalette.hudSweepMid, CaptainPalette.neonCyan, toFast),
+                    lerp(lerp(CaptainPalette.hudSweepEnd, CaptainPalette.neonCyan, toDistance),
+                        CaptainPalette.hudSweepHot, toFast),
+                ),
+                glowStrokeMultiplier = 1.5f + 0.3f * toFast,
+            )
+
+            if (motion) {
+                drawEmber(
+                    g, clock.ember.value, speedFraction, startDeg, sweepDeg, emberPaint,
+                    // Hidden entirely in WAITING: a taxi charging waiting time shows a calm,
+                    // still ring, which is the state the "calm animations" feedback was about.
+                    color = lerp(CaptainPalette.hudSweepMid, CaptainPalette.hudSweepHot, toFast),
+                    alpha = (235f * toDistance + 20f * toFast).roundToInt().coerceIn(0, 255),
+                    strokeMultiplier = 0.9f + 0.2f * toFast,
+                )
+            }
+
+            // The lit end cap: the "pointer" affordance, welded to the arc end so it introduces no
+            // motion of its own — it only moves when the speed does. Chosen over a needle, which
+            // would hunt on the spring against a 1 Hz staircase and would have to cross the fare
+            // disc at the centre.
+            val litDeg = sweepDeg * speedFraction
+            if (toDistance > 0f && litDeg >= EMBER_MIN_LIT_DEG) {
+                val capRad = Math.toRadians((startDeg + litDeg).toDouble())
+                drawCircle(
+                    color = hotColor.copy(alpha = toDistance),
+                    radius = g.strokePx * 0.45f,
+                    center = Offset(
+                        g.center.x + cos(capRad).toFloat() * g.radius,
+                        g.center.y + sin(capRad).toFloat() * g.radius,
+                    ),
+                )
+            }
 
             // Ticks + labels — MeterDialArt's geometry.
             val cx = g.center.x
@@ -497,12 +600,12 @@ fun GlowingSpeedometer(
                 val dirX = cos(rad).toFloat()
                 val dirY = sin(rad).toFloat()
                 val len = if (major) majorLen else minorLen
-                val lit = kmh <= animatedSpeed + 0.01f
+                val lit = kmh <= speed + 0.01f
                 drawLine(
-                    color = if (lit) CaptainPalette.hudAccent else CaptainPalette.hudTrack,
+                    color = if (lit) hotColor else CaptainPalette.hudTrack,
                     start = Offset(cx + dirX * tickOuter, cy + dirY * tickOuter),
                     end = Offset(cx + dirX * (tickOuter - len), cy + dirY * (tickOuter - len)),
-                    strokeWidth = (if (major) 2.5.dp else 1.5.dp).toPx(),
+                    strokeWidth = (if (major) 2.5.dp else 1.5.dp).toPx() * (1f + 0.25f * toFast),
                     cap = StrokeCap.Round,
                 )
                 if (major && showLabels) {
@@ -511,10 +614,61 @@ fun GlowingSpeedometer(
                     drawContext.canvas.nativeCanvas.drawText(kmh.roundToInt().toString(), lx, ly, labelPaint)
                 }
             }
+
+            // A static marker at the tariff's own waiting/distance line, so the speed where the
+            // meter changes what it charges is visible on the dial rather than only implied by the
+            // colour change. Drawn last so it sits over the tick it shares a position with.
+            val thresholdFraction = (thresholdKmh.toFloat() / safeMax).coerceIn(0f, 1f)
+            if (thresholdFraction > 0f && thresholdFraction < 1f) {
+                val tRad = Math.toRadians((startDeg + sweepDeg * thresholdFraction).toDouble())
+                val tx = cos(tRad).toFloat()
+                val ty = sin(tRad).toFloat()
+                drawLine(
+                    color = CaptainPalette.textSecondary,
+                    start = Offset(cx + tx * (tickOuter + g.strokePx * 0.35f), cy + ty * (tickOuter + g.strokePx * 0.35f)),
+                    end = Offset(cx + tx * (tickOuter - majorLen), cy + ty * (tickOuter - majorLen)),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
         }
         content()
     }
 }
+
+/**
+ * The [SpeedBand] for a smoothed speed, with its hysteresis carried across frames.
+ *
+ * Collected off a `snapshotFlow` on the spring's own [State], so the policy is evaluated on
+ * animation frames rather than on recomposition — and banded on the SMOOTHED speed, never the raw
+ * 1 Hz GPS staircase, which would flap across a threshold several times a second.
+ *
+ * Public so [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen]'s dial can compute it once
+ * and pass it both to [GlowingSpeedometer] and to its own numeric readout — one band, one truth,
+ * rather than two evaluations that could disagree mid-transition.
+ */
+@Composable
+fun rememberSpeedBand(speed: State<Float>, thresholdKmh: Double): State<SpeedBand> {
+    val band = remember { mutableStateOf(SpeedBand.initial(speed.value.toDouble(), thresholdKmh)) }
+    LaunchedEffect(thresholdKmh) {
+        snapshotFlow { speed.value }.collect { current ->
+            band.value = SpeedBand.next(band.value, current.toDouble(), thresholdKmh)
+        }
+    }
+    return band
+}
+
+/** Band crossfade. Long enough to read as a change of state rather than a flicker, short enough
+ * that a driver accelerating through 26 km/h sees it happen. */
+private const val BAND_FADE_MS = 700
+
+/** The single bloom on a band change. */
+private const val BAND_FLASH_MS = 500
+private const val BAND_FLASH_GLOW = 0.25f
+
+/** How far the FAST band's brightness hum swings, as a fraction of glow alpha. Small on purpose:
+ * the passenger is reading the fare in the middle of this ring. */
+private const val HUM_AMPLITUDE = 0.06f
 
 // ------------------------------------------------------------------------------------------
 // Ember motion (2026-09-06) — see GlowingSpeedometer's [motion] doc for why this is safe to
@@ -527,32 +681,60 @@ fun GlowingSpeedometer(
  * a marker racing around the dial. */
 private const val EMBER_MAX_CYCLES_PER_SEC = 0.35f
 
-/** Tracks one soft spark's back-and-forth position along the lit arc. Returns a [State] whose
- * `.value` is a phase in radians for [drawEmber]'s `sin` — always returned (never null) so the
- * composable call itself is unconditional per Compose's rules; when [enabled] is false the phase
- * is simply never advanced, so [drawEmber] is never invoked at [enabled]'s call site and this
- * state sits inert. Advancing is a plain `withFrameNanos` accumulator, not [animateFloatAsState]:
- * the rate itself changes continuously with [speedKmh], which a single target-value animation
- * can't express.
+/**
+ * Two phases that only advance while the vehicle is moving — the dial's single frame loop.
+ *
+ * ### The bug this replaces
+ * `rememberEmberPhase` took `speedKmh` as a plain `Float` parameter and read it inside a
+ * `withFrameNanos` loop launched by `LaunchedEffect(enabled)`. The coroutine captured whatever the
+ * speed was at the composition that started it — on the meter screen, 0 — and every later
+ * recomposition passed a fresh value to a fresh call while the running loop kept the stale one. So
+ * `cyclesPerSec` was `0.35 * 0` for the life of the screen and the ember never moved. The one
+ * speed-reactive animation the dial had was static on the tablet.
+ *
+ * [speed] is a [State] here, read inside the loop, so it tracks.
+ *
+ * ### Why an accumulator rather than an animation spec
+ * Both phases advance at a *rate* proportional to speed, and a rate is not something
+ * `animateFloatAsState` or an `infiniteRepeatable` can express — those animate a value toward a
+ * target over a duration. More importantly, an accumulator makes the calm-motion rule structural:
+ * every delta is multiplied by `speedFraction`, so at a standstill both phases stop advancing
+ * exactly, and the dial is pixel-static. There is no decorative loop anywhere in this file that
+ * could keep running with the vehicle stopped.
  */
 @Composable
-private fun rememberEmberPhase(enabled: Boolean, speedKmh: Float, maxKmh: Float): State<Float> {
-    val phase = remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(enabled) {
+private fun rememberSpeedClock(
+    enabled: Boolean,
+    speed: State<Float>,
+    maxKmh: Float,
+): SpeedClock {
+    val ember = remember { mutableFloatStateOf(0f) }
+    val hum = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(enabled, maxKmh) {
         if (!enabled) return@LaunchedEffect
         var lastNanos = withFrameNanos { it }
         while (true) {
             withFrameNanos { nowNanos ->
                 val dtSeconds = ((nowNanos - lastNanos).coerceAtLeast(0)) / 1_000_000_000f
                 lastNanos = nowNanos
-                val speedFraction = (speedKmh / maxKmh).coerceIn(0f, 1f)
-                val cyclesPerSec = EMBER_MAX_CYCLES_PER_SEC * speedFraction
-                phase.floatValue += (cyclesPerSec * 2f * Math.PI.toFloat()) * dtSeconds
+                val speedFraction = (speed.value / maxKmh).coerceIn(0f, 1f)
+                val twoPiDt = 2f * Math.PI.toFloat() * dtSeconds
+                ember.floatValue += EMBER_MAX_CYCLES_PER_SEC * speedFraction * twoPiDt
+                hum.floatValue += HUM_MAX_CYCLES_PER_SEC * speedFraction * twoPiDt
             }
         }
     }
-    return phase
+    return remember(ember, hum) { SpeedClock(ember, hum) }
 }
+
+/** The two phases [rememberSpeedClock] advances. Read in the draw lambda, never in composition. */
+@Stable
+private class SpeedClock(val ember: State<Float>, val hum: State<Float>)
+
+/** Top rate of the FAST band's brightness hum. Faster than the ember because it is a change in
+ * intensity rather than position — the eye tolerates that far better, which is the whole reason
+ * the energetic band brightens rather than moving anything new. */
+private const val HUM_MAX_CYCLES_PER_SEC = 0.8f
 
 /** The ember's own small blurred paint — same [BlurMaskFilter] technique as [rememberHudGlowPaint]
  * but a tighter radius and the sweep's mid colour, so it reads as one bright bead of light inside
@@ -583,7 +765,11 @@ private fun DrawScope.drawEmber(
     startDeg: Float,
     sweepDeg: Float,
     paint: android.graphics.Paint,
+    color: Color,
+    alpha: Int,
+    strokeMultiplier: Float,
 ) {
+    if (alpha <= 0) return
     val litDeg = sweepDeg * speedFraction
     if (litDeg < EMBER_MIN_LIT_DEG) return
     val t = (kotlin.math.sin(phase) + 1f) / 2f
@@ -592,8 +778,9 @@ private fun DrawScope.drawEmber(
     val x = g.center.x + cos(rad).toFloat() * g.radius
     val y = g.center.y + sin(rad).toFloat() * g.radius
     drawIntoCanvas { canvas ->
-        paint.strokeWidth = g.strokePx * 0.9f
-        paint.alpha = 235
+        paint.strokeWidth = g.strokePx * strokeMultiplier
+        paint.color = color.toArgb()
+        paint.alpha = alpha
         canvas.nativeCanvas.drawPoint(x, y, paint)
     }
 }

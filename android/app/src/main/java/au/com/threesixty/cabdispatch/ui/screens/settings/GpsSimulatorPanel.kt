@@ -64,7 +64,11 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
             ?.sorted()
             ?.mapNotNull { SimulatedRoutes.throughTollRoad(registry, it) }
             .orEmpty()
-        routes = listOf(SimulatedRoutes.plainDrive(), SimulatedRoutes.stopAndGo()) + tollRoutes
+        routes = listOf(
+            SimulatedRoutes.bandSweep(),
+            SimulatedRoutes.plainDrive(),
+            SimulatedRoutes.stopAndGo(),
+        ) + tollRoutes
     }
 
     Column(modifier = modifier) {

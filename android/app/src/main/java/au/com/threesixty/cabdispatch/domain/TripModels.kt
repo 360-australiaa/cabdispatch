@@ -82,6 +82,16 @@ data class FareState(
     val distanceKm: BigDecimal = BigDecimal.ZERO,
     val currentSpeedKmh: Double = 0.0,
     /**
+     * The tariff's own waiting/distance line, carried here so the UI does not have to reach for a
+     * Tariff it otherwise never needs.
+     *
+     * The meter dial marks this speed on its ring and bands its animation on it
+     * ([au.com.threesixty.cabdispatch.domain.SpeedBand]) — a country tariff's different threshold
+     * has to move both, or the dial would claim waiting-time character while the meter charged
+     * distance. Defaults to the Fares Order urban figure, matching the fare engine's own fallback.
+     */
+    val speedThresholdKmh: Double = 26.0,
+    /**
      * Cumulative whole seconds spent in [AccrualMode.DISTANCE] / [AccrualMode.WAITING]
      * respectively, since [status] became [TripStatus.HIRED]. Added so
      * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel] can persist

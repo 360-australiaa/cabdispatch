@@ -166,6 +166,15 @@ object CaptainPalette {
     var hudSweepMid: Color by mutableStateOf(DarkTokens.hudSweepMid); private set
     var hudSweepEnd: Color by mutableStateOf(DarkTokens.hudSweepEnd); private set
 
+    /**
+     * The hottest point of the speedometer sweep, used only in [au.com.threesixty.cabdispatch.domain.SpeedBand.FAST].
+     *
+     * Deliberately not a warning colour: 60 km/h is a legal speed, and amber already means
+     * PAUSED on the meter dial. This is the cyan run through to near-white — brighter, not
+     * alarming.
+     */
+    var hudSweepHot: Color by mutableStateOf(DarkTokens.hudSweepHot); private set
+
     /** The three sweep stops as one list, for `Brush.sweepGradient` call sites. Recomputed as a
      * plain `val` accessor (not cached) since it's cheap and must reflect the live tokens above. */
     val hudSweep: List<Color> get() = listOf(hudSweepStart, hudSweepMid, hudSweepEnd)
@@ -257,6 +266,7 @@ object CaptainPalette {
         hudSweepStart = t.hudSweepStart
         hudSweepMid = t.hudSweepMid
         hudSweepEnd = t.hudSweepEnd
+        hudSweepHot = t.hudSweepHot
         hudTrack = t.hudTrack
         hudGlass = t.hudGlass
         hudGlassBorderPurple = t.hudGlassBorderPurple
@@ -300,6 +310,7 @@ object CaptainPalette {
         val hudSweepStart: Color
         val hudSweepMid: Color
         val hudSweepEnd: Color
+        val hudSweepHot: Color
         val hudTrack: Color
         val hudGlass: Color
         val hudGlassBorderPurple: Color
@@ -355,6 +366,7 @@ object CaptainPalette {
         override val hudSweepStart = Color(0xFF5B3FD6)
         override val hudSweepMid = Color(0xFF9E77FF)
         override val hudSweepEnd = Color(0xFF6E3FF3)
+        override val hudSweepHot = Color(0xFFB8F6FF)
         override val hudTrack = Color(0xFF1E1A2D)
         override val hudGlass = Color(0xCC0D0D12)
         override val hudGlassBorderPurple = Color(0x669E77FF)
@@ -417,6 +429,9 @@ object CaptainPalette {
         override val hudSweepStart = Color(0xFF4C1D95)
         override val hudSweepMid = Color(0xFF7C3AED)
         override val hudSweepEnd = Color(0xFF5B21B6)
+        // Light mode deepens rather than brightens -- a near-white hot point would vanish on a
+        // pale ground, which is the same reason every other neon token is darkened here.
+        override val hudSweepHot = Color(0xFF0B6B7A)
         override val hudTrack = Color(0xFFE3E0EE)
         override val hudGlass = Color(0xE6FFFFFF)
         override val hudGlassBorderPurple = Color(0x8A7C3AED)

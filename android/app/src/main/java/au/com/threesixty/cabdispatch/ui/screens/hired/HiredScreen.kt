@@ -106,6 +106,7 @@ import au.com.threesixty.cabdispatch.domain.AutoTollEntry
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareBreakdown
 import au.com.threesixty.cabdispatch.domain.FareState
+import au.com.threesixty.cabdispatch.domain.SpeedBand
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TimeClass
@@ -131,6 +132,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.GlowingSpeedometer
+import au.com.threesixty.cabdispatch.ui.theme.rememberSpeedBand
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -1617,6 +1619,38 @@ private fun MeterDial(
         animationSpec = tween(300),
         label = "state-color",
     )
+    // The band, computed once here and handed to the ring, so the ring's colour and this screen's
+    // own readout can never disagree mid-crossfade. Smoothed with the same spring the ring uses --
+    // banding the raw 1 Hz GPS staircase would flap several times a second in traffic.
+    val smoothedSpeed = animateFloatAsState(
+        targetValue = fareState.currentSpeedKmh.toFloat().coerceAtLeast(0f),
+        animationSpec = hudSpring(),
+        label = "dial-speed",
+    )
+    val band by rememberSpeedBand(smoothedSpeed, fareState.speedThresholdKmh)
+    val bandColor by animateColorAsState(
+        targetValue = when (band) {
+            SpeedBand.WAITING -> CaptainPalette.hudAccent
+            SpeedBand.DISTANCE, SpeedBand.FAST -> CaptainPalette.neonCyan
+        },
+        animationSpec = tween(700),
+        label = "band-color",
+    )
+    val speedSize by animateFloatAsState(
+        targetValue = if (band == SpeedBand.FAST) 28f else 24f,
+        animationSpec = tween(700),
+        label = "band-speed-size",
+    )
+    // One pop when the band changes — the same snapTo/animateTo the fare figure already uses. Not a
+    // repeating pulse: it fires on a change and settles.
+    val bandPop = remember { Animatable(1f) }
+    var seenBand by remember { mutableStateOf(false) }
+    LaunchedEffect(band) {
+        if (!seenBand) { seenBand = true; return@LaunchedEffect }
+        bandPop.snapTo(1.12f)
+        bandPop.animateTo(1f, hudSpring())
+    }
+
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
         val d: Dp = minOf(maxWidth, maxHeight)
         val inner: Dp = d * DIAL_INNER_FRACTION
@@ -1627,6 +1661,8 @@ private fun MeterDial(
             // only — see GlowingSpeedometer's [motion] doc. Flip this to false to revert instantly
             // if it reproduces the earlier "moving circle" distress; nothing else needs to change.
             motion = true,
+            thresholdKmh = fareState.speedThresholdKmh,
+            band = band,
         ) {
             GlassCard(
                 modifier = Modifier.size(inner),
@@ -1781,26 +1817,46 @@ private fun MeterDial(
                     }
                 }
             }
-            // Numeric speed in the ring's bottom gap (the 270° arc leaves 7:30 → 4:30 open).
-            Row(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-                verticalAlignment = Alignment.Bottom,
+            // Numeric speed in the ring's bottom gap (the 270° arc leaves 7:30 → 4:30 open),
+            // with the charging mode named underneath it. The caption is the point: it says which
+            // rate the passenger is being charged right now, which is what the ring's colour is
+            // already showing and what a driver would otherwise have to infer.
+            Column(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    fareState.currentSpeedKmh.roundToInt().toString(),
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 24.sp,
-                    color = CaptainPalette.hudAccent,
-                )
-                Text(
-                    " km/h",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    color = CaptainPalette.textMuted,
-                    modifier = Modifier.padding(bottom = 3.dp),
-                )
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        fareState.currentSpeedKmh.roundToInt().toString(),
+                        fontFamily = ChakraPetch,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = speedSize.sp,
+                        color = bandColor,
+                        style = if (band == SpeedBand.FAST) glowStyle(bandColor, 14f) else TextStyle.Default,
+                        modifier = Modifier.scale(bandPop.value),
+                    )
+                    Text(
+                        " km/h",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textMuted,
+                        modifier = Modifier.padding(bottom = 3.dp),
+                    )
+                }
+                // Suppressed on a fixed price: neither rate is accruing, so naming one would be a
+                // lie about what the passenger is paying.
+                if (fareState.negotiatedTotal == null) {
+                    Text(
+                        if (band == SpeedBand.WAITING) "WAITING TIME" else "DISTANCE RATE",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        letterSpacing = 2.sp,
+                        color = CaptainPalette.textMuted,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
         }
     }

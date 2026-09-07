@@ -352,6 +352,10 @@ class FareEngineImpl(
             mode = AccrualMode.WAITING,
             band = TariffBand.BAND_1,
             timeClass = timeClass,
+            // Set here as well as in tick(): the dial renders the instant the fare starts, a whole
+            // second before the first tick, and would otherwise mark the default threshold on a
+            // country tariff for that second.
+            speedThresholdKmh = domainTariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: 26.0,
             // Point-to-Point Levy fix (product-reported, 2026-09): the live meter must start at
             // flagfall + PSL, not flagfall alone (the PSL is a mandatory Fares Order pass-through —
             // see CloseAndPayViewModel's own `includePsl = true` doc — never a driver-optional
@@ -491,6 +495,9 @@ class FareEngineImpl(
             band = band,
             distanceKm = cs.cumulativeDistanceKm,
             currentSpeedKmh = speed,
+            // The same threshold this tick just used to pick the accrual mode -- so the dial bands
+            // on exactly the line the meter is charging on, not a constant that could drift.
+            speedThresholdKmh = threshold,
             movingSeconds = current.movingSeconds + if (mode == AccrualMode.DISTANCE) 1 else 0,
             waitingSeconds = current.waitingSeconds + if (mode == AccrualMode.WAITING) 1 else 0,
             breakdown = current.breakdown.copy(
