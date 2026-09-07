@@ -548,7 +548,18 @@ class FareEngineImpl(
             // AutoTollAlert's own doc. If more than one road changes on the same tick (rare: two
             // gantries of different roads within detection radius of the same fix), the last one
             // wins the single alert slot; not worth a multi-alert queue for an edge case this thin.
-            alert = AutoTollAlert(roadName = roadName, amount = newAmount, id = ++autoTollAlertSeq)
+            //
+            // Announce a road ONCE, on the tick it first becomes chargeable — never again as its
+            // amount is revised. Found on the tablet, 2026-09-07, driving the real M7 route: a
+            // distance-metered road re-prices on every fix while the vehicle is inside a gantry's
+            // 150m radius, which is ~13 consecutive fixes at 80 km/h. Alerting on each of those
+            // meant a burst of ~13 beeps per gantry -- times M7's 45 gantries -- and a passenger
+            // being told "TOLL ADDED $0.19", then "$0.92" for the SAME road, as though a second
+            // toll had been charged. The revision is still applied to the fare (the dial and the
+            // breakdown both show it live); it simply stops being announced.
+            if (previousAmount.signum() == 0) {
+                alert = AutoTollAlert(roadName = roadName, amount = newAmount, id = ++autoTollAlertSeq)
+            }
         }
 
         val alreadyFlagged = current.unpricedTollRoads.mapTo(mutableSetOf()) { it.roadId }

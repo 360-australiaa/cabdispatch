@@ -284,6 +284,17 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # never written) for every other pricing model.
     toll_road_progress: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True, default=dict)
 
+    # Road id -> the ids of that road's gantries this trip passed within
+    # TOLL_CONFIRM_RADIUS_M of. The corroboration evidence behind every auto-toll
+    # charge -- see app.services.tolls.TOLL_CONFIRM_RADIUS_M for the adjacent-road
+    # false charge it prevents, and why being inside the 150m detection radius is
+    # not by itself evidence of having used the road.
+    #
+    # Persisted rather than recomputed because detection is incremental (one
+    # telemetry point at a time) and the two confirmations that corroborate a road
+    # can arrive minutes apart.
+    toll_confirmed_gantries: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+
     # unpriced_toll_road_ids: real NSW toll roads (or toll points, for a
     # per_point road — same key convention as `auto_tolled_roads` above)
     # this trip has genuinely crossed (GPS-detected via a real gantry) but

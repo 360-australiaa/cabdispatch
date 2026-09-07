@@ -243,9 +243,12 @@ async def test_tick_charges_road_once_across_multiple_gantries(client: AsyncClie
     trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_a[0], start_lng=gantry_a[1])
     t0 = datetime.fromisoformat(trip["start_at"])
 
+    # One gantry is not corroboration -- see app.services.tolls.TOLL_CONFIRM_RADIUS_M.
+    # A road with two known gantries must be confirmed at both before it bills, so a
+    # vehicle on an adjacent service road that clips one of them is never charged.
     body1 = await _tick(client, headers, trip["id"], lat=gantry_a[0], lng=gantry_a[1], ts=t0 + timedelta(seconds=5))
-    assert Decimal(body1["tolls"]) == Decimal("5.00")
-    assert body1["auto_tolled_roads"] == {"TESTFLAT": "5.00"}
+    assert Decimal(body1["tolls"]) == Decimal("0.00")
+    assert body1["auto_tolled_roads"] == {}
 
     # Crossing a SECOND, physically different gantry on the SAME road must
     # not charge again -- this is exactly the once-per-gantry overcharge bug
@@ -527,14 +530,21 @@ async def test_cumulative_per_point_road_charges_each_distinct_point(
     await _make_toll_point(session, road_id=road.id, point_id="TESTCUMUL:p2", price_class_a="3.76")
     point_a = _next_zone()
     point_b = _next_zone()
-    await _add_gantry(
-        session, road_id=road.id, gantry_id="TESTCUMUL:g1",
-        lat=point_a[0], lng=point_a[1], toll_point_id="TESTCUMUL:p1",
-    )
-    await _add_gantry(
-        session, road_id=road.id, gantry_id="TESTCUMUL:g2",
-        lat=point_b[0], lng=point_b[1], toll_point_id="TESTCUMUL:p2",
-    )
+    # Two gantries per toll point, metres apart, as a real mainline has -- so a single
+    # pass corroborates the road (see TOLL_CONFIRM_RADIUS_M) without having to reach
+    # the second, distant toll point first.
+    for suffix, point in (("a", point_a), ("b", point_a)):
+        await _add_gantry(
+            session, road_id=road.id, gantry_id=f"TESTCUMUL:g1{suffix}",
+            lat=point[0] + (0.0002 if suffix == "b" else 0.0), lng=point[1],
+            toll_point_id="TESTCUMUL:p1",
+        )
+    for suffix in ("a", "b"):
+        await _add_gantry(
+            session, road_id=road.id, gantry_id=f"TESTCUMUL:g2{suffix}",
+            lat=point_b[0] + (0.0002 if suffix == "b" else 0.0), lng=point_b[1],
+            toll_point_id="TESTCUMUL:p2",
+        )
 
     trip = await _create_trip(client, headers, tariff.id, start_lat=point_a[0], start_lng=point_a[1])
     t0 = datetime.fromisoformat(trip["start_at"])
@@ -577,9 +587,18 @@ async def test_once_per_road_per_point_road_charges_only_the_first_point_crossed
     await _make_toll_point(session, road_id=road.id, point_id="TESTONCEPP:ramp", price_class_a="2.15")
     point_a = _next_zone()
     point_b = _next_zone()
+    # Two gantries on the main point. This is not just fixture convenience: a
+    # once_per_road per_point road's points are ALTERNATIVES (main tunnel vs. ramp),
+    # so a vehicle only ever crosses one, and corroboration has to be satisfiable
+    # from a single point's own gantries or the road could never charge at all. The
+    # real Lane Cove Tunnel has six mainline gantries for exactly one main point.
     await _add_gantry(
-        session, road_id=road.id, gantry_id="TESTONCEPP:g1",
+        session, road_id=road.id, gantry_id="TESTONCEPP:g1a",
         lat=point_a[0], lng=point_a[1], toll_point_id="TESTONCEPP:main",
+    )
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTONCEPP:g1b",
+        lat=point_a[0] + 0.0002, lng=point_a[1], toll_point_id="TESTONCEPP:main",
     )
     await _add_gantry(
         session, road_id=road.id, gantry_id="TESTONCEPP:g2",
@@ -690,6 +709,94 @@ async def test_network_group_roads_share_one_capped_total(client: AsyncClient, s
     # And the cap really bit -- otherwise this test would pass on any
     # implementation that simply undercharged.
     assert sum(charged.values()) > Decimal("9.00"), "each road alone caps at 9.00; the network total should exceed that"
+
+
+# --- adjacent-road false positives ------------------------------------------------
+#
+# Field report, 2026-09-07: vehicles that never entered a toll road were being
+# charged for it, because a single fix inside the 150m detection radius was enough.
+# Australian motorways are flanked by service roads, and a tunnel gantry's
+# coordinate is the surface projection of a point underground.
+
+
+async def test_driving_parallel_to_a_toll_road_is_never_charged(
+    client: AsyncClient, session: AsyncSession
+):
+    """~100m to the side of the corridor for the entire pass: inside the 150m watch
+    radius the whole way, never inside the 60m confirmation radius. This is the
+    service-road case, and it must cost the passenger nothing."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTPARALLEL", pricing_model="flat", price_class_a="5.00")
+    lat, lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTPARALLEL:g1", lat=lat, lng=lng)
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTPARALLEL:g2", lat=lat + 0.0002, lng=lng)
+
+    parallel_lng = lng + 0.00108  # ~100m to the side
+    trip = await _create_trip(client, headers, tariff.id, start_lat=lat - 0.0027, start_lng=parallel_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = None
+    for step in range(5):
+        body = await _tick(
+            client, headers, trip["id"],
+            lat=lat + step * 0.0001, lng=parallel_lng,
+            ts=t0 + timedelta(seconds=10 * (step + 1)),
+        )
+
+    assert Decimal(body["tolls"]) == Decimal("0.00")
+    assert body["auto_tolled_roads"] == {}
+    # And not nagged about either: a road driven past is not a road whose price is
+    # unknown, and flagging it would just relocate the false charge to a prompt.
+    assert body["unpriced_toll_road_ids"] == []
+
+
+async def test_a_single_close_pass_is_not_enough_on_a_multi_gantry_road(
+    client: AsyncClient, session: AsyncSession
+):
+    """The cross-street-over-a-tunnel case: one genuinely sub-60m fix, which alone is
+    a coincidence rather than evidence of having travelled the road."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTONEPASS", pricing_model="flat", price_class_a="4.30")
+    lat, lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTONEPASS:g1", lat=lat, lng=lng)
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTONEPASS:g2", lat=lat - 0.05, lng=lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=lat, start_lng=lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=lat, lng=lng, ts=t0 + timedelta(seconds=5))
+
+    assert Decimal(body["tolls"]) == Decimal("0.00")
+    assert body["auto_tolled_roads"] == {}
+
+
+async def test_a_road_with_one_known_gantry_still_charges_on_one_close_pass(
+    client: AsyncClient, session: AsyncSession
+):
+    """Corroboration must never make a road permanently unchargeable. Where the
+    dataset cannot supply a second checkpoint, the tight 60m test is the whole gate
+    -- trading a guaranteed missed charge for a second opinion that does not exist
+    would be the worse deal."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(session, road_id="TESTSOLO", pricing_model="flat", price_class_a="9.16")
+    lat, lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTSOLO:only", lat=lat, lng=lng)
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=lat, start_lng=lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=lat, lng=lng, ts=t0 + timedelta(seconds=5))
+
+    assert Decimal(body["tolls"]) == Decimal("9.16")
 
 
 # --- /v1/toll-roads read API -------------------------------------------------------

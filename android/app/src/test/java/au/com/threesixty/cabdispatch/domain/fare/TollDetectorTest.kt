@@ -177,11 +177,15 @@ class TollDetectorTest {
         val registry = TollRegistrySnapshot(roadsById = mapOf("M7" to road), gantries = listOf(gantryA, gantryB))
         val state = TollDetectionState()
 
-        // Entry gantry at 10km cumulative — anchor point, zero travelled yet.
+        // Entry gantry at 10km cumulative. ONE confirmed gantry is not yet enough to charge a
+        // road with two of them (see TOLL_MIN_CONFIRMATIONS) -- but it does anchor the accrual,
+        // so the stretch from here to the next gantry is still billed once corroborated.
         val r1 = onFix(state, registry, gantryA.latitude, gantryA.longitude, ts, BigDecimal("10.0"))
-        assertEquals(mapOf("M7" to BigDecimal("0.00")), r1.chargedRoadsChanged)
+        assertTrue("one gantry is not corroboration", r1.chargedRoadsChanged.isEmpty())
 
-        // 5km further down the M7, a second real gantry of the SAME road — revises the SAME entry.
+        // 5km further down the M7, a second real gantry of the SAME road. That is the second
+        // confirmation, so the road becomes chargeable -- and it bills from the FIRST gantry, not
+        // from here.
         val r2 = onFix(state, registry, gantryB.latitude, gantryB.longitude, ts, BigDecimal("15.0"))
         assertEquals(mapOf("M7" to BigDecimal("2.63")), r2.chargedRoadsChanged) // 5km * 0.5252 = 2.626 -> 2.63
         assertEquals(1, state.chargedRoads.size) // still one entry, not two
@@ -471,8 +475,13 @@ class TollDetectorTest {
         val registry = TollRegistrySnapshot(
             roadsById = mapOf("M2" to road),
             gantries = listOf(
-                TollGantryRef("g1", "M2", gantryLat, gantryLng, tollPointId = "M2:north_ryde"),
-                TollGantryRef("g2", "M2", -33.9000, 151.1000, tollPointId = "M2:windsor_rd"),
+                // Two gantries per point, metres apart, as a real mainline has -- a single pass
+                // therefore corroborates the road (see TOLL_MIN_CONFIRMATIONS) without needing to
+                // reach the second, distant toll point first.
+                TollGantryRef("g1a", "M2", gantryLat, gantryLng, tollPointId = "M2:north_ryde"),
+                TollGantryRef("g1b", "M2", gantryLat + 0.0002, gantryLng, tollPointId = "M2:north_ryde"),
+                TollGantryRef("g2a", "M2", -33.9000, 151.1000, tollPointId = "M2:windsor_rd"),
+                TollGantryRef("g2b", "M2", -33.9002, 151.1000, tollPointId = "M2:windsor_rd"),
             ),
         )
         val state = TollDetectionState()
@@ -509,7 +518,13 @@ class TollDetectorTest {
         val registry = TollRegistrySnapshot(
             roadsById = mapOf("LCT" to road),
             gantries = listOf(
-                TollGantryRef("g1", "LCT", gantryLat, gantryLng, tollPointId = "LCT:main_tunnel"),
+                // Two mainline gantries, as the real Lane Cove Tunnel has six -- so driving the
+                // main tunnel corroborates the road on its own. This matters beyond the fixture:
+                // a once_per_road per_point road's points are ALTERNATIVES (main tunnel vs. ramp),
+                // so a vehicle only ever crosses one of them, and corroboration has to be
+                // satisfiable from a single point's own gantries or the road could never charge.
+                TollGantryRef("g1a", "LCT", gantryLat, gantryLng, tollPointId = "LCT:main_tunnel"),
+                TollGantryRef("g1b", "LCT", gantryLat + 0.0002, gantryLng, tollPointId = "LCT:main_tunnel"),
                 TollGantryRef("g2", "LCT", -33.9000, 151.1000, tollPointId = "LCT:military_e_ramp"),
             ),
         )
@@ -669,5 +684,100 @@ class TollDetectorTest {
         assertEquals("Hills M2 Motorway", chargeDisplayName(registry, "M2"))
         // A key the registry no longer knows still returns something honest, never blank.
         assertEquals("GONE:point", chargeDisplayName(registry, "GONE:point"))
+    }
+
+    // --- 10. adjacent-road false positives ---------------------------------------------------
+    //
+    // The field report this rule comes from: a vehicle that never entered the toll road being
+    // charged anyway, because Australian motorways are flanked by service roads and a tunnel's
+    // gantry coordinate is the surface projection of a point underground.
+
+    @Test
+    fun `driving parallel to a toll road inside the watch radius never charges`() {
+        // ~100m to the side: comfortably inside the 150m detection radius, comfortably outside
+        // the 60m confirmation radius. This is the service-road case.
+        val road = flatRoad("M7", directional = "both")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("M7" to road),
+            gantries = listOf(
+                TollGantryRef("g1", "M7", gantryLat, gantryLng),
+                TollGantryRef("g2", "M7", gantryLat + 0.0002, gantryLng),
+            ),
+        )
+        val state = TollDetectionState()
+        val parallelLng = gantryLng + 0.00108 // ~100m east at this latitude
+
+        // Drive the whole length of the corridor, offset the entire way.
+        var result = onFix(state, registry, gantryLat - 0.0027, parallelLng, ts, BigDecimal.ZERO)
+        for (step in 0..6) {
+            result = onFix(state, registry, gantryLat + step * 0.0001, parallelLng, ts, BigDecimal(step))
+        }
+
+        assertTrue("a vehicle beside the road must never be charged", state.chargedRoads.isEmpty())
+        assertTrue(result.chargedRoadsChanged.isEmpty())
+        // And it must not be nagged about either -- a road driven past is not a road whose price
+        // is unknown, and flagging it would just move the false charge to a manual prompt.
+        assertTrue(state.unpricedRoadIds.isEmpty())
+    }
+
+    @Test
+    fun `a single close pass is not enough on a road with several gantries`() {
+        // The cross-street-over-a-tunnel case: one genuinely sub-60m fix, which on its own is a
+        // coincidence rather than evidence of having travelled the road.
+        val road = flatRoad("LCT", directional = "both")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("LCT" to road),
+            gantries = listOf(
+                TollGantryRef("g1", "LCT", gantryLat, gantryLng),
+                TollGantryRef("g2", "LCT", -33.8100, gantryLng),
+                TollGantryRef("g3", "LCT", -33.8200, gantryLng),
+            ),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val result = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+
+        assertTrue(result.chargedRoadsChanged.isEmpty())
+        assertEquals(setOf("g1"), state.confirmedGantries["LCT"])
+    }
+
+    @Test
+    fun `a second confirmed gantry on the same road completes the corroboration`() {
+        val road = flatRoad("LCT", directional = "both", amount = "4.30")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("LCT" to road),
+            gantries = listOf(
+                TollGantryRef("g1", "LCT", gantryLat, gantryLng),
+                TollGantryRef("g2", "LCT", gantryLat + 0.0009, gantryLng), // ~100m along the corridor
+                TollGantryRef("g3", "LCT", -33.8200, gantryLng),
+            ),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val first = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+        assertTrue("still only one checkpoint", first.chargedRoadsChanged.isEmpty())
+
+        val second = onFix(state, registry, gantryLat + 0.0009, gantryLng, ts, BigDecimal("0.1"))
+        assertEquals(mapOf("LCT" to BigDecimal("4.30")), second.chargedRoadsChanged)
+    }
+
+    @Test
+    fun `a road the registry only knows one gantry for still charges on one close pass`() {
+        // Corroboration must never make a road permanently unchargeable. Where the dataset cannot
+        // supply a second checkpoint, the tight 60m test is the whole gate -- trading a
+        // guaranteed missed charge for a second opinion that does not exist is the worse deal.
+        val road = flatRoad("ED", directional = "both", amount = "9.16")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("ED" to road),
+            gantries = listOf(TollGantryRef("only", "ED", gantryLat, gantryLng)),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val result = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+
+        assertEquals(mapOf("ED" to BigDecimal("9.16")), result.chargedRoadsChanged)
     }
 }

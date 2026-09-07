@@ -83,6 +83,45 @@ private const val EARTH_RADIUS_M = 6_371_008.8
  */
 const val TOLL_GANTRY_DETECTION_RADIUS_M = 150.0
 
+/**
+ * Closest approach, in metres, a trip must actually achieve to a gantry before that gantry counts
+ * as CROSSED rather than merely passed nearby.
+ *
+ * **The problem this exists to solve** (reported from the field, 2026-09-07): a vehicle that never
+ * enters a toll road can still spend a long time inside [TOLL_GANTRY_DETECTION_RADIUS_M] of its
+ * gantries. Australian motorways are routinely flanked by service roads, parallel surface streets
+ * and on/off ramps that carry non-tolled traffic, and a tunnel's gantry coordinate is the SURFACE
+ * projection of a point underground — the street directly above it is metres away horizontally.
+ * Charging on the 150m radius alone therefore bills drivers who never used the road, which is the
+ * worst possible failure for a fare-regulated meter: an overcharge the passenger cannot dispute
+ * because the meter "saw" a gantry.
+ *
+ * 150m has to stay the WATCH radius — it is derived from real worst-case GPS error plus the
+ * distance covered between two fixes at motorway speed (see that constant's own doc), and
+ * tightening it would start missing genuine crossings. So detection keeps its generous radius and
+ * a second, tighter test decides whether to CHARGE: a vehicle actually in the tolled lanes passes
+ * essentially underneath the gantry, while a vehicle on adjacent infrastructure keeps a real
+ * lateral offset. 60m sits above ordinary in-vehicle GPS error (LocationFix.accuracyM documents
+ * 5-30m) and below the lateral separation of a motorway from its own service road.
+ */
+const val TOLL_CONFIRM_RADIUS_M = 60.0
+
+/**
+ * How many of a road's own gantries must be confirmed at close range before the road is charged —
+ * the "multiple checkpoints" corroboration rule.
+ *
+ * One close pass can still be a coincidence: a cross street that happens to run directly over a
+ * gantry gives a genuine sub-60m fix. A vehicle really travelling the road passes a SEQUENCE of
+ * its gantries, so requiring two independent confirmations turns a single coincidence into a
+ * charge that has to be corroborated by a second, physically separate point.
+ *
+ * Only applied to roads that HAVE enough gantries for it to mean anything (see
+ * [requiredConfirmations]). Demanding two from a road the registry only knows one gantry for
+ * would silently make that road permanently unchargeable, which trades a false charge for a
+ * guaranteed missed one.
+ */
+const val TOLL_MIN_CONFIRMATIONS = 2
+
 /** Minimum movement between consecutive GPS fixes before a computed bearing is trusted to mean
  * anything — mirrors `app.services.tolls._MIN_BEARING_DISTANCE_M` exactly (same value, same
  * reasoning: below this, ordinary GPS jitter or a vehicle stopped at lights dominates and the
@@ -299,6 +338,26 @@ fun findNearbyGantries(
     radiusM: Double = TOLL_GANTRY_DETECTION_RADIUS_M,
 ): List<TollGantryRef> = registry.gantries.filter { tollHaversineM(lat, lng, it.latitude, it.longitude) <= radiusM }
 
+/**
+ * How many close-range gantry confirmations [roadId] needs before it may be charged.
+ *
+ * [TOLL_MIN_CONFIRMATIONS] where the registry knows enough gantries to supply them, otherwise as
+ * many as physically exist. A road the dataset only has one gantry for cannot corroborate itself;
+ * demanding two would make it permanently unchargeable, silently converting a false-charge risk
+ * into a guaranteed missed charge. Those roads still have to clear the tight
+ * [TOLL_CONFIRM_RADIUS_M] test — they just cannot be asked for a second opinion that does not
+ * exist.
+ */
+internal fun requiredConfirmations(registry: TollRegistrySnapshot, roadId: String): Int {
+    val gantryCount = registry.gantries.count { it.tollRoadId == roadId }
+    return minOf(TOLL_MIN_CONFIRMATIONS, gantryCount).coerceAtLeast(1)
+}
+
+/** Whether this trip has enough close-range evidence to charge [roadId] — see
+ * [TollDetectionState.confirmedGantries] and [requiredConfirmations]. */
+internal fun isCorroborated(state: TollDetectionState, registry: TollRegistrySnapshot, roadId: String): Boolean =
+    (state.confirmedGantries[roadId]?.size ?: 0) >= requiredConfirmations(registry, roadId)
+
 // --- per-trip mutable detection state --------------------------------------------
 
 /**
@@ -338,6 +397,17 @@ class TollDetectionState {
      * queued traffic near a toll point). A false positive the driver has already corrected must
      * stay corrected. */
     val dismissedRoadIds: MutableSet<String> = mutableSetOf()
+
+    /**
+     * Road id -> the ids of that road's gantries this trip has passed within
+     * [TOLL_CONFIRM_RADIUS_M] of. The corroboration evidence behind every charge.
+     *
+     * Accumulates across the whole trip rather than per-pass: a road's gantries are physically
+     * separated, so two confirmations genuinely mean two distinct places on the corridor, however
+     * far apart in time they happened. Never cleared on a miss — a vehicle that legitimately
+     * crossed one gantry and then lost signal has not stopped having crossed it.
+     */
+    val confirmedGantries: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     /** The immediately preceding GPS fix, for bearing classification — `null` before the first
      * fix. Advanced on EVERY [onFix] call, hit or not, matching the backend's own
@@ -422,6 +492,20 @@ fun onFix(
     val hits = findNearbyGantries(registry, lat, lng)
     if (hits.isEmpty()) return TollDetectionResult()
 
+    // Record close-range evidence BEFORE any pricing. A gantry only counts as crossed once the
+    // trip has actually passed within TOLL_CONFIRM_RADIUS_M of it -- see that constant's doc for
+    // the adjacent-road false charge this prevents.
+    for (gantry in hits) {
+        if (tollHaversineM(lat, lng, gantry.latitude, gantry.longitude) <= TOLL_CONFIRM_RADIUS_M) {
+            state.confirmedGantries.getOrPut(gantry.tollRoadId) { mutableSetOf() }.add(gantry.id)
+            // Anchor a distance-priced road's accrual at the FIRST confirmed contact, not at the
+            // point corroboration completes. Corroboration decides WHETHER to charge; it must not
+            // also decide where the metering starts, or a road would silently under-bill the
+            // entire stretch between its first and second confirmed gantry.
+            state.roadEntryDistanceKm.getOrPut(gantry.tollRoadId) { cumulativeDistanceKm }
+        }
+    }
+
     val compass = previous?.let { (plat, plng) -> classifyBearing(plat, plng, lat, lng) }
 
     val changed = mutableMapOf<String, BigDecimal>()
@@ -439,6 +523,13 @@ fun onFix(
         val allowed = directionAllowsCharge(road.directional, compass)
         if (allowed == false) continue // genuinely the wrong direction — never charge
         if (allowed == null) continue // no reliable bearing yet — try again next fix
+
+        // Corroboration gate. Being inside the 150m watch radius is not evidence of having used
+        // the road -- see TOLL_CONFIRM_RADIUS_M. `continue`, never "flag as unpriced": a road
+        // driven past is not a road whose price is unknown, and telling the driver to add it
+        // manually would reintroduce exactly the false charge this gate exists to stop. A trip
+        // that goes on to genuinely enter the road corroborates on a later fix and charges then.
+        if (!isCorroborated(state, registry, roadId)) continue
 
         if (road.pricingModel == "per_point") {
             chargePerPointRoad(state, road, hits, changed, newlyUnpriced)

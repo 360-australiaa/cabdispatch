@@ -342,7 +342,10 @@ fun HiredScreen(
         val alert = fareState.lastAutoTollAlert
         if (alert != null) {
             autoTollBanner = alert
-            kotlinx.coroutines.delay(4000)
+            // 7s, not 4: long enough for a passenger to look up, find the banner, and read both
+            // the road and the amount off it. Still self-dismissing -- it must never sit over the
+            // running fare permanently.
+            kotlinx.coroutines.delay(7000)
             autoTollBanner = null
         }
     }
@@ -489,27 +492,59 @@ fun HiredScreen(
         ) {
             val banner = autoTollBanner
             if (banner != null) {
-                Row(
+                // Sized for the PASSENGER, not the driver. This is a charge appearing on the fare
+                // without anyone touching the meter, so the person paying it has to be able to
+                // read what was added and how much from across the back seat -- on a dash-mounted
+                // 1200px tablet an ordinary 15sp label is illegible from there. The amount is the
+                // single most important thing on it, so it gets the largest type on the screen
+                // after the fare itself; the road name answers "for what?".
+                Column(
                     modifier = Modifier
-                        .neonGlow(CaptainPalette.warning, 16.dp, strength = 0.6f)
-                        .clip(RoundedCornerShape(16.dp))
+                        .neonGlow(CaptainPalette.warning, 28.dp, strength = 0.85f)
+                        .clip(RoundedCornerShape(24.dp))
                         .background(CaptainPalette.panel)
-                        .border(1.dp, CaptainPalette.warning, RoundedCornerShape(16.dp))
+                        .border(2.dp, CaptainPalette.warning, RoundedCornerShape(24.dp))
                         // Ties into the same inspect/correct affordance the driver would reach via
                         // ADD TOLL — tapping the confirmation opens the exact dialog that lists it
                         // (with Remove), so "I heard a beep I think is wrong" is one tap away.
                         .clickable { showTollMenu = true }
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        .padding(horizontal = 44.dp, vertical = 22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Icon(Icons.Rounded.ConfirmationNumber, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(20.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.ConfirmationNumber,
+                            contentDescription = null,
+                            tint = CaptainPalette.warning,
+                            modifier = Modifier.size(34.dp),
+                        )
+                        Text(
+                            "TOLL ADDED",
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 24.sp,
+                            letterSpacing = 4.sp,
+                            color = CaptainPalette.warning,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "${banner.roadName} toll added — ${banner.amount.toMoneyString()}",
+                        banner.roadName,
                         fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 28.sp,
                         color = CaptainPalette.textPrimary,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        banner.amount.toMoneyString(),
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 76.sp,
+                        color = CaptainPalette.warning,
                     )
                 }
             }

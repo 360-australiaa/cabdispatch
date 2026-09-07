@@ -27,7 +27,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from math import asin, atan2, cos, degrees, radians, sin, sqrt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.toll import (
@@ -55,6 +55,30 @@ _DISTANCE_METERED_PRICING_MODELS = ("distance", "distance_with_flagfall")
 # hundred metres apart on the same interchange don't both fire for one
 # crossing.
 GANTRY_DETECTION_RADIUS_M = 150.0
+
+# Closest approach a trip must actually achieve to a gantry before that gantry
+# counts as CROSSED rather than merely passed nearby -- the device-side mirror is
+# `TOLL_CONFIRM_RADIUS_M` in android/.../domain/fare/TollDetector.kt, and the two
+# MUST stay equal (see that constant's own doc for the full reasoning).
+#
+# Field report, 2026-09-07: vehicles that never entered a toll road were being
+# charged for it. Australian motorways are flanked by service roads and parallel
+# surface streets, and a tunnel's gantry coordinate is the SURFACE projection of a
+# point underground -- so the street above it is metres away horizontally. All of
+# those sit inside the 150m detection radius. That radius has to stay generous (it
+# is derived from real GPS error plus the distance covered between fixes at
+# motorway speed), so a second, tighter test decides whether to CHARGE: a vehicle
+# in the tolled lanes passes essentially underneath the gantry, while one on
+# adjacent infrastructure keeps a real lateral offset.
+TOLL_CONFIRM_RADIUS_M = 60.0
+
+# How many of a road's own gantries must be confirmed at close range before the
+# road is charged -- the "multiple checkpoints" corroboration rule. One close pass
+# can still be a coincidence (a cross street directly over a gantry); a vehicle
+# genuinely travelling the road passes a SEQUENCE of its gantries. Capped at the
+# number the registry actually has for that road, so a single-gantry road stays
+# chargeable rather than becoming permanently un-billable.
+TOLL_MIN_CONFIRMATIONS = 2
 
 _EARTH_RADIUS_M = 6_371_008.8
 
@@ -324,6 +348,29 @@ async def _network_capped_amount(
     return min(raw_amount, remaining)
 
 
+async def _required_confirmations(session: AsyncSession, road_id: str) -> int:
+    """How many close-range gantry confirmations `road_id` needs before it may be
+    charged: TOLL_MIN_CONFIRMATIONS where the registry knows enough gantries to
+    supply them, otherwise as many as physically exist.
+
+    A road the dataset only has one gantry for cannot corroborate itself; demanding
+    two would make it permanently unchargeable, silently converting a false-charge
+    risk into a guaranteed missed charge. Those roads still have to clear the tight
+    TOLL_CONFIRM_RADIUS_M test."""
+    result = await session.execute(
+        select(func.count()).select_from(TollGantry).where(TollGantry.toll_road_id == road_id)
+    )
+    gantry_count = result.scalar_one()
+    return max(1, min(TOLL_MIN_CONFIRMATIONS, gantry_count))
+
+
+async def _is_corroborated(
+    session: AsyncSession, confirmed: dict[str, set[str]], road_id: str
+) -> bool:
+    """Whether this trip has enough close-range evidence to charge `road_id`."""
+    return len(confirmed.get(road_id, ())) >= await _required_confirmations(session, road_id)
+
+
 async def apply_toll_detection(
     session: AsyncSession,
     *,
@@ -376,9 +423,23 @@ async def apply_toll_detection(
     charged_roads: dict[str, str] = dict(trip.auto_tolled_roads or {})
     progress: dict[str, str] = dict(trip.toll_road_progress or {})
     unpriced: set[str] = set(trip.unpriced_toll_road_ids or [])
+    confirmed: dict[str, set[str]] = {
+        road_id: set(gantry_ids)
+        for road_id, gantry_ids in (trip.toll_confirmed_gantries or {}).items()
+    }
     tolls: Decimal = trip.tolls or Decimal(0)
 
     compass = classify_bearing(prev_lat, prev_lng, lat, lng)
+
+    # Record close-range evidence BEFORE any pricing -- see TOLL_CONFIRM_RADIUS_M
+    # for the adjacent-road false charge this prevents. The distance anchor for a
+    # distance-priced road is set here too, at FIRST confirmed contact rather than
+    # when corroboration completes, so a road never under-bills the stretch between
+    # its first and second confirmed gantry.
+    for gantry in hits:
+        if haversine_m(lat, lng, gantry.latitude, gantry.longitude) <= TOLL_CONFIRM_RADIUS_M:
+            confirmed.setdefault(gantry.toll_road_id, set()).add(gantry.id)
+            progress.setdefault(gantry.toll_road_id, str(cumulative_distance_km))
 
     for road_id in {g.toll_road_id for g in hits}:
         road = await session.get(TollRoad, road_id)
@@ -394,6 +455,14 @@ async def apply_toll_detection(
             continue  # genuinely the wrong direction on a directional road — never charge
         if allowed is None:
             continue  # no reliable bearing yet this tick — try again once there's real movement
+
+        # Corroboration gate. Being inside the 150m watch radius is not evidence of
+        # having used the road. `continue`, never "flag as unpriced": a road driven
+        # past is not a road whose price is unknown, and prompting for it manually
+        # would just relocate the false charge. A trip that goes on to genuinely
+        # enter the road corroborates on a later point and charges then.
+        if not await _is_corroborated(session, confirmed, road_id):
+            continue
 
         # --- per_point roads (M2 cumulative; CCT/LCT once-per-road) --------
         if road.pricing_model == "per_point":
@@ -501,3 +570,4 @@ async def apply_toll_detection(
     trip.auto_tolled_roads = charged_roads
     trip.toll_road_progress = progress
     trip.unpriced_toll_road_ids = sorted(unpriced)
+    trip.toll_confirmed_gantries = {road_id: sorted(ids) for road_id, ids in confirmed.items()}
