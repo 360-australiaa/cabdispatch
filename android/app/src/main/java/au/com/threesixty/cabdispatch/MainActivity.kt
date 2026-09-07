@@ -6,6 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -80,7 +83,27 @@ private const val DESIGN_H_DP = 800f
  */
 @Composable
 private fun FixedDesignCanvas(content: @Composable () -> Unit) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    // Inset to the SAFE AREA before measuring, not after.
+    //
+    // Reported from a second tablet, 2026-09-07: "bottom bar having apps pinned, so when I open
+    // this apk the buttons crop or hide". The canvas below is sized from the constraints it is
+    // given, so handing it the full window means it lays 800dp of design out over a window whose
+    // bottom strip is physically covered by the system navigation bar -- and every screen's bottom
+    // row (CLOSE TRIP, Accept, the keypad) lands underneath it. The pilot SM-T575 never showed
+    // this because kiosk screen pinning hides its bars, so the insets there are zero and this
+    // padding is a no-op; a tablet with visible three-button navigation is a different shape and
+    // the app was simply ignoring it.
+    //
+    // `safeDrawing` rather than `systemBars`: it also covers a display cutout, which some tablets
+    // have and which would clip the status strip in the same silent way. Applied to the OUTER box
+    // so `constraints` (and therefore the design scale computed from them) describe the usable
+    // area, which is the whole point -- padding the content instead would scale to the full width
+    // and then push the bottom off-screen.
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         val systemDensity = LocalDensity.current
         val widthPx = constraints.maxWidth.toFloat()
         // Width-driven scale: horizontal Figma dimensions stay exact (1280dp spans the panel);

@@ -790,6 +790,7 @@ private fun AppVersionTile(state: SettingsUiState, modifier: Modifier) {
     val (label, tone) = when (state.forceUpdateStatus) {
         ForceUpdateStatus.UNKNOWN_NO_DEVICE -> "unknown (device not paired)" to DiagTone.WARN
         ForceUpdateStatus.UNKNOWN_OFFLINE -> "unknown (offline)" to DiagTone.WARN
+        ForceUpdateStatus.UNREGISTERED -> "unknown (tablet not registered)" to DiagTone.BAD
         ForceUpdateStatus.UP_TO_DATE -> "up to date" to DiagTone.OK
         ForceUpdateStatus.REQUIRED -> "update required" to DiagTone.BAD
     }
@@ -803,6 +804,10 @@ private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -> Unit, m
         ForceUpdateStatus.UP_TO_DATE, ForceUpdateStatus.REQUIRED ->
             "Sent on open · acknowledged by fleet server" to DiagTone.OK
         ForceUpdateStatus.UNKNOWN_OFFLINE -> "Failed — offline or server unreachable" to DiagTone.BAD
+        // The server answered, and answered 404: this tablet's device record is gone (most often
+        // removed by a fleet wipe). Remote lock/locate/update cannot reach it until it is paired
+        // again, so the message says that rather than blaming the network.
+        ForceUpdateStatus.UNREGISTERED -> "Not registered — re-pair this tablet" to DiagTone.BAD
         ForceUpdateStatus.UNKNOWN_NO_DEVICE -> "Not sent — device not registered, tap to pair" to DiagTone.WARN
     }
     // Real device pairing (2026-08-28) — tapping this tile is the entry point when unpaired, same

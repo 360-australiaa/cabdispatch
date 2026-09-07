@@ -28,6 +28,7 @@ import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import retrofit2.HttpException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -40,7 +41,16 @@ import kotlinx.serialization.Serializable
 // redesign pass) so au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel can
 // share the exact same accuracy tiers instead of duplicating them — see that file's own doc.
 enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
-enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, REQUIRED }
+/**
+ * [UNREGISTERED] is deliberately distinct from [UNKNOWN_OFFLINE]. Found on the pilot tablet,
+ * 2026-09-07: the heartbeat had been failing with a flat "offline or server unreachable" while
+ * the server was demonstrably healthy. It was returning **404** -- the device record this tablet
+ * still holds an id for had been removed by a fleet wipe, so there was nothing on the server to
+ * beat against. Those two states need opposite responses from whoever reads the screen ("wait for
+ * signal" versus "re-pair this tablet"), and collapsing them into one message sent the reader
+ * looking for a network fault that did not exist.
+ */
+enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UNREGISTERED, UP_TO_DATE, REQUIRED }
 
 /** Mirrors [MapboxOfflineRegion.DownloadState] but as a UI-friendly type (no Mapbox SDK types
  * leaking into the state a Composable reads) — see that class's doc for the actual download. */
@@ -267,8 +277,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 if (device.locateRequested) {
                     respondToLocateRequest()
                 }
-            }.onFailure {
-                _uiState.update { it.copy(forceUpdateStatus = ForceUpdateStatus.UNKNOWN_OFFLINE) }
+            }.onFailure { error ->
+                // 404 means the server has no such device -- not that it is unreachable. See
+                // ForceUpdateStatus.UNREGISTERED.
+                val unregistered = (error as? HttpException)?.code() == 404
+                _uiState.update {
+                    it.copy(
+                        forceUpdateStatus = if (unregistered) {
+                            ForceUpdateStatus.UNREGISTERED
+                        } else {
+                            ForceUpdateStatus.UNKNOWN_OFFLINE
+                        },
+                    )
+                }
             }
         }
     }

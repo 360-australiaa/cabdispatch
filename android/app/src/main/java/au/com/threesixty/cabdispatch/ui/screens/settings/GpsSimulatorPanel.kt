@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.data.AppContainer
@@ -103,7 +104,21 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
                 onClick = { simulator.stop() },
             )
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Count + scroll hint. Reported from the tablet: "I can't see other toll routes, like
+            // tunnels, Westlink". They were all there -- 13 of them -- but each row was tall
+            // enough that only the first three cleared the fold, and the About tab's scroll gave
+            // no sign there was more below. Saying how many exist is the cheapest possible fix for
+            // "I thought that was all of them"; the rows below are also tightened so more land on
+            // screen at once.
+            Text(
+                "${routes.size} routes — scroll for the tunnels and motorways",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = CaptainPalette.textMuted,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (route in routes) {
                     RouteRow(route = route, onStart = { simulator.start(route) })
                 }
@@ -129,7 +144,7 @@ private fun RouteRow(route: SimulatedRoute, onStart: () -> Unit) {
             .clip(RoundedCornerShape(12.dp))
             .background(CaptainPalette.panel)
             .clickable(onClick = onStart)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         Text(
             route.name,
@@ -138,14 +153,18 @@ private fun RouteRow(route: SimulatedRoute, onStart: () -> Unit) {
             fontSize = 14.sp,
             color = CaptainPalette.textPrimary,
         )
-        Spacer(Modifier.height(2.dp))
+        // Description trimmed to two lines max: the pricing-model detail is useful but it was
+        // costing a third of each row's height, which is what pushed the tunnels off screen.
         Text(
             route.description,
             fontFamily = InterFamily,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
+            lineHeight = 13.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             color = CaptainPalette.textMuted,
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
         Text(
             "%.1f km · %.0f km/h · about %d min".format(
                 route.lengthM / 1000.0,

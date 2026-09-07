@@ -1936,8 +1936,15 @@ private fun CaptainNavRail(
     // genuinely closed-and-paid (CloseAndPayViewModel.finalizeClose flips hasActiveTrip back to
     // false, per DeckHomeScreen's own observeActiveTrip() read above). `RailTile` below dims these
     // locked tiles so the no-op doesn't look like a stalled tap.
+    // SETTINGS is exempt from the mid-fare lock (2026-09-07). The lock exists because navigating
+    // to another PANE showed a second, contradictory meter dial while the real fare kept accruing
+    // -- Settings has no fare dial, so it cannot cause that, and locking it meant a driver could
+    // not reach the printer, GPS diagnostics or offline maps without abandoning a trip first.
+    // Reported from the tablet as simply "the menu is locked, I can't go to settings".
+    val alwaysAllowed = setOf<RailAction>(RailAction.ToPane(CaptainPane.METER), RailAction.OpenSettings)
+
     fun dispatch(action: RailAction) {
-        if (hasActiveTrip && action != RailAction.ToPane(CaptainPane.METER)) return
+        if (hasActiveTrip && action !in alwaysAllowed) return
         when (action) {
             is RailAction.ToPane -> onSelectPane(action.pane)
             RailAction.OpenVouchers -> onOpenVouchers()
@@ -1981,7 +1988,7 @@ private fun CaptainNavRail(
             // actually in force.
             if (hasActiveTrip) {
                 Text(
-                    "FARE RUNNING\nFinish the trip to unlock",
+                    "FARE RUNNING\nMeter + Settings only",
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 9.sp,
@@ -2003,7 +2010,9 @@ private fun CaptainNavRail(
                     // Same condition dispatch() itself gates on above -- kept in sync deliberately
                     // (both read hasActiveTrip + compare against the same METER action) rather than
                     // exposed as a shared val, since this one also needs `item.action` per-tile.
-                    locked = hasActiveTrip && item.action != RailAction.ToPane(CaptainPane.METER),
+                    // Same exemption set dispatch() uses, so a tile is dimmed exactly when it is
+                    // actually inert -- a dimmed-but-working SETTINGS would be its own small lie.
+                    locked = hasActiveTrip && item.action !in alwaysAllowed,
                     onClick = { dispatch(item.action) },
                 )
             }
