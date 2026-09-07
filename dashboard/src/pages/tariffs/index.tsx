@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { History, MapPinned, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
+import { History, MapPinned, Pencil, Plus, Receipt, Route, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -21,6 +21,7 @@ import {
   type Tariff,
 } from "@/hooks/useTariffStudio";
 import { ChangeLogModal } from "./ChangeLogModal";
+import { NswTollRoadsPanel } from "./NswTollRoadsPanel";
 import { TariffFormModal } from "./TariffFormModal";
 import { TariffSuggestPanel } from "./TariffSuggestPanel";
 import { TollZonesPanel } from "./TollZonesPanel";
@@ -35,10 +36,11 @@ const BOOKED_FILTER_OPTIONS = [
   { value: "false", label: "Rank / hail only" },
 ];
 
-type TariffStudioTab = "tariffs" | "toll-zones";
+type TariffStudioTab = "tariffs" | "toll-roads" | "toll-zones";
 
 const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
   { key: "tariffs", label: "Rate cards", icon: Receipt },
+  { key: "toll-roads", label: "NSW Toll Roads", icon: Route },
   { key: "toll-zones", label: "Toll Zones", icon: MapPinned },
 ];
 
@@ -170,6 +172,8 @@ export default function TariffsPage() {
           </button>
         ))}
       </div>
+
+      {tab === "toll-roads" && <NswTollRoadsPanel />}
 
       {tab === "toll-zones" && <TollZonesPanel />}
 

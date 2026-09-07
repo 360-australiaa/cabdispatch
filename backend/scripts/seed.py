@@ -24,6 +24,11 @@ Idempotent: safe to re-run — every row is looked up by its natural key first
 and only created if missing.
 
     uv run python scripts/seed.py
+
+Run `uv run python scripts/seed_toll_roads.py` as well (any order relative to
+this script) to seed the real NSW toll-road registry (13 roads, 141
+gantries) — split into its own script because it's a much larger, purely
+reference-data (no tenant/user) dataset; see that script's own docstring.
 """
 from __future__ import annotations
 
@@ -36,7 +41,7 @@ from sqlalchemy import select
 import app.models  # noqa: F401 — populate Base.metadata before any query runs
 from app.core.database import AsyncSessionLocal
 from app.core.security import PLATFORM_TENANT_ID, hash_password
-from app.models.geofence import GEOFENCE_KIND_REGION, GEOFENCE_KIND_TOLL, Geofence
+from app.models.geofence import GEOFENCE_KIND_REGION, Geofence
 from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
 from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
@@ -84,174 +89,35 @@ def _rate_kwargs(engine_tariff: fe.Tariff) -> dict[str, Decimal]:
     return {f: getattr(engine_tariff, f) for f in _RATE_FIELDS}
 
 
-# --- global (tenant_id IS NULL) reference geofences — blueprint 5.2.4/7.2.5 --
+# --- global (tenant_id IS NULL) reference geofences — blueprint 7.2.5 -------
 #
-# Coordinates are still APPROXIMATE real-world landmark locations (a few
-# hundred metres of slop is expected/acceptable — this is dev/demo seed data
-# for a "near this landmark" circle check, not a survey-grade toll-gantry
-# position), hand-picked from public knowledge of each location, not from any
-# live tolling-authority feed or geocoding API — same convention this list
-# shipped with originally.
+# The 9 toll-kind entries this list used to carry for the M5 East, Sydney
+# Harbour Bridge/Tunnel, Eastern Distributor, Cross City Tunnel, Lane Cove
+# Tunnel, M2, WestConnex M4/M8, M7, and NorthConnex are SUPERSEDED, not
+# duplicated here — see `app.models.toll` / `app.services.tolls` /
+# `scripts/seed_toll_roads.py` for the real per-road, per-gantry,
+# direction-aware, quarterly-price-versioned registry that replaces them
+# (loaded by that separate idempotent script, run alongside this one), and
+# `alembic/versions/a9c1f4e7d2b8_nsw_toll_road_registry.py` for the migration
+# that deletes those 9 rows from any database that already ran the old
+# version of this script (leaving both mechanisms live at once would
+# double-charge every trip that crosses one of these 9 real roads).
 #
-# `toll_amount` values, however, are REAL current one-way Class A (car) tolls
-# — NOT the illustrative round-number placeholders ($3.21 / $4.82) this list
-# originally shipped with — sourced from official pricing pages, accessed
-# 2026-09-06:
-#   - M5 South-West Motorway: $6.06 — Linkt, official M5 South-West Motorway
-#     toll pricing page (linkt.com.au/using-toll-roads/about-sydney-toll-roads/
-#     m5-south-west-motorway/toll-pricing), cross-checked against the NSW
-#     Government's "Toll costs by road" page.
-#   - Sydney Harbour Bridge / Tunnel: $4.55 — the PEAK weekday rate
-#     (6:30-9:30am & 4-7pm); NSW Government, "Toll costs by road"
-#     (nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road).
-#     This toll genuinely varies by time of day/week (off-peak $3.41,
-#     night/weekend $2.85) and a single flat `toll_amount` column cannot
-#     model that; the PEAK figure was picked so auto-charging never
-#     UNDER-charges vs. the real toll, at the cost of over-charging
-#     off-peak/night trips. A real fix needs a time-aware toll model, which
-#     app.services.trips.apply_tick does not have.
-#   - Eastern Distributor (northbound only — it's a one-way toll): $10.48 —
-#     Linkt, official Eastern Distributor toll pricing page.
-#   - Cross City Tunnel (main tunnel section only — there's also a separate,
-#     cheaper Sir John Young Crescent exit toll not modelled here): $7.41 —
-#     Linkt, official Cross City Tunnel toll pricing page.
-#   - Lane Cove Tunnel: $4.30 — Linkt, official Lane Cove Tunnel toll
-#     pricing page.
-#   - M2 Hills Motorway (North Ryde mainline toll point only — the M2 has
-#     several cheaper partial-trip toll points not modelled here): $10.64 —
-#     Linkt, official Hills M2 toll pricing page, cross-checked against
-#     nsw.gov.au's "Toll costs by road" page.
-#   - NorthConnex: $10.64 — northconnex.com.au, official "Toll pricing" page.
-#     (Matches the M2 mainline rate exactly — NorthConnex and the Hills M2
-#     are tolled at parity as one continuous corridor.)
-#   - M7 Westlink: $10.50 — the >=20km/full-length CAPPED rate (NSW
-#     Government "Toll costs by road" page + westlinkm7.com.au). The M7 is
-#     ACTUALLY DISTANCE-BASED (NSW Gov quotes ~$0.53/km for Class A below the
-#     cap) — like WestConnex below, one circular geofence can only
-#     approximate that with a flat fee. The cap was used here because it
-#     applies to any continuous trip covering most/all of the 41km corridor,
-#     which is the case this single geofence is meant to detect.
-#   - WestConnex M4/M8: see the dedicated, LOUDLY-commented row below — it is
-#     not a real fixed price at all.
-#
-# IMPORTANT — snapshots, not permanent figures: NSW toll prices are formally
-# revised on a QUARTERLY cycle (Linkt publishes an "NSW Quarterly toll price
-# update" notice every Jan/Apr/Jul/Oct, and WestConnex is separately indexed
-# every January per its project deed) — every figure above WILL drift and
-# will eventually read stale. This is dev/demo seed data, not wired to any
-# live feed; a real deployment must replace these with an authoritative,
-# regularly-refreshed feed before going live.
-#
-# Live data source status (checked 2026-09-06): opendata.transport.nsw.gov.au
-# publishes a "Toll Calculator API", but every download/detail link on that
-# page (the API v2 endpoint itself, its docs) is gated behind "Login to
-# download" — there is no fully anonymous, no-registration endpoint.
-# Registering IS free (the default "Bronze" plan gives 60,000 calls/day, no
-# payment or business ABN required), so this isn't a paid-tier wall — but it
-# still needs a human to actually create that Open Data Hub account and mint
-# an API key by hand first. Nothing in this codebase calls that API today.
+# The one surviving entry below is a genuine `kind="region"` row (not
+# pricing, not superseded by anything toll-related) — coordinates are still
+# an APPROXIMATE real-world landmark location, same "near this landmark"
+# convention as before.
 GLOBAL_GEOFENCES: list[dict] = [
-    {
-        "name": "M5 East Motorway — Sydney entry (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.9333,
-        "center_lng": 151.0900,
-        "radius_m": 300,
-        "toll_amount": Decimal("6.06"),
-    },
-    {
-        "name": "Sydney Harbour Bridge / Tunnel (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8523,
-        "center_lng": 151.2108,
-        "radius_m": 400,
-        "toll_amount": Decimal("4.55"),
-    },
     {
         # A "region" example (not a toll) — the airport precinct fits blueprint
         # 7.2.5's tariff-zone use case (see app.models.trips.TRIP_TYPE_AIRPORT_FIXED)
-        # more naturally than 5.2.4's toll-detection use case.
+        # more naturally than a toll-detection use case.
         "name": "Sydney (Kingsford Smith) Airport precinct (approx.)",
         "kind": GEOFENCE_KIND_REGION,
         "center_lat": -33.9399,
         "center_lng": 151.1753,
         "radius_m": 1500,
         "toll_amount": None,
-    },
-    {
-        "name": "Eastern Distributor — Moore Park toll point (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8925,
-        "center_lng": 151.2145,
-        "radius_m": 300,
-        "toll_amount": Decimal("10.48"),
-    },
-    {
-        "name": "Cross City Tunnel — main tunnel, city centre (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8730,
-        "center_lng": 151.2110,
-        "radius_m": 350,
-        "toll_amount": Decimal("7.41"),
-    },
-    {
-        "name": "Lane Cove Tunnel (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8070,
-        "center_lng": 151.1530,
-        "radius_m": 400,
-        "toll_amount": Decimal("4.30"),
-    },
-    {
-        "name": "M2 Hills Motorway — North Ryde mainline toll point (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.7930,
-        "center_lng": 151.1280,
-        "radius_m": 350,
-        "toll_amount": Decimal("10.64"),
-    },
-    {
-        # WestConnex (M4, M4 East/tunnels, M8, New M5) is a DISTANCE-BASED
-        # toll network, not a fixed point charge: Class A pricing is a
-        # flagfall (~$1.80) plus a per-km rate (~$0.67/km), capped per segment
-        # ($10.79 for the full M4, $9.15 for the M8/New M5 segment) and capped
-        # again for the full network ($12.74). A single fixed circular
-        # geofence that fires one flat `toll_amount` on entry CANNOT represent
-        # that faithfully — this is a FLAT-FEE APPROXIMATION of a
-        # distance-based toll, not the real pricing model. The figure below
-        # is just what that formula gives for a representative ~10km
-        # WestConnex trip ($1.80 + $0.67 x 10 ~= $8.50) — a plausible
-        # mid-length single-segment crossing, not any one specific real toll
-        # point. A correct fix would teach app.services.trips.apply_tick to
-        # compute an actual distance-based charge (e.g. an entry/exit
-        # geofence pair plus the trip's travelled distance between them)
-        # instead of charging a fixed amount the instant one circle is
-        # entered — deliberately NOT attempted here, see task scope.
-        "name": "WestConnex M4/M8 (approx., flat-rate approximation of a distance-based toll)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.9095,
-        "center_lng": 151.1867,
-        "radius_m": 400,
-        "toll_amount": Decimal("8.50"),
-    },
-    {
-        # Also genuinely distance-based (see WestConnex comment above for why
-        # a flat fee is an approximation) — $10.50 is the >=20km capped rate,
-        # used here as the representative full-corridor crossing charge.
-        "name": "M7 Westlink (approx., capped full-length rate of a distance-based toll)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8090,
-        "center_lng": 150.8590,
-        "radius_m": 500,
-        "toll_amount": Decimal("10.50"),
-    },
-    {
-        "name": "NorthConnex (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.7190,
-        "center_lng": 151.1150,
-        "radius_m": 400,
-        "toll_amount": Decimal("10.64"),
     },
 ]
 
@@ -402,7 +268,7 @@ async def seed() -> None:
         await get_or_create_global_reference_tariff(session, region="urban", engine_tariff=fe.URBAN_TARIFF)
         await get_or_create_global_reference_tariff(session, region="country", engine_tariff=fe.COUNTRY_TARIFF)
 
-        print("Seeding global toll/region reference geofences...")
+        print("Seeding global region reference geofence (see scripts/seed_toll_roads.py for the real toll registry)...")
         for spec in GLOBAL_GEOFENCES:
             await get_or_create_global_geofence(session, **spec)
 

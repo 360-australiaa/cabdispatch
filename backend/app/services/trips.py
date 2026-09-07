@@ -34,6 +34,7 @@ from app.services.fare_engine import (
 )
 from app.services.geofence import detect_geofences
 from app.services.tariffs import to_fare_engine_tariff
+from app.services.tolls import apply_toll_detection
 
 engine = FareEngine()
 
@@ -197,6 +198,12 @@ async def apply_tick(
     applied_toll_geofence_ids: set[str] = set(trip.auto_tolls_applied or [])
 
     for point in points:
+        # Captured before prev_lat/prev_lng are advanced below -- this is the
+        # position the vehicle was travelling FROM, needed by the NSW
+        # toll-registry detection's bearing classifier (app.services.tolls)
+        # to tell which way a directional road was crossed.
+        bearing_prev_lat, bearing_prev_lng = prev_lat, prev_lng
+
         distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
         elapsed_seconds = Decimal(0)
         if prev_ts is not None:
@@ -227,6 +234,22 @@ async def apply_tick(
                 continue
             trip.tolls = (trip.tolls or Decimal(0)) + geofence.toll_amount
             applied_toll_geofence_ids.add(geofence.id)
+
+        # --- NSW toll-registry auto-detection (app.services.tolls) --------
+        # Additive to, and independent of, the ad hoc-geofence block above:
+        # this is the real 13-road/141-gantry registry, charged ONCE PER ROAD
+        # (never per gantry), direction-aware, and covering flat/zone_flat/
+        # distance/time_of_day pricing -- see that module's docstring.
+        await apply_toll_detection(
+            session,
+            trip=trip,
+            prev_lat=bearing_prev_lat,
+            prev_lng=bearing_prev_lng,
+            lat=point.lat,
+            lng=point.lng,
+            ts=point.ts,
+            cumulative_distance_km=state.cumulative_distance_km,
+        )
 
     trip.distance_m = round(state.cumulative_distance_km * Decimal(1000))
     trip.dist_amount = round_half_up(state.accrued_distance_charge)
