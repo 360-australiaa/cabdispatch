@@ -1967,6 +1967,31 @@ private fun CaptainNavRail(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // Say WHY the menu is unresponsive, not just that it is.
+            //
+            // Reported from the tablet, 2026-09-07: "why can't I see settings, all menu is
+            // locked?". It was locked, correctly and deliberately -- `dispatch` above refuses
+            // every destination except METER while a fare is open, so a driver cannot wander off
+            // mid-trip while it keeps accruing. But the only signal was RailTile's 35% dim, and a
+            // dimmed menu on a dark screen is indistinguishable from a broken one. The driver's
+            // conclusion (a fleet admin has locked this tablet) was entirely reasonable, and the
+            // FLEET LOCKED badge sitting in the corner made it more so.
+            //
+            // One line converts a mystery into an instruction. Shown only while the lock is
+            // actually in force.
+            if (hasActiveTrip) {
+                Text(
+                    "FARE RUNNING\nFinish the trip to unlock",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 9.sp,
+                    lineHeight = 12.sp,
+                    letterSpacing = 0.4.sp,
+                    textAlign = TextAlign.Center,
+                    color = CaptainPalette.warning,
+                    modifier = Modifier.padding(bottom = 2.dp),
+                )
+            }
             items.forEachIndexed { index, item ->
                 val target = (item.action as? RailAction.ToPane)?.pane
                 RailTile(
