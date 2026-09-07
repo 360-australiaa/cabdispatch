@@ -41,6 +41,12 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 6 / 0.5.0 (2026-09-08): a tablet must be REGISTERED with the depot before anyone can log
+        // into the meter -- see domain/DeviceReadiness.kt. Requires the matching backend
+        // (device_secret + code-authenticated POST /v1/fleet/devices/register): against an older
+        // server the readiness gate still appears but cannot be cleared, so DEPLOY THE BACKEND
+        // FIRST and only then push this build to tablets.
+        //
         // 5 / 0.4.1 (2026-09-08): fare-time and toll-time classification pinned to NSW local time
         // (Australia/Sydney) instead of the tablet's own zone -- see domain.fare.NSW_FARE_ZONE.
         // A meter on the wrong timezone billed the night rate at the wrong hours and every such
@@ -52,8 +58,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 5
-        versionName = "0.4.1"
+        versionCode = 6
+        versionName = "0.5.0"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

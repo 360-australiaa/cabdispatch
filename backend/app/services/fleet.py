@@ -72,6 +72,8 @@ for the full "close vs refuse" reasoning.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 import string
 from datetime import UTC, datetime, timedelta
@@ -110,6 +112,13 @@ class DuplicateRegoError(FleetError):
 
 class InvalidPairingCodeError(FleetError):
     pass
+
+
+class DeviceAuthError(FleetError):
+    """A device presented a `X-Device-Secret` that does not match. Kept distinct
+    from DeviceNotFoundError so the router can answer 401 (wrong credential)
+    rather than 404 (no such device) -- a revoked or deleted device is a 404,
+    which is what the Android client turns into a sticky `deviceRejected`."""
 
 
 def _is_expired(expires_at: datetime) -> bool:
@@ -199,6 +208,60 @@ async def prepare_vehicle_for_deletion(
     )
 
 
+# --- device credential --------------------------------------------------------
+#
+# Every other route in this domain authenticates a HUMAN access token, so a
+# tablet with nobody logged into it cannot reach this backend at all -- which is
+# exactly why a parked or logged-off tablet cannot be located, kiosk-locked or
+# told to update today. A device secret makes the tablet a caller in its own
+# right. Same shape app.services.duress_device already uses for duress hardware:
+# a random secret handed over once, only its hash retained, constant-time
+# compared on every use.
+
+
+def _hash_device_secret(secret: str) -> str:
+    """SHA-256 hex of a device secret.
+
+    A plain hash, not a password KDF, and deliberately so: this is a 256-bit
+    random value we generated ourselves (`secrets.token_urlsafe(32)`), not a
+    human-chosen password. There is no dictionary to attack and no work factor
+    worth paying on a request that runs on every 60-second heartbeat from every
+    tablet in the fleet.
+    """
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def mint_device_secret() -> tuple[str, str]:
+    """A fresh (plaintext, hash) pair. The plaintext is returned to the tablet
+    exactly once, at registration, and never recoverable afterwards -- losing it
+    means re-pairing, which is the correct and intended recovery."""
+    secret = secrets.token_urlsafe(32)
+    return secret, _hash_device_secret(secret)
+
+
+async def authenticate_device(session: AsyncSession, *, device_id: str, secret: str) -> Device:
+    """The device row for `device_id`, if `secret` is its credential.
+
+    Raises DeviceNotFoundError for an unknown OR revoked device -- deliberately
+    the same answer for both, so a revoked tablet gets the 404 the Android
+    client already reads as "this device is no longer registered"
+    (DeviceCommandHeartbeat.pollOnce turns a heartbeat 404 into a sticky
+    `deviceRejected`). Raises DeviceAuthError for a real device presenting the
+    wrong secret, and for one that has no secret at all -- a device paired
+    before secrets existed must fall back to bearer auth, not be waved through
+    on an empty credential.
+    """
+    result = await session.execute(select(Device).where(Device.id == device_id))
+    device = result.scalar_one_or_none()
+    if device is None or device.revoked_at is not None:
+        raise DeviceNotFoundError(device_id)
+    if not device.device_secret_hash:
+        raise DeviceAuthError("Device has no credential -- re-pair it")
+    if not hmac.compare_digest(device.device_secret_hash, _hash_device_secret(secret)):
+        raise DeviceAuthError("Device secret mismatch")
+    return device
+
+
 # --- pairing-code issuance + consumption -------------------------------------
 
 
@@ -223,22 +286,36 @@ async def generate_pairing_code(
 async def register_device(
     session: AsyncSession,
     *,
-    tenant_id: str,
     android_id: str,
     pairing_code: str,
     model: str | None,
     app_version: str | None,
-) -> Device:
+) -> tuple[Device, str]:
     """Consumes a not-yet-used, not-expired pairing code and binds (creating if
     necessary) the device identified by `android_id` to that code's vehicle.
+    Returns the device and the plaintext secret it must keep.
 
     Re-registering an already-known android_id (e.g. a device swapped to a
     different car) is allowed — it just re-binds the existing Device row rather
-    than erroring, since that's the realistic "device gets moved" case.
+    than erroring, since that's the realistic "device gets moved" case. It also
+    mints a FRESH secret, invalidating the old one: re-pairing is the documented
+    recovery for a tablet that has lost its credential, and it would not be a
+    recovery if the old secret kept working.
+
+    The tenant comes from the pairing-code row, NOT from a caller's token. This
+    changed when device registration became the gate a tablet must pass before
+    anyone can log into the meter: a tablet that has never been paired has
+    nobody logged into it, so there is no token to take a tenant from, and the
+    code -- admin-minted, tenant-scoped, single-use, 15-minute TTL -- is the
+    credential. Callers therefore no longer supply `tenant_id`; a code from
+    tenant A can only ever enrol a device into tenant A.
+
+    Registering also clears `revoked_at`: an operator handing out a fresh
+    pairing code for a tablet they previously retired is un-retiring it, and
+    leaving the row revoked would silently 404 every subsequent heartbeat.
     """
     result = await session.execute(
         select(DevicePairingCode).where(
-            DevicePairingCode.tenant_id == tenant_id,
             DevicePairingCode.code == pairing_code,
             DevicePairingCode.used_at.is_(None),
         )
@@ -249,6 +326,7 @@ async def register_device(
     if _is_expired(pairing.expires_at):
         raise InvalidPairingCodeError("Pairing code has expired")
 
+    tenant_id = pairing.tenant_id
     result = await session.execute(
         select(Device).where(Device.tenant_id == tenant_id, Device.android_id == android_id)
     )
@@ -262,15 +340,21 @@ async def register_device(
         device.model = model
     if app_version is not None:
         device.app_version = app_version
-    device.last_seen_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    device.last_seen_at = now
+    device.paired_at = now
+    device.revoked_at = None
 
-    pairing.used_at = datetime.now(UTC)
+    secret, secret_hash = mint_device_secret()
+    device.device_secret_hash = secret_hash
+
+    pairing.used_at = now
     await session.flush()  # so device.id is populated before we reference it below
     pairing.used_by_device_id = device.id
 
     await session.commit()
     await session.refresh(device)
-    return device
+    return device, secret
 
 
 # --- heartbeat + admin flags --------------------------------------------------

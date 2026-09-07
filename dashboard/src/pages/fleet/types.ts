@@ -87,6 +87,13 @@ export interface Device {
   last_seen_at: string | null;
   battery: number | null;
   network: string | null;
+  // When this tablet last completed a real pairing-code enrolment, and when an
+  // operator retired it. `paired_at` is not interchangeable with `last_seen_at`:
+  // a device row created by hand on this page has never paired, and a paired
+  // tablet switched off for a week still has. Null on rows that predate the
+  // columns means "not recorded", not "never paired".
+  paired_at: string | null;
+  revoked_at: string | null;
   created_at: string;
   updated_at: string;
 }

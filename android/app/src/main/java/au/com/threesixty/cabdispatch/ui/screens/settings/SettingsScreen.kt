@@ -41,6 +41,13 @@ import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextField
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,6 +79,8 @@ import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_ALPHABET
+import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_LENGTH
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
@@ -1224,22 +1233,60 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
                         }
                     }
                     else -> {
-                        GlassCard(modifier = Modifier.fillMaxWidth().height(72.dp), cornerRadiusDp = 12, glow = CaptainPalette.hudAccent) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        // The tablet's own keyboard, not a hand-rolled pad.
+                        //
+                        // Every other text entry in this app avoids the platform IME because an
+                        // earlier on-device check found it never came up (see HiredScreen.kt's
+                        // DestinationSearchDialog). Re-measured on this tablet, 2026-09-08, while
+                        // screen-pinned: `dumpsys input_method` reports mShowRequested=true /
+                        // mInputShown=true and typed characters land. So the pairing code uses the
+                        // real keyboard here and on the readiness gate, which is the same code
+                        // entered in two places and should not have two different idioms.
+                        //
+                        // Filtered as typed to the server's own alphabet (PAIR_CODE_ALPHABET),
+                        // which is what the removed keypad achieved by omitting keys.
+                        TextField(
+                            value = code,
+                            onValueChange = { raw ->
+                                code = raw.uppercase().filter { it in PAIR_CODE_ALPHABET }.take(PAIR_CODE_LENGTH)
+                            },
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(
+                                fontFamily = ChakraPetch,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 28.sp,
+                                letterSpacing = 6.sp,
+                                textAlign = TextAlign.Center,
+                            ),
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Characters,
+                                autoCorrect = false,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { if (code.length == PAIR_CODE_LENGTH) viewModel.submitPairingCode(code) },
+                            ),
+                            placeholder = {
                                 Text(
-                                    code.ifEmpty { "········" },
+                                    "········",
                                     fontFamily = ChakraPetch,
-                                    fontWeight = FontWeight.Bold,
                                     fontSize = 28.sp,
                                     letterSpacing = 6.sp,
-                                    color = if (code.isEmpty()) CaptainPalette.textMuted else CaptainPalette.textPrimary,
+                                    textAlign = TextAlign.Center,
+                                    color = CaptainPalette.textMuted,
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        PairCodeKeyRows(
-                            onKey = { c -> if (code.length < 8) code += c },
-                            onBackspace = { code = code.dropLast(1) },
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = CaptainPalette.raised,
+                                unfocusedContainerColor = CaptainPalette.raised,
+                                focusedTextColor = CaptainPalette.textPrimary,
+                                unfocusedTextColor = CaptainPalette.textPrimary,
+                                cursorColor = CaptainPalette.accent,
+                                focusedIndicatorColor = CaptainPalette.accent,
+                                unfocusedIndicatorColor = CaptainPalette.panelBorder,
+                            ),
                         )
                         Spacer(Modifier.height(16.dp))
                         if (pairState is PairMeterState.Error) {
@@ -1256,7 +1303,7 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
                             CaptainButton(
                                 text = if (pairState is PairMeterState.Submitting) "PAIRING…" else "PAIR",
                                 modifier = Modifier.weight(1f),
-                                enabled = code.length == 8 && pairState !is PairMeterState.Submitting,
+                                enabled = code.length == PAIR_CODE_LENGTH && pairState !is PairMeterState.Submitting,
                             ) { viewModel.submitPairingCode(code) }
                         }
                     }
@@ -1266,34 +1313,3 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
     }
 }
 
-/** Same alphanumeric-grid shape as `LoginVehicleBindScreen`'s rego keypad, kept separate (not
- * extracted to a shared composable) since that one is `private` in a different screen and this is
- * a small, one-off widget — not worth a cross-screen refactor for. Pairing codes exclude
- * `0/1/O/I` server-side (transcription-ambiguity avoidance, per spec) — filtered out of the
- * keyboard entirely so a driver physically cannot type a character the server would reject. Not
- * [au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad]: that shared widget is a numeric-only 0-9
- * pad, and this one needs the full A-Z/2-9 alphabet. */
-@Composable
-private fun PairCodeKeyRows(onKey: (Char) -> Unit, onBackspace: () -> Unit) {
-    val rows = listOf("ABCDEFGH", "JKLMNPQR", "STUVWXYZ", "23456789⌫")
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        rows.forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { c ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(CaptainPalette.hudGlass)
-                            .border(1.dp, CaptainPalette.hudGlassBorderPurple, RoundedCornerShape(8.dp))
-                            .clickable { if (c == '⌫') onBackspace() else onKey(c) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(c.toString(), fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-                    }
-                }
-            }
-        }
-    }
-}

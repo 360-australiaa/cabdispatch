@@ -17,6 +17,9 @@ import au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncScreen
 import au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen
 import au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen
 import au.com.threesixty.cabdispatch.ui.screens.rating.RatePassengerScreen
+import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.DeviceReadiness
+import au.com.threesixty.cabdispatch.ui.screens.readiness.DeviceReadinessScreen
 import au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftreport.ShiftReportScreen
 import au.com.threesixty.cabdispatch.ui.screens.shiftstart.ShiftStartScreen
@@ -127,6 +130,11 @@ object CabDispatchRoutes {
      * [au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncViewModel]'s doc).
      * Reachable from Settings & Diagnostics (S6). */
     const val OFFLINE_SYNC = "offline_sync"
+
+    /** The device-readiness gate — see [au.com.threesixty.cabdispatch.domain.DeviceReadiness].
+     * Reached only from [postAuthDestination], never navigated to directly, and it navigates
+     * onward itself the moment the tablet becomes fit to use. */
+    const val DEVICE_READINESS = "device_readiness"
 
     /** Row 36 — Log Off confirmation (Phase B v2 pass, fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
      * `20:137`): a confirmation step in front of the dashboard's "LOG OFF" chip, which previously
@@ -270,6 +278,18 @@ fun CabDispatchNavHost(
                 },
             )
         }
+        composable(CabDispatchRoutes.DEVICE_READINESS) {
+            DeviceReadinessScreen(
+                onReady = {
+                    navController.navigate(postAuthDestination()) {
+                        // popUpTo(0) rather than popping this route alone: the gate must not be
+                        // reachable by Back from the login screen behind it, and there is nothing
+                        // above it worth keeping either.
+                        popUpTo(0)
+                    }
+                },
+            )
+        }
         composable(
             route = "${CabDispatchRoutes.PERMISSIONS_CHECKLIST}?next={next}",
             arguments = listOf(
@@ -312,9 +332,51 @@ fun CabDispatchNavHost(
  * function starts correctly resolving to [CabDispatchRoutes.IDLE] on a cold start that has a
  * durable, not-stale session to resume — with zero changes to the branch itself.
  */
-fun postAuthDestination(): String =
-    if (au.com.threesixty.cabdispatch.domain.SessionHolder.session.value != null) {
-        CabDispatchRoutes.IDLE
-    } else {
-        CabDispatchRoutes.LOGIN_VEHICLE_BIND
+fun postAuthDestination(): String {
+    val session = au.com.threesixty.cabdispatch.domain.SessionHolder.session.value
+
+    // An OPEN SHIFT is never interrupted. A driver already working -- possibly with a passenger in
+    // the car -- must not be locked out of their own meter because a pairing flag changed under
+    // them: block the next login, never the current fare.
+    //
+    // Keyed on `shiftId`, deliberately, not on `session != null`. A restored session keeps the
+    // driver and vehicle after its shift has aged out -- SessionStore.restore nulls `shiftId` past
+    // the 12-hour limit but returns a perfectly good DriverSession around it -- so "has a session"
+    // is true for a driver who merely worked yesterday. Gating on that would have skipped the
+    // readiness check for every returning driver on the fleet, which is most of them, and the
+    // feature would have looked like it worked while doing almost nothing.
+    val midShift = session?.shiftId != null
+    if (!midShift && DeviceReadiness.blockingFailures(currentReadinessInputs()).isNotEmpty()) {
+        // Both blocking checks read state that AppContainer.init has already restored from
+        // DevicePairingStore, so this costs no network round-trip and a healthy tablet never
+        // flashes the gate on its way past. See DeviceReadiness's own doc.
+        return CabDispatchRoutes.DEVICE_READINESS
     }
+
+    return if (session != null) CabDispatchRoutes.IDLE else CabDispatchRoutes.LOGIN_VEHICLE_BIND
+}
+
+/**
+ * The readiness inputs as they stand right now, for the synchronous gate decision above.
+ *
+ * The two slow checks ([DeviceReadiness.ReadinessCheck.OfflineMaps] and
+ * [DeviceReadiness.ReadinessCheck.SignedTariff]) are reported as `null` -- "not checked" -- rather
+ * than guessed at, because probing either means touching disk or the network and neither can block
+ * anyone anyway. [DeviceReadinessScreen] fills them in for display once it is on screen.
+ *
+ * `updateAvailable` is likewise `false` here: this cannot know whether a newer build exists without
+ * asking the server, and an unreachable release server must never be the thing that stops a driver
+ * working. The gate screen performs the real check and re-evaluates.
+ */
+private fun currentReadinessInputs(): DeviceReadiness.Inputs {
+    val command = AppContainer.deviceCommandHeartbeat.state.value
+    return DeviceReadiness.Inputs(
+        deviceId = command.deviceId,
+        deviceRejected = command.deviceRejected,
+        forceUpdatePending = command.forceUpdatePending,
+        updateAvailable = false,
+        heartbeatSucceeding = command.lastPollSucceeded,
+        offlineMapsPresent = null,
+        signedTariffCached = null,
+    )
+}

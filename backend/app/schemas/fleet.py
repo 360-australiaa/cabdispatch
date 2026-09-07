@@ -123,6 +123,12 @@ class DeviceUpdate(BaseModel):
     vehicle_id: str | None = None
     kiosk_locked: bool | None = None
     calibration_due: date | None = None
+    # Retire (or un-retire) a tablet without deleting its history. A revoked
+    # device's heartbeat 404s, which the meter app already reads as "this tablet
+    # is no longer registered" -- so revoking is how an operator takes a tablet
+    # out of service and puts it back behind the readiness gate. Re-pairing it
+    # with a fresh code clears the flag (see fleet_service.register_device).
+    revoked: bool | None = None
 
 
 class DeviceRead(BaseModel):
@@ -142,6 +148,13 @@ class DeviceRead(BaseModel):
     battery: int | None
     network: str | None
     calibration_due: date | None
+    # When this tablet last completed a real pairing-code enrolment, and when an
+    # operator retired it. `paired_at` is NOT interchangeable with
+    # `last_seen_at`: a manually-provisioned row has never paired, and a paired
+    # tablet switched off for a week still has. `None` on a row predating these
+    # columns means "not recorded", not "never paired".
+    paired_at: datetime | None = None
+    revoked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     # Not a Device column -- populated only by POST /devices/{id}/heartbeat
@@ -153,6 +166,14 @@ class DeviceRead(BaseModel):
     # ever been published -- never treat `None` as "you are up to date",
     # only as "no hint was computed this response".
     latest_version_code: int | None = None
+
+    # Also not a Device column, and the one field here that is a SECRET.
+    # Populated only by POST /devices/register, which mints it and hands it over
+    # exactly once -- the server keeps a hash and can never return it again.
+    # `None` on every other response, including every heartbeat and every list
+    # read, so a device credential is never exposed to a dashboard user or to
+    # anything that merely reads the fleet.
+    device_secret: str | None = None
 
 
 # --- Device pairing / heartbeat / admin flag endpoints -----------------------------

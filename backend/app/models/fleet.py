@@ -114,6 +114,38 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-100
     network: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "wifi", "4g", "offline"
 
+    # --- device credential + pairing lifecycle -------------------------------
+    #
+    # SHA-256 of a secret minted at registration and handed to the tablet exactly
+    # once. Never stored or returned in plaintext again -- same shape
+    # app.services.duress_device already uses for duress hardware.
+    #
+    # It exists because every other route in this domain authenticates a HUMAN
+    # access token, so a tablet with nobody logged into it cannot reach this
+    # backend at all -- which is precisely why a parked or logged-off tablet
+    # cannot be located, kiosk-locked or told to update. With a secret the device
+    # is a first-class caller of its own heartbeat.
+    #
+    # Nullable: every tablet paired before this column existed has none, and
+    # keeps authenticating its heartbeat with the driver's bearer token (the
+    # route accepts either) until it is next re-paired. See
+    # app.services.fleet.authenticate_device.
+    device_secret_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # When this tablet last completed a real pairing-code enrolment. Distinct
+    # from last_seen_at, which cannot answer "has this ever enrolled": a
+    # manually-provisioned row (POST /v1/fleet/devices) has never paired, and a
+    # paired tablet switched off for a week still has. NULL on a row that
+    # predates this column means "not recorded", not "never paired".
+    paired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Set when an operator retires a tablet. A revoked device's heartbeat 404s,
+    # and the Android client already turns a heartbeat 404 into a sticky
+    # `deviceRejected` (DeviceCommandHeartbeat.pollOnce), so revocation needs
+    # nothing new on-device. Kept as a timestamp rather than a boolean so the
+    # row remains an honest audit record of when it was withdrawn.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Meter re-verification due-date (operations-cycle tracking pass, on top of
     # the compliance-expiry pass above). Same nullable, fail-open-on-missing-
     # data convention as Vehicle.registration_expiry/insurance_expiry: null

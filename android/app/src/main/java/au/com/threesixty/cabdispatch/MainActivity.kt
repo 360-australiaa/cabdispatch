@@ -149,7 +149,10 @@ private fun CabDispatchScreenRoot() {
                     // All non-hit-testable full-size overlays (see FleetCommandOverlays.kt's own
                     // doc) — stacked above the nav host so they follow the driver across every
                     // screen rather than being wired into each screen individually.
-                    if (commandState.forceUpdatePending) {
+                    // Every app-level banner stands down while a full-screen gate owns the
+                    // display -- see CaptainChromeMetrics.fullScreenGateVisible for why.
+                    val gateVisible = CaptainChromeMetrics.fullScreenGateVisible
+                    if (!gateVisible && commandState.forceUpdatePending) {
                         ForceUpdatePendingBanner()
                     }
                     // The two latching status chips, stacked in ONE column rather than each
@@ -170,16 +173,21 @@ private fun CabDispatchScreenRoot() {
                             .padding(start = 10.dp, top = CaptainChromeMetrics.topOverlayInset),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        if (commandState.kioskLocked) {
+                        if (!gateVisible && commandState.kioskLocked) {
                             KioskLockedBanner()
                         }
-                        if (DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)) {
+                        if (!gateVisible &&
+                            DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)
+                        ) {
                             DeviceUnpairedBanner()
                         }
                     }
-                    // Unconditional: OfflineBanner reads live connectivity + outbox state itself
-                    // and renders nothing when there's nothing honest to say — see its own doc.
-                    OfflineBanner()
+                    // Otherwise unconditional: OfflineBanner reads live connectivity + outbox
+                    // state itself and renders nothing when there's nothing honest to say — see
+                    // its own doc.
+                    if (!gateVisible) {
+                        OfflineBanner()
+                    }
                 }
             }
         }

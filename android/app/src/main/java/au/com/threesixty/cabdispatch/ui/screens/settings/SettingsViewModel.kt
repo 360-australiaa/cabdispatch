@@ -12,15 +12,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.AppContainer
-import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
-import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
 import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
+import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ThemeMode
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
@@ -35,7 +34,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
 
 // GpsQuality moved to au.com.threesixty.cabdispatch.domain.GpsQuality (2026-09-02, Home-dashboard
 // redesign pass) so au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel can
@@ -126,11 +124,6 @@ sealed interface PairMeterState {
      * server's own explanatory text (spec: "show the server's message text directly"). */
     data class Error(val message: String) : PairMeterState
 }
-
-/** FastAPI's default error-body shape, e.g. `{"detail":"Invalid driver code or PIN"}` — same
- * convention this backend uses everywhere (see driver-login's 401). */
-@Serializable
-private data class PairErrorDto(val detail: String? = null)
 
 /**
  * S6 — Settings/Diagnostics (spec B5). [AndroidViewModel] (not a plain
@@ -471,6 +464,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                             AppContainer.accessToken = null
                             AppContainer.refreshToken = null
                             SessionHolder.clear()
+                            // A factory reset must also UNPAIR. This wiped Room, the tokens and the
+                            // session but left the device id and secret sitting in
+                            // DevicePairingStore, so a "factory reset" tablet came back up still
+                            // paired -- DevicePairingStore.clear() had no caller at all, and both
+                            // DeviceCommandHeartbeat's and Session.kt's docs asserted the opposite
+                            // of what actually happened.
+                            //
+                            // Cosmetic until 2026-09-08; not any more. Registration is now the gate
+                            // in front of the login screen, so a tablet that had been reset and
+                            // handed to another depot would sail straight past a check that exists
+                            // precisely to stop it. SessionHolder.clear() deliberately does not
+                            // touch deviceId (logging off must not unpair), so this is the one
+                            // place that has to say so explicitly.
+                            SessionHolder.deviceId = null
+                            AppContainer.devicePairingStore.clear()
                             _uiState.update {
                                 it.copy(factoryResetInProgress = false, factoryResetComplete = true)
                             }
@@ -548,51 +556,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * physical tablet as that vehicle's meter and persists the resulting device id so
      * [loadDeviceStatus]'s existing heartbeat call — previously a structural no-op, see
      * [au.com.threesixty.cabdispatch.domain.SessionHolder.deviceId]'s own long-standing TODO —
-     * finally has something real to fire against. */
+     * finally has something real to fire against.
+     *
+     * The call itself lives in [DevicePairingRepository]: the readiness gate in front of the login
+     * screen pairs too, and the two must behave identically — same normalisation, same persistence
+     * (including the device secret, which only that repository has ever stored), same error text.
+     * A second copy here would be a second thing to keep in step. */
     fun submitPairingCode(pairingCode: String) {
-        val normalized = pairingCode.trim().uppercase()
-        if (normalized.isBlank()) return
+        if (pairingCode.isBlank()) return
         _uiState.update { it.copy(pairMeter = PairMeterState.Submitting) }
         viewModelScope.launch {
-            val context = getApplication<Application>()
-            val androidId = android.provider.Settings.Secure.getString(
-                context.contentResolver,
-                android.provider.Settings.Secure.ANDROID_ID,
-            )
-            val result = runCatching {
-                AppContainer.apiService.registerDevice(
-                    DeviceRegisterRequestDto(
-                        androidId = androidId,
-                        pairingCode = normalized,
-                        model = android.os.Build.MODEL,
-                        appVersion = BuildConfig.VERSION_NAME,
-                    ),
-                )
+            when (val result = DevicePairingRepository.pair(getApplication(), pairingCode)) {
+                is DevicePairingRepository.PairResult.Success -> {
+                    _uiState.update { it.copy(pairMeter = PairMeterState.Success(result.vehicleId)) }
+                    loadDeviceStatus() // re-fires heartbeat now that deviceId is real
+                }
+                is DevicePairingRepository.PairResult.Failure ->
+                    _uiState.update { it.copy(pairMeter = PairMeterState.Error(result.message)) }
             }
-            result.onSuccess { device ->
-                SessionHolder.deviceId = device.id
-                AppContainer.devicePairingStore.saveDeviceId(device.id)
-                _uiState.update { it.copy(pairMeter = PairMeterState.Success(device.vehicleId)) }
-                loadDeviceStatus() // re-fires heartbeat now that deviceId is real
-            }.onFailure { error ->
-                _uiState.update { it.copy(pairMeter = PairMeterState.Error(pairErrorMessage(error))) }
-            }
-        }
-    }
-
-    /** Extracts the backend's own `{"detail": "..."}` message off a Retrofit [retrofit2.HttpException]
-     * (matches this API's error shape everywhere else, e.g. driver-login's 401 body) — the 409
-     * "vehicle has an open shift" case in particular must show the server's real explanatory text
-     * per spec, not a generic fallback. Network/5xx/anything unparseable falls back to a plain
-     * message; never throws. */
-    private fun pairErrorMessage(error: Throwable): String {
-        val http = error as? retrofit2.HttpException ?: return error.message ?: "Could not pair — check your connection and try again"
-        val body = runCatching { http.response()?.errorBody()?.string() }.getOrNull()
-        val detail = body?.let { runCatching { cabDispatchJson.decodeFromString<PairErrorDto>(it).detail }.getOrNull() }
-        return detail ?: when (http.code()) {
-            404, 410 -> "Invalid or expired code — check it and try again"
-            409 -> "Cannot pair — this vehicle currently has an open shift"
-            else -> "Could not pair (server said ${http.code()}) — try again"
         }
     }
 

@@ -265,36 +265,30 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     private var pendingOnShiftStarted: (() -> Unit)? = null
 
     /**
-     * ### Deliberately does NOT gate on [DevicePairingStatus.isUnpaired] (2026-09-06 review)
-     * Argued both ways before landing here, because both sides are genuine:
+     * ### This DOES now block on [DevicePairingStatus.isUnpaired] (2026-09-08 policy change)
+     * The long note that used to live here argued the other way, and its reasoning was sound at the
+     * time: registering needed a pairing code only an admin could mint AND a driver session to
+     * spend it with, so blocking here would have meant "your ability to earn today depends on
+     * whether a depot admin is awake" with no way forward from the tablet. That was rejected, and
+     * rightly.
      *
-     * FOR hard-blocking: an unpaired tablet cannot be remotely kiosk-locked, located, or
-     * force-updated ([DeviceCommandHeartbeat] simply never polls for it — see that class's own
-     * doc). For a kiosk fleet that is a real operational and safety gap, not a cosmetic one — it is
-     * exactly the gap this whole pass exists to close, and a warning a driver can tap past does
-     * not, by itself, guarantee an operator ever follows up.
+     * Both halves of that premise are now gone. The fleet owner has set the policy — a tablet must
+     * be registered before it is used — and the mechanism to satisfy it exists: registration is the
+     * gate in front of the login screen ([au.com.threesixty.cabdispatch.domain.DeviceReadiness]),
+     * and `POST /v1/fleet/devices/register` no longer requires a bearer token, so a driver can pair
+     * the tablet themselves from a code read out over the phone before they have signed in at all.
      *
-     * AGAINST hard-blocking, and the reason it loses: registering a device needs a pairing code
-     * only an admin/owner role can mint (`POST /v1/fleet/vehicles/{id}/pairing-code` is
-     * `_require_admin` server-side — see [DevicePairingStatus]'s class doc). A driver's own session
-     * can never produce one. Blocking shift-start on pairing would therefore not be "go get paired
-     * and then start your shift" — it would be "your ability to earn today now depends on whether a
-     * depot admin who may not be awake, on-site, or reachable issues you a code in the next few
-     * minutes." [ForceUpdatePendingBanner]'s own doc already rejected exactly this shape of trade-off
-     * for a *lesser* stake (an available-but-unapplied app update) as "actively harmful... would
-     * permanently brick a revenue-earning meter". Bricking the START of a shift over a depot's
-     * pairing backlog is the same mistake with a worse victim: a driver who did nothing wrong,
-     * blocked from earning at all, with — per this task's own hard constraint — no guarantee of a
-     * way forward if the one person who could unblock them is unreachable.
+     * This check is the SECOND evaluation point, not the first, and it exists for one narrow case:
+     * the tablet passed the gate at cold start and then lost its registration during the two
+     * minutes of login, vehicle bind and inspection — an admin deleting or revoking the device
+     * mid-onboarding. Without it, that tablet would start a shift the gate had just been added to
+     * prevent.
      *
-     * So the chosen shape is: loud and repeated (the onboarding advisory below fires on every
-     * unpaired bind, not once-and-forgotten; the app-wide
-     * [au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner] stays up for the entire
-     * unpaired shift), but never a hard stop. If a fleet operator later decides the safety case
-     * outweighs this, the natural place to add a real block is here — checking
-     * [DevicePairingStatus.isUnpaired] before the network call below — but that is a deliberate
-     * policy decision for this app's owner to make with eyes open, not a default this pass reaches
-     * for on its own.
+     * What it deliberately does NOT do is interrupt anyone already working. There is no equivalent
+     * check on the running meter or at Close & Pay: an open shift and a running fare always finish,
+     * because a driver with a passenger in the car must never be locked out of their own meter over
+     * a pairing flag. See [au.com.threesixty.cabdispatch.ui.navigation.postAuthDestination], which
+     * returns IDLE for an existing session before it consults the gate at all.
      */
     fun startShift(onShiftStarted: () -> Unit) {
         val state = _uiState.value
@@ -302,6 +296,19 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         val vehicleId = state.boundVehicleId ?: return
         if (!state.allChecklistItemsChecked) {
             _uiState.update { it.copy(shiftError = "Complete every checklist item before starting the shift") }
+            return
+        }
+        val command = AppContainer.deviceCommandHeartbeat.state.value
+        if (DevicePairingStatus.isUnpaired(command.deviceId, command.deviceRejected)) {
+            // Names a fix the driver can actually carry out on their own: restarting the meter
+            // lands them on the readiness gate, which takes a pairing code. An error that only
+            // said "not registered" would be a dead end at the last screen before earning.
+            _uiState.update {
+                it.copy(
+                    shiftError = "This tablet is no longer registered with the depot. " +
+                        "Close and reopen the meter to enter a pairing code.",
+                )
+            }
             return
         }
         _uiState.update { it.copy(isStartingShift = true, shiftError = null) }

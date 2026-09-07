@@ -570,7 +570,19 @@ async def test_expired_pairing_code_rejected(client, session):
     assert resp.status_code == 400
 
 
-async def test_pairing_code_is_tenant_scoped(client, session):
+async def test_a_pairing_code_can_only_ever_enrol_into_its_own_tenant(client, session):
+    """The tenant comes from the CODE, never from whoever presents it.
+
+    This used to assert a 400 when tenant B's admin presented tenant A's code,
+    back when registration read the tenant off the caller's token. It no longer
+    can: registration is the gate a tablet passes BEFORE anyone logs into the
+    meter, so there is usually no token at all, and the code is the credential.
+
+    What must still hold -- and is the property that actually protects a tenant
+    -- is that a code cannot move a device into the presenter's tenant. Holding
+    tenant A's secret code enrols into tenant A, which is what the code is for;
+    it can never be turned into a device inside tenant B.
+    """
     headers_a = await auth_headers(client, session, role="admin", tenant_name="Pairing Tenant A")
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Pairing Tenant B")
 
@@ -585,7 +597,233 @@ async def test_pairing_code_is_tenant_scoped(client, session):
         json={"android_id": "android-scope-1", "pairing_code": code},
         headers=headers_b,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    device = resp.json()
+
+    # Tenant A's vehicle, tenant A's device -- not tenant B's, despite tenant B
+    # being the caller.
+    assert device["vehicle_id"] == vehicle_id
+    tenant_a_devices = (await client.get("/v1/fleet/devices", headers=headers_a)).json()["items"]
+    tenant_b_devices = (await client.get("/v1/fleet/devices", headers=headers_b)).json()["items"]
+    assert device["id"] in {d["id"] for d in tenant_a_devices}
+    assert device["id"] not in {d["id"] for d in tenant_b_devices}
+
+
+async def test_registration_needs_no_login_at_all(client, session):
+    """The whole point of the change: a tablet that has never been paired has
+    nobody logged into it, so registration cannot require a bearer token.
+
+    Note there are no `headers=` on the register call. If this ever starts
+    needing auth again, the readiness gate in the meter app becomes unclearable
+    in the field -- a driver would be told to pair before logging in, on a
+    screen whose pair button cannot work until they log in.
+    """
+    headers = await auth_headers(client, session, role="admin", tenant_name="No Login Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-NOAUTH")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-noauth-1", "pairing_code": code, "model": "SM-T575"},
+    )
+
+    assert resp.status_code == 200
+    device = resp.json()
+    assert device["vehicle_id"] == vehicle_id
+    assert device["paired_at"] is not None
+    assert device["revoked_at"] is None
+    # And it comes back with the credential it will use from now on.
+    assert device["device_secret"]
+
+
+async def test_the_device_secret_is_returned_on_registration_and_never_again(client, session):
+    """A device credential must not be readable by anything that merely reads
+    the fleet -- a dashboard user listing devices, or the device's own
+    heartbeat."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Secret Once Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-ONCE")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-once-1", "pairing_code": code},
+        )
+    ).json()
+    device_id = registered["id"]
+    secret = registered["device_secret"]
+    assert secret
+
+    read = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+    assert read["device_secret"] is None
+
+    listed = (await client.get("/v1/fleet/devices", headers=headers)).json()["items"]
+    assert all(d["device_secret"] is None for d in listed)
+
+    beat = (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 80},
+            headers={"X-Device-Secret": secret},
+        )
+    ).json()
+    assert beat["device_secret"] is None
+
+
+async def test_a_device_secret_authenticates_a_heartbeat_with_nobody_logged_in(client, session):
+    """The reason the secret exists: a parked or logged-off tablet must still be
+    able to collect its kiosk-lock / locate / force-update flags. It could not
+    before, because the heartbeat rode the driver's bearer token."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Beat Secret Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-BEAT")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-beat-1", "pairing_code": code},
+        )
+    ).json()
+    device_id, secret = registered["id"], registered["device_secret"]
+
+    await client.post(
+        f"/v1/fleet/devices/{device_id}/kiosk-lock", json={"enabled": True}, headers=headers
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 55, "network": "4g"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["kiosk_locked"] is True
+    assert resp.json()["battery"] == 55
+
+
+async def test_a_wrong_or_missing_device_secret_does_not_get_in(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Bad Secret Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-BADSEC")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    device_id = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-badsec-1", "pairing_code": code},
+        )
+    ).json()["id"]
+
+    wrong = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 10},
+        headers={"X-Device-Secret": "not-the-secret"},
+    )
+    assert wrong.status_code == 401
+
+    # No credential of either kind. get_optional_tenant_id authorises nothing on
+    # its own, so the route itself has to refuse -- this is the test that proves
+    # making the bearer optional did not open the heartbeat to everyone.
+    none_at_all = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 10}
+    )
+    assert none_at_all.status_code == 401
+
+
+async def test_a_revoked_device_is_a_404_so_the_tablet_knows_it_is_out(client, session):
+    """Revocation has to look like "no such device" to the meter app, because
+    that is the one signal it already acts on: DeviceCommandHeartbeat turns a
+    heartbeat 404 into a sticky `deviceRejected`, which fails the readiness gate
+    on the next cold start."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Revoke Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-REVOKE")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-revoke-1", "pairing_code": code},
+        )
+    ).json()
+    device_id, secret = registered["id"], registered["device_secret"]
+
+    patched = await client.patch(
+        f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=headers
+    )
+    assert patched.status_code == 200
+    assert patched.json()["revoked_at"] is not None
+
+    beat = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 90},
+        headers={"X-Device-Secret": secret},
+    )
+    assert beat.status_code == 404
+
+
+async def test_re_pairing_a_revoked_device_puts_it_back_in_service(client, session):
+    """An operator handing out a fresh code for a tablet they retired is
+    un-retiring it. Leaving revoked_at set would silently 404 every heartbeat
+    after a pairing the driver just watched succeed."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Unrevoke Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-UNREV")).json()["id"]
+
+    async def new_code():
+        resp = await client.post(
+            f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers
+        )
+        return resp.json()["code"]
+
+    first = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-unrev-1", "pairing_code": await new_code()},
+        )
+    ).json()
+    await client.patch(f"/v1/fleet/devices/{first['id']}", json={"revoked": True}, headers=headers)
+
+    second = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-unrev-1", "pairing_code": await new_code()},
+    )
+
+    assert second.status_code == 200
+    assert second.json()["id"] == first["id"]  # same physical tablet, same row
+    assert second.json()["revoked_at"] is None
+    # ...and re-pairing minted a NEW secret, so the old one no longer works.
+    assert second.json()["device_secret"] != first["device_secret"]
+    stale = await client.post(
+        f"/v1/fleet/devices/{first['id']}/heartbeat",
+        json={"battery": 5},
+        headers={"X-Device-Secret": first["device_secret"]},
+    )
+    assert stale.status_code == 401
+
+
+async def test_a_device_paired_before_secrets_existed_can_still_heartbeat(client, session):
+    """Rollout safety. Every tablet in the field today has no device_secret_hash.
+    If the heartbeat demanded a secret, the whole fleet would stop reporting the
+    moment this deployed -- so the bearer path stays until they re-pair."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Legacy Tenant")
+    device_id = (
+        await client.post(
+            "/v1/fleet/devices", json={"android_id": "android-legacy-1"}, headers=headers
+        )
+    ).json()["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 42}, headers=headers
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["battery"] == 42
+    assert resp.json()["paired_at"] is None  # provisioned by hand, never enrolled
 
 
 async def test_pairing_code_requires_admin_role(client, session):

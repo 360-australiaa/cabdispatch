@@ -221,6 +221,32 @@ export function DevicesPanel() {
       render: (d) => (d.vehicle_id ? vehicleRegoById.get(d.vehicle_id) ?? d.vehicle_id : "—"),
     },
     {
+      // "Is that tablet actually enrolled?" was unanswerable from this page: it
+      // showed Last seen, which a hand-created row that has never paired also
+      // has once anyone hits its heartbeat. A meter cannot be used unregistered
+      // any more, so this is now the first thing an operator needs when a driver
+      // phones in blocked.
+      key: "paired_at",
+      header: "Paired",
+      sortable: true,
+      sortAccessor: (d) => d.paired_at ?? "",
+      render: (d) => {
+        if (d.revoked_at) {
+          return (
+            <Badge variant="destructive" title={`Revoked ${formatDateTime(d.revoked_at)}`}>
+              Revoked
+            </Badge>
+          );
+        }
+        if (!d.paired_at) {
+          return <span className="text-muted-foreground">Never</span>;
+        }
+        return (
+          <span title={formatDateTime(d.paired_at)}>{relativeFromNow(d.paired_at)}</span>
+        );
+      },
+    },
+    {
       key: "kiosk_locked",
       header: "Kiosk",
       render: (d) => <Badge variant={d.kiosk_locked ? "destructive" : "success"}>{d.kiosk_locked ? "Locked" : "Unlocked"}</Badge>,

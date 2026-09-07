@@ -14,6 +14,8 @@ import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /**
  * Real offline map region download via Mapbox's Maps SDK v11 [TileStore]/[OfflineManager] —
@@ -212,4 +214,36 @@ object MapboxOfflineRegion {
     fun removeSydneyMetroRegion(accessToken: String) {
         tileStore(accessToken).removeTileRegion(SYDNEY_METRO_REGION_ID)
     }
+
+    /**
+     * Whether this tablet is actually holding tiles for either known region.
+     *
+     * This file could download regions but never report on them, so nothing in the app could
+     * answer "are offline maps ready?" — which is exactly what the device-readiness gate
+     * ([au.com.threesixty.cabdispatch.domain.DeviceReadiness]) has to display. Settings' offline-
+     * maps tile was in the same position: it could start a download and show its progress, but on
+     * the next launch it had no idea whether one had ever finished.
+     *
+     * Deliberately "either region", not a specific one: [downloadRegionNear] picks whichever of
+     * Sydney/Karachi is closer to the current fix, so demanding one particular id would report a
+     * correctly-provisioned tablet as unprovisioned.
+     *
+     * A region counts only when [TileRegion.completedResourceCount] has reached its required count.
+     * A half-finished download — interrupted by a dead connection or a reboot, which is the
+     * realistic failure — leaves a region row behind, and treating its mere existence as "maps are
+     * ready" would tell a driver they had offline maps they do not have.
+     */
+    suspend fun hasAnyRegion(accessToken: String): Boolean = suspendCancellableCoroutine { cont ->
+        tileStore(accessToken).getAllTileRegions { expected ->
+            val regions = expected.value.orEmpty()
+            val complete = regions.any {
+                it.id in ALL_REGION_IDS &&
+                    it.requiredResourceCount > 0 &&
+                    it.completedResourceCount >= it.requiredResourceCount
+            }
+            if (cont.isActive) cont.resume(complete)
+        }
+    }
+
+    private val ALL_REGION_IDS = setOf(SYDNEY_METRO_REGION_ID, KARACHI_METRO_REGION_ID)
 }

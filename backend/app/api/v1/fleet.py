@@ -7,14 +7,19 @@ this system (see app.core.security / app.core.database docstrings).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.core.security import (
+    get_current_tenant_id,
+    get_current_user,
+    get_optional_tenant_id,
+    require_role,
+)
 from app.models.fleet import Device, Vehicle
 from app.models.user import User
 from app.schemas.fleet import (
@@ -476,6 +481,14 @@ async def update_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # `revoked` is a boolean on the wire and a timestamp in the column -- the row
+    # is an audit record, so it keeps WHEN a tablet was retired, not merely that
+    # it was. Popped before the generic setattr loop below, which would otherwise
+    # try to assign a bool to `Device.revoked`, a field that does not exist.
+    if "revoked" in updates:
+        revoked = updates.pop("revoked")
+        device.revoked_at = datetime.now(UTC) if revoked else None
+
     for field, value in updates.items():
         setattr(device, field, value)
 
@@ -508,18 +521,27 @@ async def delete_device(
 @router.post("/devices/register", response_model=DeviceRead)
 async def register_device(
     payload: DeviceRegisterRequest,
-    tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    """QR-pairing: the device presents its `android_id` plus the pairing code
-    shown/scanned from `POST /vehicles/{id}/pairing-code`, and is bound to that
-    code's vehicle. Requires auth like every endpoint here (the person setting
-    up the kiosk is logged into the app) — see the domain summary for why this
-    doesn't use a separate device-credential scheme."""
+    """Pairing: the device presents its `android_id` plus the pairing code shown
+    by `POST /vehicles/{id}/pairing-code`, and is bound to that code's vehicle.
+    Responds with the device row plus, once and only here, its `device_secret`.
+
+    **This is the one route in this file with no bearer requirement, and that is
+    the point.** Registration became the gate a tablet must pass before anyone
+    can log into the meter, so by definition there is nobody logged in when it
+    is called and no token to take a tenant from. The pairing code IS the
+    credential: admin-minted, tenant-scoped (the tenant is read off the code
+    row, so a code from tenant A can only enrol into tenant A), single-use, and
+    valid for `fleet_service.PAIRING_CODE_TTL_MINUTES` minutes. Eight characters
+    of a 32-symbol alphabet is ~40 bits, which -- single-use and expiring in 15
+    minutes -- is not a brute-force target worth defending beyond what the code
+    itself provides. This backend has no rate limiting anywhere today; if that
+    changes, this route should be among the first to get it.
+    """
     try:
-        return await fleet_service.register_device(
+        device, secret = await fleet_service.register_device(
             session,
-            tenant_id=tenant_id,
             android_id=payload.android_id,
             pairing_code=payload.pairing_code,
             model=payload.model,
@@ -528,12 +550,20 @@ async def register_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # The single moment the plaintext secret exists outside the tablet. Set on
+    # the response object rather than the ORM row -- DeviceRead.device_secret is
+    # not a column, and every other read of this model leaves it None.
+    response = DeviceRead.model_validate(device)
+    response.device_secret = secret
+    return response
+
 
 @router.post("/devices/{device_id}/heartbeat", response_model=DeviceRead)
 async def device_heartbeat(
     device_id: str,
     payload: DeviceHeartbeatRequest,
-    tenant_id: str = Depends(get_current_tenant_id),
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Updates last_seen_at/battery/network and returns the current device row —
@@ -546,11 +576,43 @@ async def device_heartbeat(
     been published) — a low-cost hint riding this existing 60s poll so a
     device can learn about an OTA update without a second network round-trip.
     The dedicated `GET /v1/app-releases/latest` endpoint still exists
-    independently for a manual "check for updates" pull."""
-    try:
-        device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
-    except fleet_service.FleetError as exc:
-        raise _fleet_error_to_http(exc) from exc
+    independently for a manual "check for updates" pull.
+
+    **Authenticates on EITHER an `X-Device-Secret` header or a human bearer
+    token.** The secret is the one that matters: it lets a tablet with nobody
+    logged into it poll for commands, which is the whole reason a parked or
+    logged-off tablet could not be located, kiosk-locked or told to update
+    before. The bearer path is kept because every tablet paired before device
+    secrets existed has none, and would otherwise stop reporting the moment this
+    deployed; those acquire a secret the next time they re-pair. A device
+    presenting a secret needs no tenant from a token -- its own row carries one.
+    """
+    if x_device_secret:
+        try:
+            device = await fleet_service.authenticate_device(
+                session, device_id=device_id, secret=x_device_secret
+            )
+        except fleet_service.DeviceAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+            ) from exc
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    elif tenant_id is not None:
+        try:
+            device = await fleet_service.get_device_or_404(
+                session, tenant_id=tenant_id, device_id=device_id
+            )
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    else:
+        # Neither credential. get_optional_tenant_id authorises nothing by
+        # itself, so this branch is what actually keeps the route protected.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Device heartbeat requires an X-Device-Secret header or a bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     device = await fleet_service.record_heartbeat(
         session,

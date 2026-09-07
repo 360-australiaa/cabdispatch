@@ -64,12 +64,21 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- windowSoftInputMode=adjustResize: the soft keyboard must SHRINK the window, not sit
+             on top of it. Two screens take a device pairing code on the tablet's own keyboard (the
+             readiness gate in front of login, and Settings > Pair Meter); with the default
+             behaviour the keyboard overlaid the Pair button, on a gate a driver cannot leave.
+             Compose's imePadding() reports nothing while decorFitsSystemWindows stays true (the
+             default here), so this attribute is what actually makes the room. Nothing else in this
+             app raises the IME - every other text entry is a hand-rolled on-screen keypad - so the
+             blast radius is those two screens. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.CabDispatch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

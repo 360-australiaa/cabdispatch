@@ -220,6 +220,35 @@ _CREDENTIALS_EXCEPTION = HTTPException(
 )
 
 
+# The same scheme with auto_error off, for the one route that accepts EITHER a
+# human bearer token or a device credential (POST /v1/fleet/devices/{id}/
+# heartbeat). auto_error=True would reject a perfectly valid device request
+# before the route ever saw its X-Device-Secret header.
+_optional_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def _payload_from_credentials(
+    credentials: HTTPAuthorizationCredentials,
+) -> dict[str, Any]:
+    """The decode/verify body shared by the required and optional bearer
+    dependencies below, so both apply exactly the same rules -- an optional
+    credential that skipped the revocation or token-type checks would be a hole,
+    not a convenience."""
+    try:
+        payload = decode_token(credentials.credentials)
+    except JWTError:
+        raise _CREDENTIALS_EXCEPTION
+
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
+        raise _CREDENTIALS_EXCEPTION
+
+    jti = payload.get("jti")
+    if jti and await revocation_store.is_revoked(jti):
+        raise _CREDENTIALS_EXCEPTION
+
+    return payload
+
+
 async def get_token_payload(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ) -> dict[str, Any]:
@@ -234,19 +263,19 @@ async def get_token_payload(
     lifetime. (POST /v1/auth/refresh already self-checks TOKEN_TYPE_REFRESH
     before this dependency ever sees a refresh token, so it's unaffected.)
     """
-    try:
-        payload = decode_token(credentials.credentials)
-    except JWTError:
-        raise _CREDENTIALS_EXCEPTION
+    return await _payload_from_credentials(credentials)
 
-    if payload.get("type") != TOKEN_TYPE_ACCESS:
-        raise _CREDENTIALS_EXCEPTION
 
-    jti = payload.get("jti")
-    if jti and await revocation_store.is_revoked(jti):
-        raise _CREDENTIALS_EXCEPTION
-
-    return payload
+async def get_optional_token_payload(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer_scheme),
+) -> dict[str, Any] | None:
+    """[get_token_payload] for a route that may legitimately be called with no
+    Authorization header at all. Absent header -> None; a header that IS present
+    is validated exactly as strictly as the required dependency, so this weakens
+    nothing -- it only makes "no credential" expressible instead of fatal."""
+    if credentials is None:
+        return None
+    return await _payload_from_credentials(credentials)
 
 
 async def get_current_user(
@@ -267,18 +296,9 @@ async def get_current_user(
     return user
 
 
-async def get_current_tenant_id(
-    request: Request,
-    payload: dict[str, Any] = Depends(get_token_payload),
-) -> str:
-    """The row-level multi-tenancy mechanism every domain router MUST use to
-    filter every query.
-
-    - role == "owner" whose token tenant_id == PLATFORM_TENANT_ID (the "TCT"
-      platform tenant, tenant 0) may pass `?tenant_id=<id>` to act cross-tenant.
-    - Everyone else is hard-locked to their own token's tenant_id; a query-string
-      tenant_id is silently ignored for them.
-    """
+def _tenant_from_payload(request: Request, payload: dict[str, Any]) -> str:
+    """The tenant-resolution rule itself, shared by the required and optional
+    dependencies below so there is exactly one definition of it."""
     token_tenant_id = payload.get("tenant_id")
     role = payload.get("role")
 
@@ -294,6 +314,36 @@ async def get_current_tenant_id(
             detail="Token has no tenant scope",
         )
     return token_tenant_id
+
+
+async def get_current_tenant_id(
+    request: Request,
+    payload: dict[str, Any] = Depends(get_token_payload),
+) -> str:
+    """The row-level multi-tenancy mechanism every domain router MUST use to
+    filter every query.
+
+    - role == "owner" whose token tenant_id == PLATFORM_TENANT_ID (the "TCT"
+      platform tenant, tenant 0) may pass `?tenant_id=<id>` to act cross-tenant.
+    - Everyone else is hard-locked to their own token's tenant_id; a query-string
+      tenant_id is silently ignored for them.
+    """
+    return _tenant_from_payload(request, payload)
+
+
+async def get_optional_tenant_id(
+    request: Request,
+    payload: dict[str, Any] | None = Depends(get_optional_token_payload),
+) -> str | None:
+    """[get_current_tenant_id] where "no credential was presented" is a valid
+    answer rather than a 403. For routes that accept a non-human credential
+    instead -- today only the device heartbeat, which a tablet with nobody
+    logged into it must be able to call. A route using this MUST reject `None`
+    itself unless it has another credential to fall back on; this dependency
+    authorises nothing on its own."""
+    if payload is None:
+        return None
+    return _tenant_from_payload(request, payload)
 
 
 # Alias — some call sites read more naturally as "require_tenant_scope".

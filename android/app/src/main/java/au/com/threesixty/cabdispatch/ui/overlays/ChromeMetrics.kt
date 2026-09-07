@@ -51,6 +51,30 @@ object CaptainChromeMetrics {
     val topOverlayInset: Dp get() = headerHeight + 10.dp
 
     /**
+     * True while an exclusive full-screen surface owns the display and the app-level banners must
+     * stand down.
+     *
+     * Set only by the device-readiness gate
+     * ([au.com.threesixty.cabdispatch.ui.screens.readiness.DeviceReadinessScreen]). That screen has
+     * no header, so the banners' measured clearance -- the last real header they saw -- lands them
+     * on top of its own headline and its first checklist row. Worse, they are redundant there:
+     * FLEET LOCKED, TABLET NOT REGISTERED and UPDATE PENDING all announce conditions the gate is
+     * already dedicated to, in fewer words and with no fix attached, over the version of the same
+     * message that does have one.
+     *
+     * Deliberately narrow. This is not a general "hide the chrome" switch -- the banners exist
+     * because a driver must see these states everywhere else, and the one place they may be
+     * suppressed is a screen whose entire job is to say the same thing better.
+     */
+    var fullScreenGateVisible: Boolean by mutableStateOf(false)
+        private set
+
+    /** Called by the gate as it enters and leaves composition. */
+    internal fun setFullScreenGateVisible(visible: Boolean) {
+        fullScreenGateVisible = visible
+    }
+
+    /**
      * Publishes this element's measured height as the app header's.
      *
      * Screens with no header never call this, so the last real measurement persists — which is the
