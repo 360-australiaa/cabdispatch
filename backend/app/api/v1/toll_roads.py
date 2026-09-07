@@ -19,16 +19,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
 from app.core.security import get_current_user, require_role
-from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
+from app.models.toll import TollGantry, TollPoint, TollRoad, TollRoadPriceRevision
 from app.models.user import User
 from app.schemas.toll import (
     TollGantryRead,
+    TollPointPriceRevisionRead,
+    TollPointRead,
     TollRoadDetailRead,
     TollRoadPriceRevisionCreate,
     TollRoadPriceRevisionRead,
     TollRoadRead,
 )
-from app.services.tolls import current_price_revision
+from app.services.tolls import current_price_revision, current_toll_point_price_revision
 
 router = APIRouter(prefix="/v1/toll-roads", tags=["toll-roads"])
 
@@ -48,19 +50,69 @@ async def _gantry_count(session: AsyncSession, road_id: str) -> int:
     return result.scalar_one()
 
 
-def _to_road_read(road: TollRoad, *, gantry_count: int, current: TollRoadPriceRevision | None) -> TollRoadRead:
+async def _toll_points(session: AsyncSession, road: TollRoad) -> list[TollPointRead]:
+    """The named toll points of a `pricing_model == "per_point"` road, each
+    with the price currently in force. Empty for every other road — those
+    price at the road level, so a non-empty list here would be misleading
+    rather than merely redundant.
+
+    Returned on the LIST endpoint as well as the detail one, deliberately:
+    M2/CCT/LCT have no meaningful road-level price at all (their min/max is a
+    descriptive range across their points, never charged), so a road list
+    without this has nothing real to show for them."""
+    if road.pricing_model != "per_point":
+        return []
+
+    points = (
+        await session.execute(select(TollPoint).where(TollPoint.toll_road_id == road.id).order_by(TollPoint.id))
+    ).scalars().all()
+
+    out: list[TollPointRead] = []
+    for point in points:
+        gantry_count = (
+            await session.execute(
+                select(func.count()).select_from(TollGantry).where(TollGantry.toll_point_id == point.id)
+            )
+        ).scalar_one()
+        current = await current_toll_point_price_revision(session, toll_point_id=point.id)
+        out.append(
+            TollPointRead(
+                id=point.id,
+                toll_road_id=point.toll_road_id,
+                name=point.name,
+                description=point.description,
+                source_note=point.source_note,
+                gantry_count=gantry_count,
+                current_price=(
+                    TollPointPriceRevisionRead.model_validate(current) if current is not None else None
+                ),
+            )
+        )
+    return out
+
+
+def _to_road_read(
+    road: TollRoad,
+    *,
+    gantry_count: int,
+    current: TollRoadPriceRevision | None,
+    toll_points: list[TollPointRead],
+) -> TollRoadRead:
     return TollRoadRead(
         id=road.id,
         api_code=road.api_code,
         name=road.name,
         operator=road.operator,
         pricing_model=road.pricing_model,
+        charging_policy=road.charging_policy,
+        network_group=road.network_group,
         directional=road.directional,
         description=road.description,
         derived_corridor_km=road.derived_corridor_km,
         source_note=road.source_note,
         gantry_count=gantry_count,
         current_price=TollRoadPriceRevisionRead.model_validate(current) if current is not None else None,
+        toll_points=toll_points,
     )
 
 
@@ -76,7 +128,14 @@ async def list_toll_roads(
     for road in roads:
         gantry_count = await _gantry_count(session, road.id)
         current = await current_price_revision(session, toll_road_id=road.id)
-        out.append(_to_road_read(road, gantry_count=gantry_count, current=current))
+        out.append(
+            _to_road_read(
+                road,
+                gantry_count=gantry_count,
+                current=current,
+                toll_points=await _toll_points(session, road),
+            )
+        )
     return out
 
 
@@ -104,7 +163,12 @@ async def get_toll_road(
     ).scalars().all()
     current = await current_price_revision(session, toll_road_id=road_id)
 
-    base = _to_road_read(road, gantry_count=len(gantries), current=current)
+    base = _to_road_read(
+        road,
+        gantry_count=len(gantries),
+        current=current,
+        toll_points=await _toll_points(session, road),
+    )
     return TollRoadDetailRead(
         **base.model_dump(),
         gantries=[TollGantryRead.model_validate(g) for g in gantries],

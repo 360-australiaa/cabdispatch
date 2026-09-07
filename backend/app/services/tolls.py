@@ -2,15 +2,19 @@
 
 Replaces the old `app.models.geofence.Geofence(kind="toll")` flat-circle
 model (still used, unchanged, for tenant-defined AD HOC toll circles — see
-`app.services.geofence`) for the 13 roads in the product owner's
-authoritative NSW toll dataset (`app/data/nsw_toll_roads.json` /
-`app/data/nsw_toll_gantries.csv`, loaded by `scripts/seed_toll_roads.py`).
+`app.services.geofence`) for the roads in the authoritative NSW toll dataset
+(`app/data/nsw_toll_roads.json` / `app/data/nsw_toll_gantries.csv`, loaded by
+`scripts/seed_toll_roads.py`).
 
-The one thing every function in this module exists to get right: charge a
-road ONCE PER TRIP no matter how many of its gantries are crossed, respect a
-one-way/northbound/southbound-only road's actual direction, and never invent
-a dollar figure the source data doesn't support (see the `zone_flat` /
-"unpriced" handling in `apply_toll_detection` below).
+The things every function in this module exists to get right: honour each
+road's own `TollRoad.charging_policy` (see `app.models.toll`'s module
+docstring — once-per-road, cumulative-per-point, or distance-metered are NOT
+interchangeable, a single blanket "charge once" rule is wrong for a road
+like Hills M2), respect a one-way/northbound/southbound-only road's actual
+direction, enforce a shared network-wide cap across roads that have one
+(`TollRoad.network_group` — WestConnex), and never invent a dollar figure
+the source data doesn't support (see the "unpriced" handling in
+`apply_toll_detection` below).
 
 Called from `app.services.trips.apply_tick`, once per submitted GPS point,
 ALONGSIDE (not instead of) the pre-existing ad hoc-geofence toll detection —
@@ -26,8 +30,22 @@ from math import asin, atan2, cos, degrees, radians, sin, sqrt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
+from app.models.toll import (
+    TollGantry,
+    TollPoint,
+    TollPointPriceRevision,
+    TollRoad,
+    TollRoadPriceRevision,
+)
 from app.services.fare_engine import round_half_up
+
+# Pricing models whose charge is computed from running distance-since-entry
+# rather than a single fixed amount -- see `TollRoad.charging_policy ==
+# "distance_metered"` in app.models.toll's module docstring. A road on this
+# list is the one case where re-detecting the SAME road on a later tick must
+# still REVISE its existing `auto_tolled_roads` entry (rather than being
+# skipped as "already charged") -- see apply_toll_detection below.
+_DISTANCE_METERED_PRICING_MODELS = ("distance", "distance_with_flagfall")
 
 # Gantries are precise point structures (unlike the old "near this landmark"
 # circles, which used 300-1500m radii) — a tight, DOCUMENTED app-level
@@ -195,16 +213,57 @@ async def current_price_revision(
     return result.scalar_one_or_none()
 
 
+async def current_toll_point_price_revision(
+    session: AsyncSession, *, toll_point_id: str, as_of: date | None = None
+) -> TollPointPriceRevision | None:
+    """Same lookup as `current_price_revision`, one level down — the
+    revision in force `as_of` for one named `TollPoint` of a
+    `pricing_model == "per_point"` road (M2/CCT/LCT)."""
+    as_of = as_of or datetime.now(UTC).date()
+    stmt = (
+        select(TollPointPriceRevision)
+        .where(
+            TollPointPriceRevision.toll_point_id == toll_point_id,
+            TollPointPriceRevision.effective_date <= as_of,
+        )
+        .order_by(TollPointPriceRevision.effective_date.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 def distance_rate_per_km_class_a(road: TollRoad, revision: TollRoadPriceRevision) -> Decimal | None:
-    """$/km for a "distance" pricing-model road (M7 today), backed out of its
-    published Class A cap and its REAL corridor length
-    (`TollRoad.derived_corridor_km` — computed at seed time from the road's
-    actual gantry coordinates, see `scripts/seed_toll_roads.py`; not
-    invented). None if either input is missing, which
-    `apply_toll_detection` treats as "unpriced"."""
+    """FALLBACK ONLY — see `effective_rate_per_km_class_a` below, which
+    always prefers a real published rate over this. $/km for a "distance"
+    pricing-model road, backed out of its published Class A cap and its REAL
+    corridor length (`TollRoad.derived_corridor_km` — computed at seed time
+    from the road's actual gantry coordinates, see
+    `scripts/seed_toll_roads.py`; not invented). None if either input is
+    missing, which `apply_toll_detection` treats as "unpriced".
+
+    Westlink M7 used to rely on this as its ONLY rate, which the 2026-09-07
+    correction pass identified as wrong: dividing a cap by a self-measured
+    gantry corridor is a derivation, not Linkt's actual published $/km rate,
+    and the two need not agree (they didn't — this produced roughly
+    $0.44/km against a real published $0.5252/km). Kept only as a fallback
+    for a future "distance" road with no published rate captured yet.
+    """
     if revision.cap_class_a is None or not road.derived_corridor_km:
         return None
     return revision.cap_class_a / road.derived_corridor_km
+
+
+def effective_rate_per_km_class_a(road: TollRoad, revision: TollRoadPriceRevision) -> Decimal | None:
+    """The $/km rate actually used to price a "distance" or
+    "distance_with_flagfall" road — the revision's own published
+    `rate_per_km_class_a` (Linkt's real, cited figure) if present, else the
+    derived-corridor fallback (`distance_rate_per_km_class_a`). None if
+    neither is available, which `apply_toll_detection` treats as
+    "unpriced"."""
+    if revision.rate_per_km_class_a is not None:
+        return revision.rate_per_km_class_a
+    return distance_rate_per_km_class_a(road, revision)
 
 
 # --- gantry detection -----------------------------------------------------------
@@ -225,6 +284,46 @@ async def find_nearby_gantries(
 # --- main entry point, called from app.services.trips.apply_tick ------------
 
 
+async def _network_capped_amount(
+    session: AsyncSession,
+    *,
+    road: TollRoad,
+    road_id: str,
+    raw_amount: Decimal,
+    revision: TollRoadPriceRevision,
+    charged_roads: dict[str, str],
+) -> Decimal:
+    """Clamps `raw_amount` (this road's own amount, already capped at its
+    OWN per-road cap) so that the SUM of every already-charged road sharing
+    `road.network_group` never exceeds that group's published network-wide
+    cap (WestConnex: $12.74 Class A across M4/M8/M5E/M4M8_LINK for one trip
+    — see `TollRoad.network_group` / `TollRoadPriceRevision.
+    network_cap_class_a`). A no-op for a road with no network_group, or a
+    group whose revision carries no network cap figure.
+
+    Interpretation call (flagged, not a stated fact): when a crossing would
+    push the network total over the cap, THIS (the most-recently-crossed)
+    road absorbs the reduction rather than retroactively reducing an
+    earlier one — chosen because it never requires revising a charge already
+    shown to the passenger for a different road, and it never overcharges
+    the trip as a whole."""
+    if not road.network_group or revision.network_cap_class_a is None:
+        return raw_amount
+
+    prior_network_total = Decimal(0)
+    for other_id, other_amount in charged_roads.items():
+        if other_id == road_id:
+            continue
+        other_road = await session.get(TollRoad, other_id)
+        if other_road is not None and other_road.network_group == road.network_group:
+            prior_network_total += Decimal(other_amount)
+
+    remaining = revision.network_cap_class_a - prior_network_total
+    if remaining < 0:
+        remaining = Decimal(0)
+    return min(raw_amount, remaining)
+
+
 async def apply_toll_detection(
     session: AsyncSession,
     *,
@@ -243,11 +342,32 @@ async def apply_toll_detection(
     `app.services.trips.apply_tick`, which calls this once per submitted
     telemetry point, right after that point has been folded into the fare
     engine's own cumulative distance (`cumulative_distance_km` is that
-    post-tick running total, needed for the "distance" pricing model).
+    post-tick running total, needed for the "distance"/"distance_with_
+    flagfall" pricing models).
 
     `(prev_lat, prev_lng)` is the immediately preceding point (or the trip's
     last known position/start position) — used only to classify a
     directional road's travel bearing (see `classify_bearing`).
+
+    Honours each road's own `TollRoad.charging_policy` (see
+    `app.models.toll`'s module docstring) instead of one blanket rule:
+      - "once_per_road": charge once per trip. For a `pricing_model ==
+        "per_point"` road with this policy (CCT, LCT), the first toll point
+        actually crossed sets the price under the ROAD's own id in
+        `auto_tolled_roads` — a second, different point of the same road
+        later in the trip is not charged again.
+      - "cumulative_per_point": charge ADDITIVELY, once per distinct toll
+        point crossed, keyed by the `TollPoint.id` itself (e.g.
+        "M2:north_ryde") in `auto_tolled_roads` rather than the road id —
+        so a trip through 3 of M2's 6 points shows 3 separate line items
+        that sum together, and a 4th distinct point later still adds to the
+        total.
+      - "distance_metered": the road's own running-distance-since-entry
+        amount is REVISED (not skipped) on every later tick, same as
+        before, now also true for "distance_with_flagfall" (WestConnex) —
+        and, for a `network_group` road, additionally clamped so the group's
+        shared network-wide cap for this trip is never exceeded (see
+        `_network_capped_amount`).
     """
     hits = await find_nearby_gantries(session, lat=lat, lng=lng)
     if not hits:
@@ -275,16 +395,56 @@ async def apply_toll_detection(
         if allowed is None:
             continue  # no reliable bearing yet this tick — try again once there's real movement
 
-        if road.pricing_model == "zone_flat":
-            # The published range spans a cheap ramp toll to the full
-            # mainline toll and this dataset does not say which applies to
-            # which specific gantry (see app.models.toll's module docstring)
-            # — charging a guessed number from that range is exactly what
-            # the task brief forbids. Flag the crossing instead.
-            unpriced.add(road_id)
-            continue
+        # --- per_point roads (M2 cumulative; CCT/LCT once-per-road) --------
+        if road.pricing_model == "per_point":
+            road_points = [g.toll_point_id for g in hits if g.toll_road_id == road_id and g.toll_point_id]
+            if not road_points:
+                # A gantry matched this road but carries no toll_point_id —
+                # a per_point road can't be priced without one; flag it.
+                unpriced.add(road_id)
+                continue
 
-        if road_id in charged_roads and road.pricing_model != "distance":
+            if road.charging_policy == "cumulative_per_point":
+                for point_id in road_points:
+                    if point_id in charged_roads:
+                        continue  # this exact toll point already charged this trip
+                    point_revision = await current_toll_point_price_revision(
+                        session, toll_point_id=point_id, as_of=ts.date()
+                    )
+                    if (
+                        point_revision is None
+                        or point_revision.confidence == "not_captured"
+                        or point_revision.price_class_a is None
+                    ):
+                        unpriced.add(point_id)
+                        continue
+                    amount = round_half_up(point_revision.price_class_a)
+                    tolls += amount
+                    charged_roads[point_id] = str(amount)
+                    unpriced.discard(point_id)
+            else:
+                # once_per_road: first point actually crossed sets the
+                # price; already-charged roads never revise (see module
+                # docstring's CCT/LCT interpretation note).
+                if road_id not in charged_roads:
+                    point_revision = await current_toll_point_price_revision(
+                        session, toll_point_id=road_points[0], as_of=ts.date()
+                    )
+                    if (
+                        point_revision is None
+                        or point_revision.confidence == "not_captured"
+                        or point_revision.price_class_a is None
+                    ):
+                        unpriced.add(road_id)
+                    else:
+                        amount = round_half_up(point_revision.price_class_a)
+                        tolls += amount
+                        charged_roads[road_id] = str(amount)
+                        unpriced.discard(road_id)
+            continue  # per_point roads are fully handled above
+
+        distance_metered = road.pricing_model in _DISTANCE_METERED_PRICING_MODELS
+        if road_id in charged_roads and not distance_metered:
             continue  # already charged once — nothing left to revise for this model
 
         revision = await current_price_revision(session, toll_road_id=road_id, as_of=ts.date())
@@ -297,8 +457,8 @@ async def apply_toll_detection(
             amount = revision.price_class_a_max
         elif road.pricing_model == "time_of_day":
             amount = select_time_of_day_price(revision.time_of_day_rates_class_a or [], ts)
-        elif road.pricing_model == "distance":
-            rate = distance_rate_per_km_class_a(road, revision)
+        elif road.pricing_model in _DISTANCE_METERED_PRICING_MODELS:
+            rate = effective_rate_per_km_class_a(road, revision)
             if rate is None:
                 amount = None
             else:
@@ -306,10 +466,26 @@ async def apply_toll_detection(
                     progress[road_id] = str(cumulative_distance_km)
                 entry_km = Decimal(progress[road_id])
                 travelled_km = max(cumulative_distance_km - entry_km, Decimal(0))
-                raw = rate * travelled_km
+                flagfall = revision.flagfall_class_a or Decimal(0)
+                # Zero charge (flagfall included) until real movement is
+                # recorded past the entry gantry -- same "never charge on
+                # the entry tick itself" convention the plain "distance"
+                # model already used for M7, extended here to "distance_
+                # with_flagfall": never overcharge a trip that crosses the
+                # entry gantry but never sends another tick on this road.
+                raw = flagfall + rate * travelled_km if travelled_km > 0 else Decimal(0)
                 amount = min(raw, revision.cap_class_a) if revision.cap_class_a is not None else raw
+                if amount is not None:
+                    amount = await _network_capped_amount(
+                        session,
+                        road=road,
+                        road_id=road_id,
+                        raw_amount=amount,
+                        revision=revision,
+                        charged_roads=charged_roads,
+                    )
         else:
-            amount = None  # distance_with_flagfall etc. with no formula captured here
+            amount = None  # any future pricing model with no formula captured here
 
         if amount is None:
             unpriced.add(road_id)

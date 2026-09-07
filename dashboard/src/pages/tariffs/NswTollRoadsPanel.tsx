@@ -48,7 +48,16 @@ export function NswTollRoadsPanel() {
     {
       key: "pricing_model",
       header: "Pricing model",
-      render: (row) => <Badge variant="outline">{PRICING_MODEL_LABELS[row.pricing_model] ?? row.pricing_model}</Badge>,
+      render: (row) => (
+        <div>
+          <Badge variant="outline">{PRICING_MODEL_LABELS[row.pricing_model] ?? row.pricing_model}</Badge>
+          {row.pricing_model === "per_point" && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              {CHARGING_POLICY_LABELS[row.charging_policy] ?? row.charging_policy}
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       key: "direction",
@@ -128,11 +137,23 @@ export function NswTollRoadsPanel() {
 
 const PRICING_MODEL_LABELS: Record<string, string> = {
   flat: "Flat",
-  zone_flat: "Zone flat (ambiguous — see below)",
+  per_point: "Per toll point",
+  // Retired by the 2026-09-07 correction pass (see useTollRoads.ts) — kept so
+  // a row seeded by an older build still reads as something, and reads as stale.
+  zone_flat: "Zone flat (retired — re-seed required)",
   distance: "Distance-based (capped)",
   distance_with_flagfall: "Distance + flagfall",
   time_of_day: "Time of day",
   unpriced: "Unpriced",
+};
+
+/** Shown only where it changes what a trip pays — i.e. on a `per_point` road,
+ * where the same pricing model bills two different ways. `once_per_road` on
+ * anything else is the ordinary case and needs no badge. */
+const CHARGING_POLICY_LABELS: Record<string, string> = {
+  cumulative_per_point: "Charged per point traversed",
+  once_per_road: "Charged once per trip",
+  distance_metered: "Metered by distance",
 };
 
 const DIRECTION_LABELS: Record<string, string> = {
@@ -157,17 +178,52 @@ function CurrentPriceCell({ road }: { road: TollRoad }) {
     return (
       <span className="flex items-center gap-1 text-sm">
         <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-        {formatMoney(price.price_class_a_min)}–{formatMoney(price.price_class_a_max)} (ambiguous per gantry — not
-        auto-charged)
+        Stale pricing model — re-run scripts/seed_toll_roads.py to load the real per-point prices
       </span>
     );
   }
-  if (road.pricing_model === "distance") {
+  // A per_point road's own min/max is a descriptive range across its points and
+  // is never what a trip is charged, so showing it here as "the price" would be
+  // misleading. Show the real points instead (all of them for a cumulative road,
+  // since a trip pays for each one it traverses).
+  if (road.pricing_model === "per_point") {
+    if (road.toll_points.length === 0) {
+      return <span className="text-muted-foreground">No toll points loaded — re-seed required</span>;
+    }
+    return (
+      <div className="text-sm">
+        {road.toll_points.map((point) => (
+          <div key={point.id} className="flex justify-between gap-3">
+            <span className="text-muted-foreground">{point.name}</span>
+            <span>{point.current_price?.price_class_a ? formatMoney(point.current_price.price_class_a) : "—"}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (road.pricing_model === "distance" || road.pricing_model === "distance_with_flagfall") {
+    // Prefer the operator's OWN published $/km rate. `derived_corridor_km` is
+    // only a fallback for a distance road whose real rate hasn't been captured
+    // — using it as the headline figure is exactly the defect the 2026-09-07
+    // correction pass fixed on Westlink M7 (a derived ~$0.44/km shown in place
+    // of Linkt's published $0.5252/km).
     return (
       <span className="text-sm">
-        {formatMoney(price.price_class_a_min)}/shortest — capped {formatMoney(price.cap_class_a)}
-        {road.derived_corridor_km && (
-          <span className="text-muted-foreground"> (~{Number(road.derived_corridor_km).toFixed(1)} km corridor)</span>
+        {price.flagfall_class_a && <>{formatMoney(price.flagfall_class_a)} + </>}
+        {price.rate_per_km_class_a ? (
+          <>${Number(price.rate_per_km_class_a).toFixed(4)}/km</>
+        ) : road.derived_corridor_km ? (
+          <span className="text-muted-foreground">
+            rate not published — derived over ~{Number(road.derived_corridor_km).toFixed(1)} km
+          </span>
+        ) : (
+          <span className="text-muted-foreground">rate not captured</span>
+        )}
+        {price.cap_class_a && <> — capped {formatMoney(price.cap_class_a)}</>}
+        {price.network_cap_class_a && road.network_group && (
+          <div className="text-xs text-muted-foreground">
+            {road.network_group} network cap {formatMoney(price.network_cap_class_a)} across all stages in one trip
+          </div>
         )}
       </span>
     );
@@ -214,6 +270,34 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
           {detail.description && (
             <p className="text-sm text-muted-foreground md:col-span-2">{detail.description}</p>
           )}
+          {detail.toll_points.length > 0 && (
+            <div className="md:col-span-2">
+              <h4 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+                Toll points ({detail.toll_points.length}) —{" "}
+                {CHARGING_POLICY_LABELS[detail.charging_policy] ?? detail.charging_policy}
+              </h4>
+              <table className="w-full text-xs">
+                <tbody>
+                  {detail.toll_points.map((point) => (
+                    <tr key={point.id} className="border-b border-border/50">
+                      <td className="py-1 pr-2">{point.name}</td>
+                      <td className="py-1 pr-2">
+                        {point.current_price?.price_class_a ? formatMoney(point.current_price.price_class_a) : "—"}
+                      </td>
+                      <td className="py-1 pr-2 text-muted-foreground">
+                        {point.gantry_count > 0
+                          ? `${point.gantry_count} gantr${point.gantry_count === 1 ? "y" : "ies"}`
+                          : "no gantries — not GPS-detectable"}
+                      </td>
+                      <td className="py-1">
+                        <ConfidenceBadge confidence={point.current_price?.confidence} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div>
             <h4 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
               Gantries ({detail.gantries.length})
@@ -258,6 +342,19 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
                       <td className="py-1 pr-2">{rev.price_class_a_max ? formatMoney(rev.price_class_a_max) : "—"}</td>
                       <td className="py-1">
                         <ConfidenceBadge confidence={rev.confidence} />
+                        {/* Provenance, not decoration: this is what an operator
+                            opens when a passenger disputes a toll. */}
+                        {rev.source_url && (
+                          <a
+                            href={rev.source_url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="ml-1 underline decoration-dotted underline-offset-2"
+                            title={rev.retrieved_at ? `Confirmed ${rev.retrieved_at}` : "Source"}
+                          >
+                            source
+                          </a>
+                        )}
                       </td>
                     </tr>
                   ))}

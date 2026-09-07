@@ -29,7 +29,13 @@ from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
 from app.models.shift import Shift
 from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
-from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
+from app.models.toll import (
+    TollGantry,
+    TollPoint,
+    TollPointPriceRevision,
+    TollRoad,
+    TollRoadPriceRevision,
+)
 from app.models.trips import Trip, TripGpsTrace
 from app.models.user import User
 from app.models.vouchers import CorporateAccount, Voucher
@@ -70,6 +76,8 @@ __all__ = [
     "TariffChangeLog",
     "Tenant",
     "TollGantry",
+    "TollPoint",
+    "TollPointPriceRevision",
     "TollRoad",
     "TollRoadPriceRevision",
     "Trip",

@@ -240,35 +240,44 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # app.services.trips.apply_tick — not exposed for direct editing via
     # TripUpdate.
     #
-    # auto_tolled_roads: {toll_road_id: "<current charged amount>"} — ONE entry
-    # per real NSW toll road this trip has been auto-charged for, keyed by
-    # `TollRoad.id` (not by gantry — this is exactly what fixes the old
-    # once-per-gantry overcharge bug). `tolls` above always includes the sum
-    # of every value here. Most roads write their entry once and never touch
-    # it again; a "distance" pricing-model road (M7 today) instead REVISES its
-    # own entry in place as the trip covers more of the corridor (see
+    # auto_tolled_roads: {key: "<current charged amount>"} — ONE entry per
+    # real NSW toll road (or, for a `charging_policy == "cumulative_per_
+    # point"` road, per distinct TOLL POINT — see app.models.toll's module
+    # docstring) this trip has been auto-charged for. Most keys are a plain
+    # `TollRoad.id` (not a gantry id — this is exactly what fixes the old
+    # once-per-gantry overcharge bug); a cumulative_per_point road's keys are
+    # instead its `TollPoint.id` (e.g. "M2:north_ryde"), so a trip through 3
+    # of Hills M2's 6 toll points shows 3 separate summed line items instead
+    # of one. `tolls` above always includes the sum of every value here.
+    # Most roads write their entry once and never touch it again; a
+    # "distance_metered" (`pricing_model in ("distance",
+    # "distance_with_flagfall")`) road instead REVISES its own entry in
+    # place as the trip covers more of the corridor (see
     # app.services.tolls.apply_toll_detection) — still only one line item,
-    # never a second `M7` entry, so "once per road" holds even though the
-    # amount itself isn't frozen at first crossing for that one model.
+    # never a second entry for that road, so "once per road" holds even
+    # though the amount itself isn't frozen at first crossing for that
+    # policy.
     auto_tolled_roads: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True, default=dict)
 
     # toll_road_progress: {toll_road_id: "<cumulative trip distance_km at
-    # entry>"} — only ever written for a "distance" pricing-model road, so its
-    # running charge can be recomputed as min(rate_per_km * distance_since_entry,
-    # cap) on every subsequent tick. Irrelevant (and never written) for every
-    # other pricing model.
+    # entry>"} — only ever written for a "distance_metered" pricing model
+    # road (`pricing_model in ("distance", "distance_with_flagfall")`), so
+    # its running charge can be recomputed as min(flagfall + rate_per_km *
+    # distance_since_entry, cap) on every subsequent tick. Irrelevant (and
+    # never written) for every other pricing model.
     toll_road_progress: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True, default=dict)
 
-    # unpriced_toll_road_ids: real NSW toll roads this trip has genuinely
-    # crossed (GPS-detected via a real gantry) but that app.services.tolls
-    # deliberately did NOT auto-charge a dollar amount for -- either because
-    # the source dataset has no captured price at all for that road
-    # (confidence="not_captured": the four WestConnex roads), or because its
-    # `zone_flat` pricing model makes the correct per-gantry amount genuinely
-    # ambiguous from this data (M2, Cross City Tunnel — see that module's
-    # docstring). Surfaced on the dashboard/meter so a driver/dispatcher knows
-    # to add a manual toll for these rather than the passenger being silently
-    # undercharged. Deliberately never populated with a guessed dollar amount.
+    # unpriced_toll_road_ids: real NSW toll roads (or toll points, for a
+    # per_point road — same key convention as `auto_tolled_roads` above)
+    # this trip has genuinely crossed (GPS-detected via a real gantry) but
+    # that app.services.tolls deliberately did NOT auto-charge a dollar
+    # amount for -- either because the source dataset has no captured price
+    # at all for that road (e.g. Rozelle Interchange, confidence=
+    # "not_captured"), or because a specific toll point's own revision is
+    # missing/incomplete. Surfaced on the dashboard/meter so a driver/
+    # dispatcher knows to add a manual toll for these rather than the
+    # passenger being silently undercharged. Deliberately never populated
+    # with a guessed dollar amount.
     unpriced_toll_road_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
 
     # --- dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema,

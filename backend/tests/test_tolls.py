@@ -10,7 +10,8 @@ for the old mechanism):
   - distance-model pricing (M7-style) respecting its published cap
   - time-of-day band selection (Sydney Harbour Bridge/Tunnel-style)
   - a trip crossing two DIFFERENT roads being charged for both
-  - zone_flat / unpriced roads being flagged, never charged a guessed amount
+  - unpriced roads, and roads whose pricing model this service has no
+    formula for, being flagged and never charged a guessed amount
 
 Also covers the read-only `/v1/toll-roads` API and the platform-owner-gated
 price-revision endpoint.
@@ -34,7 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import PLATFORM_TENANT_ID
 from app.models.tenant import Tenant
-from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
+from app.models.toll import (
+    TollGantry,
+    TollPoint,
+    TollPointPriceRevision,
+    TollRoad,
+    TollRoadPriceRevision,
+)
 from app.services.tolls import (
     classify_bearing,
     direction_allows_charge,
@@ -74,6 +81,11 @@ async def _make_road(
     derived_corridor_km: str | None = None,
     time_of_day_rates_class_a: list[dict] | None = None,
     confidence: str = "verified",
+    charging_policy: str = "once_per_road",
+    network_group: str | None = None,
+    rate_per_km_class_a: str | None = None,
+    flagfall_class_a: str | None = None,
+    network_cap_class_a: str | None = None,
 ) -> TollRoad:
     road = TollRoad(
         id=road_id,
@@ -81,6 +93,8 @@ async def _make_road(
         name=f"{road_id} Motorway",
         operator="Test Operator",
         pricing_model=pricing_model,
+        charging_policy=charging_policy,
+        network_group=network_group,
         directional=directional,
         derived_corridor_km=Decimal(derived_corridor_km) if derived_corridor_km else None,
     )
@@ -97,6 +111,9 @@ async def _make_road(
                 price_class_b_max=None,
                 cap_class_a=Decimal(cap_class_a) if cap_class_a else None,
                 cap_class_b=None,
+                rate_per_km_class_a=Decimal(rate_per_km_class_a) if rate_per_km_class_a else None,
+                flagfall_class_a=Decimal(flagfall_class_a) if flagfall_class_a else None,
+                network_cap_class_a=Decimal(network_cap_class_a) if network_cap_class_a else None,
                 time_of_day_rates_class_a=time_of_day_rates_class_a,
                 currency="AUD",
                 gst_included=True,
@@ -109,14 +126,52 @@ async def _make_road(
     return road
 
 
-async def _add_gantry(session: AsyncSession, *, road_id: str, gantry_id: str, lat: float, lng: float) -> TollGantry:
+async def _add_gantry(
+    session: AsyncSession,
+    *,
+    road_id: str,
+    gantry_id: str,
+    lat: float,
+    lng: float,
+    toll_point_id: str | None = None,
+) -> TollGantry:
     gantry = TollGantry(
         id=gantry_id, toll_road_id=road_id, location=gantry_id, ramp=None, direction=None,
-        latitude=lat, longitude=lng,
+        latitude=lat, longitude=lng, toll_point_id=toll_point_id,
     )
     session.add(gantry)
     await session.commit()
     return gantry
+
+
+async def _make_toll_point(
+    session: AsyncSession,
+    *,
+    road_id: str,
+    point_id: str,
+    price_class_a: str | None,
+    confidence: str = "verified",
+) -> TollPoint:
+    """One named toll point of a `per_point` road, plus the dated revision
+    that prices it. `price_class_a=None` models a point the source data never
+    resolved a price for -- which must be FLAGGED, never guessed."""
+    point = TollPoint(id=point_id, toll_road_id=road_id, name=point_id)
+    session.add(point)
+    await session.commit()
+    session.add(
+        TollPointPriceRevision(
+            toll_point_id=point_id,
+            price_class_a=Decimal(price_class_a) if price_class_a else None,
+            price_class_b=None,
+            currency="AUD",
+            gst_included=True,
+            effective_date=_EFFECTIVE_DATE,
+            indexation="quarterly",
+            confidence=confidence,
+        )
+    )
+    await session.commit()
+    return point
 
 
 async def _tick(client: AsyncClient, headers: dict, trip_id: str, *, lat: float, lng: float, ts: datetime, speed_kmh: float = 80.0):
@@ -387,10 +442,25 @@ async def test_crossing_two_different_roads_charges_both(client: AsyncClient, se
     assert body2["auto_tolled_roads"] == {"TESTROADA": "6.06", "TESTROADB": "4.30"}
 
 
-# --- zone_flat / unpriced: flagged, never guessed ---------------------------------
+# --- unrecognised / unpriced models: flagged, never guessed -----------------------
 
 
-async def test_zone_flat_road_is_flagged_not_charged(client: AsyncClient, session: AsyncSession):
+async def test_retired_or_unknown_pricing_model_is_flagged_not_charged(
+    client: AsyncClient, session: AsyncSession
+):
+    """A road whose `pricing_model` this service has no formula for must be
+    FLAGGED for manual entry, never charged a guessed number.
+
+    Uses the retired "zone_flat" value deliberately. Before the 2026-09-07
+    correction pass that model was a real, explicitly-handled branch (an
+    ambiguous min-max range across a road's cheapest ramp and its full
+    mainline toll); the pass replaced it with real per-toll-point prices, so
+    "zone_flat" is now exactly what this test needs — a value a production
+    database seeded by an older build can genuinely still contain, which
+    today's code does not recognise. It stands in for any future model that
+    reaches this service before its formula does; the invariant under test
+    ("no formula -> unpriced, never a guess") is what matters, not the
+    string."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -425,6 +495,197 @@ async def test_unpriced_road_is_flagged_not_charged(client: AsyncClient, session
     assert body["unpriced_toll_road_ids"] == ["TESTUNPRICED"]
 
 
+# --- per_point roads: cumulative vs. once-per-road -------------------------------
+#
+# The 2026-09-07 correction pass replaced the old, ambiguous `zone_flat` model
+# (one min-max range per road, never chargeable) with real per-toll-point
+# prices, and with it a second axis the old model had no need for: a road's
+# `charging_policy`. `pricing_model` alone does NOT determine what a trip is
+# charged -- M2 and Lane Cove Tunnel are both "per_point" and charge
+# differently -- so both policies are pinned here against the real endpoint.
+
+
+async def test_cumulative_per_point_road_charges_each_distinct_point(
+    client: AsyncClient, session: AsyncSession
+):
+    """Hills M2's own pricing page prices by the number of toll points
+    traversed, so a trip through two of its points pays for BOTH. This is the
+    one road where a second gantry of the SAME road adds money rather than
+    being deduplicated away."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(
+        session,
+        road_id="TESTCUMUL",
+        pricing_model="per_point",
+        charging_policy="cumulative_per_point",
+        directional="both",
+    )
+    await _make_toll_point(session, road_id=road.id, point_id="TESTCUMUL:p1", price_class_a="10.64")
+    await _make_toll_point(session, road_id=road.id, point_id="TESTCUMUL:p2", price_class_a="3.76")
+    point_a = _next_zone()
+    point_b = _next_zone()
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTCUMUL:g1",
+        lat=point_a[0], lng=point_a[1], toll_point_id="TESTCUMUL:p1",
+    )
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTCUMUL:g2",
+        lat=point_b[0], lng=point_b[1], toll_point_id="TESTCUMUL:p2",
+    )
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=point_a[0], start_lng=point_a[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body1 = await _tick(client, headers, trip["id"], lat=point_a[0], lng=point_a[1], ts=t0 + timedelta(seconds=5))
+    assert Decimal(body1["tolls"]) == Decimal("10.64")
+
+    body2 = await _tick(client, headers, trip["id"], lat=point_b[0], lng=point_b[1], ts=t0 + timedelta(minutes=5))
+    assert Decimal(body2["tolls"]) == Decimal("10.64") + Decimal("3.76")
+    # Keyed by TOLL POINT id, not road id -- the receipt has to be able to
+    # show which points were actually traversed, not one merged road total.
+    assert body2["auto_tolled_roads"] == {"TESTCUMUL:p1": "10.64", "TESTCUMUL:p2": "3.76"}
+
+    # Re-crossing an already-charged point never adds it twice.
+    body3 = await _tick(client, headers, trip["id"], lat=point_a[0], lng=point_a[1], ts=t0 + timedelta(minutes=10))
+    assert Decimal(body3["tolls"]) == Decimal("10.64") + Decimal("3.76")
+
+
+async def test_once_per_road_per_point_road_charges_only_the_first_point_crossed(
+    client: AsyncClient, session: AsyncSession
+):
+    """Cross City Tunnel and Lane Cove Tunnel have real per-point prices but
+    their two points are a main tunnel and an alternate ramp a vehicle uses
+    ONE of. Neither source says those are cumulative, so they are modelled
+    once_per_road -- the deliberate no-overcharge reading (a flagged
+    interpretation call; see app.models.toll's module docstring). This test
+    exists so that call can never be silently reversed by a refactor."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(
+        session,
+        road_id="TESTONCEPP",
+        pricing_model="per_point",
+        charging_policy="once_per_road",
+        directional="both",
+    )
+    await _make_toll_point(session, road_id=road.id, point_id="TESTONCEPP:main", price_class_a="4.30")
+    await _make_toll_point(session, road_id=road.id, point_id="TESTONCEPP:ramp", price_class_a="2.15")
+    point_a = _next_zone()
+    point_b = _next_zone()
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTONCEPP:g1",
+        lat=point_a[0], lng=point_a[1], toll_point_id="TESTONCEPP:main",
+    )
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTONCEPP:g2",
+        lat=point_b[0], lng=point_b[1], toll_point_id="TESTONCEPP:ramp",
+    )
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=point_a[0], start_lng=point_a[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body1 = await _tick(client, headers, trip["id"], lat=point_a[0], lng=point_a[1], ts=t0 + timedelta(seconds=5))
+    assert Decimal(body1["tolls"]) == Decimal("4.30")
+    # Charged under the ROAD id here, not the point id -- there is only ever
+    # one charge for this road per trip, so the road is the honest key.
+    assert body1["auto_tolled_roads"] == {"TESTONCEPP": "4.30"}
+
+    body2 = await _tick(client, headers, trip["id"], lat=point_b[0], lng=point_b[1], ts=t0 + timedelta(minutes=5))
+    assert Decimal(body2["tolls"]) == Decimal("4.30"), "a second point of a once_per_road road must never add"
+
+
+async def test_per_point_road_with_an_unpriced_point_is_flagged_not_guessed(
+    client: AsyncClient, session: AsyncSession
+):
+    """A toll point the source data never resolved a price for must be
+    flagged for manual entry, exactly like an unpriced road -- never charged
+    the road-level min/max range, which is a descriptive summary and not a
+    real per-crossing price."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await _make_road(
+        session,
+        road_id="TESTPPUNPRICED",
+        pricing_model="per_point",
+        charging_policy="cumulative_per_point",
+        directional="both",
+    )
+    await _make_toll_point(session, road_id=road.id, point_id="TESTPPUNPRICED:p1", price_class_a=None)
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTPPUNPRICED:g1",
+        lat=gantry_lat, lng=gantry_lng, toll_point_id="TESTPPUNPRICED:p1",
+    )
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=gantry_lat, start_lng=gantry_lng)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    body = await _tick(client, headers, trip["id"], lat=gantry_lat, lng=gantry_lng, ts=t0 + timedelta(seconds=5))
+    assert body["tolls"] == "0.00"
+    assert body["auto_tolled_roads"] == {}
+    assert body["unpriced_toll_road_ids"] == ["TESTPPUNPRICED:p1"]
+
+
+# --- WestConnex network-wide cap -------------------------------------------------
+
+
+async def test_network_group_roads_share_one_capped_total(client: AsyncClient, session: AsyncSession):
+    """A trip using more than one WestConnex stage is capped for the WHOLE
+    network, not just per road. Two roads that would each bill their own
+    per-road amount must together never exceed the shared network cap."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # Two stages of one network. Each is generously capped on its own
+    # (9.00 each = 18.00 if the network cap were not applied), against a
+    # shared network cap of 12.74 -- the real published WestConnex figure.
+    common = dict(
+        pricing_model="distance_with_flagfall",
+        charging_policy="distance_metered",
+        directional="both",
+        network_group="TESTNET",
+        price_class_a=None,
+        rate_per_km_class_a="5.0000",
+        flagfall_class_a="1.80",
+        cap_class_a="9.00",
+        network_cap_class_a="12.74",
+    )
+    road_a = await _make_road(session, road_id="TESTNETA", **common)
+    road_b = await _make_road(session, road_id="TESTNETB", **common)
+
+    entry_a = _next_zone()
+    entry_b = _next_zone()
+    await _add_gantry(session, road_id=road_a.id, gantry_id="TESTNETA:g", lat=entry_a[0], lng=entry_a[1])
+    await _add_gantry(session, road_id=road_b.id, gantry_id="TESTNETB:g", lat=entry_b[0], lng=entry_b[1])
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=entry_a[0], start_lng=entry_a[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    # Drive far enough on each stage that both would hit their own per-road cap.
+    await _tick(client, headers, trip["id"], lat=entry_a[0], lng=entry_a[1], ts=t0 + timedelta(seconds=5))
+    await _tick(client, headers, trip["id"], lat=entry_a[0] + 0.05, lng=entry_a[1], ts=t0 + timedelta(minutes=5))
+    await _tick(client, headers, trip["id"], lat=entry_b[0], lng=entry_b[1], ts=t0 + timedelta(minutes=10))
+    body = await _tick(
+        client, headers, trip["id"], lat=entry_b[0] + 0.05, lng=entry_b[1], ts=t0 + timedelta(minutes=15)
+    )
+
+    charged = {k: Decimal(v) for k, v in body["auto_tolled_roads"].items()}
+    assert set(charged) == {"TESTNETA", "TESTNETB"}
+    assert sum(charged.values()) <= Decimal("12.74"), charged
+    assert Decimal(body["tolls"]) <= Decimal("12.74")
+    # And the cap really bit -- otherwise this test would pass on any
+    # implementation that simply undercharged.
+    assert sum(charged.values()) > Decimal("9.00"), "each road alone caps at 9.00; the network total should exceed that"
+
+
 # --- /v1/toll-roads read API -------------------------------------------------------
 
 
@@ -452,6 +713,102 @@ async def test_get_toll_road_detail_includes_gantries_and_price_history(client: 
     body = resp.json()
     assert len(body["gantries"]) == 1
     assert len(body["price_history"]) == 1
+
+
+async def test_toll_roads_api_exposes_per_point_prices_and_charging_policy(
+    client: AsyncClient, session: AsyncSession
+):
+    """A `per_point` road has no real road-level price -- its min/max is a
+    descriptive range across its points, never charged -- so the API must
+    return the points themselves, on the LIST endpoint as well as the detail
+    one. Without this the dashboard has nothing true to show for M2/CCT/LCT
+    and the meter caches a road it cannot price.
+
+    `charging_policy` is exposed for the same reason it exists at all: it is
+    not derivable from `pricing_model` (M2 and LCT are both "per_point" and
+    charge differently), so a consumer that only sees `pricing_model` cannot
+    reproduce what a trip is actually billed."""
+    headers = await auth_headers(client, session, role="driver")
+    road = await _make_road(
+        session,
+        road_id="TESTPPAPI",
+        pricing_model="per_point",
+        charging_policy="cumulative_per_point",
+        directional="both",
+    )
+    await _make_toll_point(session, road_id=road.id, point_id="TESTPPAPI:p1", price_class_a="5.32")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(
+        session, road_id=road.id, gantry_id="TESTPPAPI:g1",
+        lat=gantry_lat, lng=gantry_lng, toll_point_id="TESTPPAPI:p1",
+    )
+
+    listed = await client.get("/v1/toll-roads", headers=headers)
+    assert listed.status_code == 200, listed.text
+    row = {r["id"]: r for r in listed.json()}["TESTPPAPI"]
+    assert row["charging_policy"] == "cumulative_per_point"
+    assert [(p["id"], p["current_price"]["price_class_a"]) for p in row["toll_points"]] == [
+        ("TESTPPAPI:p1", "5.32")
+    ]
+    assert row["toll_points"][0]["gantry_count"] == 1
+
+    detail = await client.get("/v1/toll-roads/TESTPPAPI", headers=headers)
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert len(body["toll_points"]) == 1
+    # The gantry says which point it belongs to, so a consumer can price a
+    # detected crossing without a second lookup.
+    assert body["gantries"][0]["toll_point_id"] == "TESTPPAPI:p1"
+
+
+async def test_toll_roads_api_omits_toll_points_for_a_road_priced_at_road_level(
+    client: AsyncClient, session: AsyncSession
+):
+    """Every non-`per_point` road prices at the road level, so an empty list
+    here is the honest answer -- not merely a redundant one."""
+    headers = await auth_headers(client, session, role="driver")
+    road = await _make_road(session, road_id="TESTFLATAPI", pricing_model="flat", price_class_a="4.30")
+    gantry_lat, gantry_lng = _next_zone()
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTFLATAPI:g", lat=gantry_lat, lng=gantry_lng)
+
+    resp = await client.get("/v1/toll-roads/TESTFLATAPI", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["toll_points"] == []
+    assert body["charging_policy"] == "once_per_road"
+    assert body["gantries"][0]["toll_point_id"] is None
+
+
+async def test_toll_roads_api_exposes_the_distance_formula_and_its_source(
+    client: AsyncClient, session: AsyncSession
+):
+    """The published $/km rate, flagfall and network cap are what a distance
+    road is actually billed from, and `source_url` is what lets an operator
+    defend a disputed toll by opening the page the figure came from. All
+    three were added by the 2026-09-07 correction pass and are useless if
+    they never leave the database."""
+    headers = await auth_headers(client, session, role="driver")
+    await _make_road(
+        session,
+        road_id="TESTFORMULA",
+        pricing_model="distance_with_flagfall",
+        charging_policy="distance_metered",
+        network_group="TESTNETAPI",
+        price_class_a=None,
+        rate_per_km_class_a="0.6667",
+        flagfall_class_a="1.80",
+        cap_class_a="9.00",
+        network_cap_class_a="12.74",
+    )
+
+    resp = await client.get("/v1/toll-roads/TESTFORMULA", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["network_group"] == "TESTNETAPI"
+    price = body["current_price"]
+    assert price["rate_per_km_class_a"] == "0.6667"
+    assert price["flagfall_class_a"] == "1.80"
+    assert price["network_cap_class_a"] == "12.74"
 
 
 async def test_get_unknown_toll_road_is_404(client: AsyncClient, session: AsyncSession):

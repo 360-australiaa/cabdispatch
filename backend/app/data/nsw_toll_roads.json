@@ -1,6 +1,7 @@
 {
-  "$schema_version": "1.0",
+  "$schema_version": "2.0",
   "generated_at": "2026-08-15",
+  "corrected_at": "2026-09-07",
   "jurisdiction": "NSW, Australia",
   "currency": "AUD",
   "gst_included": true,
@@ -9,11 +10,13 @@
     "B": "Heavy vehicle — everything else."
   },
   "notes": [
-    "Prices are the published 1 July 2026 quarterly schedule unless a different effective_date is stated on the road.",
+    "Prices are the published 1 July 2026 quarterly schedule unless a different effective_date is stated on the road (WestConnex: 1 January 2026, its own annual cycle).",
     "Non-WestConnex Sydney motorways are indexed QUARTERLY (1 Jan / 1 Apr / 1 Jul / 1 Oct). WestConnex roads are indexed ANNUALLY on 1 January. Your ingest job must re-scrape on both cadences.",
     "Do not hardcode these values in application code. Load from this file, version it, and treat a stale effective_date as a monitoring alert.",
     "Authoritative per-trip pricing is the TfNSW Toll Calculator API v2. This file is the fallback / cross-check / offline table.",
-    "Records with confidence != \"verified\" MUST be confirmed before production use."
+    "Records with confidence != \"verified\" MUST be confirmed before production use.",
+    "2026-09-07 CORRECTION PASS: every price below was re-verified against nsw.gov.au and the relevant Linkt toll-pricing pages on that date (see each entry's own source_url/retrieved_at). Two real defects were fixed — Westlink M7's $/km rate was previously DERIVED from a self-measured gantry corridor instead of Linkt's published $0.5252/km; WestConnex (M4/M8/M5E/M4M5 Link) was previously confidence='not_captured' with every price NULL and is now priced from Linkt's published flagfall+per-km formula and per-road/network caps. A modelling defect was also fixed: 'Military Road E-Ramp' was previously seeded as its own TollRoad; it is a toll POINT of Lane Cove Tunnel, not a separate road, and is now modelled as one. A second modelling defect was fixed: the old 'M4M5_ROZELLE' road conflated two DIFFERENT Linkt-named segments (the priced 'M4-M8 Link' and the unpriced 'Rozelle Interchange') under one id because they share physical gantry infrastructure in the source gantry CSV; they are now two separate roads, split by gantry location (Haberfield/St Peters = M4-M8 Link; Anzac Bridge/Iron Cove Bridge/City West Link = Rozelle Interchange) — see scripts/seed_toll_roads.py for the full reasoning, flagged there as an interpretation call since the source data itself does not label individual gantries by segment name.",
+    "See app.models.toll's module docstring for the once_per_road / cumulative_per_point / distance_metered charging_policy field this pass introduced, and app.services.tolls for how it's applied."
   ],
   "toll_roads": [
     {
@@ -21,8 +24,9 @@
       "api_code": "M2",
       "name": "Hills M2 Motorway",
       "operator": "Transurban",
-      "pricing_model": "zone_flat",
-      "description": "Flat toll at the main toll point plus separate, cheaper ramp tolls. The range spans ramp toll to full main-line toll.",
+      "pricing_model": "per_point",
+      "charging_policy": "cumulative_per_point",
+      "description": "Linkt's own page states prices \"vary based on vehicle class and the number of toll points traversed along the motorway\" — charged ADDITIVELY per distinct toll point crossed (up to 6). See toll_points below for the real per-point prices.",
       "directional": "both",
       "price_class_a_min": 3.15,
       "price_class_a_max": 10.64,
@@ -31,40 +35,45 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/hills-m2/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "Road-level min/max above is a descriptive summary across the 6 real toll points below (kept for dashboard display); actual charging uses the per-point prices, summed, never this range.",
+      "toll_points": [
+        { "id": "north_ryde", "name": "North Ryde (mainline)", "price_class_a": 10.64, "price_class_b": 31.91 },
+        { "id": "pennant_hills_rd", "name": "Pennant Hills Road", "price_class_a": 5.32, "price_class_b": 15.96 },
+        { "id": "ncx", "name": "M2-NCX", "price_class_a": 5.32, "price_class_b": 15.96 },
+        { "id": "herring_christie", "name": "Herring & Christie Roads", "price_class_a": 5.31, "price_class_b": 15.95 },
+        { "id": "windsor_rd", "name": "Windsor Road", "price_class_a": 3.76, "price_class_b": 11.30 },
+        { "id": "lane_cove_rd", "name": "Lane Cove Road on-ramp", "price_class_a": 3.15, "price_class_b": 9.44 }
+      ]
     },
     {
       "id": "LCT",
       "api_code": "LCT",
       "name": "Lane Cove Tunnel",
       "operator": "Transurban",
-      "pricing_model": "flat",
+      "pricing_model": "per_point",
+      "charging_policy": "once_per_road",
+      "description": "Two named toll points (main tunnel; Military Road E-Ramp — a real, separately-priced ramp under the same LCT concession, corrected in this pass from being modelled as its own road). Neither source states these are cumulative, and they are a main-carriageway/alternate-ramp pair a real vehicle uses ONE of — modelled once_per_road: whichever point is actually crossed first sets the (real, per-point) price; a second, different point of the same road later in the same trip is not charged again. Interpretation call, not a stated fact — see scripts/seed_toll_roads.py.",
       "directional": "both",
-      "price_class_a_min": 4.30,
+      "price_class_a_min": 2.15,
       "price_class_a_max": 4.30,
-      "price_class_b_min": 14.94,
+      "price_class_b_min": 7.47,
       "price_class_b_max": 14.94,
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
-    },
-    {
-      "id": "MILITARY_E_RAMP",
-      "api_code": "LCT",
-      "name": "Military Road E-Ramp",
-      "operator": "Transurban",
-      "pricing_model": "flat",
-      "description": "Tolled ramp associated with the Lane Cove Tunnel concession.",
-      "directional": "one_way",
-      "price_class_a_min": 2.15,
-      "price_class_a_max": 2.15,
-      "price_class_b_min": 7.47,
-      "price_class_b_max": 7.47,
-      "cap": null,
-      "effective_date": "2026-07-01",
-      "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07",
+      "toll_points": [
+        { "id": "main_tunnel", "name": "Main tunnel", "price_class_a": 4.30, "price_class_b": 14.94 },
+        {
+          "id": "military_e_ramp", "name": "Military Road E-Ramp", "price_class_a": 2.15, "price_class_b": 7.47,
+          "source_note": "No real gantry coordinates exist for this ramp in app/data/nsw_toll_gantries.csv (that file's 6 LCT rows are all mainline tunnel gantries) — priced and visible on the dashboard, but not GPS-auto-detectable until real coordinates are captured."
+        }
+      ]
     },
     {
       "id": "ED",
@@ -72,6 +81,7 @@
       "name": "M1 Eastern Distributor",
       "operator": "Transurban",
       "pricing_model": "flat",
+      "charging_policy": "once_per_road",
       "description": "Tolled northbound only.",
       "directional": "northbound_only",
       "price_class_a_min": 10.48,
@@ -81,15 +91,18 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07"
     },
     {
       "id": "CCT",
       "api_code": "CCT",
       "name": "Cross City Tunnel",
       "operator": "Transurban",
-      "pricing_model": "zone_flat",
-      "description": "Main tunnel toll plus cheaper portal/ramp tolls; range spans the two.",
+      "pricing_model": "per_point",
+      "charging_policy": "once_per_road",
+      "description": "Two named toll points (main tunnel; Sir John Young Crescent exit — a real alternate exit ramp, not a sequential add-on). Linkt's page attributes price to \"the number of toll points you pass\", same wording used for M2's genuinely cumulative 6 points, but CCT's two points are a main-carriageway/alternate-ramp pair a real vehicle uses ONE of. Modelled once_per_road (first point crossed sets the price) to avoid overcharging on a genuinely ambiguous point — interpretation call, not a stated fact.",
       "directional": "both",
       "price_class_a_min": 3.50,
       "price_class_a_max": 7.41,
@@ -98,7 +111,13 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/cross-city-tunnel/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "toll_points": [
+        { "id": "main_tunnel", "name": "Main Tunnel", "price_class_a": 7.41, "price_class_b": 14.82 },
+        { "id": "sjyc", "name": "Sir John Young Crescent exit", "price_class_a": 3.50, "price_class_b": 6.99 }
+      ]
     },
     {
       "id": "M5SW",
@@ -106,6 +125,7 @@
       "name": "M5 South-West Motorway",
       "operator": "Transurban",
       "pricing_model": "flat",
+      "charging_policy": "once_per_road",
       "directional": "both",
       "price_class_a_min": 6.06,
       "price_class_a_max": 6.06,
@@ -114,7 +134,9 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07"
     },
     {
       "id": "M7",
@@ -122,16 +144,21 @@
       "name": "Westlink M7",
       "operator": "Transurban",
       "pricing_model": "distance",
-      "description": "Per-kilometre charge with a capped maximum trip toll. Min value is the shortest tolled movement, max is the trip cap.",
+      "charging_policy": "distance_metered",
+      "description": "Per-kilometre charge with a capped maximum trip toll. CORRECTED in this pass: previously priced from a rate DERIVED by dividing the cap by a self-measured gantry-to-gantry corridor length (~0.44 $/km) — replaced with Linkt's own published rate (rate_per_km_class_a below). The derived-corridor fallback (TollRoad.derived_corridor_km / app.services.tolls's distance_rate_per_km_class_a) is kept but now only used if a future 'distance' road has no published rate captured.",
       "directional": "both",
       "price_class_a_min": 0.71,
       "price_class_a_max": 10.50,
       "price_class_b_min": 2.13,
       "price_class_b_max": 31.50,
+      "rate_per_km_class_a": 0.5252,
       "cap": { "class_a": 10.50, "class_b": 31.50 },
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "rate_per_km_class_a=0.5252 and cap.class_a=10.50 both directly confirmed on the NSW Government toll-costs-by-road page ('$0.5252 cents/kilometre capped at $10.50'). No published Class B $/km rate was found in this pass (a taxi is Class A and never pays this) — cap.class_b=31.50 is the pre-existing figure, not re-verified against a Class-B-specific source."
     },
     {
       "id": "NORTHCONNEX",
@@ -139,6 +166,7 @@
       "name": "NorthConnex",
       "operator": "Transurban",
       "pricing_model": "flat",
+      "charging_policy": "once_per_road",
       "description": "Same price both directions. Concession runs to 2048.",
       "directional": "both",
       "price_class_a_min": 10.64,
@@ -148,7 +176,9 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "quarterly",
-      "confidence": "verified"
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07"
     },
     {
       "id": "SHB_SHT",
@@ -156,6 +186,7 @@
       "name": "Sydney Harbour Bridge & Sydney Harbour Tunnel",
       "operator": "Transport for NSW",
       "pricing_model": "time_of_day",
+      "charging_policy": "once_per_road",
       "description": "Government-operated, time-of-day tolling, southbound only. Two-way tolling has been announced for a later year — re-check before launch.",
       "directional": "southbound_only",
       "time_of_day_rates_class_a": [
@@ -166,8 +197,10 @@
       "cap": null,
       "effective_date": "2026-07-01",
       "indexation": "annual_or_scheduled",
-      "confidence": "needs_verification",
-      "verify_note": "Source page listed both a pre-July and a from-1-July-2026 figure; the from-July values are used here. Confirm against the Toll Calculator API before production."
+      "confidence": "verified",
+      "source_url": "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "CORRECTED in this pass from needs_verification to verified: the NSW Government toll-costs-by-road page, re-fetched 2026-09-07, states the exact band boundaries and prices verbatim — 'Weekdays 6:30am-9:30am: $4.55', 'Weekdays 9:30am-4:00pm: $3.41', 'Weekdays 4:00pm-7:00pm: $4.55', 'Weekday 7:00pm-6:30am: $2.85', 'Weekends 8:00am-8:00pm: $3.41', 'Weekends 8:00pm-8:00am: $2.85' — matching this dataset's existing peak/off_peak/night bands and prices exactly. No band boundary or price here was invented; all six were read directly off that page."
     },
     {
       "id": "M4",
@@ -175,16 +208,26 @@
       "name": "WestConnex M4",
       "operator": "Transurban",
       "pricing_model": "distance_with_flagfall",
-      "description": "Flagfall plus per-km, capped per trip.",
+      "charging_policy": "distance_metered",
+      "network_group": "WESTCONNEX",
+      "description": "CORRECTED in this pass from confidence='not_captured' (every price field NULL, never auto-charged) to a real, published flagfall+per-km formula with a per-road cap, plus this trip's share of the WestConnex network-wide cap. Linkt's own segment table additionally publishes fixed point-to-point prices for named origin/destination pairs (Parramatta-Homebush $6.75/$20.25, Homebush-Haberfield $5.85/$17.55, Parramatta-Haberfield total $10.79/$32.39) that do not sum consistently with a single uniform per-km rate (6.75+5.85=12.60, not 10.79) — this system prices from actual GPS-measured distance, not fixed OD pairs, so the formula+cap below (not the OD table) is what's implemented; the OD table is retained here purely as cross-check reference.",
+      "directional": null,
       "price_class_a_min": null,
       "price_class_a_max": null,
       "price_class_b_min": null,
       "price_class_b_max": null,
-      "cap": null,
+      "flagfall_class_a": 1.80,
+      "flagfall_class_b": 1.80,
+      "rate_per_km_class_a": 0.6667,
+      "rate_per_km_class_b": 0.6667,
+      "cap": { "class_a": 10.79, "class_b": 32.39 },
+      "network_cap": { "class_a": 12.74, "class_b": 38.22 },
       "effective_date": "2026-01-01",
       "indexation": "annual_1_january",
-      "confidence": "not_captured",
-      "verify_note": "Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing"
+      "confidence": "verified",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "flagfall/rate are Linkt's own published formula ('$1.80 flagfall' plus '$0.6667 (per kilometre)'); cap.class_a=10.79 and cap.class_b=32.39 are Linkt's own 'M4 Total (Parramatta to Haberfield)' segment price, used as this road's maximum. network_cap is Linkt's stated cap 'to use the full length of WestConnex' for one trip, shared across M4/M8/M5E/M4M8_LINK via TollRoad.network_group — see app.services.tolls."
     },
     {
       "id": "M8",
@@ -192,15 +235,26 @@
       "name": "WestConnex M8",
       "operator": "Transurban",
       "pricing_model": "distance_with_flagfall",
+      "charging_policy": "distance_metered",
+      "network_group": "WESTCONNEX",
+      "description": "CORRECTED in this pass from confidence='not_captured' to a real, published flagfall+per-km formula.",
+      "directional": null,
       "price_class_a_min": null,
       "price_class_a_max": null,
       "price_class_b_min": null,
       "price_class_b_max": null,
-      "cap": null,
+      "flagfall_class_a": 1.80,
+      "flagfall_class_b": 1.80,
+      "rate_per_km_class_a": 0.6667,
+      "rate_per_km_class_b": 0.6667,
+      "cap": { "class_a": 9.15, "class_b": 27.47 },
+      "network_cap": { "class_a": 12.74, "class_b": 38.22 },
       "effective_date": "2026-01-01",
       "indexation": "annual_1_january",
-      "confidence": "not_captured",
-      "verify_note": "Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing"
+      "confidence": "verified",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "cap.class_a/class_b = Linkt's own 'M8 (Beverly Hills to St Peters)' segment price, used as this road's maximum."
     },
     {
       "id": "M5E",
@@ -208,22 +262,60 @@
       "name": "M5 East",
       "operator": "Transurban",
       "pricing_model": "distance_with_flagfall",
+      "charging_policy": "distance_metered",
+      "network_group": "WESTCONNEX",
+      "description": "CORRECTED in this pass from confidence='not_captured' to a real, published flagfall+per-km formula. Still has ZERO gantries in the source gantry dataset (its physical tolling points are part of the combined M8/M5E interchange the CSV only tags 'M8' — no separate M5E gantry coordinates exist to seed) — priced but not yet GPS-auto-detectable, an honest, unresolved gap this pass did not have data to close.",
+      "directional": null,
       "price_class_a_min": null,
       "price_class_a_max": null,
       "price_class_b_min": null,
       "price_class_b_max": null,
-      "cap": null,
+      "flagfall_class_a": 1.80,
+      "flagfall_class_b": 1.80,
+      "rate_per_km_class_a": 0.6667,
+      "rate_per_km_class_b": 0.6667,
+      "cap": { "class_a": 9.15, "class_b": 27.47 },
+      "network_cap": { "class_a": 12.74, "class_b": 38.22 },
       "effective_date": "2026-01-01",
       "indexation": "annual_1_january",
-      "confidence": "not_captured",
-      "verify_note": "Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing"
+      "confidence": "verified",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "cap.class_a/class_b = Linkt's own 'M5 East (Beverly Hills to Mascot)' segment price, used as this road's maximum."
     },
     {
-      "id": "M4M5_ROZELLE",
+      "id": "M4M8_LINK",
       "api_code": null,
-      "name": "M4-M5 Link / Rozelle Interchange",
+      "name": "WestConnex M4-M8 Link",
       "operator": "Transurban",
-      "pricing_model": "distance_with_flagfall",
+      "pricing_model": "flat",
+      "charging_policy": "once_per_road",
+      "network_group": "WESTCONNEX",
+      "description": "CORRECTED in this pass — previously merged with the (unpriced) Rozelle Interchange under one 'M4M5_ROZELLE' road id purely because both share physical gantry infrastructure in the source gantry CSV, not because they are the same tolled thing. Linkt's own segment table gives this specific Haberfield-St Peters link a single named price rather than a flagfall+per-km formula ('M4-M8 Link (Haberfield to St Peters) $6.48') — modelled as a flat charge at that figure, which can never exceed what Linkt itself publishes for this segment. Interpretation call: Linkt's page does not explicitly say this is a flat toll rather than a formula output that happens to be presented as one number — flagged as such, not read as a stated fact.",
+      "directional": null,
+      "price_class_a_min": 6.48,
+      "price_class_a_max": 6.48,
+      "price_class_b_min": 19.45,
+      "price_class_b_max": 19.45,
+      "network_cap": { "class_a": 12.74, "class_b": 38.22 },
+      "cap": null,
+      "effective_date": "2026-01-01",
+      "indexation": "annual_1_january",
+      "confidence": "needs_verification",
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "Marked needs_verification (not verified) specifically because whether this segment is genuinely a flat toll or a formula output is an interpretation call, not a stated fact — see description."
+    },
+    {
+      "id": "ROZELLE_INTERCHANGE",
+      "api_code": null,
+      "name": "Rozelle Interchange",
+      "operator": "Transurban",
+      "pricing_model": "unpriced",
+      "charging_policy": "once_per_road",
+      "network_group": "WESTCONNEX",
+      "description": "Linkt's own WestConnex segment table lists this as a named segment ('Rozelle Interchange (St Peters to Rozelle)') with NO price shown. Left deliberately unpriced and flagged rather than guessed, per this pass's explicit instruction. Previously conflated with the (priced) M4-M8 Link under one 'M4M5_ROZELLE' road id — split out in this pass, see M4M8_LINK's description.",
+      "directional": null,
       "price_class_a_min": null,
       "price_class_a_max": null,
       "price_class_b_min": null,
@@ -232,10 +324,16 @@
       "effective_date": "2026-01-01",
       "indexation": "annual_1_january",
       "confidence": "not_captured",
-      "verify_note": "Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing"
+      "source_url": "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+      "retrieved_at": "2026-09-07",
+      "verify_note": "Not a data gap — Linkt's own published table shows no price for this segment at all. Do not guess one."
     }
   ],
   "sources": [
+    "https://www.nsw.gov.au/driving-boating-and-transport/tolling/toll-costs-by-road",
+    "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing/sydney",
+    "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/cross-city-tunnel/toll-pricing/sydney",
+    "https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/hills-m2/toll-pricing/sydney",
     "https://www.linkt.com.au/using-toll-roads/news/quarterly-toll-price-update-for-july-2026",
     "https://www.northconnex.com.au/plan-your-trip/toll-pricing",
     "https://www.myetoll.transport.nsw.gov.au/help-and-faqs/calculating-tolls",
