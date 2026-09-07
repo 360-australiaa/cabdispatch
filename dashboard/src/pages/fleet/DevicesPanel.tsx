@@ -32,7 +32,6 @@ import {
   useForceUpdateAll,
   useKioskLock,
   useLocateDevice,
-  useRebootDevice,
   useUpdateDevice,
   useVehicleOptions,
   type DeviceFilters,
@@ -46,6 +45,25 @@ const KIOSK_FILTER_OPTIONS = [
   { value: "true", label: "Kiosk-locked" },
   { value: "false", label: "Unlocked" },
 ];
+
+/** HONESTY NOTE (matches the backend's own on `Device.reboot_requested` /
+ * `POST /v1/fleet/devices/{id}/reboot`, and the Android app's own
+ * `DeviceCommandHeartbeat` note that it deliberately never reads this flag):
+ * actually rebooting a tablet's OS needs the on-device app enrolled as
+ * Android Device Owner, which no build this dashboard talks to holds today.
+ * The backend still tracks the flag as real groundwork for a future
+ * device-owner-aware app build, but THIS control must never look like it
+ * does something now — an operator clicking "Reboot" and seeing a
+ * `Pending` badge would reasonably (and wrongly) believe the tablet is
+ * about to restart. Disabled outright, everywhere, rather than wired up to
+ * `POST .../reboot` at all, same "visible for completeness, never a
+ * functional trap" policy already used for locked settings rows in the
+ * Android app's own SettingsScreen ("COMING SOON" badge, greyed out,
+ * tap-safe). */
+const REBOOT_NOT_SUPPORTED_REASON =
+  "Remote reboot isn't supported yet — a tablet's Android app can't restart its own OS " +
+  "without Device Owner provisioning, which this build doesn't have. This control is " +
+  "disabled so it never looks like it worked when it didn't.";
 
 function BatteryIcon({ battery }: { battery: number | null }) {
   if (battery === null) return <span className="text-muted-foreground">—</span>;
@@ -102,7 +120,6 @@ export function DevicesPanel() {
   const forceUpdate = useForceUpdate();
   const forceUpdateAll = useForceUpdateAll();
   const locateDevice = useLocateDevice();
-  const rebootDevice = useRebootDevice();
   const [confirmingPushAll, setConfirmingPushAll] = useState(false);
   const [pushAllResult, setPushAllResult] = useState<{ flagged: number; total: number } | null>(null);
 
@@ -183,15 +200,6 @@ export function DevicesPanel() {
     }
   }
 
-  async function triggerReboot(d: Device) {
-    setPendingActionId(d.id);
-    try {
-      await rebootDevice.mutateAsync(d.id);
-    } finally {
-      setPendingActionId(null);
-    }
-  }
-
   const columns: TableColumn<Device>[] = [
     { key: "android_id", header: "Android ID", render: (d) => <span className="font-medium">{d.android_id}</span> },
     { key: "model", header: "Model", render: (d) => d.model || "—" },
@@ -230,7 +238,11 @@ export function DevicesPanel() {
     {
       key: "reboot_requested",
       header: "Reboot",
-      render: (d) => (d.reboot_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+      render: () => (
+        <span className="text-muted-foreground" title={REBOOT_NOT_SUPPORTED_REASON}>
+          Not supported yet
+        </span>
+      ),
     },
     {
       key: "actions",
@@ -279,15 +291,11 @@ export function DevicesPanel() {
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Reboot device"
-            title={d.reboot_requested ? "Reboot already pending" : "Queue a remote reboot"}
-            onClick={(e) => {
-              e.stopPropagation();
-              triggerReboot(d);
-            }}
-            disabled={pendingActionId === d.id || d.reboot_requested}
+            aria-label="Reboot device (not yet supported)"
+            title={REBOOT_NOT_SUPPORTED_REASON}
+            disabled
           >
-            <Power className="h-4 w-4" />
+            <Power className="h-4 w-4 opacity-40" />
           </Button>
           <Button
             variant="ghost"

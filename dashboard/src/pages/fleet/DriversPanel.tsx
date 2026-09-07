@@ -14,7 +14,7 @@ import {
 } from "./api";
 import { DriverAvatar } from "./DriverAvatar";
 import { PaginationBar } from "./PaginationBar";
-import { errorMessage, formatDateTime, truncateId } from "./format";
+import { errorMessage, formatDateTime, truncateId, vehicleLabel } from "./format";
 import type { Driver } from "./types";
 
 const PHOTO_UPLOAD_ROLES = new Set(["owner", "admin", "dispatcher"]);
@@ -192,7 +192,7 @@ export function DriversPanel() {
     {
       key: "vehicle_id",
       header: "Vehicle",
-      render: (d) => (d.vehicle_id ? vehicleRegoById.get(d.vehicle_id) ?? d.vehicle_id : "—"),
+      render: (d) => vehicleLabel(d.vehicle_id, vehicleRegoById),
     },
     { key: "shift_start_at", header: "Shift started", render: (d) => formatDateTime(d.shift_start_at) },
     { key: "current_trip_id", header: "Current trip", render: (d) => truncateId(d.current_trip_id) },
@@ -333,7 +333,7 @@ export function DriversPanel() {
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Vehicle</dt>
-              <dd>{selected.vehicle_id ? vehicleRegoById.get(selected.vehicle_id) ?? selected.vehicle_id : "—"}</dd>
+              <dd>{vehicleLabel(selected.vehicle_id, vehicleRegoById)}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Shift started</dt>

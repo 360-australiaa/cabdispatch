@@ -24,6 +24,8 @@ from app.schemas.fleet import (
     DeviceRead,
     DeviceRegisterRequest,
     DeviceUpdate,
+    FleetForceWipeRequest,
+    FleetForceWipeResult,
     ForceUpdateRequest,
     KioskLockRequest,
     LocateRequest,
@@ -44,6 +46,7 @@ from app.services import compliance_expiry as compliance_expiry_service
 from app.services import evidence_pack as evidence_pack_service
 from app.services import fleet as fleet_service
 from app.services import fleet_reports as fleet_reports_service
+from app.services import fleet_wipe as fleet_wipe_service
 from app.services import tenant as tenant_service
 from app.services.reports import InvalidDateRangeError
 
@@ -51,6 +54,11 @@ router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
 
 # Admin-only dependency reused across the write/admin endpoints in this file.
 _require_admin = require_role("owner", "admin")
+# Owner-only: reserved for the single most destructive action in this file
+# (force wipe, see the bottom of this router) -- same "highest-privilege
+# action reserved for owner" precedent as POST /v1/tenants/{id}/admin-pin in
+# app/api/v1/tenants.py.
+_require_owner = require_role("owner")
 
 
 def _fleet_error_to_http(exc: fleet_service.FleetError) -> HTTPException:
@@ -164,20 +172,28 @@ async def delete_vehicle(
     vehicle_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    admin: User = Depends(_require_admin),
 ):
     try:
         vehicle = await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
         # Devices survive vehicle deletion, just unbound — a device isn't
-        # deleted just because its car was retired/sold. Must flush before
-        # the DELETE below: SQLAlchemy's flush always runs every pending
-        # UPDATE ahead of every pending DELETE within one commit regardless
-        # of statement order or ORM relationships (verified empirically for
-        # this exact unrelated-mapped-classes case — there is no
-        # `relationship()` anywhere in this codebase's models, see
-        # app.core.database's docstring), so this unlink is safe even
-        # against postgres's now-enforced FK.
-        await fleet_service.unlink_devices_from_vehicle(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+        # deleted just because its car was retired/sold. Any currently-OPEN
+        # shift on this vehicle is also closed here (unreconciled,
+        # audit-logged) rather than left dangling — see
+        # fleet_service.prepare_vehicle_for_deletion's own docstring for the
+        # full "close vs refuse" design decision (a real production bug: a
+        # deleted vehicle's id was surviving forever on an open Shift row,
+        # rendering as a raw UUID on the dashboard's drivers list). Must
+        # flush before the DELETE below: SQLAlchemy's flush always runs
+        # every pending UPDATE ahead of every pending DELETE within one
+        # commit regardless of statement order or ORM relationships
+        # (verified empirically for this exact unrelated-mapped-classes case
+        # — there is no `relationship()` anywhere in this codebase's models,
+        # see app.core.database's docstring), so this is safe even against
+        # postgres's now-enforced FK.
+        await fleet_service.prepare_vehicle_for_deletion(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, actor_user_id=admin.id
+        )
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
@@ -665,3 +681,51 @@ async def verify_device_admin_pin(
 
     configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
     return VerifyAdminPinResponse(valid=valid, configured=configured)
+
+
+# ==================================================================================
+# TEMPORARY force-wipe (see app.services.fleet_wipe's module docstring for full
+# context, exactly what is/isn't destroyed, and the removal plan). This is
+# deliberately a SEPARATE endpoint from DELETE /v1/fleet/vehicles/{id} etc, not
+# a flag on them -- the ordinary per-row deletes must never gain a backdoor
+# around app.services.user.assert_user_deletable's evidence-blocking.
+# ==================================================================================
+
+
+@router.post("/wipe-test-data/force", response_model=FleetForceWipeResult)
+async def force_wipe_test_data(
+    payload: FleetForceWipeRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    owner: User = Depends(_require_owner),
+):
+    """Owner-only. Deletes every vehicle, device, and driver on this tenant,
+    additionally purging (for every driver about to be deleted) the exact
+    evidence categories that would otherwise correctly block their deletion:
+    PSL ledger entries + top-ups, wallet transactions, trip ratings,
+    compliance documents, and tariff change-log entries. IRREVERSIBLE.
+
+    Never deletes `AuditLog` rows, under any circumstance -- see
+    app.services.fleet_wipe's module docstring for why the tamper-evident
+    hash chain is left intact even here. A driver who has ever been recorded
+    as an audit-log actor is reported in `failures` instead of being deleted
+    or silently skipped.
+
+    `confirm: true` is required on every call (see `FleetForceWipeRequest`) --
+    this is the explicit, separately-chosen opt-in path the task brief calls
+    for, distinct from (and never the default of) the ordinary per-row-loop
+    wipe the dashboard already does client-side for the non-destructive-
+    evidence case."""
+    result = await fleet_wipe_service.force_wipe_tenant_fleet_data(
+        session, tenant_id=tenant_id, actor_user_id=owner.id
+    )
+    await session.commit()
+    return FleetForceWipeResult(
+        vehicles_deleted=result.vehicles_deleted,
+        devices_deleted=result.devices_deleted,
+        drivers_deleted=result.drivers_deleted,
+        evidence_rows_destroyed=result.evidence_rows_destroyed,
+        failures=[
+            {"kind": f.kind, "id": f.id, "reason": f.reason} for f in result.failures
+        ],
+    )

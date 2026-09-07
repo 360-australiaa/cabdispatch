@@ -58,6 +58,17 @@ for the mirror-image decision on `DELETE /v1/users/{id}`:
     never be silently destroyed just to let a delete through — see
     app.services.user.assert_user_deletable, which refuses those deletes
     with a specific, actionable 409 instead.
+
+DANGLING-OPEN-SHIFT BUG (found live, separate from the above): deleting a
+vehicle with an open Shift on it (`Shift.vehicle_id` — a plain unconstrained
+String column, see app/models/shift.py's own DEVIATION note, so the DB never
+rejected this) left that shift open forever, pointing at a vehicle_id that no
+longer resolves to anything — surfacing on the dashboard's drivers list as a
+raw UUID where a vehicle rego should be. Fixed by `prepare_vehicle_for_deletion`
+below, called from `DELETE /v1/fleet/vehicles/{id}`: CLOSES the open shift
+(unreconciled, audit-logged) rather than refusing the vehicle delete — see
+`app.services.shift.close_open_shifts_for_vehicle_deletion`'s own docstring
+for the full "close vs refuse" reasoning.
 """
 from __future__ import annotations
 
@@ -71,6 +82,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
 from app.models.shift import Shift
 from app.models.user import User
+from app.services.shift import close_open_shifts_for_vehicle_deletion
 
 # Codes exclude visually-ambiguous characters (0/O, 1/I) since a driver may need
 # to key one in by hand if the QR scan fails.
@@ -160,6 +172,31 @@ async def unlink_devices_from_vehicle(session: AsyncSession, *, tenant_id: str, 
     )
     for device in result.scalars():
         device.vehicle_id = None
+
+
+async def prepare_vehicle_for_deletion(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, actor_user_id: str | None
+) -> None:
+    """Everything that must happen BEFORE a vehicle row is actually deleted,
+    beyond what the DB's own `ondelete=` cascades handle automatically (see
+    this module's docstring). Single call site for both `DELETE
+    /v1/fleet/vehicles/{id}` (app/api/v1/fleet.py) and the TEMPORARY force-wipe
+    tool (app.services.fleet_wipe) so the two paths can never drift apart on
+    this:
+
+    1. Unlink any devices still paired to this vehicle (see
+       `unlink_devices_from_vehicle` above) — devices survive, just unbound.
+    2. Close any currently-OPEN shift on this vehicle (see
+       `app.services.shift.close_open_shifts_for_vehicle_deletion` for the
+       full "close, don't refuse" design decision) — a dangling open shift
+       pointing at a since-deleted vehicle_id was the real production bug
+       this fixes (raw UUIDs rendering on the dashboard's drivers list where
+       a rego should be).
+    """
+    await unlink_devices_from_vehicle(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    await close_open_shifts_for_vehicle_deletion(
+        session, tenant_id=tenant_id, vehicle_id=vehicle_id, actor_user_id=actor_user_id
+    )
 
 
 # --- pairing-code issuance + consumption -------------------------------------
