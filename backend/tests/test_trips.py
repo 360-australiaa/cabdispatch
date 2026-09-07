@@ -1558,6 +1558,170 @@ async def test_sync_negotiated_total_trip_device_and_server_totals_agree_exactly
     assert Decimal(trip["psl"]) == Decimal("1.32")
 
 
+# --- negotiated total: card surcharge absorption (2026-09 product ruling) --
+#
+# "yes card surcharge will be absorbed into a fixed price, but not cleaning
+# fee" (owner, verbatim) -- a negotiated fare now absorbs the non-cash
+# surcharge exactly like tolls/PSL/extras, while a cleaning fee stays
+# additive on top since it's only ever discovered after the price was agreed.
+
+
+async def test_close_negotiated_total_card_payment_bills_exactly_the_agreed_amount(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Billed: exactly the agreed amount -- card, same as cash.
+    assert Decimal(body["subtotal"]) == Decimal("50.00")
+    assert Decimal(body["total"]) == Decimal("50.00")
+    # Recorded (not billed): the operator can see what card fee it absorbed.
+    assert Decimal(body["surcharge"]) == Decimal("2.50")
+
+
+async def test_close_negotiated_total_card_payment_with_cleaning_fee_bills_agreed_plus_cleaning_fee_only(
+    client: AsyncClient, session: AsyncSession
+):
+    """Cleaning fee is the one component that is never absorbed, even on a
+    negotiated fare. total = negotiated_total + cleaning_fee exactly, with
+    the card surcharge still absorbed (never a third addend)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0", "cleaning_fee": "30.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert Decimal(body["total"]) == Decimal("80.00")  # 50.00 + 30.00, surcharge absorbed
+    assert Decimal(body["surcharge"]) == Decimal("2.50")  # still recorded
+
+
+async def test_close_metered_trip_card_payment_still_bills_the_surcharge_on_top(
+    client: AsyncClient, session: AsyncSession
+):
+    """Regression guard: an ordinary (non-negotiated) trip must keep billing
+    the non-cash surcharge on top exactly as before the 2026-09 absorption
+    ruling, which applies only to negotiated/fixed fares."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    tick_resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.87,
+                    "lng": 151.21,
+                    "speed_kmh": 40,
+                    "ts": (_FIXED_DAY_START_AT + timedelta(seconds=270)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert tick_resp.status_code == 200, tick_resp.text
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert Decimal(body["surcharge"]) > 0
+    assert Decimal(body["total"]) == Decimal(body["subtotal"]) + Decimal(body["surcharge"])
+
+
+async def test_sync_negotiated_total_card_trip_device_and_server_totals_agree_exactly(
+    client: AsyncClient, session: AsyncSession
+):
+    """Device/server agreement for a negotiated, CARD-paid trip specifically
+    (the cash case is already covered above) -- the on-device FareEngine.kt
+    and this server's FareEngine.close() must both absorb the surcharge and
+    agree on the SAME total, or the trip gets auto-flagged for review by the
+    1%-tolerance check. Asserts variance_pct == 0.00, not merely <= 1.0."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        # What the on-device FareEngine.close() computes: negotiated_total
+        # exactly -- the card surcharge is absorbed, never added.
+        device_total="50.00",
+        negotiated_total="50.00",
+        payment_method="card",
+        surcharge_pct="5.0",
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["status"] == "closed"
+    assert Decimal(trip["total"]) == Decimal("50.00")
+    assert Decimal(trip["variance_pct"]) == Decimal("0.00")
+    assert trip["max_fare_check_passed"] is True
+    assert trip["flagged_for_review"] is False
+    # Absorbed surcharge is still recorded on the closed trip.
+    assert Decimal(trip["surcharge"]) == Decimal("2.50")
+
+
+async def test_close_negotiated_total_cleaning_fee_not_folded_into_extras(
+    client: AsyncClient, session: AsyncSession
+):
+    """A negotiated trip's genuine `extras` (set at creation) must stay
+    absorbed/unbilled, distinct from a cleaning fee applied at close time --
+    the two must never be blended into a single bucket, or one of them
+    silently stops being billed/absorbed correctly."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00", extras="7.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"cleaning_fee": "15.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # The genuine $7 extra stays recorded but absorbed (not billed) -- same as
+    # tolls/PSL for a negotiated fare.
+    assert Decimal(body["extras"]) == Decimal("7.00")
+    # The $15 cleaning fee IS billed, on top of the agreed $50 -- not silently
+    # dropped, and not blended into the (absorbed) extras figure above.
+    assert Decimal(body["total"]) == Decimal("65.00")
+
+
 # --- tips (Close & Pay "tips" pass) -----------------------------------------
 
 

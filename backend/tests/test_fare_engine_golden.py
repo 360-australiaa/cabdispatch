@@ -376,6 +376,84 @@ def test_h3_negotiated_set_price_bills_exactly_the_agreed_amount_all_inclusive()
     assert breakdown.psl == Decimal("1.32")
 
 
+def test_h4_negotiated_card_payment_absorbs_the_surcharge_bills_agreed_amount_exactly():
+    """2026-09 product ruling (owner, verbatim): "yes card surcharge will be
+    absorbed into a fixed price, but not cleaning fee". A $50 Set Price trip
+    paid by card must bill EXACTLY $50 — no surcharge on top — even though a
+    real, non-zero surcharge is computed and recorded for accounting."""
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, negotiated_total=Decimal("50.00"))
+
+    breakdown = engine.close(state, payment_method="card", surcharge_pct=Decimal("5.0"))
+
+    assert breakdown.fare_total == Decimal("50.00")
+    # Billed: exactly the agreed amount, card or cash makes no difference.
+    assert breakdown.grand_total == Decimal("50.00")
+    # Recorded (never billed): the operator can see what card fee it absorbed.
+    assert breakdown.surcharge == Decimal("2.50")
+
+
+def test_h5_negotiated_card_payment_with_cleaning_fee_bills_agreed_plus_cleaning_fee_only():
+    """Cleaning fee is the ONE component that is never absorbed, even on a
+    negotiated fare — the owner's own words: "not cleaning fee" (a soiling
+    charge is only discovered after the price was agreed). So the bill is
+    agreed_amount + cleaning_fee exactly, with the card surcharge still
+    absorbed (not a third addend)."""
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, negotiated_total=Decimal("50.00"))
+
+    breakdown = engine.close(
+        state, payment_method="card", surcharge_pct=Decimal("5.0"), cleaning_fee=Decimal("30.00")
+    )
+
+    assert breakdown.fare_total == Decimal("50.00")
+    assert breakdown.cleaning_fee == Decimal("30.00")
+    assert breakdown.grand_total == Decimal("80.00")  # 50.00 + 30.00, surcharge absorbed
+    assert breakdown.surcharge == Decimal("2.50")  # still recorded
+
+
+def test_h6_metered_card_payment_is_completely_unchanged():
+    """Regression guard: an ordinary metered (non-negotiated, non-fixed) trip
+    must keep billing the non-cash surcharge on top exactly as before — the
+    2026-09 absorption ruling applies ONLY to negotiated/fixed fares."""
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, time_class=TimeClass.DAY)
+    state = engine.tick(state, speed_kmh=40, distance_delta_km=3, elapsed_seconds=270)
+
+    breakdown = engine.close(state, payment_method="card", surcharge_pct=Decimal("5.0"))
+
+    assert breakdown.fare_total == Decimal("13.00")
+    assert breakdown.surcharge == Decimal("0.65")
+    assert breakdown.grand_total == Decimal("13.65")  # surcharge IS billed, unlike the negotiated case
+
+
+def test_h7_airport_fixed_card_payment_also_absorbs_the_surcharge_consistency_call():
+    """2026-09 consistency call: the Sydney Airport Fixed Fare Trial has the
+    same "the price is the price" character as a negotiated Set Price fare —
+    it now absorbs the card surcharge the same way (previously it added the
+    surcharge on top, diverging from the negotiated_total branch)."""
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, fixed_fare=airport_fixed_fare(maxi=False))
+
+    breakdown = engine.close(state, payment_method="card", surcharge_pct=Decimal("5.0"))
+
+    assert breakdown.fare_total == Decimal("60.00")
+    assert breakdown.grand_total == Decimal("60.00")  # surcharge absorbed
+    assert breakdown.surcharge == Decimal("3.00")  # still recorded
+
+
+def test_h8_airport_fixed_cleaning_fee_still_additive_on_top():
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, fixed_fare=airport_fixed_fare(maxi=False))
+
+    breakdown = engine.close(
+        state, payment_method="card", surcharge_pct=Decimal("5.0"), cleaning_fee=Decimal("20.00")
+    )
+
+    assert breakdown.grand_total == Decimal("80.00")  # 60.00 + 20.00, surcharge absorbed
+    assert breakdown.surcharge == Decimal("3.00")
+
+
 def test_i_validate_against_fares_order_rank_hail_vs_booked():
     """A rank/hail tariff with rates above the Fares Order reference must raise;
     the identical (still excessive) tariff sold as a BOOKED fare is exempt."""

@@ -692,4 +692,124 @@ class FareEngineTest {
         assertEquals(BigDecimal("10.00"), breakdown.extras)
         assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
     }
+
+    // ------------------------------------------------------------------------------------------
+    // 2026-09 product ruling (owner, verbatim): "yes card surcharge will be absorbed into a fixed
+    // price, but not cleaning fee". testY/testZ/testAA/testAB prove the negotiated branch; testAC/
+    // testAD mirror the same consistency call onto the Sydney Airport Fixed branch; testAE pins
+    // that an ordinary metered trip is completely unaffected.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    fun testY_negotiatedCardPaymentAbsorbsTheSurchargeBillsAgreedAmountExactly() {
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, negotiatedTotal = BigDecimal("50.00"))
+
+        val breakdown = engine.close(state, paymentMethod = "card", surchargePct = BigDecimal("5.0"))
+
+        assertEquals(BigDecimal("50.00"), breakdown.fareTotal)
+        // Billed: exactly the agreed amount, card or cash makes no difference.
+        assertEquals(BigDecimal("50.00"), breakdown.grandTotal)
+        // Recorded (never billed): the driver/operator can see what card fee was absorbed.
+        assertEquals(BigDecimal("2.50"), breakdown.surcharge)
+    }
+
+    @Test
+    fun testZ_negotiatedCardPaymentWithCleaningFeeBillsAgreedPlusCleaningFeeOnly() {
+        // Cleaning fee is the ONE component that is never absorbed, even on a negotiated fare --
+        // the owner's own words: "not cleaning fee" (a soiling charge is only discovered after the
+        // price was agreed). Bill = agreed + cleaning_fee exactly, surcharge absorbed (not a third
+        // addend).
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, negotiatedTotal = BigDecimal("50.00"))
+
+        val breakdown = engine.close(
+            state,
+            paymentMethod = "card",
+            surchargePct = BigDecimal("5.0"),
+            cleaningFee = BigDecimal("30.00"),
+        )
+
+        assertEquals(BigDecimal("50.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("30.00"), breakdown.cleaningFee)
+        assertEquals(BigDecimal("80.00"), breakdown.grandTotal) // 50.00 + 30.00, surcharge absorbed
+        assertEquals(BigDecimal("2.50"), breakdown.surcharge) // still recorded
+    }
+
+    @Test
+    fun testAA_negotiatedCashPaymentRecordsNoSurcharge() {
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, negotiatedTotal = BigDecimal("50.00"))
+
+        val breakdown = engine.close(state, paymentMethod = "cash")
+
+        assertEquals(BigDecimal.ZERO, breakdown.surcharge)
+        assertEquals(BigDecimal("50.00"), breakdown.grandTotal)
+    }
+
+    @Test
+    fun testAB_deviceAndServerAgreeExactlyOnANegotiatedCardTrip() {
+        // Same scenario a real device sync would replay: the on-device engine (this file) and the
+        // backend's Python fare_engine.py port must compute the byte-identical grand_total for a
+        // negotiated, card-paid trip -- see backend/tests/test_fare_engine_golden.py's
+        // test_h4_negotiated_card_payment_absorbs_the_surcharge_bills_agreed_amount_exactly, which
+        // asserts the exact same inputs/outputs against the server engine.
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, negotiatedTotal = BigDecimal("50.00"))
+
+        val breakdown = engine.close(state, paymentMethod = "card", surchargePct = BigDecimal("5.0"))
+
+        assertEquals(BigDecimal("50.00"), breakdown.grandTotal)
+        assertEquals(BigDecimal("2.50"), breakdown.surcharge)
+    }
+
+    @Test
+    fun testAC_airportFixedCardPaymentAlsoAbsorbsTheSurchargeConsistencyCall() {
+        // 2026-09 consistency call: the Sydney Airport Fixed Fare Trial has the same "the price is
+        // the price" character as a negotiated Set Price fare -- it now absorbs the card surcharge
+        // the same way (previously it added the surcharge on top, diverging from the negotiated
+        // branch).
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF)
+        state.fixedFare = airportFixedFare(state.maxiRateApplied)
+
+        val breakdown = engine.close(state, paymentMethod = "card", surchargePct = BigDecimal("5.0"))
+
+        assertEquals(BigDecimal("60.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("60.00"), breakdown.grandTotal) // surcharge absorbed
+        assertEquals(BigDecimal("3.00"), breakdown.surcharge) // still recorded
+    }
+
+    @Test
+    fun testAD_airportFixedCleaningFeeStillAdditiveOnTop() {
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF)
+        state.fixedFare = airportFixedFare(state.maxiRateApplied)
+
+        val breakdown = engine.close(
+            state,
+            paymentMethod = "card",
+            surchargePct = BigDecimal("5.0"),
+            cleaningFee = BigDecimal("20.00"),
+        )
+
+        assertEquals(BigDecimal("80.00"), breakdown.grandTotal) // 60.00 + 20.00, surcharge absorbed
+        assertEquals(BigDecimal("3.00"), breakdown.surcharge)
+    }
+
+    @Test
+    fun testAE_meteredCardPaymentIsCompletelyUnchanged() {
+        // Regression guard: an ordinary metered (non-negotiated, non-fixed) trip must keep billing
+        // the non-cash surcharge on top exactly as before -- the 2026-09 absorption ruling applies
+        // ONLY to negotiated/fixed fares. Same shape as testH.
+        val engine = FareEngine()
+        var state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.DAY)
+        state = engine.tick(state, speedKmh = 40, distanceDeltaKm = 3, elapsedSeconds = 270)
+
+        val breakdown = engine.close(state, paymentMethod = "card", surchargePct = BigDecimal("5.0"))
+
+        assertEquals(BigDecimal("13.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("0.65"), breakdown.surcharge)
+        assertEquals(BigDecimal("13.65"), breakdown.grandTotal) // surcharge IS billed, unlike the negotiated case
+    }
 }

@@ -246,6 +246,9 @@ private fun TotalCol(
     // function's doc — that the Sydney Airport Fixed Fare path always zeroes psl regardless of
     // includePsl, so it's the one real exemption where the levy line is genuinely not due.
     val isAirportFixed = state.trip.type == "airport_fixed"
+    // Negotiated ("Set Price") or Sydney Airport Fixed — the two FareEngine.close() branches
+    // that absorb the non-cash surcharge (2026-09 product ruling) rather than billing it on top.
+    val isAbsorbedFare = isAirportFixed || breakdown.negotiatedTotal != null
 
     // Scrollable (2026-09-03 tips live pass, real device finding): the added Tip row pushed
     // "Report vehicle soiling" (and, on a taller breakdown, other rows) behind the fixed
@@ -330,7 +333,16 @@ private fun TotalCol(
             }
             if (breakdown.surcharge.signum() > 0) {
                 val pctLabel = state.surchargePct.stripTrailingZeros().toPlainString()
-                BreakdownRow("Non-cash payment surcharge ($pctLabel%)", breakdown.surcharge.money())
+                // 2026-09 product ruling: a negotiated/fixed fare (see isAbsorbedFare below)
+                // ABSORBS the non-cash surcharge — it is still computed and shown here (the
+                // driver should see what card fee was absorbed) but it is NOT added to TOTAL
+                // DUE above, so it must never read like an ordinary additive line.
+                val label = if (isAbsorbedFare) {
+                    "Non-cash surcharge ($pctLabel%) — absorbed, not charged"
+                } else {
+                    "Non-cash payment surcharge ($pctLabel%)"
+                }
+                BreakdownRow(label, breakdown.surcharge.money())
             }
             BreakdownRow("GST included", breakdown.gstComponent.money())
             // Tip (Close & Pay "tips" pass) — its own line, added at the display level only:
@@ -344,7 +356,7 @@ private fun TotalCol(
         }
         if (breakdown.negotiatedTotal != null) {
             Text(
-                "Agreed (Set Price) trip — the levy and any tolls above are already included in the agreed amount, not charged on top. Only a cleaning fee or card surcharge (if applicable) adds to the total.",
+                "Agreed (Set Price) trip — the levy, any tolls, and a card surcharge (if applicable) above are already included in the agreed amount, not charged on top. Only a cleaning fee adds to the total.",
                 fontFamily = InterFamily,
                 fontSize = 13.sp,
                 color = CaptainPalette.textMuted,
