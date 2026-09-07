@@ -468,14 +468,19 @@ class FareEngineTest {
     }
 
     @Test
-    fun testR_negotiatedFareBillsTheAgreedAmountNotTheMeteredAccrual() {
-        // $25 negotiated ("Set Price") trip, $6.43 toll, PSL on. The meter still accrued a much
-        // larger metered fare (flag_fall 5.17 + accrued_distance 50.00 = 55.17) -- proving the
-        // negotiated amount, not that accrual, is what actually gets billed (Fix 7 / Act s79(3)).
-        // subtotal = negotiated_total 25.00 + tolls 6.43 + psl 1.32 = 32.75
-        // fare_total = round_down(32.75) = 32.75 (exact)
-        // grand_total = 32.75 (cash, no surcharge)
-        // gst_component = 32.75 / 11 = 2.977272... -> 2.98
+    fun testR_negotiatedFareBillsExactlyTheAgreedAmountAllInclusive() {
+        // 2026-09 product correction: a $25 negotiated ("Set Price") trip is now ALL-INCLUSIVE --
+        // the $6.43 toll and PSL are still real, still recorded on the breakdown (for PSL-ledger
+        // remittance / toll-audit purposes), but are NOT added on top of what's billed. The meter
+        // still accrued a much larger metered fare (flag_fall 5.17 + accrued_distance 50.00 =
+        // 55.17) -- proving the negotiated amount, not that accrual, is what actually gets billed
+        // (Act s79(3)); and NOT negotiated + tolls + psl = 32.75 either (the OLD, now-wrong
+        // behaviour this test used to assert -- see git history). Per the product owner's own
+        // words: "fixed price means, all toll fees everything included ... driver will straight
+        // charge $50 or $60 or whatever they decide."
+        // fare_total = round_down(25.00) = 25.00 (exact)
+        // grand_total = 25.00 (cash, no surcharge)
+        // gst_component = 25.00 / 11 = 2.272727... -> 2.27
         val engine = FareEngine()
         val state = FareState(
             tariff = URBAN_TARIFF,
@@ -493,9 +498,13 @@ class FareEngineTest {
         // ...but is NOT what got charged: the negotiated $25 was billed instead of the ~$55.17
         // metered fare component.
         assertEquals(BigDecimal("25.00"), breakdown.negotiatedTotal)
-        assertEquals(BigDecimal("32.75"), breakdown.fareTotal)
-        assertEquals(BigDecimal("32.75"), breakdown.grandTotal)
-        assertEquals(BigDecimal("2.98"), breakdown.gstComponent)
+        assertEquals(BigDecimal("25.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("25.00"), breakdown.grandTotal)
+        assertEquals(BigDecimal("2.27"), breakdown.gstComponent)
+        // Recorded (not billed): the toll and PSL are still real obligations -- still owed for
+        // remittance/audit -- even though absorbed into the price.
+        assertEquals(BigDecimal("6.43"), breakdown.tolls)
+        assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
     }
 
     @Test
@@ -544,13 +553,14 @@ class FareEngineTest {
     // 2026-09 live-display pass (product-reported): the meter must START at flagfall + PSL, the
     // RUNNING display must always show the full amount the passenger will pay (tolls/waiting
     // included from the moment they accrue, not only at close), and a negotiated ("Set Price")
-    // trip must actually charge — and NOW display — the agreed amount, not the metered accrual.
-    // These four tests pin the CLOSE-TIME math these display fixes must never disturb: [close] and
-    // [FareState.negotiatedTotal] handling here are UNCHANGED by this pass (they already worked —
-    // see testR above) — what changed is only in `domain.FareEngineImpl`/`domain.FareState` (the
-    // UI-facing live-display layer), which cannot be exercised from this plain-engine test file.
-    // These tests exist to PROVE that unrelated layer's fix didn't quietly change what this file's
-    // close() computes.
+    // trip must actually charge — and display — the agreed amount, not the metered accrual.
+    // testT/testU below (ordinary metered trips) pin the CLOSE-TIME math this pass and the later
+    // 2026-09 negotiated-fare-inclusivity correction (testR/testV above) must never disturb: an
+    // ordinary metered trip's [close] computation is UNCHANGED by either pass — what changed is
+    // only (a) `domain.FareEngineImpl`/`domain.FareState` (the UI-facing live-display layer,
+    // untestable from this plain-engine file) and (b) this file's own negotiated_total branch
+    // (testR/testV). These two tests exist to PROVE neither of those touched the ordinary metered
+    // path.
     // ------------------------------------------------------------------------------------------
 
     @Test
@@ -598,12 +608,14 @@ class FareEngineTest {
     }
 
     @Test
-    fun testV_negotiatedFixedPriceTripClosesAtTheAgreedAmountEvenWhenMeteredWouldBeLess() {
+    fun testV_negotiatedFixedPriceTripClosesAtExactlyTheAgreedAmountEvenWhenMeteredWouldBeLess() {
         // Mirror of testR (which proves the agreed amount wins when the meter would have charged
         // MORE) for the other direction: the meter barely moved (a short 1km hop), but the driver
         // had agreed $50 up front. Act s79(3) cuts both ways — an agreed price is what's charged,
         // not a floor the metered fare must exceed, and not a ceiling it must stay under either.
-        // subtotal = negotiated_total 50.00 + psl 1.32 = 51.32 (no tolls/extras in this scenario)
+        // 2026-09 product correction: PSL is still recorded (breakdown.psl below) but no longer
+        // adds on top — fare_total/grand_total are exactly 50.00, not 51.32 (the OLD, now-wrong
+        // figure this test used to assert — see git history).
         val engine = FareEngine()
         var state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.DAY, negotiatedTotal = BigDecimal("50.00"))
         state = engine.tick(state, speedKmh = 40, distanceDeltaKm = 1, elapsedSeconds = 90)
@@ -612,7 +624,72 @@ class FareEngineTest {
 
         assertTrue("metered distance charge should be small", breakdown.distanceCharge < BigDecimal("50.00"))
         assertEquals(BigDecimal("50.00"), breakdown.negotiatedTotal)
-        assertEquals(BigDecimal("51.32"), breakdown.fareTotal)
-        assertEquals(BigDecimal("51.32"), breakdown.grandTotal)
+        assertEquals(BigDecimal("50.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("50.00"), breakdown.grandTotal)
+        // Recorded (not billed): the levy is still a real obligation, still owed for remittance.
+        assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // 2026-09 negotiated-fare-inclusivity correction (product-reported): "fixed price means, all
+    // toll fees everything included ... driver will straight charge $50 or $60 or whatever they
+    // decide." Tolls/PSL/extras must be absorbed into a negotiated total, never billed on top of
+    // it — but must still be RECORDED for PSL-ledger remittance and toll audit purposes. testW
+    // proves the fixed-price case; testX proves an ordinary metered trip is completely unaffected
+    // (byte-for-byte identical to what testB/testU already pin) by this change to the negotiated
+    // branch only.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    fun testW_negotiatedFareWithTollsAndExtrasIsFullyInclusiveButStillRecordsThem() {
+        // A $50 negotiated trip with a $6.43 toll, a $10 extra, and PSL on: the passenger is
+        // charged EXACTLY $50 — nothing added for the toll/levy/extra — but all three are still
+        // present on the breakdown for accounting purposes (PSL-ledger remittance, toll audit,
+        // driver's own extras record).
+        val engine = FareEngine()
+        val state = FareState(
+            tariff = URBAN_TARIFF,
+            timeClass = TimeClass.DAY,
+            negotiatedTotal = BigDecimal("50.00"),
+            tolls = BigDecimal("6.43"),
+            extras = BigDecimal("10.00"),
+        )
+
+        val breakdown = engine.close(state, includePsl = true)
+
+        assertEquals(BigDecimal("50.00"), breakdown.fareTotal)
+        assertEquals(BigDecimal("50.00"), breakdown.grandTotal)
+        // Recorded, not billed.
+        assertEquals(BigDecimal("6.43"), breakdown.tolls)
+        assertEquals(BigDecimal("10.00"), breakdown.extras)
+        assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
+    }
+
+    @Test
+    fun testX_ordinaryMeteredTripUnaffectedByTheNegotiatedFareInclusivityChange() {
+        // Regression pin for the HARD CONSTRAINT that this change must not touch ordinary metered
+        // billing: same trip shape as testB (urban night, over 12km, both distance bands), plus a
+        // toll/extra/PSL exactly like testW above so the two scenarios are directly comparable —
+        // for a trip with NO negotiatedTotal, tolls/psl/extras must still add on top, unchanged.
+        val engine = FareEngine()
+        var state = FareState(
+            tariff = URBAN_TARIFF,
+            timeClass = TimeClass.NIGHT,
+            isPeak = true,
+            tolls = BigDecimal("6.43"),
+            extras = BigDecimal("10.00"),
+        )
+        state = engine.tick(state, speedKmh = 40, distanceDeltaKm = 16, elapsedSeconds = 1440)
+
+        val breakdown = engine.close(state, includePsl = true)
+
+        // first 12km @ 3.10 = 37.20, next 4km @ 2.82 = 11.28 -> distance 48.48
+        assertEquals(BigDecimal("48.48"), breakdown.distanceCharge)
+        // subtotal = flag_fall 5.17 + peak 2.65 + 48.48 + tolls 6.43 + psl 1.32 + extras 10.00 = 74.05
+        assertEquals(BigDecimal("74.05"), breakdown.fareTotal)
+        assertEquals(BigDecimal("74.05"), breakdown.grandTotal)
+        assertEquals(BigDecimal("6.43"), breakdown.tolls)
+        assertEquals(BigDecimal("10.00"), breakdown.extras)
+        assertEquals(URBAN_TARIFF.pslAmount, breakdown.psl)
     }
 }

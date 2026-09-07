@@ -142,7 +142,9 @@ class TripCreate(BaseModel):
             "the driver enters this before starting the meter (NSW allows this "
             "for pre-arranged/negotiated fares). Settable only at trip creation "
             "— not mid-trip. Replaces the metered flag/distance/time components "
-            "at close; PSL and tolls still accrue and add on top of it."
+            "at close and is all-inclusive: PSL and tolls are still recorded on "
+            "the trip for ledger/audit purposes but are never added on top of "
+            "this amount."
         ),
     )
 

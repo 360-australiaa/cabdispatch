@@ -167,7 +167,7 @@ class FareEngineImplRunningDisplayTest {
     // --- (C) a negotiated/fixed price sticks on the live display, meter keeps running underneath ---
 
     @Test
-    fun `a negotiated fixed price displays the agreed amount immediately, not flagfall`() = runTest {
+    fun `a negotiated fixed price displays exactly the agreed amount immediately, not flagfall`() = runTest {
         val speedSource = FakeSpeedSource(0.0)
         val engine = FareEngineImpl(speedSource, backgroundScope)
 
@@ -180,13 +180,15 @@ class FareEngineImplRunningDisplayTest {
 
         val state = engine.state.value
         assertEquals(BigDecimal("50.00"), state.negotiatedTotal)
-        // Deliberate design choice (documented on FareState.total): the dial shows the agreed
-        // amount PLUS PSL (mandatory Fares Order pass-through, always billed on top of a
-        // negotiated total too — see domain.fare.FareEngineTest's testV) — never bare flagfall,
-        // and never the raw $50 alone either, because $50 alone would UNDER-state what Close & Pay
-        // will actually charge (50.00 + psl 1.32 = 51.32), which would itself violate requirement
-        // (B) ("always show the full amount the passenger will pay").
-        assertEquals(BigDecimal("51.32"), state.total)
+        // 2026-09 product correction (documented on FareState.total): a negotiated/fixed price is
+        // now ALL-INCLUSIVE — "fixed price means, all toll fees everything included ... driver
+        // will straight charge $50 or $60 or whatever they decide" (verbatim product requirement).
+        // The dial shows EXACTLY the agreed amount — never bare flagfall, and no longer 50.00 +
+        // psl 1.32 = 51.32 either (the OLD, now-wrong behaviour this test used to assert — PSL is
+        // still seeded into breakdown.psl for the trip record, see the assertion below, just no
+        // longer added to what's displayed/billed).
+        assertEquals(BigDecimal("50.00"), state.total)
+        assertEquals(BigDecimal("1.32"), state.breakdown.psl)
     }
 
     @Test
@@ -213,11 +215,16 @@ class FareEngineImplRunningDisplayTest {
         )
         // ...yet the DISPLAYED total is exactly what it was at t=0 — unchanged by all that accrual.
         assertEquals(totalAtStart, afterDriving.total)
-        assertEquals(BigDecimal("51.32"), afterDriving.total)
+        assertEquals(BigDecimal("50.00"), afterDriving.total)
     }
 
     @Test
-    fun `a toll still adds on top of a negotiated fixed price`() = runTest {
+    fun `a toll no longer adds on top of a negotiated fixed price, but is still recorded`() = runTest {
+        // 2026-09 product correction: a toll crossed during a fixed-price trip is absorbed into
+        // the agreed amount, same as the levy above — never billed on top (this test used to
+        // assert 57.75 = 50.00 + 1.32 psl + 6.43 toll; see git history). The toll is still a real
+        // cost the operator incurred, so it must still be RECORDED (breakdown.tolls) for
+        // audit/reconciliation, even though the passenger is never charged more than $50 for it.
         val speedSource = FakeSpeedSource(0.0)
         val engine = FareEngineImpl(speedSource, backgroundScope)
         engine.startTrip(
@@ -229,9 +236,9 @@ class FareEngineImplRunningDisplayTest {
 
         engine.addToll(TollPresets.AIRPORT) // $6.43
 
-        // 50.00 (agreed) + 1.32 (psl) + 6.43 (toll) = 57.75 — tolls are a real extra cost on top of
-        // any agreed price, metered or fixed; Act s79(3) only fixes the METERED-fare component.
-        assertEquals(BigDecimal("57.75"), engine.state.value.total)
+        val state = engine.state.value
+        assertEquals(BigDecimal("50.00"), state.total)
+        assertEquals(BigDecimal("6.43"), state.breakdown.tolls)
     }
 
     @Test

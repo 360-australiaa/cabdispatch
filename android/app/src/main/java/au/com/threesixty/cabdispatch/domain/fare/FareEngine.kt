@@ -244,12 +244,16 @@ class FareState(
     /**
      * "Set Price" / negotiated-fare total agreed with the passenger before
      * the trip (Act s79(3): a driver must never demand more than the agreed
-     * amount). When non-null, [FareEngine.close] charges exactly this amount
-     * for the metered-fare component instead of the accrued
-     * flagFall+peak+distance+waiting total — see that method's doc. The
-     * meter still accrues [accruedDistanceCharge]/[accruedWaitingCharge]
-     * normally so the "what the meter would have charged" reference stays
-     * available for display; it is simply not what gets billed.
+     * amount). When non-null, [FareEngine.close] charges EXACTLY this amount
+     * — full stop, all-inclusive (2026-09 product requirement: "fixed price
+     * means, all toll fees everything included ... driver will straight
+     * charge $50 or $60 or whatever they decide") — instead of the accrued
+     * flagFall+peak+distance+waiting total, and tolls/PSL/extras are no
+     * longer added on top of it either; see that method's doc. The meter
+     * still accrues [accruedDistanceCharge]/[accruedWaitingCharge]/[tolls]
+     * normally so the "what the meter would have charged" reference, and the
+     * toll/levy figures still owed for remittance/audit, stay available; it
+     * is simply not what gets billed.
      */
     var negotiatedTotal: BigDecimal? = null,
 ) {
@@ -424,17 +428,27 @@ class FareEngine {
             meteredFare *= state.tariff.maxiMultiplier
         }
 
-        // Negotiated ("Set Price") trips bill the agreed amount instead of the
-        // metered accrual (Act s79(3): never demand more than what was agreed)
-        // — everything else (tolls/PSL/extras/cleaning fee/surcharge/GST)
-        // still computes and adds on top exactly as it does for a metered
-        // trip (Fix 7). The metered accrual itself is untouched above, so
+        // Negotiated ("Set Price") trips bill EXACTLY the agreed amount — full
+        // stop, all-inclusive (2026-09 product requirement: "fixed price
+        // means, all toll fees everything included ... driver will straight
+        // charge $50 or $60 or whatever they decide"). Unlike a metered trip,
+        // tolls/PSL/extras are NOT added on top: they are still computed and
+        // still returned below in [FareBreakdown.tolls]/[psl]/[extras] (real
+        // amounts still owed for PSL-ledger remittance / toll audit purposes —
+        // absorbing them into the fixed price does not make the levy/toll
+        // obligation disappear), simply not billed to the passenger. Only
+        // cleaning fee (never knowable at negotiation time — soiling is
+        // discovered after the fact) and the non-cash surcharge below remain
+        // additive, mirroring the fixedFare/Sydney Airport branch above. The
+        // metered accrual itself is untouched above, so
         // [FareBreakdown.flagFall]/[distanceCharge]/[waitingCharge]/[peakCharge]
         // still show what the meter would have charged, for reference.
         val negotiatedTotal = state.negotiatedTotal
-        val effectiveFare = negotiatedTotal ?: meteredFare
-
-        val subtotal = effectiveFare + state.tolls + psl + state.extras + cappedCleaningFee
+        val subtotal = if (negotiatedTotal != null) {
+            negotiatedTotal + cappedCleaningFee
+        } else {
+            meteredFare + state.tolls + psl + state.extras + cappedCleaningFee
+        }
 
         val fareTotal = roundDownToCent(subtotal)
 

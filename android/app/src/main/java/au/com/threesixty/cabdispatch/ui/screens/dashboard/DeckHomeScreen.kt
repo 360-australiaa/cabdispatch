@@ -2476,7 +2476,11 @@ private fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit)
         ) {
             Text("Set price — fixed fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
             Text(
-                "Agreed with the passenger before starting. Levies and GST still apply on top.",
+                // 2026-09 product correction: this used to read "Levies and GST still apply on
+                // top" — no longer true. A negotiated/fixed price is now all-inclusive (see
+                // domain.fare.FareEngine.close's negotiatedTotal branch) — the levy and any tolls
+                // are absorbed into the agreed amount, never billed on top of it.
+                "Agreed with the passenger before starting. This is the total the passenger pays — levies and tolls are included, not added on top.",
                 fontFamily = InterFamily,
                 fontSize = 16.sp,
                 color = CaptainPalette.textSecondary,

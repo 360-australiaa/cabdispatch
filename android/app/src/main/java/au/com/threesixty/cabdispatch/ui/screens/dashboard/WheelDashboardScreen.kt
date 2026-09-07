@@ -1141,9 +1141,13 @@ private fun SetPriceEntryScreen(onCancel: () -> Unit, onConfirm: (String) -> Uni
                     ) {
                         Text("⚠", color = WheelColorsV2.amberFigure, fontSize = 15.sp)
                         Text(
+                            // 2026-09 product correction: this used to read "This price does not
+                            // include levies and/or tolls" — no longer true, see
+                            // domain.fare.FareEngine.close's negotiatedTotal branch doc. A
+                            // negotiated/fixed price is now all-inclusive.
                             "NSW: negotiated fares must be agreed before the trip starts and " +
-                                "offered — never demanded. This price does not include levies " +
-                                "and/or tolls.",
+                                "offered — never demanded. This is the total the passenger pays " +
+                                "— levies and tolls are included, not added on top.",
                             color = WheelColorsV2.amberFigure,
                             fontSize = 13.sp,
                         )

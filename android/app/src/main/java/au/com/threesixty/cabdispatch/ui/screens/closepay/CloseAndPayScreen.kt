@@ -344,7 +344,7 @@ private fun TotalCol(
         }
         if (breakdown.negotiatedTotal != null) {
             Text(
-                "Agreed (Set Price) trip — the levy, tolls, cleaning fee and any card surcharge above are still added on top of the agreed amount.",
+                "Agreed (Set Price) trip — the levy and any tolls above are already included in the agreed amount, not charged on top. Only a cleaning fee or card surcharge (if applicable) adds to the total.",
                 fontFamily = InterFamily,
                 fontSize = 13.sp,
                 color = CaptainPalette.textMuted,

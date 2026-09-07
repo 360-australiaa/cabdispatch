@@ -53,14 +53,17 @@ No column in the brief's list was renamed, dropped, or retyped.
    allows this for pre-arranged/negotiated fares). Reuses the same
    fare-engine mechanism the pre-existing `airport_fixed` trip type uses
    (`app.services.fare_engine.FareState.fixed_fare` /
-   `FareEngine.close`) via a sibling `negotiated_total` field on `FareState`,
-   but — unlike `airport_fixed` — PSL and tolls still accrue and add on top
-   of it (see `app.services.fare_engine`'s `NEGOTIATED_TOTAL_MIN`/`_MAX`
-   module comment for the exact rationale). Settable only at trip creation
-   (`TripCreate.negotiated_total`, not `TripUpdate` — matches the "set price
-   before starting the meter" UX this mirrors); stored on the trip row
-   distinct from `total` so it stays visible on the receipt/trip detail even
-   after tolls/PSL/surcharge are layered on top at close.
+   `FareEngine.close`) via a sibling `negotiated_total` field on `FareState`.
+   2026-09 product correction: like `airport_fixed`, this is now
+   ALL-INCLUSIVE — PSL and tolls are still recorded on `psl`/`tolls` below
+   (for ledger/audit/remittance purposes; the obligation is real) but no
+   longer add on top of what's billed (see `app.services.fare_engine`'s
+   `negotiated_total` module comment for the full rationale). Settable only
+   at trip creation (`TripCreate.negotiated_total`, not `TripUpdate` —
+   matches the "set price before starting the meter" UX this mirrors);
+   stored on the trip row distinct from `total` so it stays visible on the
+   receipt/trip detail even after a cleaning fee/surcharge is layered on top
+   at close.
 6. `tip_amount` is added by a later feature step (Close & Pay "tips"
    pass) on top of the domain brief's original field list. A driver tip is
    NOT part of the NSW-regulated metered fare — it is never folded into

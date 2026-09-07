@@ -114,19 +114,19 @@ data class FareState(
      * `.addToll()`; PSL is seeded once at [FareEngineImpl.startTrip] from the tariff, see that
      * method's doc for why it's no longer left at zero for the trip's whole duration).
      *
-     * For a "Set Price" trip ([negotiatedTotal] non-null) this mirrors EXACTLY the same formula the
-     * pure engine's own [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] uses for a
-     * negotiated fare: the agreed amount replaces the metered flagFall+distance+waiting+peak
-     * component, but tolls/PSL/extras still add on top of it — never [breakdown.total] itself (that
-     * would double-count the metered accrual the negotiated amount already stands in for). This is
-     * a deliberate choice, not an accident: it means the dial shows exactly what Close & Pay will
-     * actually charge (agreed price + any tolls/levy/extras added since), staying honest even when
-     * the metered fare running underneath would have worked out to more OR less than the agreed
-     * price — the driver can only ever charge the agreed amount (Act s79(3)), so the dial never
-     * shows a bigger "metered" figure that isn't what the passenger will actually pay.
+     * For a "Set Price" trip ([negotiatedTotal] non-null) this is EXACTLY [negotiatedTotal] — full
+     * stop, nothing added on top — mirroring the pure engine's own
+     * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] negotiated-fare branch (2026-09
+     * product requirement: "fixed price means, all toll fees everything included ... driver will
+     * straight charge $50 or $60 or whatever they decide"). [breakdown.tolls]/[breakdown.psl]/
+     * [breakdown.extras] keep accruing underneath exactly as before (still real amounts owed for
+     * PSL-ledger remittance / toll audit — see [FareEngine.close]'s doc) but are deliberately
+     * excluded here: a driver who agreed $50 must see $50 on the dial the whole trip, never a
+     * bigger figure that isn't what the passenger will actually be charged (Act s79(3) — the
+     * agreed amount is what's charged, full stop).
      */
     val total: BigDecimal
-        get() = negotiatedTotal?.let { it + breakdown.tolls + breakdown.psl + breakdown.extras } ?: breakdown.total
+        get() = negotiatedTotal ?: breakdown.total
 }
 
 /** Formats a decimal-as-string-contract money value for display. Never use

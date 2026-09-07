@@ -186,11 +186,30 @@ def airport_fixed_fare(maxi: bool) -> Decimal:
 # permits this for pre-arranged/negotiated fares (unlike rank/hail tariffs,
 # which are Fares Order-capped - see validate_against_fares_order - negotiated
 # fares are not rate-capped at all, since the passenger agrees to the exact
-# number up front). The competitor's own on-screen disclaimer reads "this
-# price doesn't include levies and/or tolls" - i.e. PSL and tolls still accrue
-# and add ON TOP of the negotiated amount, unlike AIRPORT_FIXED_FARE_* above
-# which excludes them entirely. See FareEngine.close's `negotiated_total`
-# branch.
+# number up front).
+#
+# 2026-09 product correction: negotiated_total is now ALL-INCLUSIVE, same as
+# AIRPORT_FIXED_FARE_* above - "fixed price means, all toll fees everything
+# included, driver will straight charge $50 or $60 or whatever they decide"
+# (verbatim product requirement). PSL and tolls are NEVER added on top of a
+# negotiated total any more - the driver's agreed number is the full amount
+# the passenger pays, full stop. This reverses the previous behaviour (kept
+# below only as a historical note): an earlier pass modelled this on a
+# competitor's own on-screen disclaimer ("this price doesn't include levies
+# and/or tolls"), which billed negotiated_total + tolls + psl + extras on
+# top - that is now considered wrong and must not be reintroduced.
+#
+# Absorbing PSL/tolls into the negotiated total does NOT mean they stop being
+# real, owed amounts: FareEngine.close's `negotiated_total` branch still
+# returns the tariff's real psl_amount and whatever tolls were actually
+# crossed in `FareBreakdown.psl`/`.tolls` (never zeroed, unlike
+# AIRPORT_FIXED_FARE_* which genuinely has neither) - they are recorded for
+# PSL-ledger remittance / audit / toll-reconciliation purposes, simply no
+# longer ADDED to `fare_total`/`grand_total`. Only cleaning_fee and the
+# non-cash surcharge remain additive on top (mirroring the fixed_fare/Sydney
+# Airport branch above): neither is knowable at the time the price was
+# negotiated - a soiling fee is only discovered after the fact and a card
+# surcharge is a payment-method choice, not part of "the fare" itself.
 #
 # NEGOTIATED_TOTAL_MIN/MAX are a sanity cap only - guarding against an
 # obvious data-entry error (a stray zero, a decimal-point slip), not a
@@ -394,11 +413,14 @@ class FareState:
     fixed_fare: Decimal | None = None
 
     # Negotiated / "Set Price" fixed fare (see validate_negotiated_total /
-    # NEGOTIATED_TOTAL_MIN/MAX above): when set, close() charges exactly this
-    # amount for the base/flag/distance/time components combined, but — unlike
-    # fixed_fare above — PSL and tolls still accrue and add ON TOP, exactly as
-    # they do for a normal metered trip (per the competitor's own "doesn't
-    # include levies and/or tolls" on-screen disclaimer this mirrors).
+    # NEGOTIATED_TOTAL_MIN/MAX above): when set, close() charges EXACTLY this
+    # amount, full stop - all-inclusive, same as fixed_fare above. PSL and
+    # tolls still accrue on `tolls`/into the returned FareBreakdown (for
+    # ledger/audit/remittance purposes - the levy/toll obligation is real and
+    # still owed) but are NOT added on top of what the passenger is billed
+    # (2026-09 product correction - see this module's negotiated_total
+    # docstring above for the full rationale and why the old "add PSL/tolls
+    # on top" behaviour is now wrong).
     negotiated_total: Decimal | None = None
 
     @property
@@ -546,24 +568,27 @@ class FareEngine:
         if state.negotiated_total is not None:
             # Negotiated / "Set Price" fixed fare: negotiated_total REPLACES
             # the flag/peak/distance/waiting components combined — reported
-            # as 0 individually below, same convention fixed_fare uses — but
-            # PSL and tolls still accrue and add on top, exactly as they do
-            # for a normal metered trip (see FareState.negotiated_total's
-            # docstring). Not run through the maxi multiplier: the negotiated
-            # number is the number the driver and passenger already agreed to.
+            # as 0 individually below, same convention fixed_fare uses. Not
+            # run through the maxi multiplier: the negotiated number is the
+            # number the driver and passenger already agreed to.
+            #
+            # 2026-09 product correction: negotiated_total is now
+            # ALL-INCLUSIVE — tolls, PSL, and extras are still recorded below
+            # (state.tolls / psl / state.extras still flow into the returned
+            # FareBreakdown, for PSL-ledger remittance and toll-audit
+            # purposes — the obligation is real even though it isn't billed)
+            # but are deliberately EXCLUDED from `subtotal`/`fare_total` — see
+            # FareState.negotiated_total's docstring. Only cleaning_fee (never
+            # knowable at negotiation time — soiling is discovered after the
+            # fact) and the non-cash surcharge below remain additive, mirroring
+            # the fixed_fare/Sydney Airport branch above.
             flag_fall = Decimal(0)
             peak_charge = Decimal(0)
             distance_charge_amount = Decimal(0)
             waiting_charge_amount = Decimal(0)
             psl = state.tariff.psl_amount if include_psl else Decimal(0)
 
-            subtotal = (
-                state.negotiated_total
-                + state.tolls
-                + psl
-                + state.extras
-                + cleaning_fee
-            )
+            subtotal = state.negotiated_total + cleaning_fee
 
             maxi_applied = state.maxi_applied
             fare_total = round_down(subtotal)

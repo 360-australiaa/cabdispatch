@@ -1413,13 +1413,17 @@ async def test_create_trip_with_negotiated_total_persists_it(client: AsyncClient
     assert trip["total"] == "0.00"
 
 
-async def test_close_negotiated_total_trip_charges_negotiated_plus_tolls_and_psl(
+async def test_close_negotiated_total_trip_records_tolls_and_psl_but_bills_only_the_agreed_amount(
     client: AsyncClient, session: AsyncSession
 ):
-    """The important nuance from the competitor's own on-screen disclaimer
-    ("this price doesn't include levies and/or tolls"): PSL and tolls still
-    accrue and add ON TOP of negotiated_total — unlike the pre-existing
-    airport_fixed trip type, which excludes them entirely."""
+    """2026-09 product correction: a negotiated ("Set Price") trip is now
+    ALL-INCLUSIVE — PSL and tolls are still recorded on the trip (`tolls`/
+    `psl` below), same as the pre-existing airport_fixed trip type, but unlike
+    airport_fixed they are not zeroed out: they remain real, owed amounts for
+    PSL-ledger remittance / toll-audit purposes. What changed is that they no
+    longer add ON TOP of `negotiated_total` — `total` is exactly the agreed
+    amount, full stop (this test used to assert the opposite; see git
+    history)."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -1472,15 +1476,16 @@ async def test_close_negotiated_total_trip_charges_negotiated_plus_tolls_and_psl
     assert body["wait_amount"] == "0.00"
     assert body["peak_amount"] == "0.00"
 
+    # Still recorded — real amounts still owed for PSL-ledger remittance /
+    # toll-audit purposes — even though absorbed into the agreed price below.
     assert Decimal(body["tolls"]) == Decimal("4.82")
     assert Decimal(body["psl"]) == Decimal("1.32")
     assert Decimal(body["negotiated_total"]) == Decimal("45.00")
 
-    expected_subtotal = Decimal("45.00") + Decimal("4.82") + Decimal("1.32")
-    assert Decimal(body["subtotal"]) == expected_subtotal
-    assert Decimal(body["total"]) == expected_subtotal + Decimal(body["surcharge"])
-    # Not negotiated_total alone.
-    assert Decimal(body["total"]) != Decimal("45.00")
+    # But NOT billed on top: subtotal/total are exactly the agreed amount.
+    assert Decimal(body["subtotal"]) == Decimal("45.00")
+    assert Decimal(body["total"]) == Decimal("45.00") + Decimal(body["surcharge"])
+    assert Decimal(body["total"]) == Decimal("45.00")
 
 
 async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_negotiated(
@@ -1496,6 +1501,61 @@ async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_
     body = resp.json()
     assert body["total"] == "45.00"
     assert body["subtotal"] == "45.00"
+
+
+async def test_sync_negotiated_total_trip_device_and_server_totals_agree_exactly(
+    client: AsyncClient, session: AsyncSession
+):
+    """Device/server agreement proof for a negotiated fare (2026-09 product
+    correction). The on-device engine (android's `domain/fare/FareEngine.kt`
+    `close()`) and this server's `recompute_from_trace` -> `FareEngine.close`
+    must compute the SAME total for a negotiated trip, or every fixed-price
+    trip gets auto-flagged for review by the 1%-tolerance check below (see
+    sync_trips' own `fare_check_passed = variance_pct <= 1.0`).
+
+    For a negotiated trip with a toll and PSL both present, the on-device
+    engine now computes total = negotiated_total exactly (tolls/PSL recorded
+    but not billed — see FareEngine.kt's close() negotiated-fare branch) —
+    exactly mirrored here by setting device_total to the bare negotiated
+    amount. Asserts variance_pct == 0.00 (not merely <= 1.0) — the two engines
+    must agree byte-for-byte on a negotiated trip, not just within tolerance.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        # What the on-device FareEngine.close() computes for this exact input:
+        # negotiated_total, full stop — no toll/PSL added on top.
+        device_total="50.00",
+        negotiated_total="50.00",
+        tolls="4.30",
+        include_psl=True,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["status"] == "closed"
+    assert Decimal(trip["total"]) == Decimal("50.00")
+    assert Decimal(trip["variance_pct"]) == Decimal("0.00")
+    assert trip["max_fare_check_passed"] is True
+    assert trip["flagged_for_review"] is False
+    # Still recorded on the closed trip — real amounts still owed for
+    # PSL-ledger remittance / toll-audit purposes — even though absorbed into
+    # the $50 the passenger was actually charged.
+    assert Decimal(trip["tolls"]) == Decimal("4.30")
+    assert Decimal(trip["psl"]) == Decimal("1.32")
 
 
 # --- tips (Close & Pay "tips" pass) -----------------------------------------

@@ -341,13 +341,16 @@ def test_h2_cleaning_fee_is_clamped_to_the_tariffs_cap_never_trusted_raw():
     assert breakdown.fare_total == Decimal("129.31")
 
 
-def test_h3_negotiated_set_price_bills_the_agreed_amount_not_the_metered_fare():
-    """A $25 negotiated ("Set Price") fare with a $6.43 toll and PSL on:
-    grand_total = 25.00 (agreed) + 6.43 (toll) + 1.32 (PSL) = 32.75 — the
-    agreed amount, never the metered accrual, per Act s79(3) (never demand
-    more than what was agreed) and this engine's own negotiated_total
-    contract (levies/tolls still add on top, exactly as the driver-facing
-    copy promises)."""
+def test_h3_negotiated_set_price_bills_exactly_the_agreed_amount_all_inclusive():
+    """2026-09 product correction: a $25 negotiated ("Set Price") fare is now
+    ALL-INCLUSIVE — the $6.43 toll and PSL are still real, still recorded on
+    the breakdown (for PSL-ledger remittance / toll-audit purposes), but are
+    NOT added on top of what's billed. grand_total = 25.00 exactly, never
+    25.00 + 6.43 + 1.32 = 32.75 (the OLD, now-wrong behaviour this test used
+    to assert — see git history). Per Act s79(3): never demand more than what
+    was agreed — and per the product owner's own words, "fixed price means,
+    all toll fees everything included ... driver will straight charge $50 or
+    $60 or whatever they decide"."""
     engine = FareEngine()
     state = FareState(
         tariff=URBAN_TARIFF,
@@ -363,9 +366,14 @@ def test_h3_negotiated_set_price_bills_the_agreed_amount_not_the_metered_fare():
     breakdown = engine.close(state, include_psl=True)
 
     assert breakdown.maxi_applied is False
-    assert breakdown.fare_total == Decimal("32.75")
-    assert breakdown.grand_total == Decimal("32.75")
-    assert breakdown.gst_component == Decimal("2.98")
+    # Billed: exactly the agreed amount, nothing more.
+    assert breakdown.fare_total == Decimal("25.00")
+    assert breakdown.grand_total == Decimal("25.00")
+    assert breakdown.gst_component == Decimal("2.27")  # 25.00 / 11, half-up
+    # Recorded (not billed): the toll and PSL are still real obligations —
+    # still owed for remittance/audit — even though absorbed into the price.
+    assert breakdown.tolls == Decimal("6.43")
+    assert breakdown.psl == Decimal("1.32")
 
 
 def test_i_validate_against_fares_order_rank_hail_vs_booked():
