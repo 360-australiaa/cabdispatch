@@ -205,11 +205,18 @@ def airport_fixed_fare(maxi: bool) -> Decimal:
 # crossed in `FareBreakdown.psl`/`.tolls` (never zeroed, unlike
 # AIRPORT_FIXED_FARE_* which genuinely has neither) - they are recorded for
 # PSL-ledger remittance / audit / toll-reconciliation purposes, simply no
-# longer ADDED to `fare_total`/`grand_total`. Only cleaning_fee and the
-# non-cash surcharge remain additive on top (mirroring the fixed_fare/Sydney
-# Airport branch above): neither is knowable at the time the price was
-# negotiated - a soiling fee is only discovered after the fact and a card
-# surcharge is a payment-method choice, not part of "the fare" itself.
+# longer ADDED to `fare_total`/`grand_total`.
+#
+# 2026-09-06 product ruling (owner, verbatim): "yes card surcharge will be
+# absorbed into a fixed price, but not cleaning fee". So the non-cash
+# surcharge joins tolls/PSL/extras above - absorbed into the agreed price,
+# still computed and RECORDED on `FareBreakdown.surcharge` for accounting
+# (the operator needs to know what card fee it absorbed), never added to
+# `grand_total`. Only `cleaning_fee` remains additive on top (mirroring the
+# fixed_fare/Sydney Airport branch above): a cleaning fee is a post-hoc
+# soiling charge that is only ever discovered AFTER the price was agreed, so
+# unlike a card surcharge it was never capable of being part of "the fare" in
+# the first place.
 #
 # NEGOTIATED_TOTAL_MIN/MAX are a sanity cap only - guarding against an
 # obvious data-entry error (a stray zero, a decimal-point slip), not a
@@ -409,18 +416,21 @@ class FareState:
     extras: Decimal = field(default_factory=lambda: Decimal(0))
 
     # Sydney Airport Fixed Fare Trial: when set, close() returns exactly this
-    # amount (60/80) plus ONLY surcharge/cleaning fee — no PSL, tolls, or peak.
+    # amount plus ONLY a cleaning fee — no PSL, tolls, peak, or (2026-09
+    # consistency call, see close()'s own comment) non-cash surcharge either;
+    # the surcharge is still computed/recorded, just never added.
     fixed_fare: Decimal | None = None
 
     # Negotiated / "Set Price" fixed fare (see validate_negotiated_total /
     # NEGOTIATED_TOTAL_MIN/MAX above): when set, close() charges EXACTLY this
-    # amount, full stop - all-inclusive, same as fixed_fare above. PSL and
-    # tolls still accrue on `tolls`/into the returned FareBreakdown (for
-    # ledger/audit/remittance purposes - the levy/toll obligation is real and
-    # still owed) but are NOT added on top of what the passenger is billed
-    # (2026-09 product correction - see this module's negotiated_total
-    # docstring above for the full rationale and why the old "add PSL/tolls
-    # on top" behaviour is now wrong).
+    # amount plus a cleaning fee, full stop - all-inclusive, same as
+    # fixed_fare above. PSL, tolls, and extras still accrue into the returned
+    # FareBreakdown (for ledger/audit/remittance purposes - the levy/toll
+    # obligation is real and still owed) and the non-cash surcharge is still
+    # computed and recorded too, but NONE of the four are added on top of
+    # what the passenger is billed (2026-09 product correction/ruling - see
+    # this module's negotiated_total docstring above for the full rationale).
+    # Only a cleaning fee is ever additive on top of this amount.
     negotiated_total: Decimal | None = None
 
     @property
@@ -538,7 +548,12 @@ class FareEngine:
 
         if state.fixed_fare is not None:
             # Sydney Airport Fixed Fare Trial: no PSL, tolls, or peak allowed on
-            # top — only the non-cash surcharge and a cleaning fee.
+            # top — only a cleaning fee. The non-cash surcharge is computed
+            # and RECORDED below (never billed) — see the 2026-09 consistency
+            # note above `FareEngine.close`'s `negotiated_total` branch: this
+            # fixed fare has the exact same "the price is the price"
+            # character as a negotiated total, so it now absorbs the card
+            # surcharge the same way, rather than diverging from it.
             fare_total = state.fixed_fare
             surcharge = Decimal(0)
             if payment_method == "card":
@@ -547,7 +562,7 @@ class FareEngine:
                     state.tariff.surcharge_pct_cap,
                 )
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
-            grand_total = fare_total + surcharge + cleaning_fee
+            grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
             gst_component = round_half_up(grand_total / Decimal(11))
             return FareBreakdown(
                 flag_fall=Decimal(0),
@@ -578,20 +593,25 @@ class FareEngine:
             # FareBreakdown, for PSL-ledger remittance and toll-audit
             # purposes — the obligation is real even though it isn't billed)
             # but are deliberately EXCLUDED from `subtotal`/`fare_total` — see
-            # FareState.negotiated_total's docstring. Only cleaning_fee (never
-            # knowable at negotiation time — soiling is discovered after the
-            # fact) and the non-cash surcharge below remain additive, mirroring
-            # the fixed_fare/Sydney Airport branch above.
+            # FareState.negotiated_total's docstring.
+            #
+            # 2026-09 product ruling (owner, verbatim): "yes card surcharge
+            # will be absorbed into a fixed price, but not cleaning fee" — a
+            # cleaning fee is a post-hoc soiling charge discovered only AFTER
+            # the price was agreed, so unlike tolls/PSL/extras/surcharge it is
+            # never part of "the fare" and stays additive on top, exactly like
+            # the fixed_fare/Sydney Airport branch above. The non-cash
+            # surcharge itself is still computed and returned below — RECORDED
+            # for accounting (the operator needs to know what card fee it
+            # absorbed) but never added to grand_total.
             flag_fall = Decimal(0)
             peak_charge = Decimal(0)
             distance_charge_amount = Decimal(0)
             waiting_charge_amount = Decimal(0)
             psl = state.tariff.psl_amount if include_psl else Decimal(0)
 
-            subtotal = state.negotiated_total + cleaning_fee
-
             maxi_applied = state.maxi_applied
-            fare_total = round_down(subtotal)
+            fare_total = round_down(state.negotiated_total)
 
             surcharge = Decimal(0)
             if payment_method == "card":
@@ -601,7 +621,7 @@ class FareEngine:
                 )
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
 
-            grand_total = fare_total + surcharge
+            grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
             gst_component = round_half_up(grand_total / Decimal(11))
 
             return FareBreakdown(

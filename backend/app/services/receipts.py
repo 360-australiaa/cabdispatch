@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.fleet import Vehicle
 from app.models.tenant import Tenant
-from app.models.trips import TRIP_STATUS_CLOSED, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip
 from app.models.user import User
 
 logger = logging.getLogger("cab_dispatch.receipts")
@@ -132,34 +132,59 @@ def _fmt(amount) -> str:
     return f"${amount:.2f}"
 
 
+def is_absorbed_fare(trip) -> bool:
+    """True for a negotiated ("Set Price") or Sydney Airport Fixed fare — the
+    two `app.services.fare_engine.FareEngine.close` branches where tolls/PSL/
+    extras/the non-cash surcharge are all absorbed into one agreed price
+    rather than billed on top (only a cleaning fee ever adds to the total).
+    `trip.type == TRIP_TYPE_AIRPORT_FIXED` is checked first, matching
+    `FareEngine.close`'s own branch order (a `fixed_fare` takes priority over
+    `negotiated_total` if a trip somehow carried both)."""
+    return trip.type == TRIP_TYPE_AIRPORT_FIXED or trip.negotiated_total is not None
+
+
 def fare_line_items(trip) -> tuple[list[tuple[str, Decimal]], list[tuple[str, Decimal]]]:
     """Split a trip's fare into the rows that SUM to `trip.subtotal` and the rows
     that are merely disclosed as already included in it.
 
     Returns `(line_items, included_items)`. `line_items` are additive and must
     reconcile to `trip.subtotal`; `included_items` are informational only and
-    must never be added to anything.
+    must never be added to anything. A cleaning fee (never absorbed, even on a
+    fixed/negotiated fare — see `FareEngine.close`) is additive on top of
+    `trip.subtotal` itself and is rendered as its own row by the PDF renderer,
+    not returned here — see `_render_pdf_bytes`.
 
-    A negotiated (fixed) fare is ALL-INCLUSIVE — the agreed price IS what the
-    passenger pays, with tolls and the levy absorbed inside it rather than added
-    on top (see `app.services.fare_engine.FareEngine.close`'s `negotiated_total`
-    branch). This receipt used to itemise those absorbed components as ordinary
-    additive rows, which produced a breakdown whose visible lines did not sum to
-    the printed Subtotal. The TOTAL was always correct, but on a fare-regulated
-    receipt an itemisation that doesn't reconcile is exactly what a passenger
-    disputes and an operator then cannot defend.
+    A negotiated ("Set Price") or Sydney Airport Fixed fare is ALL-INCLUSIVE —
+    the agreed price IS what the passenger pays, with tolls, the levy, extras,
+    and (2026-09 product ruling) the non-cash surcharge all absorbed inside it
+    rather than added on top (see `app.services.fare_engine.FareEngine.close`'s
+    `negotiated_total`/`fixed_fare` branches). This receipt used to itemise
+    those absorbed components as ordinary additive rows, which produced a
+    breakdown whose visible lines did not sum to the printed Subtotal. The
+    TOTAL was always correct, but on a fare-regulated receipt an itemisation
+    that doesn't reconcile is exactly what a passenger disputes and an
+    operator then cannot defend.
 
     So a fixed-price receipt leads with the agreed price, and reports the
     absorbed components as "included" — still disclosed (the levy and any toll
     really were incurred, and the operator still remits the levy: see
-    `app.models.psl_ledger`), just never presented as charged on top.
+    `app.models.psl_ledger`; the surcharge really would have been charged on
+    an ordinary trip, and the operator needs its own record of what it
+    absorbed), just never presented as charged on top.
 
     Extracted from the PDF renderer specifically so this reconciliation is
     directly assertable in tests rather than only observable by reading a
     generated PDF.
     """
-    if trip.negotiated_total is not None:
-        line_items = [("Agreed fixed price (all-inclusive)", trip.negotiated_total)]
+    if is_absorbed_fare(trip):
+        if trip.negotiated_total is not None:
+            line_items = [("Agreed fixed price (all-inclusive)", trip.negotiated_total)]
+        else:
+            # Sydney Airport Fixed Fare Trial — trip.subtotal IS the flat
+            # $60/$80 figure here (fare_engine's fixed_fare branch excludes
+            # the cleaning fee from fare_total, same as negotiated_total).
+            line_items = [("Fixed fare (all-inclusive)", trip.subtotal)]
+
         included_items = [
             (label, amount)
             for label, amount in (
@@ -169,6 +194,8 @@ def fare_line_items(trip) -> tuple[list[tuple[str, Decimal]], list[tuple[str, De
             )
             if amount
         ]
+        if trip.payment_method == "card" and trip.surcharge:
+            included_items.append(("Non-cash surcharge", trip.surcharge))
         return line_items, included_items
 
     return (
@@ -259,8 +286,22 @@ def _render_pdf_bytes(
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(130, 6, "Subtotal")
     pdf.cell(0, 6, _fmt(trip.subtotal), new_x="LMARGIN", new_y="NEXT", align="R")
-    pdf.cell(130, 6, "Non-cash surcharge (capped at 5%)")
-    pdf.cell(0, 6, _fmt(trip.surcharge), new_x="LMARGIN", new_y="NEXT", align="R")
+    if is_absorbed_fare(trip):
+        # The non-cash surcharge (if any) was already disclosed above as an
+        # "included" row — it is absorbed into the agreed price, never added
+        # on top, so it must not appear again here as an additive line. Only
+        # a cleaning fee is ever additive on top of `trip.subtotal` for a
+        # fixed/negotiated fare (see fare_engine.FareEngine.close); derived
+        # rather than re-passed in since Trip has no dedicated cleaning_fee
+        # column — exact because `trip.total` never mixes an absorbed
+        # surcharge into itself on this branch (see FareEngine.close).
+        cleaning_fee_amount = trip.total - trip.subtotal
+        if cleaning_fee_amount:
+            pdf.cell(130, 6, "Cleaning fee")
+            pdf.cell(0, 6, _fmt(cleaning_fee_amount), new_x="LMARGIN", new_y="NEXT", align="R")
+    else:
+        pdf.cell(130, 6, "Non-cash surcharge (capped at 5%)")
+        pdf.cell(0, 6, _fmt(trip.surcharge), new_x="LMARGIN", new_y="NEXT", align="R")
 
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(130, 8, "TOTAL")

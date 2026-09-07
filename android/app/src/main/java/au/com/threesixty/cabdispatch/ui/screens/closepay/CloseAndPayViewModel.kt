@@ -611,16 +611,40 @@ class CloseAndPayViewModel : ViewModel() {
 
     private fun buildReceipt(trip: TripEntity, state: CloseAndPayUiState.ReadyToClose): Receipt {
         val b = state.breakdown
+        // Negotiated ("Set Price") or Sydney Airport Fixed — the two FareEngine.close() branches
+        // that absorb tolls/PSL/extras/the non-cash surcharge into one agreed price rather than
+        // billing them on top (2026-09 product ruling for the surcharge specifically). Mirrors
+        // isAbsorbedFare in CloseAndPayScreen.kt's TotalCol / TripDetailScreen.kt's FareCard — the
+        // printed passenger-copy receipt must disclose the same way, not read like these are
+        // additive charges on top of the agreed price.
+        val isAirportFixed = trip.type == "airport_fixed"
+        val isAbsorbedFare = isAirportFixed || b.negotiatedTotal != null
         val lines = buildList {
-            add(ReceiptLine("Hiring charge", b.flagFall.money()))
-            if (b.peakCharge.signum() > 0) add(ReceiptLine("Peak time charge", b.peakCharge.money()))
-            add(ReceiptLine("Distance", b.distanceCharge.money()))
-            add(ReceiptLine("Waiting", b.waitingCharge.money()))
-            if (b.tolls.signum() > 0) add(ReceiptLine("Tolls", b.tolls.money()))
-            if (b.psl.signum() > 0) add(ReceiptLine("Point to Point Transport Levy", b.psl.money()))
+            if (b.negotiatedTotal != null) {
+                add(ReceiptLine("Agreed price (Set Price, all-inclusive)", b.negotiatedTotal.money()))
+            } else if (isAirportFixed) {
+                add(ReceiptLine("Fixed fare (all-inclusive)", b.fareTotal.money()))
+            } else {
+                add(ReceiptLine("Hiring charge", b.flagFall.money()))
+                if (b.peakCharge.signum() > 0) add(ReceiptLine("Peak time charge", b.peakCharge.money()))
+                add(ReceiptLine("Distance", b.distanceCharge.money()))
+                add(ReceiptLine("Waiting", b.waitingCharge.money()))
+            }
+            if (b.tolls.signum() > 0) {
+                add(ReceiptLine(if (isAbsorbedFare) "Tolls — included, not charged" else "Tolls", b.tolls.money()))
+            }
+            if (b.psl.signum() > 0) {
+                val label = if (isAbsorbedFare) "Point to Point Transport Levy — included, not charged" else "Point to Point Transport Levy"
+                add(ReceiptLine(label, b.psl.money()))
+            }
             if (b.cleaningFee.signum() > 0) add(ReceiptLine("Cleaning fee", b.cleaningFee.money()))
-            if (b.extras.signum() > 0) add(ReceiptLine("Extras", b.extras.money()))
-            if (b.surcharge.signum() > 0) add(ReceiptLine("Non-cash payment surcharge", b.surcharge.money()))
+            if (b.extras.signum() > 0) {
+                add(ReceiptLine(if (isAbsorbedFare) "Extras — included, not charged" else "Extras", b.extras.money()))
+            }
+            if (b.surcharge.signum() > 0) {
+                val label = if (isAbsorbedFare) "Non-cash surcharge — absorbed, not charged" else "Non-cash payment surcharge"
+                add(ReceiptLine(label, b.surcharge.money()))
+            }
             when (state.paymentMethod) {
                 PaymentMethodOption.CASH -> {
                     state.cashTendered.toBigDecimalOrNull()?.let { tendered ->

@@ -293,9 +293,23 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     Does NOT commit — caller owns the session/transaction. Returns the
     breakdown for the caller to surface if desired."""
     # cleaning_fee has no dedicated column on Trip (not in the domain's field
-    # list) — fold it into `extras` before building state so it flows through
-    # engine.close() as a genuine dollar amount rather than being dropped.
-    if params.cleaning_fee:
+    # list). For an ORDINARY metered trip it is folded into `extras` before
+    # building state so it flows through engine.close() as a genuine dollar
+    # amount rather than being dropped — `extras` is fully additive on that
+    # branch, so the sum is identical either way.
+    #
+    # A negotiated ("Set Price") or Sydney Airport Fixed fare is different:
+    # engine.close()'s negotiated_total/fixed_fare branches deliberately
+    # EXCLUDE `extras` from what's billed (tolls/PSL/extras are absorbed into
+    # the agreed price — see that module's docstrings), so folding
+    # cleaning_fee into the SAME bucket would silently absorb it too — and a
+    # cleaning fee must never be absorbed, even on a fixed/negotiated fare
+    # (2026-09 product ruling: soiling is discovered after the price was
+    # agreed). So for those two fare types, cleaning_fee is left out of
+    # `extras` and passed straight through to engine.close()'s own
+    # `cleaning_fee` parameter instead, which both branches always add on top.
+    is_all_inclusive_fare = trip.type == TRIP_TYPE_AIRPORT_FIXED or trip.negotiated_total is not None
+    if params.cleaning_fee and not is_all_inclusive_fare:
         trip.extras = (trip.extras or Decimal(0)) + params.cleaning_fee
 
     state = await build_fare_state(session, tenant_id=tenant_id, trip=trip)
@@ -303,7 +317,7 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
         state,
         payment_method=params.payment_method,
         surcharge_pct=params.surcharge_pct,
-        cleaning_fee=Decimal(0),
+        cleaning_fee=params.cleaning_fee if is_all_inclusive_fare else Decimal(0),
         include_psl=params.include_psl,
     )
 
@@ -408,6 +422,12 @@ async def recompute_from_trace(
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=tariff_id)
     time_class, is_peak = resolve_time_class_and_peak(tariff=tariff, occurred_at=start_at)
 
+    # See close_trip's identical comment: a negotiated/airport-fixed fare
+    # excludes `extras` from what's billed, so cleaning_fee must NOT be
+    # folded into it here (that would silently absorb it) — it goes straight
+    # to engine.close()'s own cleaning_fee parameter instead, below.
+    is_all_inclusive_fare = trip_type == TRIP_TYPE_AIRPORT_FIXED or negotiated_total is not None
+
     state = FareState(
         tariff=tariff,
         time_class=time_class,
@@ -418,7 +438,7 @@ async def recompute_from_trace(
         airport_rank_requested_maxi=airport_rank_requested_maxi,
         hired=True,
         tolls=tolls,
-        extras=extras + cleaning_fee,
+        extras=extras if is_all_inclusive_fare else extras + cleaning_fee,
         negotiated_total=negotiated_total,
     )
     if trip_type == TRIP_TYPE_AIRPORT_FIXED:
@@ -451,7 +471,7 @@ async def recompute_from_trace(
         state,
         payment_method=payment_method,
         surcharge_pct=surcharge_pct,
-        cleaning_fee=Decimal(0),
+        cleaning_fee=cleaning_fee if is_all_inclusive_fare else Decimal(0),
         include_psl=include_psl,
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))

@@ -383,18 +383,23 @@ class FareEngine {
         val fixedFare = state.fixedFare
         if (fixedFare != null) {
             // Sydney Airport Fixed Fare Trial: no PSL, tolls, or peak allowed on
-            // top — only the non-cash surcharge and a cleaning fee. The flat
-            // $60/$80 figure is never itself re-multiplied by the maxi
-            // multiplier here — [fixedFare] is expected to already be
-            // `airportFixedFare(state.maxiRateApplied)`, i.e. the regulated
-            // flat maxi figure, not `standard * 1.5`.
+            // top — only a cleaning fee. The flat $60/$80 figure is never
+            // itself re-multiplied by the maxi multiplier here — [fixedFare]
+            // is expected to already be `airportFixedFare(state.maxiRateApplied)`,
+            // i.e. the regulated flat maxi figure, not `standard * 1.5`.
+            //
+            // 2026-09 consistency call: the non-cash surcharge is computed and
+            // RECORDED below (never billed) — this fixed fare has the exact
+            // same "the price is the price" character as a negotiated total
+            // (see the negotiated branch below), so it now absorbs the card
+            // surcharge the same way, rather than diverging from it.
             val fareTotal = fixedFare
             var surcharge = BigDecimal.ZERO
             if (paymentMethod == "card") {
                 val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
                 surcharge = roundHalfUp(fareTotal * pct / BigDecimal(100))
             }
-            val grandTotal = fareTotal + surcharge + cappedCleaningFee
+            val grandTotal = fareTotal + cappedCleaningFee // surcharge absorbed, never added
             val gstComponent = roundHalfUp(divide(grandTotal, BigDecimal(11)))
             return FareBreakdown(
                 flagFall = BigDecimal.ZERO,
@@ -436,29 +441,43 @@ class FareEngine {
         // still returned below in [FareBreakdown.tolls]/[psl]/[extras] (real
         // amounts still owed for PSL-ledger remittance / toll audit purposes —
         // absorbing them into the fixed price does not make the levy/toll
-        // obligation disappear), simply not billed to the passenger. Only
-        // cleaning fee (never knowable at negotiation time — soiling is
-        // discovered after the fact) and the non-cash surcharge below remain
-        // additive, mirroring the fixedFare/Sydney Airport branch above. The
+        // obligation disappear), simply not billed to the passenger. The
         // metered accrual itself is untouched above, so
         // [FareBreakdown.flagFall]/[distanceCharge]/[waitingCharge]/[peakCharge]
         // still show what the meter would have charged, for reference.
+        //
+        // 2026-09 product ruling (owner, verbatim): "yes card surcharge will
+        // be absorbed into a fixed price, but not cleaning fee". So the
+        // non-cash surcharge joins tolls/PSL/extras above — computed and
+        // RECORDED below (the operator needs to know what card fee it
+        // absorbed) but never added to [grandTotal]. Only a cleaning fee
+        // (never knowable at negotiation time — soiling is discovered after
+        // the fact) remains additive on top, mirroring the fixedFare/Sydney
+        // Airport branch above.
         val negotiatedTotal = state.negotiatedTotal
-        val subtotal = if (negotiatedTotal != null) {
-            negotiatedTotal + cappedCleaningFee
+        val fareTotal: BigDecimal
+        val surcharge: BigDecimal
+        val grandTotal: BigDecimal
+        if (negotiatedTotal != null) {
+            fareTotal = roundDownToCent(negotiatedTotal)
+            surcharge = if (paymentMethod == "card") {
+                val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
+                roundHalfUp(fareTotal * pct / BigDecimal(100))
+            } else {
+                BigDecimal.ZERO
+            }
+            grandTotal = fareTotal + cappedCleaningFee // surcharge absorbed, never added
         } else {
-            meteredFare + state.tolls + psl + state.extras + cappedCleaningFee
+            val subtotal = meteredFare + state.tolls + psl + state.extras + cappedCleaningFee
+            fareTotal = roundDownToCent(subtotal)
+            surcharge = if (paymentMethod == "card") {
+                val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
+                roundHalfUp(fareTotal * pct / BigDecimal(100))
+            } else {
+                BigDecimal.ZERO
+            }
+            grandTotal = fareTotal + surcharge
         }
-
-        val fareTotal = roundDownToCent(subtotal)
-
-        var surcharge = BigDecimal.ZERO
-        if (paymentMethod == "card") {
-            val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
-            surcharge = roundHalfUp(fareTotal * pct / BigDecimal(100))
-        }
-
-        val grandTotal = fareTotal + surcharge
         val gstComponent = roundHalfUp(divide(grandTotal, BigDecimal(11)))
 
         return FareBreakdown(

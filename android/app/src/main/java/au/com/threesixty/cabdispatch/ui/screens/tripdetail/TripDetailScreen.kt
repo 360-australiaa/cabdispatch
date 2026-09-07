@@ -382,6 +382,10 @@ private fun EvidencePackCard(trip: TripEntity) {
 private fun FareCard(state: TripDetailUiState.Loaded) {
     val trip = state.trip
     val b = state.breakdown
+    // Negotiated ("Set Price") or Sydney Airport Fixed — the two FareEngine.close() branches
+    // that absorb the non-cash surcharge (2026-09 product ruling) rather than billing it on top.
+    // Mirrors CloseAndPayScreen.kt's TotalCol isAbsorbedFare.
+    val isAbsorbedFare = trip.type == "airport_fixed" || b.negotiatedTotal != null
     CaptainPanel(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Negotiated ("Set Price") trips billed the agreed amount, not the metered accrual —
@@ -416,7 +420,15 @@ private fun FareCard(state: TripDetailUiState.Loaded) {
                 // engine's surcharge formula is `fareTotal * pct / 100`; pct=0 would mean 0
                 // surcharge), so no null branch is needed.
                 val pct = trip.surchargePct?.toBigDecimalOrZero() ?: java.math.BigDecimal.ZERO
-                FareLineRow("Non-cash payment surcharge (${pct.stripTrailingZeros().toPlainString()}%)", b.surcharge.asMoney())
+                // 2026-09 product ruling: a negotiated/fixed fare ABSORBS the non-cash
+                // surcharge — still shown here (real, recorded) but never added to TOTAL, so it
+                // must never read like an ordinary additive line for one of those trip types.
+                val label = if (isAbsorbedFare) {
+                    "Non-cash surcharge (${pct.stripTrailingZeros().toPlainString()}%) — absorbed, not charged"
+                } else {
+                    "Non-cash payment surcharge (${pct.stripTrailingZeros().toPlainString()}%)"
+                }
+                FareLineRow(label, b.surcharge.asMoney())
             }
             FareLineRow("GST included", b.gstComponent.asMoney())
 
