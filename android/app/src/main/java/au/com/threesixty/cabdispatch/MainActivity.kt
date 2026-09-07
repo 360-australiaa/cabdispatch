@@ -149,7 +149,7 @@ private fun CabDispatchScreenRoot() {
                     if (commandState.forceUpdatePending) {
                         ForceUpdatePendingBanner()
                     }
-                    if (DevicePairingStatus.isUnpaired(commandState.deviceId)) {
+                    if (DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)) {
                         DeviceUnpairedBanner()
                     }
                     // Unconditional: OfflineBanner reads live connectivity + outbox state itself

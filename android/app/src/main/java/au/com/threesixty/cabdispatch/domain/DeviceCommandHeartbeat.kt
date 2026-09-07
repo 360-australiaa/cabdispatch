@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import retrofit2.HttpException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -62,6 +63,14 @@ data class DeviceCommandState(
     /** `Device.kiosk_locked`. Enforced app-wide in [au.com.threesixty.cabdispatch.MainActivity] —
      * Android *screen pinning*, not Device-Owner kiosk mode. See that file's doc for exactly what
      * that does and does not guarantee. */
+    /**
+     * The server answered this device's heartbeat with 404 — the record it is beating against no
+     * longer exists (most often removed by a fleet wipe). Distinct from `lastPollSucceeded = false`,
+     * which covers being offline: one needs re-pairing, the other needs patience, and they were
+     * indistinguishable until 2026-09-07. Never set by a network failure.
+     */
+    val deviceRejected: Boolean = false,
+
     val kioskLocked: Boolean = false,
     /** `Device.force_update_pending`. Surfaced to the driver as a persistent, non-blocking banner
      * ([au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner]) — this app has no
@@ -347,8 +356,12 @@ class DeviceCommandHeartbeat(
                 deviceSecret = pairingStore.getDeviceSecret(),
             )
         }
-        val device = result.getOrElse {
-            _state.update { it.copy(lastPollSucceeded = false) }
+        val device = result.getOrElse { error ->
+            // A 404 is the server saying "no such device", not "I am unreachable". Surfaced so the
+            // app can stop presenting as paired -- see DevicePairingStatus.isUnpaired's overload.
+            // Deliberately sticky in the other direction: only a successful poll clears it.
+            val rejected = (error as? HttpException)?.code() == 404
+            _state.update { it.copy(lastPollSucceeded = false, deviceRejected = rejected || it.deviceRejected) }
             return
         }
         // Drop a response that outlived its pairing. Factory reset does `SessionHolder.deviceId =
@@ -361,6 +374,7 @@ class DeviceCommandHeartbeat(
         _state.update {
             it.copy(
                 lastPollSucceeded = true,
+                deviceRejected = false,
                 kioskLocked = device.kioskLocked,
                 forceUpdatePending = device.forceUpdatePending,
                 latestVersionCode = device.latestVersionCode,

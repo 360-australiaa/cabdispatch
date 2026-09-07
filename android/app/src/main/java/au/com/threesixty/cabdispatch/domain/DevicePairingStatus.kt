@@ -43,4 +43,27 @@ object DevicePairingStatus {
      * ever write a real server-assigned id), so a stray empty string can never be mistaken for a
      * paired tablet. */
     fun isUnpaired(deviceId: String?): Boolean = deviceId.isNullOrBlank()
+
+    /**
+     * As [isUnpaired], but also treats a tablet the SERVER has rejected as unpaired.
+     *
+     * Found on the pilot tablet, 2026-09-07. Its heartbeat had been failing for hours with a 404:
+     * the device record it held an id for had been deleted by a fleet wipe. By the plain
+     * [isUnpaired] test above it looked perfectly paired -- it had a real, server-assigned id --
+     * so no banner showed, nothing prompted anyone to re-pair, and every remote command
+     * (kiosk lock, locate, force update) silently had nowhere to land. The tablet was in exactly
+     * the state this class was written to make visible, and could not see it.
+     *
+     * Holding an id the server disowns is not a weaker form of paired; it is unpaired with extra
+     * steps. `deviceRejected` comes from the heartbeat's own 404 -- see
+     * [DeviceCommandState.deviceRejected] -- and never from a network failure, which is a
+     * different thing and must not raise this.
+     *
+     * Note what this deliberately does NOT do: it does not clear the kiosk lock. Losing a device
+     * record is not an admin unlocking the tablet, and treating it as one would turn "get your
+     * device deleted" into an escape from a pin. See [DeviceCommandHeartbeat]'s own note on why
+     * the flags survive a failed poll.
+     */
+    fun isUnpaired(deviceId: String?, deviceRejected: Boolean): Boolean =
+        isUnpaired(deviceId) || deviceRejected
 }
