@@ -130,6 +130,35 @@ complete." Ctrl+C to stop tailing (the containers keep running).
 docker compose --env-file .env.production exec backend python scripts/seed.py
 ```
 
+## 7b. Seed the NSW toll-road registry (NOT optional if you want automatic tolls)
+
+```bash
+docker compose --env-file .env.production exec backend python scripts/seed_toll_roads.py
+```
+
+Loads the real toll roads, their published prices and all 141 physical gantry
+coordinates from `app/data/nsw_toll_roads.json` / `nsw_toll_gantries.csv`.
+
+Unlike `seed.py` above this is NOT demo data -- it is the reference data the
+meter matches a GPS fix against to auto-detect a toll crossing, and the data
+Tariff Studio's "NSW Toll Roads" tab displays. Without it the meter silently
+falls back to manual toll entry only, and that tab shows an empty map.
+
+Idempotent: safe to run as often as you like. Re-run it after **every** deploy
+that changes toll prices or gantry data -- migrations only change the schema,
+they never load reference data (see `app/models/toll.py` for why pricing is
+kept append-only rather than migrated in place). Expected tail of the output:
+
+```
+  gantries: 141 created, 0 updated (of 141 total real gantries)
+Done: 14 toll roads seeded.
+```
+
+("14" is the 13 authoritative roads plus the M12 gantry-only stub. `M5E` and
+the Lane Cove `military_e_ramp` toll point print a NOTE about having 0
+gantries -- that is correct and expected: both are genuinely priced but have
+no coordinates in the source dataset, so they are not GPS-auto-detectable.)
+
 ## 8. Verify
 
 ```bash
@@ -156,6 +185,18 @@ docker compose --env-file .env.production up -d --build
 That's the whole update workflow -- rebuilds only what changed, migrations
 re-run automatically (no-op if already at head), containers restart with
 zero manual steps.
+
+Two things migrations do NOT do, so watch for them in a release's notes:
+
+- **Reference data.** If a release changes toll prices or gantry coordinates,
+  re-run the toll seed (step 7b) after the rebuild. Migrations only move the
+  schema; they never load or correct data.
+- **Anything baked into the dashboard bundle.** Vite inlines every `VITE_*`
+  value at BUILD time (see `docker-compose.yml`'s `dashboard.build.args`), so
+  adding `VITE_MAPBOX_TOKEN` to `.env.production` changes nothing until the
+  next `up -d --build`. Set it first, then build. Without it the Live Map, the
+  Toll Zones centre picker and the toll gantry map each fall back to a
+  non-map view rather than erroring, which is easy to mistake for a bug.
 
 Useful commands:
 
