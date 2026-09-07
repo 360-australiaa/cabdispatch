@@ -51,7 +51,20 @@ pytestmark = pytest.mark.asyncio
 # coordinate is the surface projection of a point underground), a 6-gantry
 # tunnel, a 2-gantry surface motorway sitting exactly at the corroboration
 # minimum, and a 45-gantry distance-priced corridor.
-_ROADS_UNDER_TEST = ["CCT", "LCT", "ED", "M7"]
+# Every road in the registry that has BOTH gantries (so it can be GPS-detected at
+# all) and a price. Deliberately the full set rather than a sample: the question
+# this file answers -- "does the corroboration rule leave any real road
+# unchargeable?" -- is only answered by asking it of every road.
+#
+# Excluded, and why, so the gaps are visible rather than silently untested:
+#   M5E                  priced, but the dataset has zero gantry coordinates for
+#                        it, so it cannot be auto-detected by any rule.
+#   ROZELLE_INTERCHANGE  real gantries, but genuinely unpriced in the source data.
+#   M12                  gantry-only stub, no published pricing.
+_ROADS_UNDER_TEST = [
+    "CCT", "ED", "LCT", "M2", "M4", "M4M8_LINK", "M5SW", "M7", "M8",
+    "NORTHCONNEX", "SHB_SHT",
+]
 
 # Lateral offset, in metres, of the "adjacent road" track below.
 #
