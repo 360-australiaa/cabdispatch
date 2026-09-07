@@ -8,11 +8,14 @@ import au.com.threesixty.cabdispatch.data.local.dao.ShiftDao
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
+import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
 /**
@@ -44,6 +47,20 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * added in the 5 -> 6 bump above) was already read correctly on-device but was never persisted or
  * sent to the server.
  *
+ * Version bumped 9 -> 10 (automatic NSW toll-road detection pass) adding two new entities —
+ * [TollRoadEntity]/[TollGantryEntity], the local cache of `GET /v1/toll-roads` that lets
+ * [au.com.threesixty.cabdispatch.domain.fare.onFix] auto-detect toll-road crossings with zero
+ * connectivity (see [au.com.threesixty.cabdispatch.sync.TollRegistryCache]'s doc) — and two new
+ * defaulted [TripEntity] columns (`autoTolledRoadsJson`, `unpricedTollRoadIdsJson`) recording, for
+ * local audit only, which roads a trip's auto-detected/needs-manual-entry tolls came from (the
+ * actual dollar figure was already flowing through the pre-existing `tolls` column — see
+ * [TripEntity.autoTolledRoadsJson]'s own doc for exactly what these two add on top). Also carries
+ * [TollRoadEntity]'s `rateClassAPerKm`/`flagfallClassA` columns (2026-09 pricing correction, folded
+ * into this same not-yet-released version rather than a separate bump — see that entity's own
+ * doc for why the device no longer derives a `distance`-model rate from a corridor length). Real
+ * `Migration` per [MIGRATION_8_9]'s own precedent below — never `fallbackToDestructiveMigration`
+ * for financial/compliance trip data.
+ *
  * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
  * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
  * installed base to migrate)" — that assumption held only as long as every test device got a
@@ -74,8 +91,10 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TariffEntity::class,
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
+        TollRoadEntity::class,
+        TollGantryEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -84,6 +103,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tariffDao(): TariffDao
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
+    abstract fun tollRegistryDao(): TollRegistryDao
 }
 
 /**
@@ -94,5 +114,49 @@ abstract class AppDatabase : RoomDatabase() {
 val MIGRATION_8_9 = object : Migration(8, 9) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE trips ADD COLUMN airportRankRequestedMaxi INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** Real migration for the 9 -> 10 bump (automatic NSW toll-road detection pass) — see
+ * [AppDatabase]'s doc. Two brand-new tables (empty until the next [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
+ * succeeds — see that class's "offline-empty-cache" doc for why an empty cache is always a safe,
+ * handled state, never a crash) plus two new defaulted `trips` columns. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_roads` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `pricingModel` TEXT NOT NULL,
+                `directional` TEXT,
+                `derivedCorridorKm` TEXT,
+                `priceClassAMax` TEXT,
+                `capClassA` TEXT,
+                `rateClassAPerKm` TEXT,
+                `flagfallClassA` TEXT,
+                `timeOfDayRatesJson` TEXT,
+                `confidence` TEXT,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_gantries` (
+                `id` TEXT NOT NULL,
+                `tollRoadId` TEXT NOT NULL,
+                `latitude` REAL NOT NULL,
+                `longitude` REAL NOT NULL,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_gantries_tollRoadId` ON `toll_gantries` (`tollRoadId`)")
+        db.execSQL("ALTER TABLE trips ADD COLUMN autoTolledRoadsJson TEXT NOT NULL DEFAULT '{}'")
+        db.execSQL("ALTER TABLE trips ADD COLUMN unpricedTollRoadIdsJson TEXT NOT NULL DEFAULT '[]'")
     }
 }

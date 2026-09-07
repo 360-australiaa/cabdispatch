@@ -4,13 +4,22 @@ package au.com.threesixty.cabdispatch.domain
  * What an utterance is *for*, which decides who goes first when the fare meter and the navigator
  * both want the speaker at once. Higher [rank] is spoken first; ties are FIFO.
  *
+ * - [TOLL_ALERT]: "Cross City Tunnel toll added — $7.41" — the automatic NSW toll-road detector's
+ *   own audible confirmation (product requirement, 2026-09: "when vehicle move from that location
+ *   diameter, automatically it will make beep sound and show toll has been added"). Ranked ABOVE
+ *   [FARE] and, critically, does NOT coalesce (see [SpeechQueue.enqueue]'s `coalesce` parameter) —
+ *   unlike the "Fare now N dollars" ticker, where only the latest figure is ever worth hearing, a
+ *   driver who doesn't hear WHICH toll was added can't tell whether it was wrong (the whole point
+ *   of this alert), so a toll alert must never be silently dropped because a fare-dollar
+ *   announcement happened to enqueue moments later.
  * - [FARE]: the spec-B5 "Fare now N dollars" announcements — the regulated figure the passenger
  *   is entitled to hear, so it always outranks guidance.
  * - [NAV]: turn-by-turn instructions from the meter screen's navigator
  *   ([au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel]). Queued behind any
- *   pending fare announcement and spoken once the speaker is free — never interleaved with it.
+ *   pending fare/toll announcement and spoken once the speaker is free — never interleaved with it.
  */
 enum class SpeechPriority(val rank: Int) {
+    TOLL_ALERT(3),
     FARE(2),
     NAV(1),
 }

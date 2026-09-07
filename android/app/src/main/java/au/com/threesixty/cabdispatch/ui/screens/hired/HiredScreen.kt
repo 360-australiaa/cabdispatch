@@ -101,6 +101,8 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.GeocodeResult
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
+import au.com.threesixty.cabdispatch.domain.AutoTollAlert
+import au.com.threesixty.cabdispatch.domain.AutoTollEntry
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareBreakdown
 import au.com.threesixty.cabdispatch.domain.FareState
@@ -111,6 +113,7 @@ import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TollPresets
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
+import au.com.threesixty.cabdispatch.domain.UnpricedTollRoad
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.toMeterDisplayString
 import au.com.threesixty.cabdispatch.domain.toMoneyString
@@ -323,6 +326,23 @@ fun HiredScreen(
         }
     }
 
+    // Automatic NSW toll-road detection — audible+on-screen confirmation (product requirement,
+    // 2026-09: "when vehicle move from that location diameter, automatically it will make beep
+    // sound and show toll has been added"). The speech half lives in HiredViewModel (see its own
+    // doc); this is the "show toll has been added" half — a one-shot, self-dismissing banner, same
+    // pattern as showStartedBanner immediately above (a single delayed reset, not a repeating/
+    // looping animation). Keyed on the alert's own [AutoTollAlert.id], not nullness, so a second
+    // real alert while the first is still fading restarts the timer instead of being ignored.
+    var autoTollBanner by remember { mutableStateOf<AutoTollAlert?>(null) }
+    LaunchedEffect(fareState.lastAutoTollAlert?.id) {
+        val alert = fareState.lastAutoTollAlert
+        if (alert != null) {
+            autoTollBanner = alert
+            kotlinx.coroutines.delay(4000)
+            autoTollBanner = null
+        }
+    }
+
     val onEndFare: () -> Unit = {
         viewModel.endTrip { navController.navigate(CabDispatchRoutes.CLOSE_PAY) }
     }
@@ -330,7 +350,10 @@ fun HiredScreen(
         isPaused = isPaused,
         negotiatedTotal = tripContext?.negotiatedTotal,
         tollsTotal = fareState.breakdown.tolls,
-        tollCount = fareState.tollsApplied.size,
+        // Includes auto-detected tolls (Automatic NSW toll-road detection pass) — the ADD TOLL
+        // tile's subtext is the driver's at-a-glance signal that something was added even if they
+        // never open the dialog; see TollPresetDialog's own auto-tolls section for the detail view.
+        tollCount = fareState.tollsApplied.size + fareState.autoTollsApplied.size,
         // Every one-shot action also closes ControlsDrawer first — the driver lands on the plain
         // dial+map view under the dialog it opened, rather than two stacked scrims. PAUSE FARE
         // stays in-place (togglePause() has no dialog of its own), leaving the drawer open.
@@ -427,6 +450,40 @@ fun HiredScreen(
             }
         }
 
+        AnimatedVisibility(
+            visible = autoTollBanner != null,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+            enter = fadeIn(),
+            exit = fadeOut(animationSpec = tween(400)),
+        ) {
+            val banner = autoTollBanner
+            if (banner != null) {
+                Row(
+                    modifier = Modifier
+                        .neonGlow(CaptainPalette.warning, 16.dp, strength = 0.6f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(CaptainPalette.panel)
+                        .border(1.dp, CaptainPalette.warning, RoundedCornerShape(16.dp))
+                        // Ties into the same inspect/correct affordance the driver would reach via
+                        // ADD TOLL — tapping the confirmation opens the exact dialog that lists it
+                        // (with Remove), so "I heard a beep I think is wrong" is one tap away.
+                        .clickable { showTollMenu = true }
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(Icons.Rounded.ConfirmationNumber, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(20.dp))
+                    Text(
+                        "${banner.roadName} toll added — ${banner.amount.toMoneyString()}",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = CaptainPalette.textPrimary,
+                    )
+                }
+            }
+        }
+
         CaptainDialogScrim(visible = showPassengerEdit, onDismissRequest = { showPassengerEdit = false }) {
             PassengerEditDialog(
                 initialCount = fareState.passengerCount,
@@ -441,6 +498,8 @@ fun HiredScreen(
         CaptainDialogScrim(visible = showTollMenu, onDismissRequest = { showTollMenu = false }) {
             TollPresetDialog(
                 tollsTotal = fareState.breakdown.tolls,
+                autoTolls = fareState.autoTollsApplied,
+                unpricedRoads = fareState.unpricedTollRoads,
                 onDismiss = { showTollMenu = false },
                 onAddPreset = { preset ->
                     showTollMenu = false
@@ -450,6 +509,12 @@ fun HiredScreen(
                     showTollMenu = false
                     showTollPad = true
                 },
+                onRemoveAutoToll = { roadId -> viewModel.removeAutoToll(roadId) },
+                onAddManualForUnpriced = {
+                    showTollMenu = false
+                    showTollPad = true
+                },
+                onDismissUnpriced = { roadId -> viewModel.dismissUnpricedToll(roadId) },
             )
         }
         CaptainDialogScrim(visible = showTollPad, onDismissRequest = { showTollPad = false }) {
@@ -1852,9 +1917,28 @@ private fun SetPriceInfoDialog(negotiatedTotal: String?, onDismiss: () -> Unit) 
  * custom-amount pad this screen always had, consolidated from four separate inline chips into one
  * dialog reached from the action stack. `onAddPreset`/`onCustom` map straight back to
  * `viewModel.addToll(preset)` at the call site — no new toll logic here.
+ *
+ * Automatic NSW toll-road detection pass: also the one place the driver sees and corrects what the
+ * on-device detector added on its own — [autoTolls] (real gantry crossings already billed, each
+ * with its own [onRemoveAutoToll] so a false positive never sticks with no recourse) and
+ * [unpricedRoads] (real crossings the registry genuinely can't auto-price — `zone_flat`/unpriced
+ * roads — surfaced so the driver adds a manual toll via [onAddManualForUnpriced] instead of the
+ * fare silently missing a real cost). Both sections are empty, and therefore invisible, on a trip
+ * with no auto-detected crossings — this dialog looks and behaves exactly as it always did until
+ * there is something real to show.
  */
 @Composable
-private fun TollPresetDialog(tollsTotal: BigDecimal, onDismiss: () -> Unit, onAddPreset: (TollPreset) -> Unit, onCustom: () -> Unit) {
+private fun TollPresetDialog(
+    tollsTotal: BigDecimal,
+    autoTolls: List<AutoTollEntry>,
+    unpricedRoads: List<UnpricedTollRoad>,
+    onDismiss: () -> Unit,
+    onAddPreset: (TollPreset) -> Unit,
+    onCustom: () -> Unit,
+    onRemoveAutoToll: (String) -> Unit,
+    onAddManualForUnpriced: () -> Unit,
+    onDismissUnpriced: (String) -> Unit,
+) {
     // Presets in one Row and the two buttons in another (game-level visual pass): this dialog is
     // hosted inside the ~420dp-tall METER pane (CaptainDialogScrim fills the pane, not the
     // window), and the previous five-row stack ran ~500dp — its Close button was clipped behind
@@ -1882,9 +1966,90 @@ private fun TollPresetDialog(tollsTotal: BigDecimal, onDismiss: () -> Unit, onAd
                 }
             }
         }
+        if (autoTolls.isNotEmpty() || unpricedRoads.isNotEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (autoTolls.isNotEmpty()) {
+                    Text(
+                        "AUTO-DETECTED",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.textMuted,
+                    )
+                    autoTolls.forEach { entry -> AutoTollRow(entry, onRemove = { onRemoveAutoToll(entry.roadId) }) }
+                }
+                if (unpricedRoads.isNotEmpty()) {
+                    Text(
+                        "NEEDS A MANUAL TOLL",
+                        fontFamily = InterFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.warning,
+                    )
+                    unpricedRoads.forEach { road ->
+                        UnpricedTollRow(
+                            road,
+                            onAdd = onAddManualForUnpriced,
+                            onDismiss = { onDismissUnpriced(road.roadId) },
+                        )
+                    }
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             CaptainButton(text = "Custom amount…", outline = true, modifier = Modifier.weight(1.4f)) { onCustom() }
             CaptainButton(text = "Close", outline = true, modifier = Modifier.weight(1f)) { onDismiss() }
+        }
+    }
+}
+
+/** One auto-detected toll — real road name + amount, with a small REMOVE affordance so the driver
+ * can undo a false positive (see [TollPresetDialog]'s own class doc for why this matters). */
+@Composable
+private fun AutoTollRow(entry: AutoTollEntry, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(CaptainPalette.raised)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column {
+            Text(entry.roadName, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary)
+            Text("Auto-detected · ${entry.amount.toMoneyString()}", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
+        }
+        CaptainButton(text = "Remove", outline = true, widthDp = 100, heightDp = 40, fontSize = 13.sp, onClick = onRemove)
+    }
+}
+
+/** One real toll road crossed that the registry can't auto-price — see [TollPresetDialog]'s class
+ * doc for why this is never a guessed amount. [onAdd] opens the same manual-amount entry
+ * ([onAddManualForUnpriced]) every other toll on this screen already uses. */
+@Composable
+private fun UnpricedTollRow(road: UnpricedTollRoad, onAdd: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(CaptainPalette.raised)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(road.roadName, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary)
+            Text("Crossed — no on-file price, add manually", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CaptainButton(text = "Dismiss", outline = true, widthDp = 90, heightDp = 40, fontSize = 13.sp, onClick = onDismiss)
+            CaptainButton(text = "Add", widthDp = 80, heightDp = 40, fontSize = 13.sp, onClick = onAdd)
         }
     }
 }
