@@ -165,6 +165,31 @@ data class TripEntity(
     val pickupAddress: String? = null,
     val dropoffAddress: String? = null,
 
+    /**
+     * Local audit trail for the automatic NSW toll-road detector (see
+     * [au.com.threesixty.cabdispatch.domain.fare.onFix]) — JSON-encoded
+     * `Map<String, String>` (toll-road id -> current charged amount, decimal-as-string), mirroring
+     * the SHAPE of the backend's own `Trip.auto_tolled_roads` (which this trip's sync payload never
+     * populates itself — see [tolls]'s own doc: the server runs no toll detection on the
+     * `POST /v1/trips/sync` path this app actually uses, so that server-side column stays empty for
+     * every trip closed through this app; [tolls] is the one figure that DOES reach the server,
+     * verbatim, already including every amount recorded here). Local-only, same "not part of
+     * [au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto]" status as [pickupAddress]/
+     * [dropoffAddress] above — read by the Close & Pay / History views on this device so a driver
+     * can see which real roads their auto-detected tolls came from, never sent over the wire.
+     * Defaults to `"{}"` so every pre-9->10-migration row decodes as "no auto-tolls recorded" rather
+     * than crashing a decode.
+     */
+    val autoTolledRoadsJson: String = "{}",
+
+    /**
+     * Local audit trail of real toll roads crossed this trip that the registry could not
+     * auto-price (`zone_flat`/unpriced — see [au.com.threesixty.cabdispatch.domain.UnpricedTollRoad]'s
+     * doc) — JSON-encoded `List<String>` of toll-road ids. Same local-only, never-synced status as
+     * [autoTolledRoadsJson] above.
+     */
+    val unpricedTollRoadIdsJson: String = "[]",
+
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",
 

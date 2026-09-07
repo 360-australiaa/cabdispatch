@@ -638,5 +638,10 @@ private class FakeApiService : ApiService {
     // the outbox drainer under test here.
     override suspend fun latestAppRelease(): au.com.threesixty.cabdispatch.data.remote.LatestAppReleaseDto = notUsed()
 
+    // NSW toll-road registry (automatic toll detection, 2026-09) — pulled by
+    // TollRegistryCache on its own schedule, never by the outbox drainer under test here.
+    override suspend fun tollRoads(): List<au.com.threesixty.cabdispatch.data.remote.TollRoadDto> = notUsed()
+    override suspend fun tollRoadDetail(roadId: String): au.com.threesixty.cabdispatch.data.remote.TollRoadDetailDto = notUsed()
+
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }

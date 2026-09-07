@@ -201,6 +201,14 @@ class TripRepository(
         movingS: Int,
         waitingS: Int,
         tolls: String? = null,
+        /** Automatic NSW toll-road detection audit trail (roadId -> current charged amount) — see
+         * [TripEntity.autoTolledRoadsJson]'s doc. `null` (the default) leaves the existing value
+         * untouched, same convention as [tolls] itself — every pre-existing call site that never
+         * names this keeps compiling/behaving exactly as before (no auto-toll detection wired). */
+        autoTolledRoads: Map<String, String>? = null,
+        /** Real toll-road ids crossed this trip the registry couldn't auto-price — see
+         * [TripEntity.unpricedTollRoadIdsJson]'s doc. Same "`null` = leave untouched" convention. */
+        unpricedTollRoadIds: List<String>? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("tick() called for unknown trip clientUuid=$clientUuid")
@@ -215,6 +223,8 @@ class TripRepository(
             movingS = movingS,
             waitingS = waitingS,
             tolls = tolls ?: existing.tolls,
+            autoTolledRoadsJson = autoTolledRoads?.let { cabDispatchJson.encodeToString(it) } ?: existing.autoTolledRoadsJson,
+            unpricedTollRoadIdsJson = unpricedTollRoadIds?.let { cabDispatchJson.encodeToString(it) } ?: existing.unpricedTollRoadIdsJson,
             updatedAt = System.currentTimeMillis(),
         )
         tripDao.update(updated)

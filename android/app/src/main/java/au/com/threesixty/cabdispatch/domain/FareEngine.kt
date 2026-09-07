@@ -1,6 +1,10 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.TollDetectionState
+import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
+import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
+import au.com.threesixty.cabdispatch.domain.fare.onFix
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -94,6 +98,31 @@ class StubSpeedSource : SpeedSource {
 }
 
 /**
+ * Supplies the cached NSW toll-road registry [FareEngineImpl] auto-detects crossings against — a
+ * thin seam so [FareEngineImpl] itself stays a plain-JVM-testable class with no Room/network
+ * dependency, same reasoning [SpeedSource] already gives for not depending on
+ * `FusedLocationProviderClient` directly. Real implementation:
+ * [au.com.threesixty.cabdispatch.data.AppContainer.tollRegistryCache] wrapped as a
+ * `TollRegistryProvider { AppContainer.tollRegistryCache.snapshot() }` — a pure, fast local Room
+ * read (see that class's doc), never a network call on this path.
+ */
+fun interface TollRegistryProvider {
+    suspend fun snapshot(): TollRegistrySnapshot
+
+    companion object {
+        /**
+         * No-cache fallback: an always-empty registry, so [FareEngineImpl] detects nothing and the
+         * meter falls back to exactly today's manual-only toll behaviour — the correct, honest
+         * default for every existing call site (this file's own tests included) that constructs a
+         * [FareEngineImpl] without naming a real provider, and for a genuinely empty on-device
+         * cache (see [au.com.threesixty.cabdispatch.sync.TollRegistryCache]'s "offline-empty-cache"
+         * doc) — never a crash, never a guessed toll.
+         */
+        val EMPTY = TollRegistryProvider { TollRegistrySnapshot.EMPTY }
+    }
+}
+
+/**
  * Meter state machine + fare accrual, per spec B6 ("FOR_HIRE → HIRED →
  * (STOPPED ⇄ HIRED) → CLOSED", 1 Hz tick loop). Owns its own tick coroutine
  * while HIRED; callers drive it purely through [startTrip]/[pause]/[resume]/
@@ -144,6 +173,26 @@ interface FareEngine {
     fun pause()
     fun resume()
     fun addToll(preset: TollPreset)
+
+    /**
+     * Driver-initiated correction: removes an auto-detected toll charge for [roadId] (see
+     * [FareState.autoTollsApplied]) — the "the driver must be able to see and correct what was
+     * auto-added" requirement this whole feature is built around. Subtracts the charged amount
+     * back out of [FareState.breakdown]'s tolls total and permanently stops that road from being
+     * auto-charged again for the REST of this trip (a false positive the driver has already
+     * corrected must stay corrected, even if the vehicle re-crosses the same gantry in queued
+     * traffic) — see [au.com.threesixty.cabdispatch.domain.fare.dismissCharge]'s own doc. No-op if
+     * [roadId] was never actually auto-charged (nothing to remove).
+     */
+    fun removeAutoToll(roadId: String)
+
+    /**
+     * Driver-initiated dismissal of a "this road needs a manual toll" notice (see
+     * [FareState.unpricedTollRoads]) — UI-only housekeeping, never re-enables auto-charging for
+     * [roadId] (a `zone_flat`/unpriced road is never auto-charged regardless of this call; see
+     * [au.com.threesixty.cabdispatch.domain.fare.onFix]'s own doc for why).
+     */
+    fun dismissUnpricedToll(roadId: String)
 
     /**
      * Corrects the declared passenger count mid-trip (miscounts happen). Mutates only the shadow
@@ -229,6 +278,10 @@ interface FareEngine {
 class FareEngineImpl(
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
+    /** See [TollRegistryProvider]'s own doc. Defaulted to [TollRegistryProvider.EMPTY] so every
+     * pre-existing call site (this file's own tests included) keeps compiling/behaving exactly as
+     * before — no toll auto-detection, manual [addToll] chips only, same as today. */
+    private val tollRegistryProvider: TollRegistryProvider = TollRegistryProvider.EMPTY,
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -244,6 +297,24 @@ class FareEngineImpl(
      * money/distance figure this class shows the driver is read back off this after each tick,
      * never computed independently. */
     private var calcState: CalcFareState? = null
+
+    /** This trip's toll-detection dedup bookkeeping — see [TollDetectionState]'s own doc for why
+     * this lives in-memory here rather than Room-backed (same lifetime as every other live-accrual
+     * field on this class). Fresh per [FareEngineImpl] instance, matching [calcState]. */
+    private val tollDetectionState = TollDetectionState()
+
+    /** Loaded once, asynchronously, at [startTrip] time — `null` until that load completes (a fast
+     * local Room read via [tollRegistryProvider], not a network wait; see [TollRegistryProvider]'s
+     * own doc). [tick] simply skips toll detection for any fix that arrives before this is ready,
+     * which in practice is a handful of fixes at most at trip start, never a missed real crossing
+     * later in a normal-length trip. */
+    private var tollRegistry: TollRegistrySnapshot? = null
+
+    /** Monotonic source for [FareState.lastAutoTollAlert]'s [AutoTollAlert.id] — a plain
+     * incrementing counter (not a timestamp/random value) is enough since this engine is only ever
+     * driven from one coroutine at a time (its own tick loop); every real alert just needs an id
+     * distinct from the one before it. */
+    private var autoTollAlertSeq = 0L
 
     override fun startTrip(
         tariff: TariffDto,
@@ -302,6 +373,9 @@ class FareEngineImpl(
             // math (which already handled this correctly; only the live display didn't know).
             negotiatedTotal = newCalcState.negotiatedTotal,
         )
+        // Load the cached toll registry in the background (see [tollRegistry]'s own doc) — never
+        // awaited here, so a slow/empty cache can never delay the meter actually starting.
+        scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
         startTicking()
     }
 
@@ -339,6 +413,25 @@ class FareEngineImpl(
         )
     }
 
+    override fun removeAutoToll(roadId: String) {
+        val amount = dismissCharge(tollDetectionState, roadId) ?: return
+        calcState?.let { it.tolls = (it.tolls - amount).coerceAtLeast(BigDecimal.ZERO) }
+        val current = _state.value
+        _state.value = current.copy(
+            breakdown = current.breakdown.copy(tolls = (current.breakdown.tolls - amount).coerceAtLeast(BigDecimal.ZERO)),
+            autoTollsApplied = current.autoTollsApplied.filterNot { it.roadId == roadId },
+        )
+    }
+
+    override fun dismissUnpricedToll(roadId: String) {
+        // UI-only: [tollDetectionState].unpricedRoadIds is left untouched, so a re-crossing of the
+        // same road never re-raises this notice (onFix's `state.unpricedRoadIds.add(roadId)` is
+        // already false for a road flagged once) — this call only clears it from the driver-facing
+        // list. Never re-enables auto-charging for roadId; see [FareEngine.dismissUnpricedToll]'s doc.
+        val current = _state.value
+        _state.value = current.copy(unpricedTollRoads = current.unpricedTollRoads.filterNot { it.roadId == roadId })
+    }
+
     override fun close(): FareState {
         tickJob?.cancel()
         _state.value = _state.value.copy(status = TripStatus.CLOSED)
@@ -373,11 +466,19 @@ class FareEngineImpl(
         val cs = calcState ?: return
         val speed = speedSource.speedKmh.value
         val threshold = cs.tariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: 26.0
-        val current = _state.value
 
         val dKm = BigDecimal.valueOf(speed / 3600.0) // one tick = one second, per startTicking's delay(1000)
         calcEngine.tick(cs, speedKmh = speed, distanceDeltaKm = dKm, elapsedSeconds = 1)
 
+        // Auto-toll detection (see [detectTolls]'s own doc) — runs on the SAME real GPS fix
+        // [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.nextTracePoint] records
+        // into the trip's persisted trace, using [cs]'s just-updated cumulative distance (needed
+        // for the `distance` pricing model). Folds straight into `_state.value` before the final
+        // `current` read below, so [breakdown.tolls]/[autoTollsApplied] this tick already reflect
+        // any crossing detected THIS tick.
+        detectTolls(cs)
+
+        val current = _state.value
         val mode = if (speed >= threshold) AccrualMode.DISTANCE else AccrualMode.WAITING
         // Computed off TRUE cumulative distance every tick (fix #3 above), not only while in the
         // distance branch — a trip that crawls past 12km in traffic now switches band correctly.
@@ -394,6 +495,69 @@ class FareEngineImpl(
                 distanceAmount = cs.accruedDistanceCharge,
                 waitingAmount = cs.accruedWaitingCharge,
             ),
+        )
+    }
+
+    /**
+     * Runs [au.com.threesixty.cabdispatch.domain.fare.onFix] against the latest known GPS fix and
+     * folds any result straight into [_state]. A no-op whenever there's nothing to detect against
+     * yet — no fix at all (no permission/no signal, same honest-null [SpeedSource.locationFix]
+     * convention as [LocationFix]'s own doc), or [tollRegistry] hasn't finished loading, or it
+     * loaded but is genuinely empty (never cached — see [TollRegistryProvider]'s "offline-empty-
+     * cache" fallback) — every one of these is the SAME correct behaviour: detect nothing, change
+     * nothing, let the driver keep using manual [addToll] presets exactly as before this feature
+     * existed. [au.com.threesixty.cabdispatch.domain.fare.TollDetectionResult.isEmpty] is checked
+     * before touching [_state] at all so an ordinary tick with no gantry nearby (the overwhelming
+     * majority of ticks on any real trip) never triggers a state emission for this alone.
+     */
+    private fun detectTolls(cs: CalcFareState) {
+        val registry = tollRegistry ?: return
+        if (registry.gantries.isEmpty()) return
+        val fix = speedSource.locationFix.value ?: return
+
+        val result = onFix(
+            tollDetectionState,
+            registry,
+            lat = fix.lat,
+            lng = fix.lng,
+            ts = ZonedDateTime.now(),
+            cumulativeDistanceKm = cs.cumulativeDistanceKm,
+        )
+        if (result.isEmpty) return
+
+        val current = _state.value
+        var tolls = current.breakdown.tolls
+        var autoTolls = current.autoTollsApplied
+        var alert: AutoTollAlert? = null
+        for ((roadId, newAmount) in result.chargedRoadsChanged) {
+            // `distance`-model roads REVISE the same entry (see onFix's doc) — subtract the amount
+            // this trip previously showed for roadId before adding the new one, so a growing M7
+            // charge updates in place rather than double-counting on every tick it changes.
+            val previousAmount = autoTolls.firstOrNull { it.roadId == roadId }?.amount ?: BigDecimal.ZERO
+            val delta = newAmount - previousAmount
+            tolls += delta
+            // Mirrored into the shadow calc state too, same "harmless today, keeps the two totals
+            // from silently disagreeing" reasoning [addToll] above already documents.
+            cs.tolls += delta
+            val roadName = registry.roadsById[roadId]?.name ?: roadId
+            autoTolls = autoTolls.filterNot { it.roadId == roadId } + AutoTollEntry(roadId, roadName, newAmount)
+            // Audible + on-screen confirmation (product requirement, 2026-09) — see
+            // AutoTollAlert's own doc. If more than one road changes on the same tick (rare: two
+            // gantries of different roads within detection radius of the same fix), the last one
+            // wins the single alert slot; not worth a multi-alert queue for an edge case this thin.
+            alert = AutoTollAlert(roadName = roadName, amount = newAmount, id = ++autoTollAlertSeq)
+        }
+
+        val alreadyFlagged = current.unpricedTollRoads.mapTo(mutableSetOf()) { it.roadId }
+        val newUnpricedEntries = result.newlyUnpricedRoadIds
+            .filterNot { it in alreadyFlagged }
+            .map { roadId -> UnpricedTollRoad(roadId, registry.roadsById[roadId]?.name ?: roadId) }
+
+        _state.value = current.copy(
+            breakdown = current.breakdown.copy(tolls = tolls),
+            autoTollsApplied = autoTolls,
+            unpricedTollRoads = current.unpricedTollRoads + newUnpricedEntries,
+            lastAutoTollAlert = alert ?: current.lastAutoTollAlert,
         )
     }
 

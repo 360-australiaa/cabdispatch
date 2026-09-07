@@ -188,6 +188,24 @@ interface ApiService {
         @Query("vehicle_class") vehicleClass: String? = null,
     ): TariffSuggestionDto
 
+    // ---- Toll roads (real NSW toll registry — `backend/app/api/v1/toll_roads.py`; read-only,
+    // platform-wide reference data, same as tariffs above. See
+    // [au.com.threesixty.cabdispatch.sync.TollRegistryCache] for how the on-device auto-toll
+    // detector caches this for offline use — it never calls these two directly on the fare
+    // engine's hot path, only [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]. ----
+
+    /** `GET /v1/toll-roads` — every road's identity + CURRENT price only (no gantries, no price
+     * history — see [TollRoadDto.currentPrice]'s doc for why the device only ever caches the
+     * in-force revision). [TollRegistryCache][au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
+     * follows this with one [tollRoadDetail] call per road id to also fetch gantry coordinates. */
+    @GET("/v1/toll-roads")
+    suspend fun tollRoads(): List<TollRoadDto>
+
+    /** `GET /v1/toll-roads/{road_id}` — adds this one road's real gantry coordinates
+     * ([TollRoadDetailDto.gantries]) on top of everything [tollRoads] already returns. */
+    @GET("/v1/toll-roads/{roadId}")
+    suspend fun tollRoadDetail(@Path("roadId") roadId: String): TollRoadDetailDto
+
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
 
@@ -963,6 +981,113 @@ data class TariffDto(
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
     val signature: String? = null,
+)
+
+// ---- Toll roads (real NSW toll registry — mirrors `backend/app/schemas/toll.py` field-for-field,
+// same decimal-as-string convention as every other money field in this file: see that file's
+// header note. [TollRoadPriceRevisionDto.timeOfDayRatesClassA]'s own `price` field is the ONE
+// exception — see [TollTimeOfDayRateDto]'s doc for why.) ----
+
+/** Mirrors `TollRoadRead`. [currentPrice] is the ONLY pricing this app ever caches/uses on-device
+ * (see [au.com.threesixty.cabdispatch.sync.TollRegistryCache]'s doc) — unlike the backend's own
+ * `TollRoadPriceRevision` table, the device has no use for historical revisions (a live meter only
+ * ever needs "the price in force right now"; a disputed-trip audit against a past revision is a
+ * dashboard/backend-side concern, per `app.models.toll`'s own module doc). */
+@Serializable
+data class TollRoadDto(
+    val id: String,
+    @SerialName("api_code") val apiCode: String? = null,
+    val name: String,
+    val operator: String? = null,
+    @SerialName("pricing_model") val pricingModel: String,
+    val directional: String? = null,
+    val description: String? = null,
+    @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+)
+
+/**
+ * Mirrors `TollRoadPriceRevisionRead`.
+ *
+ * [rateClassAPerKm]/[flagfallClassA] (product correction, 2026-09): the `distance`/
+ * `distance_with_flagfall` pricing models' real per-km rate and flagfall component, taken directly
+ * from the registry — see [au.com.threesixty.cabdispatch.domain.fare.TollPriceRef]'s own doc for
+ * why the on-device detector no longer derives a rate from `cap_class_a / derived_corridor_km`
+ * (confirmed wrong: Westlink M7's real published rate is $0.5252/km capped at $10.50, not the
+ * geometrically-derived figure that formula produced). **These two field names/shapes are this
+ * pass's forward-compatible GUESS at what the backend workstream correcting the seed data will
+ * expose** (following this schema's own `..._class_a` naming convention) — the live API does not
+ * send them yet, so both decode as `null` today and every `distance`/`distance_with_flagfall` road
+ * honestly falls through to [au.com.threesixty.cabdispatch.domain.fare.onFix]'s "unpriced, add
+ * manually" branch until the real fields land; verify the actual field names once the backend
+ * ships them and correct these `@SerialName`s if they differ — never guess a number in their place.
+ */
+@Serializable
+data class TollRoadPriceRevisionDto(
+    val id: String,
+    @SerialName("price_class_a_min") val priceClassAMin: String? = null,
+    @SerialName("price_class_a_max") val priceClassAMax: String? = null,
+    @SerialName("price_class_b_min") val priceClassBMin: String? = null,
+    @SerialName("price_class_b_max") val priceClassBMax: String? = null,
+    @SerialName("cap_class_a") val capClassA: String? = null,
+    @SerialName("cap_class_b") val capClassB: String? = null,
+    @SerialName("rate_class_a_per_km") val rateClassAPerKm: String? = null,
+    @SerialName("flagfall_class_a") val flagfallClassA: String? = null,
+    @SerialName("time_of_day_rates_class_a") val timeOfDayRatesClassA: List<TollTimeOfDayRateDto>? = null,
+    val currency: String = "AUD",
+    @SerialName("gst_included") val gstIncluded: Boolean = true,
+    @SerialName("effective_date") val effectiveDate: String,
+    val indexation: String,
+    val confidence: String,
+    @SerialName("verify_note") val verifyNote: String? = null,
+)
+
+/** One Class-A band entry of `TollRoadPriceRevision.time_of_day_rates_class_a` (SHB_SHT only,
+ * today). **Not** decimal-as-string like every other money field in this file: the backend column
+ * is a raw passthrough JSON blob (`scripts/seed_toll_roads.py` stores the source dataset's dict
+ * verbatim, never routed through a Pydantic `Decimal` field — see `app.models.toll.TollRoadPriceRevision`'s
+ * own field comment), so `price` arrives as a plain JSON number. [au.com.threesixty.cabdispatch.domain.fare.selectTimeOfDayPrice]
+ * converts it via the same `.toString()` round-trip the Python original itself uses
+ * (`Decimal(str(entry["price"]))`) rather than parsing a `Double` directly into fare math. */
+@Serializable
+data class TollTimeOfDayRateDto(
+    val band: String,
+    val price: Double? = null,
+    val windows: String? = null,
+)
+
+/** Mirrors `TollGantryRead`. */
+@Serializable
+data class TollGantryDto(
+    val id: String,
+    @SerialName("toll_road_id") val tollRoadId: String,
+    val location: String,
+    val ramp: String? = null,
+    val direction: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+)
+
+/** Mirrors `TollRoadDetailRead` — [TollRoadDto]'s fields plus this one road's real gantries.
+ * [priceHistory] is fetched (the backend always returns it) but deliberately never cached/read
+ * on-device — see [TollRoadDto.currentPrice]'s doc. */
+@Serializable
+data class TollRoadDetailDto(
+    val id: String,
+    @SerialName("api_code") val apiCode: String? = null,
+    val name: String,
+    val operator: String? = null,
+    @SerialName("pricing_model") val pricingModel: String,
+    val directional: String? = null,
+    val description: String? = null,
+    @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+    val gantries: List<TollGantryDto> = emptyList(),
+    @SerialName("price_history") val priceHistory: List<TollRoadPriceRevisionDto> = emptyList(),
 )
 
 /** Body for [ApiService.verifyAdminPin] — same PIN shape as the backend's

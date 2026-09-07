@@ -25,6 +25,40 @@ object TollPresets {
     val ALL = listOf(M5, HARBOUR_SOUTHBOUND, AIRPORT)
 }
 
+/**
+ * One auto-detected NSW toll-road crossing currently reflected in [FareBreakdown.tolls] — the
+ * automatic counterpart to a driver-tapped [TollPreset], surfaced in [FareState.autoTollsApplied]
+ * so the driver can see (and, via [FareEngine.removeAutoToll], remove) exactly what was added and
+ * why. [amount] is the CURRENT charge for [roadId] — for a `distance`-model road (M7) this same
+ * entry is replaced in place as distance accrues (see [au.com.threesixty.cabdispatch.domain.fare.onFix]'s
+ * doc), never duplicated into a second entry for the same road.
+ */
+data class AutoTollEntry(val roadId: String, val roadName: String, val amount: BigDecimal)
+
+/**
+ * A real NSW toll road the vehicle has crossed that the on-device registry genuinely cannot auto-
+ * price (`zone_flat` roads like M2/Cross City Tunnel, whose published range doesn't say which
+ * gantry gets which price, or a road with no captured price at all — M4/M8/M5E/M4M5_ROZELLE/M12).
+ * Surfaced here so the driver knows to add a real toll manually (the existing ADD TOLL flow) rather
+ * than the fare silently missing a real cost the trip actually incurred — never an invented dollar
+ * figure. See [FareEngine.dismissUnpricedToll] for the driver's "I've dealt with this" affordance.
+ */
+data class UnpricedTollRoad(val roadId: String, val roadName: String)
+
+/**
+ * One-shot signal that an auto-toll was just added/revised — drives BOTH the audible confirmation
+ * ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s speech announcement) and the
+ * transient on-screen banner ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen]),
+ * product requirement (2026-09): "when vehicle move from that location diameter, automatically it
+ * will make beep sound and show toll has been added" — a driver who can't tell WHICH toll fired
+ * can't tell whether it was wrong, so this always names the real road and amount, never a generic
+ * "toll added". [id] is a monotonic per-[au.com.threesixty.cabdispatch.domain.FareEngineImpl]-
+ * instance counter (NOT a timestamp/random value) — the one thing consumers key off
+ * (`LaunchedEffect`/`distinctUntilChanged`) to fire exactly once per real event, even if the same
+ * road's amount is later revised to the identical figure twice in a row.
+ */
+data class AutoTollAlert(val roadName: String, val amount: BigDecimal, val id: Long)
+
 data class FareBreakdown(
     val flagFall: BigDecimal = BigDecimal.ZERO,
     val distanceAmount: BigDecimal = BigDecimal.ZERO,
@@ -102,6 +136,30 @@ data class FareState(
      * [total] fixes below, not a billing one. See [total]'s doc for how this is now used.
      */
     val negotiatedTotal: BigDecimal? = null,
+    /**
+     * Auto-detected NSW toll-road crossings currently included in [breakdown]'s tolls total — see
+     * [AutoTollEntry]'s own doc. Empty for every trip where the on-device toll registry was never
+     * cached (offline-empty-cache fallback) or simply hasn't crossed a real gantry yet — this list
+     * growing is the driver's only signal that a toll was added automatically rather than by their
+     * own ADD TOLL tap, so [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] must render
+     * it, not just fold its total silently into [breakdown.tolls].
+     */
+    val autoTollsApplied: List<AutoTollEntry> = emptyList(),
+    /**
+     * Real toll roads crossed this trip that the registry genuinely cannot auto-price — see
+     * [UnpricedTollRoad]'s own doc. Never auto-charged; existing purely so the driver knows to add
+     * a manual toll for these via the existing ADD TOLL flow.
+     */
+    val unpricedTollRoads: List<UnpricedTollRoad> = emptyList(),
+    /**
+     * Set on the exact tick a real auto-toll charge is added or revised, `null` otherwise — see
+     * [AutoTollAlert]'s own doc. Consumers must key off [AutoTollAlert.id], not nullness alone
+     * (this field never resets back to `null` on a later tick — there is nothing further to say
+     * once an alert has been shown, so a `LaunchedEffect(state.lastAutoTollAlert?.id)` keyed
+     * effect is the correct way to fire exactly once per real event, not an `if (x != null)` gate
+     * that would refire on every subsequent unrelated recomposition).
+     */
+    val lastAutoTollAlert: AutoTollAlert? = null,
 ) {
     /**
      * The full amount the passenger will pay if the trip closed right now — see the class-level

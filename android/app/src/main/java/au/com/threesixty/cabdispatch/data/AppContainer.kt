@@ -6,6 +6,7 @@ import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_8_9
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_9_10
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -57,6 +58,7 @@ import au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger
 import au.com.threesixty.cabdispatch.sync.SyncWorker
 import au.com.threesixty.cabdispatch.sync.TariffCache
 import au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache
+import au.com.threesixty.cabdispatch.sync.TollRegistryCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -235,7 +237,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
             .build()
 
         val loggingInterceptor = HttpLoggingInterceptor().apply {
@@ -275,6 +277,13 @@ object AppContainer {
         // correctness requirement; failures here are silently swallowed on purpose, same as
         // every other best-effort call in this class.
         startupScope.launch { runCatching { tariffSigningKeyCache.refresh() } }
+
+        // Best-effort warm-up of the NSW toll-road registry (automatic toll-detection pass) — same
+        // "fire-and-forget, never block startup, the fare engine never calls the network directly"
+        // shape as the tariff-signing-key warm-up immediately above. [tollRegistryCache.snapshot]
+        // returns an honest empty registry (never throws) if this hasn't completed yet by the time
+        // a trip starts — see [TollRegistryCache]'s own "offline-empty-cache" doc.
+        startupScope.launch { runCatching { tollRegistryCache.refresh() } }
 
         // Begins supervising session/shift state for the ambient position heartbeat (see
         // [livePositionHeartbeat]'s own doc) — must be started unconditionally here, not left to
@@ -405,6 +414,7 @@ object AppContainer {
     val tariffDao by lazy { database.tariffDao() }
     val syncOutboxDao by lazy { database.syncOutboxDao() }
     val tariffSigningKeyDao by lazy { database.tariffSigningKeyDao() }
+    val tollRegistryDao by lazy { database.tollRegistryDao() }
 
     val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService) }
 
@@ -412,6 +422,12 @@ object AppContainer {
      * that class's doc and `security/TariffSignatureVerifier.kt`'s `Ed25519TariffSignatureVerifier`. */
     val tariffSigningKeyCache by lazy { TariffSigningKeyCache(tariffSigningKeyDao, apiService) }
     val tariffCache by lazy { TariffCache(tariffDao, apiService, tariffSigningKeyCache) }
+
+    /** Local cache of the real NSW toll-road registry (automatic toll-detection pass) — see
+     * [TollRegistryCache]'s own doc. [au.com.threesixty.cabdispatch.domain.FareEngineImpl] reads
+     * this (via [au.com.threesixty.cabdispatch.domain.TollRegistryProvider]) once per trip, never
+     * per GPS fix. */
+    val tollRegistryCache by lazy { TollRegistryCache(tollRegistryDao, apiService) }
 
     // --- S4-S6 agent: fare-breakdown engine + hardware gateways ---
     //

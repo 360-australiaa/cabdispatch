@@ -16,10 +16,13 @@ import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.SpeechPriority
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
+import au.com.threesixty.cabdispatch.domain.TollRegistryProvider
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
+import au.com.threesixty.cabdispatch.domain.toMoneyString
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,7 +40,13 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     // TODO(integration agent): see FareEngine's doc comment — this instance
     // is recreated per nav entry, not process-scoped.
-    private val fareEngine: FareEngine = FareEngineImpl(AppContainer.speedSource, viewModelScope)
+    private val fareEngine: FareEngine = FareEngineImpl(
+        AppContainer.speedSource,
+        viewModelScope,
+        // Real automatic NSW toll-road registry — a pure, fast local Room read (see
+        // TollRegistryCache.snapshot's own doc), never a network call from this hot path.
+        TollRegistryProvider { AppContainer.tollRegistryCache.snapshot() },
+    )
 
     val fareState: StateFlow<FareState> = fareEngine.state
 
@@ -121,6 +130,27 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 if (_speechEnabled.value && wholeDollars != lastAnnouncedDollar && wholeDollars > 0) {
                     lastAnnouncedDollar = wholeDollars
                     speechAnnouncer.announce("Fare now $wholeDollars dollars")
+                }
+            }
+            .launchIn(viewModelScope)
+
+        // Automatic NSW toll-road detection audible confirmation (product requirement, 2026-09):
+        // "when vehicle move from that location diameter, automatically it will make beep sound
+        // and show toll has been added". Reuses this same speechAnnouncer (respecting the exact
+        // same speechEnabled mute the "Fare now N dollars" announcement above already honours — a
+        // driver who has muted the app must not suddenly hear anything) rather than a new sound
+        // asset/audio path. Keyed on FareState.lastAutoTollAlert.id (see that field's own doc) so
+        // this fires exactly once per real detected/revised charge, never on an unrelated
+        // recomposition-driving emission. SpeechPriority.TOLL_ALERT (see that enum's own doc) is
+        // deliberately non-coalescing and ranked above FARE — this alert must never be silently
+        // dropped just because a fare-dollar announcement happens to enqueue moments later; a
+        // driver who can't hear WHICH toll fired can't judge whether it was wrong.
+        fareState
+            .map { it.lastAutoTollAlert }
+            .distinctUntilChanged { old, new -> old?.id == new?.id }
+            .onEach { alert ->
+                if (alert != null && _speechEnabled.value) {
+                    speechAnnouncer.announce("${alert.roadName} toll added — ${alert.amount.toMoneyString()}", SpeechPriority.TOLL_ALERT)
                 }
             }
             .launchIn(viewModelScope)
@@ -274,6 +304,13 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 // tapped. `.tolls` is the running total, not a delta — same
                 // overwrite convention as distanceM/movingS/waitingS above.
                 tolls = state.breakdown.tolls.toPlainString(),
+                // Local audit trail for the automatic NSW toll-road detector — see
+                // TripEntity.autoTolledRoadsJson's doc for why this never reaches the server (the
+                // sync path this app uses only takes the aggregate `tolls` figure above, already
+                // including every one of these amounts) but is still worth persisting locally for
+                // Close & Pay / History to show the driver which real roads it came from.
+                autoTolledRoads = state.autoTollsApplied.associate { it.roadId to it.amount.toPlainString() },
+                unpricedTollRoadIds = state.unpricedTollRoads.map { it.roadId },
             )
         }
     }
@@ -296,6 +333,19 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addToll(preset: TollPreset) {
         fareEngine.addToll(preset)
+    }
+
+    /** Driver-initiated correction of an auto-detected toll — see [FareEngine.removeAutoToll]'s
+     * doc. The next [persistTick] emission (driven by [fareState]'s own `onEach` in [init])
+     * durably reflects the correction, same "no separate persistence call needed" pattern
+     * [addToll] already relies on. */
+    fun removeAutoToll(roadId: String) {
+        fareEngine.removeAutoToll(roadId)
+    }
+
+    /** Driver dismissal of a "needs manual toll" notice — see [FareEngine.dismissUnpricedToll]'s doc. */
+    fun dismissUnpricedToll(roadId: String) {
+        fareEngine.dismissUnpricedToll(roadId)
     }
 
     /**
