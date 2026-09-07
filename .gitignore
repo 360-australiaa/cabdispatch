@@ -5,6 +5,8 @@ backend/__pycache__/
 *.pyc
 backend/dev.db
 backend/tests/test_dev.db
+# SQLite rollback journal beside the test DB above -- same artefact, appears mid-run.
+backend/tests/test_dev.db-journal
 backend/uploads/
 backend/.pytest_cache/
 backend/.ruff_cache/

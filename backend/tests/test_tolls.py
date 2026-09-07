@@ -661,21 +661,27 @@ async def test_network_group_roads_share_one_capped_total(client: AsyncClient, s
     road_a = await _make_road(session, road_id="TESTNETA", **common)
     road_b = await _make_road(session, road_id="TESTNETB", **common)
 
+    # Two gantries per road, ~5.5 km apart: an entry one that anchors the distance accrual and an
+    # exit one that revises it. A distance road is only ever re-priced on a tick that is actually
+    # NEAR one of its gantries (apply_toll_detection returns early otherwise), which is why a
+    # single gantry per road would leave both charges pinned at their entry-tick value of zero.
     entry_a = _next_zone()
     entry_b = _next_zone()
-    await _add_gantry(session, road_id=road_a.id, gantry_id="TESTNETA:g", lat=entry_a[0], lng=entry_a[1])
-    await _add_gantry(session, road_id=road_b.id, gantry_id="TESTNETB:g", lat=entry_b[0], lng=entry_b[1])
+    exit_a = (entry_a[0] + 0.05, entry_a[1])
+    exit_b = (entry_b[0] + 0.05, entry_b[1])
+    await _add_gantry(session, road_id=road_a.id, gantry_id="TESTNETA:in", lat=entry_a[0], lng=entry_a[1])
+    await _add_gantry(session, road_id=road_a.id, gantry_id="TESTNETA:out", lat=exit_a[0], lng=exit_a[1])
+    await _add_gantry(session, road_id=road_b.id, gantry_id="TESTNETB:in", lat=entry_b[0], lng=entry_b[1])
+    await _add_gantry(session, road_id=road_b.id, gantry_id="TESTNETB:out", lat=exit_b[0], lng=exit_b[1])
 
     trip = await _create_trip(client, headers, tariff.id, start_lat=entry_a[0], start_lng=entry_a[1])
     t0 = datetime.fromisoformat(trip["start_at"])
 
     # Drive far enough on each stage that both would hit their own per-road cap.
     await _tick(client, headers, trip["id"], lat=entry_a[0], lng=entry_a[1], ts=t0 + timedelta(seconds=5))
-    await _tick(client, headers, trip["id"], lat=entry_a[0] + 0.05, lng=entry_a[1], ts=t0 + timedelta(minutes=5))
+    await _tick(client, headers, trip["id"], lat=exit_a[0], lng=exit_a[1], ts=t0 + timedelta(minutes=5))
     await _tick(client, headers, trip["id"], lat=entry_b[0], lng=entry_b[1], ts=t0 + timedelta(minutes=10))
-    body = await _tick(
-        client, headers, trip["id"], lat=entry_b[0] + 0.05, lng=entry_b[1], ts=t0 + timedelta(minutes=15)
-    )
+    body = await _tick(client, headers, trip["id"], lat=exit_b[0], lng=exit_b[1], ts=t0 + timedelta(minutes=15))
 
     charged = {k: Decimal(v) for k, v in body["auto_tolled_roads"].items()}
     assert set(charged) == {"TESTNETA", "TESTNETB"}

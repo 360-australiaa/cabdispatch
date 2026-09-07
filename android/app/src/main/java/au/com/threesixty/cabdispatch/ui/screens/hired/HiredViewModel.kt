@@ -11,11 +11,13 @@ import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.AlertTone
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.ToneGeneratorAlertTone
 import au.com.threesixty.cabdispatch.domain.SpeechPriority
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
@@ -75,6 +77,10 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     val duressState: StateFlow<DuressUiState> = AppContainer.duressController.state
 
     private val speechAnnouncer = TextToSpeechAnnouncer(application)
+
+    /** The literal "beep" of the automatic toll-detection requirement — see [AlertTone]'s own doc
+     * for why it deliberately does NOT honour [speechEnabled] the way the spoken alert below does. */
+    private val alertTone: AlertTone = ToneGeneratorAlertTone()
     private var lastAnnouncedDollar = -1
 
     // --- Room persistence (integration pass) ---
@@ -149,7 +155,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
             .map { it.lastAutoTollAlert }
             .distinctUntilChanged { old, new -> old?.id == new?.id }
             .onEach { alert ->
-                if (alert != null && _speechEnabled.value) {
+                if (alert == null) return@onEach
+                // The beep always plays; the spoken detail is the opt-in extra on top of it. See
+                // AlertTone's doc: spoken announcements are off by default, so gating the beep on
+                // them would mean a freshly-installed tablet silently adds money to the fare.
+                alertTone.tollDetected()
+                if (_speechEnabled.value) {
                     speechAnnouncer.announce("${alert.roadName} toll added — ${alert.amount.toMoneyString()}", SpeechPriority.TOLL_ALERT)
                 }
             }
@@ -441,6 +452,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         speechAnnouncer.shutdown()
+        alertTone.shutdown()
         // Unconditional clear: this VM instance is nav-scoped (recreated per trip, per this
         // file's existing TODO on [fareEngine]) and normal navigation always tears the old
         // instance down before a new one is created, so there is no real window where a newer

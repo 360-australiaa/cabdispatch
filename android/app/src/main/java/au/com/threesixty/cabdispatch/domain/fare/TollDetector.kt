@@ -214,8 +214,32 @@ data class TollPriceRef(
     val capClassA: BigDecimal?,
     val ratePerKmClassA: BigDecimal?,
     val flagfallClassA: BigDecimal?,
+    /** Cap shared across every road in the same [TollRoadRef.networkGroup] for ONE trip, on top of
+     * this road's own [capClassA] — WestConnex publishes $12.74 (Class A) across M4/M8/M5E/M4-M8
+     * Link. `null` for a road with no such group, or a revision that hasn't captured the figure:
+     * in both cases [onFix] applies no network clamp rather than inventing one. */
+    val networkCapClassA: BigDecimal? = null,
     val timeOfDayRatesClassA: List<TimeOfDayRateRef>?,
     val confidence: String,
+)
+
+/**
+ * One named toll point of a `per_point` road — the real, published, per-crossing price for M2's
+ * six points and Cross City / Lane Cove Tunnel's two each.
+ *
+ * A `per_point` road's own [TollPriceRef.priceClassAMax] is NOT a usable price: the road-level
+ * min/max is a descriptive range spanning its cheapest ramp to its full mainline toll, and
+ * charging anything out of it would be exactly the guess this whole feature refuses to make.
+ * These are what [onFix] charges instead.
+ */
+data class TollPointRef(
+    val id: String,
+    val name: String,
+    /** `null` when the source data never resolved a price for this point — flagged, never guessed. */
+    val priceClassA: BigDecimal?,
+    /** `verified`/`needs_verification`/`not_captured`, or `null` when no revision is cached at all.
+     * `not_captured` and `null` are treated identically: never auto-charge. */
+    val confidence: String?,
 )
 
 /** Static identity + current pricing for one NSW toll road — device-cached subset of the server's
@@ -228,12 +252,29 @@ data class TollRoadRef(
     val id: String,
     val name: String,
     val pricingModel: String,
+    /** `once_per_road` / `cumulative_per_point` / `distance_metered` — how crossings become a
+     * charge. Deliberately a separate axis from [pricingModel], because it is NOT derivable from
+     * it: Hills M2 and Lane Cove Tunnel are both `per_point` and bill differently (see [onFix]).
+     * Defaulted to the ordinary case so a road built without one behaves exactly as before. */
+    val chargingPolicy: String = "once_per_road",
+    /** Roads sharing one network-wide cap for a single trip ("WESTCONNEX"), or null. */
+    val networkGroup: String? = null,
     val directional: String?,
     val currentPrice: TollPriceRef?,
+    /** Keyed by [TollPointRef.id]. Empty for every road priced at the road level. */
+    val tollPoints: Map<String, TollPointRef> = emptyMap(),
 )
 
-/** One physical gantry — device-cached subset of `TollGantryRead`. */
-data class TollGantryRef(val id: String, val tollRoadId: String, val latitude: Double, val longitude: Double)
+/** One physical gantry — device-cached subset of `TollGantryRead`. [tollPointId] is non-null only
+ * on a `per_point` road, and is what tells [onFix] WHICH of that road's points was crossed (and so
+ * which price applies). */
+data class TollGantryRef(
+    val id: String,
+    val tollRoadId: String,
+    val latitude: Double,
+    val longitude: Double,
+    val tollPointId: String? = null,
+)
 
 /** Immutable, in-memory snapshot of the cached registry loaded once per trip (or refresh) — never
  * re-read from Room per GPS fix; see [au.com.threesixty.cabdispatch.sync.TollRegistryCache.snapshot]. */
@@ -272,16 +313,24 @@ fun findNearbyGantries(
  * though this in-memory dedup bookkeeping is.
  */
 class TollDetectionState {
-    /** roadId -> current auto-charged amount for this trip. `distance`-model roads REVISE this
-     * value in place (see [onFix]) rather than growing a second entry. */
+    /** Charge key -> current auto-charged amount for this trip. `distance`-model roads REVISE
+     * this value in place (see [onFix]) rather than growing a second entry.
+     *
+     * The key is the ROAD id in every case EXCEPT a `cumulative_per_point` road (Hills M2), where
+     * it is the TOLL POINT id ("M2:north_ryde") — because that road genuinely bills once per
+     * distinct point traversed, so a single road-keyed entry could not represent it. This mirrors
+     * the backend's `Trip.auto_tolled_roads` exactly, so a device charge and a server-side
+     * reconstruction of the same trip produce identical keys. */
     val chargedRoads: MutableMap<String, BigDecimal> = mutableMapOf()
 
     /** roadId -> cumulative trip distance (km) at the FIRST gantry crossing for a `distance`-model
      * road — the anchor point [onFix] measures "distance travelled on this road" from. */
     val roadEntryDistanceKm: MutableMap<String, BigDecimal> = mutableMapOf()
 
-    /** Roads crossed that genuinely cannot be auto-priced from the real dataset (`zone_flat`,
-     * `unpriced`) — surfaced to the driver to add manually, never guessed. */
+    /** Roads (or, on a `cumulative_per_point` road, individual toll points — same keying as
+     * [chargedRoads]) crossed that genuinely cannot be auto-priced from the real dataset: an
+     * `unpriced` road, a point with no captured price, or a pricing model this build has no
+     * formula for. Surfaced to the driver to add manually, never guessed. */
     val unpricedRoadIds: MutableSet<String> = mutableSetOf()
 
     /** Roads the driver has explicitly removed an auto-charge for (see [dismissCharge]) — never
@@ -316,20 +365,19 @@ data class TollDetectionResult(
  * Detects every real NSW toll-road gantry crossed at (lat, lng) and updates [state] in place —
  * Kotlin mirror of `app.services.tolls.apply_toll_detection`'s per-tick loop, same rules:
  *
- * 1. Dedup by ROAD id, never by gantry id (M7 alone has 45 gantries in the real dataset). **Open
- *    question, flagged rather than guessed (product report, 2026-09):** this "once per road"
- *    policy is correct for a distance-CAPPED road (M7), but the real published wording for M2
- *    ("Hills M2 Motorway") says charges "vary based on the number of toll points traversed" —
- *    which reads as a genuinely CUMULATIVE per-point charge, not a single per-road one. This file
- *    does NOT attempt to guess a per-point charging policy or invent per-point prices — M2/CCT/LCT
- *    stay in the `zone_flat` "never auto-charge, flag for manual entry" branch below until the
- *    registry publishes both the real per-point prices AND an explicit charging-policy field this
- *    function can read (a per-road "once" vs "per-point" flag) — see this repo's PR/report for the
- *    same flag, not a silent under- or over-charge shipped without it.
- * 2. `zone_flat` (M2, CCT, and — pending the registry update above — potentially LCT) and any
- *    road/revision missing the fields its pricing model actually needs (see 4/5 below) are NEVER
- *    auto-charged — added to [TollDetectionState.unpricedRoadIds] instead, exactly the
- *    driver-must-add-manually contract this whole feature is built around.
+ * 1. Never dedup by GANTRY id (M7 alone has 45 in the real dataset). Dedup by what the registry's
+ *    own `charging_policy` says the road bills by — ROAD id for almost everything, TOLL POINT id
+ *    for a `cumulative_per_point` road. That flag is what this function used to be missing: the
+ *    published wording for Hills M2 prices by "the number of toll points traversed", which is a
+ *    genuinely cumulative charge, and rather than guess a policy this file previously left M2,
+ *    Cross City Tunnel and Lane Cove Tunnel permanently in the "flag for manual entry" branch.
+ *    The 2026-09-07 registry correction published both the real per-point prices and the explicit
+ *    policy, so they are charged properly now — read from the data, still never guessed.
+ * 2. Any road/revision/toll point missing the fields its pricing model actually needs (see 4-6
+ *    below), and any pricing model this build has no formula for at all (e.g. the retired
+ *    `zone_flat` still sitting in a stale cache), are NEVER auto-charged — added to
+ *    [TollDetectionState.unpricedRoadIds] instead, exactly the driver-must-add-manually contract
+ *    this whole feature is built around.
  * 3. Direction: `one_way` charges unconditionally (no bearing needed — physically single
  *    carriageway); `northbound_only`/`southbound_only` require a real, trusted bearing matching;
  *    an UNDETERMINED bearing (`null` — too little movement since the last fix, or this is the
@@ -344,6 +392,18 @@ data class TollDetectionResult(
  *    entry in place as distance grows rather than adding a second one. Both pricing models read
  *    their rate/flagfall straight off [TollPriceRef] — see that type's own doc for why this file no
  *    longer derives a rate from a corridor length the way it originally did.
+ * 6. `per_point` (M2, CCT, LCT): charge the crossed TOLL POINT's own published price, never the
+ *    road-level min/max (a descriptive range, not a real per-crossing figure). A
+ *    `cumulative_per_point` road (M2) charges each distinct point traversed, keyed by point id; a
+ *    `once_per_road` one (CCT, LCT) charges only the first point crossed, keyed by road id,
+ *    because its points are a main tunnel and an alternate ramp a vehicle uses ONE of. That second
+ *    reading is a flagged interpretation call carried over verbatim from the registry — see
+ *    `app.models.toll`'s module docstring.
+ * 7. A road in a `network_group` (WestConnex) is additionally clamped so the SUM of every charged
+ *    road in that group never exceeds the group's published network-wide cap. Where a crossing
+ *    would breach it, THIS road absorbs the reduction rather than retroactively lowering a charge
+ *    already shown to the driver for an earlier one — same interpretation the backend makes, so
+ *    device and server agree.
  *
  * A road in [TollDetectionState.dismissedRoadIds] (the driver already removed this auto-charge —
  * see [dismissCharge]) is skipped entirely for the rest of the trip, even if crossed again.
@@ -380,11 +440,8 @@ fun onFix(
         if (allowed == false) continue // genuinely the wrong direction — never charge
         if (allowed == null) continue // no reliable bearing yet — try again next fix
 
-        if (road.pricingModel == "zone_flat") {
-            // The published range spans a cheap ramp toll to the full mainline toll and the real
-            // dataset does not say which applies to which specific gantry — charging a guessed
-            // number from that range is exactly what this feature must never do. Flag instead.
-            if (state.unpricedRoadIds.add(roadId)) newlyUnpriced.add(roadId)
+        if (road.pricingModel == "per_point") {
+            chargePerPointRoad(state, road, hits, changed, newlyUnpriced)
             continue
         }
 
@@ -399,7 +456,7 @@ fun onFix(
             continue
         }
 
-        val amount: BigDecimal? = when (road.pricingModel) {
+        var amount: BigDecimal? = when (road.pricingModel) {
             "flat" -> price.priceClassAMax
             "time_of_day" -> selectTimeOfDayPrice(price.timeOfDayRatesClassA.orEmpty(), ts)
             // Westlink M7 (product correction, 2026-09): [TollPriceRef.ratePerKmClassA] is the
@@ -442,6 +499,8 @@ fun onFix(
             continue
         }
 
+        amount = networkCappedAmount(state, registry, road, amount)
+
         val rounded = amount.setScale(2, RoundingMode.HALF_UP)
         if (state.chargedRoads[roadId] == rounded) continue // no real change (e.g. plateaued at cap)
         state.chargedRoads[roadId] = rounded
@@ -450,6 +509,126 @@ fun onFix(
     }
 
     return TollDetectionResult(chargedRoadsChanged = changed, newlyUnpricedRoadIds = newlyUnpriced)
+}
+
+/**
+ * The driver-facing name for one entry of [TollDetectionState.chargedRoads] /
+ * [TollDetectionState.unpricedRoadIds].
+ *
+ * Those keys are a ROAD id for almost everything, but a TOLL POINT id ("M2:north_ryde") on a
+ * `cumulative_per_point` road — see [TollDetectionState.chargedRoads]'s own doc. A plain
+ * `roadsById[key]` lookup therefore misses on exactly those entries and falls through to showing
+ * the raw key, which is what the driver would then be read aloud by the toll alert and shown in
+ * the fare breakdown. A charge the driver can't name is a charge they can't judge, which defeats
+ * the point of announcing it at all.
+ *
+ * Returns "Hills M2 Motorway — North Ryde (mainline)" for a point, the plain road name for a road,
+ * and the key itself only when the registry genuinely doesn't know it (a charge carried over from
+ * a cache that has since been refreshed) — still honest, never blank.
+ */
+fun chargeDisplayName(registry: TollRegistrySnapshot, chargeKey: String): String {
+    registry.roadsById[chargeKey]?.let { return it.name }
+    for (road in registry.roadsById.values) {
+        val point = road.tollPoints[chargeKey] ?: continue
+        return "${road.name} — ${point.name}"
+    }
+    return chargeKey
+}
+
+/**
+ * Charges a `per_point` road (M2, Cross City Tunnel, Lane Cove Tunnel) from the real published
+ * price of the toll POINT actually crossed — see [onFix]'s doc, points 1 and 6, for why the
+ * road-level min/max is never usable here.
+ *
+ * Split out of [onFix]'s loop rather than inlined because it is the one branch that can charge
+ * more than once for the same road in a single call (a fix near two of M2's points), which makes
+ * it the only place a per-road `continue` would be wrong.
+ */
+private fun chargePerPointRoad(
+    state: TollDetectionState,
+    road: TollRoadRef,
+    hits: List<TollGantryRef>,
+    changed: MutableMap<String, BigDecimal>,
+    newlyUnpriced: MutableSet<String>,
+) {
+    val crossedPointIds = hits.filter { it.tollRoadId == road.id }.mapNotNull { it.tollPointId }.distinct()
+    if (crossedPointIds.isEmpty()) {
+        // A gantry matched this road but carries no toll point — a per_point road cannot be
+        // priced without one, so flag rather than fall back to the road-level range.
+        if (state.unpricedRoadIds.add(road.id)) newlyUnpriced.add(road.id)
+        return
+    }
+
+    if (road.chargingPolicy == "cumulative_per_point") {
+        for (pointId in crossedPointIds) {
+            if (pointId in state.dismissedRoadIds) continue
+            if (pointId in state.chargedRoads) continue // this exact point already charged
+            val amount = priceOfPoint(road, pointId)
+            if (amount == null) {
+                if (state.unpricedRoadIds.add(pointId)) newlyUnpriced.add(pointId)
+                continue
+            }
+            val rounded = amount.setScale(2, RoundingMode.HALF_UP)
+            state.chargedRoads[pointId] = rounded
+            state.unpricedRoadIds.remove(pointId)
+            changed[pointId] = rounded
+        }
+        return
+    }
+
+    // once_per_road: the FIRST point actually crossed sets the price for the whole trip; a
+    // different point of the same road crossed later is never charged again. Keyed by road id,
+    // since there is only ever one charge for this road.
+    if (road.id in state.chargedRoads) return
+    val amount = priceOfPoint(road, crossedPointIds.first())
+    if (amount == null) {
+        if (state.unpricedRoadIds.add(road.id)) newlyUnpriced.add(road.id)
+        return
+    }
+    val rounded = amount.setScale(2, RoundingMode.HALF_UP)
+    state.chargedRoads[road.id] = rounded
+    state.unpricedRoadIds.remove(road.id)
+    changed[road.id] = rounded
+}
+
+/** The point's own published Class A price, or `null` if it is unknown to this registry snapshot,
+ * carries no price, or is flagged `not_captured` — all three mean "flag, never guess". */
+private fun priceOfPoint(road: TollRoadRef, pointId: String): BigDecimal? {
+    val point = road.tollPoints[pointId] ?: return null
+    if (point.confidence == null || point.confidence == "not_captured") return null
+    return point.priceClassA
+}
+
+/**
+ * Clamps [rawAmount] (already capped at this road's OWN cap) so the SUM of every charged road
+ * sharing [road]'s `networkGroup` never exceeds that group's published network-wide cap —
+ * WestConnex bills at most $12.74 (Class A) across M4/M8/M5E/M4-M8 Link for one trip, however many
+ * stages are used. A no-op for a road with no group, or a group with no captured cap figure.
+ *
+ * Kotlin mirror of `app.services.tolls._network_capped_amount`, including its flagged
+ * interpretation call: when a crossing would breach the cap, THIS (most recently crossed) road
+ * absorbs the reduction rather than retroactively lowering a charge already shown to the driver
+ * for an earlier one. Matching the backend matters beyond taste here — a device charge and the
+ * server's own reconstruction of the same trace must agree, or every WestConnex trip trips the
+ * fare-variance check.
+ */
+private fun networkCappedAmount(
+    state: TollDetectionState,
+    registry: TollRegistrySnapshot,
+    road: TollRoadRef,
+    rawAmount: BigDecimal,
+): BigDecimal {
+    val group = road.networkGroup ?: return rawAmount
+    val networkCap = road.currentPrice?.networkCapClassA ?: return rawAmount
+
+    var priorTotal = BigDecimal.ZERO
+    for ((chargedId, chargedAmount) in state.chargedRoads) {
+        if (chargedId == road.id) continue
+        if (registry.roadsById[chargedId]?.networkGroup == group) priorTotal += chargedAmount
+    }
+
+    val remaining = (networkCap - priorTotal).coerceAtLeast(BigDecimal.ZERO)
+    return rawAmount.min(remaining)
 }
 
 /**

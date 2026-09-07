@@ -2,6 +2,7 @@ package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.TollDetectionState
+import au.com.threesixty.cabdispatch.domain.fare.chargeDisplayName
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
 import au.com.threesixty.cabdispatch.domain.fare.onFix
@@ -539,7 +540,9 @@ class FareEngineImpl(
             // Mirrored into the shadow calc state too, same "harmless today, keeps the two totals
             // from silently disagreeing" reasoning [addToll] above already documents.
             cs.tolls += delta
-            val roadName = registry.roadsById[roadId]?.name ?: roadId
+            // Not a plain roadsById lookup: on a cumulative-per-point road the key is a TOLL
+            // POINT id, which that map does not contain. See chargeDisplayName.
+            val roadName = chargeDisplayName(registry, roadId)
             autoTolls = autoTolls.filterNot { it.roadId == roadId } + AutoTollEntry(roadId, roadName, newAmount)
             // Audible + on-screen confirmation (product requirement, 2026-09) — see
             // AutoTollAlert's own doc. If more than one road changes on the same tick (rare: two
@@ -551,7 +554,7 @@ class FareEngineImpl(
         val alreadyFlagged = current.unpricedTollRoads.mapTo(mutableSetOf()) { it.roadId }
         val newUnpricedEntries = result.newlyUnpricedRoadIds
             .filterNot { it in alreadyFlagged }
-            .map { roadId -> UnpricedTollRoad(roadId, registry.roadsById[roadId]?.name ?: roadId) }
+            .map { roadId -> UnpricedTollRoad(roadId, chargeDisplayName(registry, roadId)) }
 
         _state.value = current.copy(
             breakdown = current.breakdown.copy(tolls = tolls),

@@ -264,10 +264,15 @@ class TollDetectorTest {
         assertEquals(setOf("M7"), result.newlyUnpricedRoadIds)
     }
 
-    // --- 6. zone_flat / unpriced roads are never auto-charged --------------------------------
+    // --- 6. unknown / unpriced models are never auto-charged ---------------------------------
 
     @Test
-    fun `zone_flat road is never auto-charged, only flagged for manual entry`() {
+    fun `a pricing model this build has no formula for is flagged, never guessed`() {
+        // "zone_flat" was a real, handled model until the 2026-09-07 price correction replaced it
+        // with per-toll-point pricing. A device whose cached registry predates that refresh still
+        // holds rows carrying it, so this is not a hypothetical value — and it stands in for any
+        // future model that reaches this build before its formula does. The invariant under test
+        // is "no formula -> flag for manual entry", not the string.
         val road = TollRoadRef(
             id = "M2",
             name = "Hills M2 Motorway",
@@ -287,7 +292,7 @@ class TollDetectorTest {
 
         val result = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
 
-        assertTrue("zone_flat must never appear as a real charge", result.chargedRoadsChanged.isEmpty())
+        assertTrue("an unrecognised model must never appear as a real charge", result.chargedRoadsChanged.isEmpty())
         assertEquals(setOf("M2"), result.newlyUnpricedRoadIds)
         assertTrue(state.chargedRoads.isEmpty())
     }
@@ -415,5 +420,254 @@ class TollDetectorTest {
         onFix(southState, registry, approachFromNorthLat, gantryLng, morningPeak, BigDecimal.ZERO)
         val southResult = onFix(southState, registry, gantryLat, gantryLng, morningPeak, BigDecimal("0.3"))
         assertEquals(mapOf(road.id to BigDecimal("4.55")), southResult.chargedRoadsChanged)
+    }
+
+    // --- 7. per_point roads: the 2026-09-07 correction's real per-crossing prices -------------
+
+    private fun perPointRoad(
+        id: String,
+        chargingPolicy: String,
+        points: Map<String, String?>,
+        /** Real display names, where a test asserts on one. Defaults to the point id elsewhere,
+         * since most of these tests care about the AMOUNT, not the label. */
+        pointNames: Map<String, String> = emptyMap(),
+    ) = TollRoadRef(
+        id = id,
+        name = "Test Road $id",
+        pricingModel = "per_point",
+        chargingPolicy = chargingPolicy,
+        directional = "both",
+        // A per_point road's road-level price is a DESCRIPTIVE RANGE across its points, never a
+        // real per-crossing figure. Deliberately set to something obviously wrong here (999.99),
+        // so any test that starts passing by charging the road level instead of the point level
+        // fails loudly rather than quietly agreeing.
+        currentPrice = TollPriceRef(
+            priceClassAMax = BigDecimal("999.99"),
+            capClassA = null,
+            ratePerKmClassA = null,
+            flagfallClassA = null,
+            timeOfDayRatesClassA = null,
+            confidence = "verified",
+        ),
+        tollPoints = points.mapValues { (pointId, price) ->
+            TollPointRef(
+                id = pointId,
+                name = pointNames[pointId] ?: pointId,
+                priceClassA = price?.let { BigDecimal(it) },
+                confidence = "verified",
+            )
+        },
+    )
+
+    @Test
+    fun `cumulative per-point road charges each distinct toll point traversed`() {
+        // Hills M2 prices by the number of toll points traversed, so this is the one road where a
+        // second gantry of the SAME road legitimately adds money.
+        val road = perPointRoad(
+            "M2",
+            chargingPolicy = "cumulative_per_point",
+            points = mapOf("M2:north_ryde" to "10.64", "M2:windsor_rd" to "3.76"),
+        )
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("M2" to road),
+            gantries = listOf(
+                TollGantryRef("g1", "M2", gantryLat, gantryLng, tollPointId = "M2:north_ryde"),
+                TollGantryRef("g2", "M2", -33.9000, 151.1000, tollPointId = "M2:windsor_rd"),
+            ),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val first = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+        assertEquals(mapOf("M2:north_ryde" to BigDecimal("10.64")), first.chargedRoadsChanged)
+
+        // A later fix at the SECOND point adds to the total rather than deduplicating away.
+        onFix(state, registry, -33.8973, 151.1000, ts, BigDecimal("8.0"))
+        val second = onFix(state, registry, -33.9000, 151.1000, ts, BigDecimal("8.5"))
+        assertEquals(mapOf("M2:windsor_rd" to BigDecimal("3.76")), second.chargedRoadsChanged)
+        assertEquals(
+            BigDecimal("14.40"),
+            state.chargedRoads.values.fold(BigDecimal.ZERO) { acc, v -> acc + v },
+        )
+
+        // Re-crossing an already-charged point never charges it twice.
+        val again = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal("20.0"))
+        assertTrue(again.chargedRoadsChanged.isEmpty())
+    }
+
+    @Test
+    fun `once-per-road per-point road charges only the first point crossed`() {
+        // Cross City / Lane Cove Tunnel: their two points are a main tunnel and an alternate ramp
+        // a vehicle uses ONE of, and no source says the charges are cumulative. This pins the
+        // deliberate no-overcharge reading (a flagged interpretation call, not a stated fact) so a
+        // refactor cannot silently reverse it.
+        val road = perPointRoad(
+            "LCT",
+            chargingPolicy = "once_per_road",
+            points = mapOf("LCT:main_tunnel" to "4.30", "LCT:military_e_ramp" to "2.15"),
+        )
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("LCT" to road),
+            gantries = listOf(
+                TollGantryRef("g1", "LCT", gantryLat, gantryLng, tollPointId = "LCT:main_tunnel"),
+                TollGantryRef("g2", "LCT", -33.9000, 151.1000, tollPointId = "LCT:military_e_ramp"),
+            ),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val first = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+        // Keyed by ROAD id here, not point id — there is only ever one charge for this road.
+        assertEquals(mapOf("LCT" to BigDecimal("4.30")), first.chargedRoadsChanged)
+
+        onFix(state, registry, -33.8973, 151.1000, ts, BigDecimal("8.0"))
+        val second = onFix(state, registry, -33.9000, 151.1000, ts, BigDecimal("8.5"))
+        assertTrue("a second point of a once_per_road road must never add", second.chargedRoadsChanged.isEmpty())
+        assertEquals(BigDecimal("4.30"), state.chargedRoads["LCT"])
+    }
+
+    @Test
+    fun `per-point road never falls back to its road-level range when a point has no price`() {
+        val road = perPointRoad(
+            "CCT",
+            chargingPolicy = "cumulative_per_point",
+            points = mapOf("CCT:main" to null),
+        )
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("CCT" to road),
+            gantries = listOf(TollGantryRef("g1", "CCT", gantryLat, gantryLng, tollPointId = "CCT:main")),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val result = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+
+        assertTrue(result.chargedRoadsChanged.isEmpty())
+        assertEquals(setOf("CCT:main"), result.newlyUnpricedRoadIds)
+        assertTrue(state.chargedRoads.isEmpty())
+    }
+
+    @Test
+    fun `per-point road whose gantry carries no toll point is flagged, not priced at road level`() {
+        val road = perPointRoad("M2", chargingPolicy = "cumulative_per_point", points = mapOf("M2:p1" to "10.64"))
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("M2" to road),
+            // No tollPointId — a stale cache, or a gantry the registry never resolved.
+            gantries = listOf(TollGantryRef("g1", "M2", gantryLat, gantryLng)),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        val result = onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+
+        assertTrue(result.chargedRoadsChanged.isEmpty())
+        assertEquals(setOf("M2"), result.newlyUnpricedRoadIds)
+    }
+
+    // --- 8. WestConnex network-wide cap ------------------------------------------------------
+
+    private fun networkRoad(id: String) = TollRoadRef(
+        id = id,
+        name = "Test Road $id",
+        pricingModel = "distance_with_flagfall",
+        chargingPolicy = "distance_metered",
+        networkGroup = "WESTCONNEX",
+        directional = "both",
+        currentPrice = TollPriceRef(
+            priceClassAMax = null,
+            capClassA = BigDecimal("9.00"),
+            ratePerKmClassA = BigDecimal("5.0000"),
+            flagfallClassA = BigDecimal("1.80"),
+            networkCapClassA = BigDecimal("12.74"),
+            timeOfDayRatesClassA = null,
+            confidence = "verified",
+        ),
+    )
+
+    @Test
+    fun `roads in one network group never bill past the shared network cap`() {
+        // Each stage caps at 9.00 on its own — 18.00 together without a network clamp — against
+        // WestConnex's real published 12.74 Class A cap for the whole network on one trip.
+        val m4 = networkRoad("M4")
+        val m8 = networkRoad("M8")
+        val m4Lat = gantryLat
+        val m8Lat = -33.9000
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("M4" to m4, "M8" to m8),
+            gantries = listOf(
+                TollGantryRef("m4-g", "M4", m4Lat, gantryLng),
+                TollGantryRef("m8-g", "M8", m8Lat, gantryLng),
+            ),
+        )
+        val state = TollDetectionState()
+
+        // Enter and run down the M4 far enough to hit its own 9.00 cap.
+        onFix(state, registry, m4Lat - 0.0027, gantryLng, ts, BigDecimal.ZERO)
+        onFix(state, registry, m4Lat, gantryLng, ts, BigDecimal.ZERO)
+        onFix(state, registry, m4Lat, gantryLng, ts, BigDecimal("5.0"))
+        assertEquals(BigDecimal("9.00"), state.chargedRoads["M4"])
+
+        // Then the M8: on its own it would also reach 9.00, but only 3.74 of the network cap is
+        // left, so THIS road absorbs the reduction (matching the backend's own reading).
+        onFix(state, registry, m8Lat - 0.0027, gantryLng, ts, BigDecimal("6.0"))
+        onFix(state, registry, m8Lat, gantryLng, ts, BigDecimal("6.5"))
+        onFix(state, registry, m8Lat, gantryLng, ts, BigDecimal("12.0"))
+
+        val total = state.chargedRoads.values.fold(BigDecimal.ZERO) { acc, v -> acc + v }
+        assertEquals(BigDecimal("12.74"), total)
+        assertEquals(BigDecimal("9.00"), state.chargedRoads["M4"])
+        assertEquals(BigDecimal("3.74"), state.chargedRoads["M8"])
+    }
+
+    @Test
+    fun `a road with no network group is never clamped by another road's charges`() {
+        val m7 = TollRoadRef(
+            id = "M7",
+            name = "Westlink M7",
+            pricingModel = "distance",
+            chargingPolicy = "distance_metered",
+            directional = "both",
+            currentPrice = TollPriceRef(
+                priceClassAMax = null,
+                capClassA = BigDecimal("10.50"),
+                ratePerKmClassA = BigDecimal("0.5252"),
+                flagfallClassA = null,
+                timeOfDayRatesClassA = null,
+                confidence = "verified",
+            ),
+        )
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf("M7" to m7),
+            gantries = listOf(TollGantryRef("g1", "M7", gantryLat, gantryLng)),
+        )
+        val state = TollDetectionState()
+
+        onFix(state, registry, approachFromSouthLat, gantryLng, ts, BigDecimal.ZERO)
+        onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal.ZERO)
+        onFix(state, registry, gantryLat, gantryLng, ts, BigDecimal("10.0"))
+
+        // 0.5252 * 10 km = 5.252 -> 5.25, well under the 10.50 cap and unclamped by anything else.
+        assertEquals(BigDecimal("5.25"), state.chargedRoads["M7"])
+    }
+
+    // --- 9. naming a charge the driver can actually recognise --------------------------------
+
+    @Test
+    fun `a per-point charge is named by road and point, not by its raw key`() {
+        // The spoken toll alert and the fare breakdown both read this string. On a cumulative
+        // per-point road the charge key is a TOLL POINT id, so a plain roads-by-id lookup would
+        // announce "M2:north_ryde toll added" — a charge the driver cannot judge.
+        val road = perPointRoad(
+            "M2",
+            chargingPolicy = "cumulative_per_point",
+            points = mapOf("M2:north_ryde" to "10.64"),
+            pointNames = mapOf("M2:north_ryde" to "North Ryde (mainline)"),
+        ).copy(name = "Hills M2 Motorway")
+        val registry = TollRegistrySnapshot(mapOf("M2" to road), emptyList())
+
+        assertEquals("Hills M2 Motorway — North Ryde (mainline)", chargeDisplayName(registry, "M2:north_ryde"))
+        assertEquals("Hills M2 Motorway", chargeDisplayName(registry, "M2"))
+        // A key the registry no longer knows still returns something honest, never blank.
+        assertEquals("GONE:point", chargeDisplayName(registry, "GONE:point"))
     }
 }

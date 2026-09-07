@@ -1000,29 +1000,72 @@ data class TollRoadDto(
     val name: String,
     val operator: String? = null,
     @SerialName("pricing_model") val pricingModel: String,
+    /** How gantry crossings become a charge (`once_per_road` /
+     * `cumulative_per_point` / `distance_metered`) — see
+     * [au.com.threesixty.cabdispatch.domain.fare.TollRoadRef.chargingPolicy]. Defaulted rather
+     * than required so a response from a backend predating the 2026-09-07 correction still
+     * decodes, landing on the ordinary case. */
+    @SerialName("charging_policy") val chargingPolicy: String = "once_per_road",
+    /** Roads sharing one network-wide cap for a single trip ("WESTCONNEX" today). */
+    @SerialName("network_group") val networkGroup: String? = null,
     val directional: String? = null,
     val description: String? = null,
     @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
     @SerialName("source_note") val sourceNote: String? = null,
     @SerialName("gantry_count") val gantryCount: Int = 0,
     @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+    /** Non-empty only for a `per_point` road (M2/CCT/LCT). Such a road has no real road-level
+     * price — its `current_price` min/max is a descriptive range across these points, never
+     * what a crossing is charged — so this is where its actual prices live. Returned on the
+     * LIST endpoint too, so one call is enough to price every road. */
+    @SerialName("toll_points") val tollPoints: List<TollPointDto> = emptyList(),
+)
+
+/** Mirrors `TollPointRead` — one named toll point of a `per_point` road. */
+@Serializable
+data class TollPointDto(
+    val id: String,
+    @SerialName("toll_road_id") val tollRoadId: String,
+    val name: String,
+    val description: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollPointPriceRevisionDto? = null,
+)
+
+/** Mirrors `TollPointPriceRevisionRead`. Same decimal-as-string convention as every other money
+ * field here. A point whose `priceClassA` is null is FLAGGED for manual entry by
+ * [au.com.threesixty.cabdispatch.domain.fare.onFix], never charged a guessed figure. */
+@Serializable
+data class TollPointPriceRevisionDto(
+    val id: String,
+    @SerialName("price_class_a") val priceClassA: String? = null,
+    @SerialName("price_class_b") val priceClassB: String? = null,
+    val currency: String = "AUD",
+    @SerialName("gst_included") val gstIncluded: Boolean = true,
+    @SerialName("effective_date") val effectiveDate: String,
+    val indexation: String,
+    val confidence: String,
+    @SerialName("verify_note") val verifyNote: String? = null,
 )
 
 /**
  * Mirrors `TollRoadPriceRevisionRead`.
  *
- * [rateClassAPerKm]/[flagfallClassA] (product correction, 2026-09): the `distance`/
+ * [ratePerKmClassA]/[flagfallClassA] (product correction, 2026-09): the `distance`/
  * `distance_with_flagfall` pricing models' real per-km rate and flagfall component, taken directly
  * from the registry — see [au.com.threesixty.cabdispatch.domain.fare.TollPriceRef]'s own doc for
  * why the on-device detector no longer derives a rate from `cap_class_a / derived_corridor_km`
  * (confirmed wrong: Westlink M7's real published rate is $0.5252/km capped at $10.50, not the
- * geometrically-derived figure that formula produced). **These two field names/shapes are this
- * pass's forward-compatible GUESS at what the backend workstream correcting the seed data will
- * expose** (following this schema's own `..._class_a` naming convention) — the live API does not
- * send them yet, so both decode as `null` today and every `distance`/`distance_with_flagfall` road
- * honestly falls through to [au.com.threesixty.cabdispatch.domain.fare.onFix]'s "unpriced, add
- * manually" branch until the real fields land; verify the actual field names once the backend
- * ships them and correct these `@SerialName`s if they differ — never guess a number in their place.
+ * geometrically-derived figure that formula produced).
+ *
+ * These field names were originally a forward-compatible GUESS made before the backend shipped
+ * them, and the guess was WRONG in one place: `rate_class_a_per_km` is really `rate_per_km_class_a`
+ * (`backend/app/schemas/toll.py`). Corrected here against the real schema — while it was wrong,
+ * every `distance`/`distance_with_flagfall` road (M7 and all of WestConnex) silently decoded a
+ * null rate and fell through to "unpriced, add manually", i.e. the meter never auto-charged
+ * Sydney's biggest toll roads. Nothing in this file may guess a field name again: mismatches here
+ * are silent, and a silently-null price is indistinguishable from an honestly-unpriced road.
  */
 @Serializable
 data class TollRoadPriceRevisionDto(
@@ -1033,8 +1076,11 @@ data class TollRoadPriceRevisionDto(
     @SerialName("price_class_b_max") val priceClassBMax: String? = null,
     @SerialName("cap_class_a") val capClassA: String? = null,
     @SerialName("cap_class_b") val capClassB: String? = null,
-    @SerialName("rate_class_a_per_km") val rateClassAPerKm: String? = null,
+    @SerialName("rate_per_km_class_a") val ratePerKmClassA: String? = null,
     @SerialName("flagfall_class_a") val flagfallClassA: String? = null,
+    /** The cap shared across every road in the same `network_group` for ONE trip (WestConnex:
+     * $12.74 Class A across M4/M8/M5E/M4-M8 Link), on top of each road's own `cap_class_a`. */
+    @SerialName("network_cap_class_a") val networkCapClassA: String? = null,
     @SerialName("time_of_day_rates_class_a") val timeOfDayRatesClassA: List<TollTimeOfDayRateDto>? = null,
     val currency: String = "AUD",
     @SerialName("gst_included") val gstIncluded: Boolean = true,
@@ -1063,6 +1109,9 @@ data class TollTimeOfDayRateDto(
 data class TollGantryDto(
     val id: String,
     @SerialName("toll_road_id") val tollRoadId: String,
+    /** Non-null only on a `per_point` road — says which named toll point (and so which price)
+     * this physical gantry charges. Null on every road priced at the road level. */
+    @SerialName("toll_point_id") val tollPointId: String? = null,
     val location: String,
     val ramp: String? = null,
     val direction: String? = null,
@@ -1080,12 +1129,15 @@ data class TollRoadDetailDto(
     val name: String,
     val operator: String? = null,
     @SerialName("pricing_model") val pricingModel: String,
+    @SerialName("charging_policy") val chargingPolicy: String = "once_per_road",
+    @SerialName("network_group") val networkGroup: String? = null,
     val directional: String? = null,
     val description: String? = null,
     @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
     @SerialName("source_note") val sourceNote: String? = null,
     @SerialName("gantry_count") val gantryCount: Int = 0,
     @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+    @SerialName("toll_points") val tollPoints: List<TollPointDto> = emptyList(),
     val gantries: List<TollGantryDto> = emptyList(),
     @SerialName("price_history") val priceHistory: List<TollRoadPriceRevisionDto> = emptyList(),
 )

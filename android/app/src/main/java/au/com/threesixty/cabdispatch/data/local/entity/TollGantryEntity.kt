@@ -30,6 +30,14 @@ import androidx.room.PrimaryKey
 data class TollGantryEntity(
     @PrimaryKey val id: String,
     val tollRoadId: String,
+    /** Non-null only on a `per_point` road — which named toll point (and so which price) this
+     * gantry charges. Deliberately NOT a Room `ForeignKey` to `toll_points`, unlike [tollRoadId]:
+     * the registry is replaced wholesale in one transaction
+     * ([au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao.replaceAll]), and a second FK
+     * would only add another ordering constraint to that swap for a column whose dangling value
+     * is already handled — [au.com.threesixty.cabdispatch.domain.fare.onFix] treats a toll point
+     * it cannot resolve as unpriced, never as a charge. */
+    val tollPointId: String?,
     val latitude: Double,
     val longitude: Double,
     val fetchedAt: Long,

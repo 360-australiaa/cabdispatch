@@ -15,6 +15,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
@@ -92,6 +93,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
         TollRoadEntity::class,
+        TollPointEntity::class,
         TollGantryEntity::class,
     ],
     version = 10,
@@ -118,9 +120,31 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
 }
 
 /** Real migration for the 9 -> 10 bump (automatic NSW toll-road detection pass) — see
- * [AppDatabase]'s doc. Two brand-new tables (empty until the next [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
+ * [AppDatabase]'s doc. Three brand-new tables (empty until the next [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
  * succeeds — see that class's "offline-empty-cache" doc for why an empty cache is always a safe,
- * handled state, never a crash) plus two new defaulted `trips` columns. */
+ * handled state, never a crash) plus two new defaulted `trips` columns.
+ *
+ * Extended IN PLACE (rather than adding an 11) by the per-toll-point follow-up, because version 10
+ * has never been installed anywhere: the toll-detection work it belongs to was built but never
+ * shipped to a device, so no database in existence is at v10 and there is nothing for a 10 -> 11
+ * step to migrate. If a v10 build HAS since reached any device, this must become a separate
+ * MIGRATION_10_11 instead — silently changing the shape a shipped version created is exactly the
+ * corruption `fallbackToDestructiveMigration` was avoided to prevent.
+ *
+ * **How to check this SQL is right, since nothing here does it for you.** Room compares a
+ * migration's result against the schema it expects only at RUNTIME, on first open: one mismatched
+ * column type or a missing index is not a build failure, it is a crash on launch for every
+ * upgrading device. Room's schema export (`room.schemaLocation`) would surface it in the diff, but
+ * it produces nothing on this project's kapt setup (tried; not worth further chasing). The direct
+ * check, which is what the statements below were verified against, is Room's OWN generated
+ * `createAllTables`:
+ *
+ *     ./gradlew kaptDebugKotlin
+ *     grep 'CREATE TABLE IF NOT EXISTS `toll_'  *       app/build/generated/source/kapt/debug/au/com/threesixty/cabdispatch/data/local/AppDatabase_Impl.java
+ *
+ * That is the exact SQL Room expects for the CURRENT version. Every statement a migration writes
+ * must match its line there character-for-character in column names, types, nullability, primary
+ * key, foreign-key clause and indices. Do this for any future migration too. */
 val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -129,12 +153,15 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
                 `id` TEXT NOT NULL,
                 `name` TEXT NOT NULL,
                 `pricingModel` TEXT NOT NULL,
+                `chargingPolicy` TEXT NOT NULL,
+                `networkGroup` TEXT,
                 `directional` TEXT,
                 `derivedCorridorKm` TEXT,
                 `priceClassAMax` TEXT,
                 `capClassA` TEXT,
                 `rateClassAPerKm` TEXT,
                 `flagfallClassA` TEXT,
+                `networkCapClassA` TEXT,
                 `timeOfDayRatesJson` TEXT,
                 `confidence` TEXT,
                 `fetchedAt` INTEGER NOT NULL,
@@ -147,6 +174,7 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
             CREATE TABLE IF NOT EXISTS `toll_gantries` (
                 `id` TEXT NOT NULL,
                 `tollRoadId` TEXT NOT NULL,
+                `tollPointId` TEXT,
                 `latitude` REAL NOT NULL,
                 `longitude` REAL NOT NULL,
                 `fetchedAt` INTEGER NOT NULL,
@@ -155,6 +183,21 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
             )
             """.trimIndent(),
         )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_points` (
+                `id` TEXT NOT NULL,
+                `tollRoadId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceClassA` TEXT,
+                `confidence` TEXT,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_points_tollRoadId` ON `toll_points` (`tollRoadId`)")
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_gantries_tollRoadId` ON `toll_gantries` (`tollRoadId`)")
         db.execSQL("ALTER TABLE trips ADD COLUMN autoTolledRoadsJson TEXT NOT NULL DEFAULT '{}'")
         db.execSQL("ALTER TABLE trips ADD COLUMN unpricedTollRoadIdsJson TEXT NOT NULL DEFAULT '[]'")

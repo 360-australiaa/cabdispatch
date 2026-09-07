@@ -32,9 +32,18 @@ import androidx.room.PrimaryKey
 data class TollRoadEntity(
     @PrimaryKey val id: String,
     val name: String,
-    /** One of `flat`/`zone_flat`/`distance`/`distance_with_flagfall`/`time_of_day`/`unpriced` —
-     * see `app.models.toll.TOLL_PRICING_MODELS`. Never re-interpreted or renamed on-device. */
+    /** One of `flat`/`per_point`/`distance`/`distance_with_flagfall`/`time_of_day`/`unpriced` —
+     * see `app.models.toll.TOLL_PRICING_MODELS`. Never re-interpreted or renamed on-device.
+     * (`zone_flat` was retired by the 2026-09-07 price correction; a cached row still carrying it
+     * is simply a model this app has no formula for, and lands in the "flag, never guess" branch
+     * of [au.com.threesixty.cabdispatch.domain.fare.onFix] until the next registry refresh.) */
     val pricingModel: String,
+    /** One of `once_per_road`/`cumulative_per_point`/`distance_metered` — see
+     * `app.models.toll.TOLL_CHARGING_POLICIES`. NOT derivable from [pricingModel]: Hills M2 and
+     * Lane Cove Tunnel are both `per_point` and charge differently. */
+    val chargingPolicy: String,
+    /** Roads sharing one cap for a single trip ("WESTCONNEX"), or null. */
+    val networkGroup: String?,
     /** One of `both`/`one_way`/`northbound_only`/`southbound_only`, or `null` — see
      * `app.models.toll.TOLL_DIRECTIONS`. */
     val directional: String?,
@@ -53,13 +62,15 @@ data class TollRoadEntity(
      * after flagfall + rate × distance) — `null` if not applicable/not captured. */
     val capClassA: String?,
     /** Real `distance`/`distance_with_flagfall` per-km rate, decimal-as-string — see
-     * [au.com.threesixty.cabdispatch.data.remote.TollRoadPriceRevisionDto.rateClassAPerKm]'s doc
-     * (2026-09 pricing correction; forward-compatible field, `null` on today's actual API). */
+     * [au.com.threesixty.cabdispatch.data.remote.TollRoadPriceRevisionDto.ratePerKmClassA]'s doc
+     * (2026-09 pricing correction). */
     val rateClassAPerKm: String?,
     /** Real `distance_with_flagfall` flat component, decimal-as-string — see
-     * [au.com.threesixty.cabdispatch.data.remote.TollRoadPriceRevisionDto.flagfallClassA]'s doc
-     * (same 2026-09 pricing correction, same forward-compatible/`null`-today status). */
+     * [au.com.threesixty.cabdispatch.data.remote.TollRoadPriceRevisionDto.flagfallClassA]'s doc. */
     val flagfallClassA: String?,
+    /** Cap shared across every road in the same [networkGroup] for one trip, decimal-as-string.
+     * Null for a road with no such group. */
+    val networkCapClassA: String?,
     /** JSON-encoded `List<au.com.threesixty.cabdispatch.data.remote.TollTimeOfDayRateDto>`
      * (`time_of_day` model only, SHB_SHT today) — raw blob, same small-list-not-a-child-table
      * convention [TripEntity.gpsTraceJson] already uses. `null` for every other pricing model. */
