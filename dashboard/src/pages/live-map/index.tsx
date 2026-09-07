@@ -28,7 +28,9 @@ import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 // insurance date at all.
 import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
 import { FleetLocateList } from "./FleetLocateList";
-import { FleetMapCanvas, ROUTE_LINE_COLOR, type VehicleMapState } from "./FleetMapCanvas";
+import { TrailControls } from "./TrailControls";
+import { usePositionHistoryQuery } from "./useVehiclePositionHistory";
+import { FleetMapCanvas, ROUTE_LINE_COLOR, type TrailPoint, type VehicleMapState } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
 import { ResolveDuressModal } from "./ResolveDuressModal";
 import { VehicleDetailModal } from "./VehicleDetailModal";
@@ -95,6 +97,37 @@ export default function LiveMapPage() {
   /** Camera-follows-the-vehicle mode. Turned on by picking a vehicle (that is
    * what picking one is FOR), off by dragging the map. */
   const [follow, setFollow] = useState(Boolean(searchParams.get("vehicle")));
+  /** Hours of history to draw, or null for "no trail". Off by default: a trail is
+   * something you ask for, and drawing one for every selection would bury the
+   * live fleet under lines. */
+  const [trailHours, setTrailHours] = useState<number | null>(null);
+  /** Where the scrubber is parked, or null for "live". */
+  const [trailCursor, setTrailCursor] = useState<number | null>(null);
+
+  const trailSince = useMemo(
+    () => (trailHours == null ? undefined : new Date(Date.now() - trailHours * 3600_000).toISOString()),
+    [trailHours],
+  );
+  const trailQuery = usePositionHistoryQuery(
+    trailHours == null ? null : selectedVehicleId,
+    trailSince,
+  );
+  const trail: TrailPoint[] = useMemo(
+    () =>
+      (trailQuery.data?.items ?? []).map((p) => ({
+        lat: p.lat,
+        lng: p.lng,
+        speedKmh: p.speed_kmh,
+        recordedAt: p.recorded_at,
+      })),
+    [trailQuery.data],
+  );
+
+  // A new selection or window starts live, not parked wherever the last scrubber
+  // happened to sit -- an index into a different vehicle's drive is meaningless.
+  useEffect(() => {
+    setTrailCursor(null);
+  }, [selectedVehicleId, trailHours]);
   const [resolvingEvent, setResolvingEvent] = useState<DuressEventRead | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
@@ -441,6 +474,8 @@ export default function LiveMapPage() {
                   selectedVehicleId={selectedVehicleId}
                   follow={follow}
                   onFollowInterrupted={() => setFollow(false)}
+                  trail={trail}
+                  trailCursor={trailCursor}
                 />
                 {selectedVehicleId && (
                   <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
@@ -457,6 +492,18 @@ export default function LiveMapPage() {
                         : "The camera is yours. Turn Follow on to track this vehicle."}
                     </span>
                   </div>
+                )}
+                {selectedVehicleId && (
+                  <TrailControls
+                    hours={trailHours}
+                    onHoursChange={setTrailHours}
+                    trail={trail}
+                    cursor={trailCursor}
+                    onCursorChange={setTrailCursor}
+                    loading={trailQuery.isLoading}
+                    harshBrakes={trailQuery.data?.harsh_brake_events ?? 0}
+                    rapidAccels={trailQuery.data?.rapid_accel_events ?? 0}
+                  />
                 )}
               </div>
             </div>

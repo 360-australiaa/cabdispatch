@@ -52,6 +52,22 @@ interface FleetMapCanvasProps {
   /** Fired when the operator pans while following, so the caller can drop out
    * of follow rather than fight them for the camera. */
   onFollowInterrupted?: () => void;
+  /** Where the selected vehicle has been, oldest first. Drawn as a line behind
+   * the markers; empty or absent draws nothing. */
+  trail?: TrailPoint[];
+  /** Index into [trail] the scrubber is parked on, or null for "live". Renders a
+   * ghost marker at that point so an operator can step back through the drive. */
+  trailCursor?: number | null;
+}
+
+/** One recorded position for the history trail. A trimmed
+ * `PositionHistoryItem` -- the canvas needs no more than this, and taking the
+ * narrower type keeps it independent of the history endpoint's shape. */
+export interface TrailPoint {
+  lat: number;
+  lng: number;
+  speedKmh: number | null;
+  recordedAt: string;
 }
 
 type PlottedVehicle = VehicleMapState & { lat: number; lng: number };
@@ -103,6 +119,99 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 // Mapbox and plain-SVG renderers" posture as VEHICLE_ARROW_VIEWBOX_PATH.
 export const ROUTE_LINE_COLOR = "#2563eb";
 
+/** The trail's own GeoJSON shapes. Declared here rather than reaching for the
+ * `GeoJSON` namespace, which this project has no @types dependency for -- the same
+ * choice TollGantryMap made for its PointFeatureCollection. */
+interface TrailFeature {
+  type: "Feature";
+  properties: Record<string, string | number>;
+  geometry:
+    | { type: "LineString"; coordinates: [number, number][] }
+    | { type: "Point"; coordinates: [number, number] };
+}
+
+interface TrailFeatureCollection {
+  type: "FeatureCollection";
+  features: TrailFeature[];
+}
+
+const TRAIL_SOURCE_ID = "vehicle-trail";
+const TRAIL_LINE_LAYER_ID = "vehicle-trail-line";
+const TRAIL_STOP_LAYER_ID = "vehicle-trail-stops";
+const TRAIL_CURSOR_LAYER_ID = "vehicle-trail-cursor";
+
+// Speed ramp for the trail. Deliberately not the status palette (green/gold/grey
+// already mean available/on-trip/offline on the markers) -- a trail segment's
+// colour is about how fast the car was going, not what it was doing.
+const TRAIL_SLOW_COLOR = "#f97316";
+const TRAIL_MID_COLOR = "#a855f7";
+const TRAIL_FAST_COLOR = "#22d3ee";
+
+/** A gap longer than this splits the trail into separate LineStrings rather than
+ * drawing a straight line across it. Without the split, a tablet that was off
+ * for six hours gets a confident line through the middle of the city it never
+ * drove. */
+const TRAIL_GAP_MS = 10 * 60 * 1000;
+
+/** Sitting below this speed for at least [STOP_MIN_MS] earns a stop marker. */
+const STOP_SPEED_KMH = 3;
+const STOP_MIN_MS = 3 * 60 * 1000;
+
+/**
+ * The trail as GeoJSON: line segments, stop markers, and the scrubber ghost.
+ *
+ * Split on time gaps rather than drawn as one polyline -- see TRAIL_GAP_MS. The
+ * `speed` property on each segment is the speed at its START point, which is what
+ * the line-colour interpolation reads.
+ */
+function buildTrailFeatures(trail: TrailPoint[], cursor: number | null): TrailFeatureCollection {
+  const features: TrailFeature[] = [];
+  if (trail.length >= 2) {
+    for (let i = 0; i < trail.length - 1; i += 1) {
+      const a = trail[i];
+      const b = trail[i + 1];
+      const gap = Date.parse(b.recordedAt) - Date.parse(a.recordedAt);
+      if (!Number.isFinite(gap) || gap > TRAIL_GAP_MS) continue;
+      features.push({
+        type: "Feature",
+        properties: { speed: a.speedKmh ?? 0 },
+        geometry: { type: "LineString", coordinates: [[a.lng, a.lat], [b.lng, b.lat]] },
+      });
+    }
+  }
+
+  // Stops: runs of consecutive near-stationary points lasting long enough to be
+  // a real stop rather than a traffic light.
+  let runStart: number | null = null;
+  for (let i = 0; i <= trail.length; i += 1) {
+    const stationary = i < trail.length && (trail[i].speedKmh ?? 0) <= STOP_SPEED_KMH;
+    if (stationary && runStart === null) runStart = i;
+    if (!stationary && runStart !== null) {
+      const from = trail[runStart];
+      const to = trail[i - 1];
+      const heldMs = Date.parse(to.recordedAt) - Date.parse(from.recordedAt);
+      if (Number.isFinite(heldMs) && heldMs >= STOP_MIN_MS) {
+        features.push({
+          type: "Feature",
+          properties: { kind: "stop", minutes: Math.round(heldMs / 60000) },
+          geometry: { type: "Point", coordinates: [from.lng, from.lat] },
+        });
+      }
+      runStart = null;
+    }
+  }
+
+  if (cursor != null && trail[cursor]) {
+    features.push({
+      type: "Feature",
+      properties: { kind: "cursor" },
+      geometry: { type: "Point", coordinates: [trail[cursor].lng, trail[cursor].lat] },
+    });
+  }
+
+  return { type: "FeatureCollection", features };
+}
+
 interface MapDataProps {
   plotted: PlottedVehicle[];
   duressByVehicleId: Map<string, DuressEventRead>;
@@ -116,6 +225,8 @@ interface MapDataProps {
   selectedVehicleId: string | null;
   follow: boolean;
   onFollowInterrupted?: () => void;
+  trail: TrailPoint[];
+  trailCursor: number | null;
 }
 
 /**
@@ -132,6 +243,8 @@ export function FleetMapCanvas({
   selectedVehicleId = null,
   follow = false,
   onFollowInterrupted,
+  trail = [],
+  trailCursor = null,
 }: FleetMapCanvasProps) {
   const plotted = useMemo(
     () => vehicles.filter((v): v is PlottedVehicle => v.lat != null && v.lng != null),
@@ -178,6 +291,8 @@ export function FleetMapCanvas({
         selectedVehicleId={selectedVehicleId}
         follow={follow}
         onFollowInterrupted={onFollowInterrupted}
+        trail={trail}
+        trailCursor={trailCursor}
         onSelectVehicle={onSelectVehicle}
       />
     );
@@ -193,6 +308,8 @@ export function FleetMapCanvas({
       // it still takes the selection so a picked vehicle is marked on the SVG plot.
       selectedVehicleId={selectedVehicleId}
       follow={false}
+      trail={[]}
+      trailCursor={null}
       onSelectVehicle={onSelectVehicle}
     />
   );
@@ -626,6 +743,8 @@ function MapboxFleetMap({
   selectedVehicleId,
   follow,
   onFollowInterrupted,
+  trail,
+  trailCursor,
 }: MapDataProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -679,6 +798,61 @@ function MapboxFleetMap({
         paint: { "line-color": "var(--brand-accent)", "line-width": 1.5, "line-dasharray": [2, 2] },
       });
 
+      // History trail -- where the selected vehicle has actually been, as a real
+      // line on the real map. The durable 72h history has always been served by
+      // GET /v1/vehicles/{id}/position-history but was only ever rendered as a
+      // static SVG inside a modal, which could not be compared against anything
+      // else on the map. Added before the route overlay so a live route draws
+      // over the historical trail rather than under it.
+      map.addSource(TRAIL_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: TRAIL_LINE_LAYER_ID,
+        type: "line",
+        source: TRAIL_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "LineString"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          // Coloured by the speed on each segment, so a glance at the trail
+          // shows where the vehicle was crawling and where it was moving --
+          // which is most of what anyone asks a history trail.
+          "line-color": [
+            "interpolate", ["linear"], ["get", "speed"],
+            0, TRAIL_SLOW_COLOR,
+            30, TRAIL_MID_COLOR,
+            70, TRAIL_FAST_COLOR,
+          ],
+          "line-width": 3,
+          "line-opacity": 0.85,
+        },
+      });
+      map.addLayer({
+        id: TRAIL_STOP_LAYER_ID,
+        type: "circle",
+        source: TRAIL_SOURCE_ID,
+        filter: ["==", ["get", "kind"], "stop"],
+        paint: {
+          "circle-radius": 5,
+          "circle-color": TRAIL_SLOW_COLOR,
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#0b0b10",
+        },
+      });
+      map.addLayer({
+        id: TRAIL_CURSOR_LAYER_ID,
+        type: "circle",
+        source: TRAIL_SOURCE_ID,
+        filter: ["==", ["get", "kind"], "cursor"],
+        paint: {
+          "circle-radius": 7,
+          "circle-color": "#ffffff",
+          "circle-stroke-width": 3,
+          "circle-stroke-color": TRAIL_FAST_COLOR,
+        },
+      });
+
       // On-trip route overlay -- added after the geofence layers (so it
       // draws on top of that translucent fill) but, like every other GL
       // layer here, still beneath the vehicle markers themselves: markers
@@ -724,6 +898,16 @@ function MapboxFleetMap({
   // separate, much-less-frequent update than the marker-sync effect below
   // (geofences rarely change, see useGeofences.ts's long staleTime), so it's
   // kept as its own effect rather than folded into that one.
+  // Feed the trail source: one LineString per run of points, a stop marker
+  // wherever the vehicle sat still, and the scrubber's ghost.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleLoaded) return;
+    const source = map.getSource(TRAIL_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData(buildTrailFeatures(trail, trailCursor));
+  }, [trail, trailCursor, styleLoaded]);
+
   // Fly to the selected vehicle when the selection changes.
   //
   // Deliberately keyed on the id alone, not on its position: a flyTo per
