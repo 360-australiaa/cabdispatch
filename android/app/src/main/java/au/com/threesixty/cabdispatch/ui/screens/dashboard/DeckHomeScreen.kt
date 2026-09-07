@@ -140,6 +140,7 @@ import au.com.threesixty.cabdispatch.ui.screens.zones.ZonesPaneContent
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import au.com.threesixty.cabdispatch.ui.overlays.reportsChromeHeader
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
@@ -876,6 +877,9 @@ private fun CaptainHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // Publishes this header's real height to the app-level overlays, which are siblings of
+            // the nav host and would otherwise be sitting on top of it — see CaptainChromeMetrics.
+            .reportsChromeHeader()
             .background(Brush.verticalGradient(listOf(CaptainPalette.glowPurpleSoft, Color.Transparent)))
             .padding(horizontal = 32.dp, vertical = 20.dp),
         verticalAlignment = Alignment.CenterVertically,

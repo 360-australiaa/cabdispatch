@@ -57,18 +57,30 @@ import kotlinx.coroutines.launch
  * `FixedDesignCanvas` doc).
  *
  * ### Placement
- * [DuressActiveBanner]'s stealth lamp owns bottom-END, so kiosk lock — a small, quiet chip — takes
- * bottom-START. Force-update is the wide one and sits **top-centre, under the header strip**. It
- * was bottom-centre until the 2026-08-29 review pass, which is the one band of a 1280×800 v2
- * screen that is never free: every screen pins its primary CTAs there (`Deck.CTA_H` = 88dp rows —
- * START METER, END SHIFT, the payment actions). Not being hit-testable meant taps still landed, but
- * a driver was tapping money-moving controls they could only half see, on every screen, for as long
- * as the flag stayed set — and it latches with no client-side clear (below). Top-centre clears the
- * 44dp in-shift status strip ([au.com.threesixty.cabdispatch.ui.theme.Deck.STATUS_STRIP_H]). That
- * strip is not universal, though: login, shift-start and settings do not carry one (see
- * `DeckChrome.kt`'s `DeckStatusStrip`, "persists on every in-shift screen"), so on those the banner
- * overlays the top of the content area. Visual only — nothing in this file is clickable or takes a
- * pointerInput — and strictly better than the CTA band it replaced, but not free.
+ * Nothing here positions itself against a hardcoded guess at the chrome any more. Anything that
+ * has to clear the header reads [CaptainChromeMetrics.topOverlayInset], which the live header
+ * measures and publishes — see that object's doc for the bug a constant caused.
+ *
+ * [DuressActiveBanner]'s stealth lamp owns bottom-END. [ForceUpdatePendingBanner] is the wide one
+ * and sits **top-centre, under the header**. It was bottom-centre until the 2026-08-29 review
+ * pass, which is the one band of a 1280×800 v2 screen that is never free: every screen pins its
+ * primary CTAs there (`Deck.CTA_H` = 88dp rows — START METER, END SHIFT, the payment actions). Not
+ * being hit-testable meant taps still landed, but a driver was tapping money-moving controls they
+ * could only half see, on every screen, for as long as the flag stayed set — and it latches with
+ * no client-side clear (below).
+ *
+ * [KioskLockedBanner] and [DeviceUnpairedBanner] are the two small latching status chips. They are
+ * **content only** — no full-size Box, no `align` — because [au.com.threesixty.cabdispatch.MainActivity]
+ * stacks them in a single top-START column. Each used to align itself bottom-START independently,
+ * which drew them on top of each other whenever both were true (an unregistered tablet that an
+ * admin has also locked is an ordinary state) and put them over the meter dial's live km/h readout.
+ * A chip about pairing status covering the speed the passenger is being charged by is the wrong
+ * trade every time. Confirmed on the tablet, 2026-09-08.
+ *
+ * None of this is free: on a screen that is fully occupied, an overlay covers *something*. What it
+ * must never cover is live meter data or a control the driver is about to press. Everything in this
+ * file is visual only — nothing is clickable or takes a pointerInput — except
+ * [ForceUpdatePendingBanner]'s own action row (above).
  *
  * [OfflineBanner] (2026-09-05) deliberately takes a THIRD position — a slim full-width strip
  * pinned at the very top edge (y=0), not [ForceUpdatePendingBanner]'s centred pill 54dp further
@@ -145,10 +157,10 @@ fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
-                // Top-centre, cleared past the 44dp status strip — deliberately NOT bottom-centre,
-                // which is every v2 screen's primary-CTA band. See this file's Placement note.
+                // Top-centre, below the header — deliberately NOT bottom-centre, which is every
+                // v2 screen's primary-CTA band. See this file's Placement note.
                 .align(Alignment.TopCenter)
-                .padding(top = (Deck.STATUS_STRIP_H + 10).dp)
+                .padding(top = CaptainChromeMetrics.topOverlayInset)
                 .widthIn(max = 720.dp)
                 .clip(RoundedCornerShape(Deck.R_MD.dp))
                 .background(Deck.panel)
@@ -294,11 +306,9 @@ private fun UpdateActionChip(label: String, onClick: () -> Unit) {
  */
 @Composable
 fun KioskLockedBanner(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier) {
         Row(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 10.dp, bottom = 10.dp)
                 .clip(RoundedCornerShape(Deck.R_SM.dp))
                 .background(Deck.panel.copy(alpha = 0.9f))
                 .padding(horizontal = 10.dp, vertical = 5.dp),
@@ -347,11 +357,9 @@ fun KioskLockedBanner(modifier: Modifier = Modifier) {
  */
 @Composable
 fun DeviceUnpairedBanner(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier) {
         Row(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 10.dp, bottom = 10.dp)
                 .clip(RoundedCornerShape(Deck.R_SM.dp))
                 .background(Deck.panel.copy(alpha = 0.9f))
                 .border(1.dp, Deck.stopped.copy(alpha = 0.6f), RoundedCornerShape(Deck.R_SM.dp))

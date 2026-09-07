@@ -4,7 +4,10 @@ import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.safeDrawing
@@ -16,14 +19,17 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.DevicePairingStatus
 import au.com.threesixty.cabdispatch.domain.KioskLockController
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchNavHost
+import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
 import au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner
 import au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner
 import au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner
@@ -143,14 +149,33 @@ private fun CabDispatchScreenRoot() {
                     // All non-hit-testable full-size overlays (see FleetCommandOverlays.kt's own
                     // doc) — stacked above the nav host so they follow the driver across every
                     // screen rather than being wired into each screen individually.
-                    if (commandState.kioskLocked) {
-                        KioskLockedBanner()
-                    }
                     if (commandState.forceUpdatePending) {
                         ForceUpdatePendingBanner()
                     }
-                    if (DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)) {
-                        DeviceUnpairedBanner()
+                    // The two latching status chips, stacked in ONE column rather than each
+                    // positioning itself.
+                    //
+                    // Both used to align themselves BottomStart independently, which meant they
+                    // drew on top of each other whenever both were true (an unregistered tablet
+                    // that a fleet admin has also locked is a perfectly ordinary state), and — more
+                    // seriously — that corner is where the meter dial's live km/h readout sits. A
+                    // chip about the tablet's pairing status covering the speed the passenger is
+                    // being charged by is the wrong trade every time, so they moved up under the
+                    // header, where they overlay the empty edge of the dial instead. Confirmed on
+                    // the tablet, 2026-09-08. TopStart, not TopCenter, keeps them clear of
+                    // ForceUpdatePendingBanner's centred pill above.
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 10.dp, top = CaptainChromeMetrics.topOverlayInset),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (commandState.kioskLocked) {
+                            KioskLockedBanner()
+                        }
+                        if (DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)) {
+                            DeviceUnpairedBanner()
+                        }
                     }
                     // Unconditional: OfflineBanner reads live connectivity + outbox state itself
                     // and renders nothing when there's nothing honest to say — see its own doc.
