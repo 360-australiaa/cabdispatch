@@ -13,6 +13,7 @@ import {
   RotateCw,
   Unlock,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -284,15 +285,18 @@ export function DevicesPanel() {
           const accuracy =
             d.last_locate_accuracy_m != null ? ` ±${Math.round(d.last_locate_accuracy_m)}m` : "";
           return (
-            <a
+            // Into our own map, not out to Google's. An operator locating a tablet
+            // wants it in context -- next to the other cars, the geofences and the
+            // remote controls -- not a pin on a blank third-party page they then
+            // have to navigate back from. `?vehicle=` is the same deep-link shape
+            // the duress markers already use.
+            <Link
               className="underline underline-offset-2"
-              href={`https://www.google.com/maps?q=${d.last_locate_lat},${d.last_locate_lng}`}
-              target="_blank"
-              rel="noreferrer"
+              to={d.vehicle_id ? `/live-map?vehicle=${d.vehicle_id}` : "/live-map"}
               title={`${d.last_locate_lat}, ${d.last_locate_lng}${accuracy} · ${formatDateTime(d.last_locate_at)}`}
             >
               {relativeFromNow(d.last_locate_at)}
-            </a>
+            </Link>
           );
         }
         return <span className="text-muted-foreground">—</span>;

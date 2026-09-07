@@ -169,6 +169,13 @@ export function useDevices(skip: number, filters: DeviceFilters, limit = PAGE_LI
       return data;
     },
     placeholderData: (prev) => prev,
+    // Poll only while a locate is outstanding. There is no push channel for a
+    // device's answer, so without this the "Waiting..." badge sat there until the
+    // operator refreshed by hand -- they pressed Locate, the tablet answered
+    // within a minute, and the page never said so. Idle fleets still make no
+    // requests, which is why this is conditional rather than a flat interval.
+    refetchInterval: (query) =>
+      query.state.data?.items?.some((d) => d.locate_requested || d.reboot_requested) ? 5000 : false,
   });
 }
 

@@ -44,6 +44,14 @@ interface FleetMapCanvasProps {
    * one always deep-links straight to its event instead -- see
    * buildMarkerElement / PlainCanvasMap's onClick below). */
   onSelectVehicle: (vehicleId: string) => void;
+  /** The vehicle the operator is looking at: gets a ring on the map, and the
+   * camera flies to it when it changes. */
+  selectedVehicleId?: string | null;
+  /** Keep the camera on the selected vehicle as new positions arrive. */
+  follow?: boolean;
+  /** Fired when the operator pans while following, so the caller can drop out
+   * of follow rather than fight them for the camera. */
+  onFollowInterrupted?: () => void;
 }
 
 type PlottedVehicle = VehicleMapState & { lat: number; lng: number };
@@ -60,6 +68,24 @@ const PADDING = 32;
 const DEFAULT_CENTER: [number, number] = [67.0011, 24.8607];
 const DEFAULT_ZOOM = 10.5;
 const SINGLE_VEHICLE_ZOOM = 13;
+
+/** How far the followed vehicle must drift from the map centre before the camera
+ * re-centres. Below this, GPS jitter would re-animate the camera constantly and
+ * make everything else on the map unreadable. */
+const FOLLOW_RECENTRE_M = 120;
+
+/** Great-circle metres between two points -- only used to decide whether follow
+ * mode should re-centre, so the spherical-earth approximation is ample. */
+function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_008.8;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
 
 // Public/publishable Mapbox token — safe to ship in a client bundle (see .env.example).
 // Falls back to the plain-SVG plot below when unset so the dashboard still works offline
@@ -87,6 +113,9 @@ interface MapDataProps {
    * `plotted`). */
   routes: Map<string, VehicleRouteState>;
   onSelectVehicle: (vehicleId: string) => void;
+  selectedVehicleId: string | null;
+  follow: boolean;
+  onFollowInterrupted?: () => void;
 }
 
 /**
@@ -95,7 +124,15 @@ interface MapDataProps {
  * otherwise falls back to a plain-SVG lat/lng plot so the page never breaks
  * for anyone without a token set up (see PlainCanvasMap below).
  */
-export function FleetMapCanvas({ vehicles, duressEvents, geofences, onSelectVehicle }: FleetMapCanvasProps) {
+export function FleetMapCanvas({
+  vehicles,
+  duressEvents,
+  geofences,
+  onSelectVehicle,
+  selectedVehicleId = null,
+  follow = false,
+  onFollowInterrupted,
+}: FleetMapCanvasProps) {
   const plotted = useMemo(
     () => vehicles.filter((v): v is PlottedVehicle => v.lat != null && v.lng != null),
     [vehicles],
@@ -138,6 +175,9 @@ export function FleetMapCanvas({ vehicles, duressEvents, geofences, onSelectVehi
         duressByVehicleId={duressByVehicleId}
         geofences={geofences}
         routes={routes}
+        selectedVehicleId={selectedVehicleId}
+        follow={follow}
+        onFollowInterrupted={onFollowInterrupted}
         onSelectVehicle={onSelectVehicle}
       />
     );
@@ -149,6 +189,10 @@ export function FleetMapCanvas({ vehicles, duressEvents, geofences, onSelectVehi
       duressByVehicleId={duressByVehicleId}
       geofences={geofences}
       routes={routes}
+      // The no-token fallback has no camera to fly, so follow is meaningless there;
+      // it still takes the selection so a picked vehicle is marked on the SVG plot.
+      selectedVehicleId={selectedVehicleId}
+      follow={false}
       onSelectVehicle={onSelectVehicle}
     />
   );
@@ -278,6 +322,7 @@ function renderMarkerContent(
   labelEl: HTMLSpanElement,
   vehicle: PlottedVehicle,
   duressEvent: DuressEventRead | undefined,
+  selected: boolean,
 ) {
   const stale = isStale(vehicle.position_updated_at);
   const idle = !stale && vehicle.idleInfo.idle;
@@ -291,6 +336,25 @@ function renderMarkerContent(
   // below) -- distinct from idle, which stays full-opacity since the vehicle
   // is still reporting fine, it's just not moving.
   iconWrap.style.opacity = stale ? "0.5" : "1";
+
+  if (selected) {
+    // A static halo behind the glyph, never animated.
+    //
+    // The obvious thing here is a pulse, and this codebase already reverted
+    // decorative marker animation once on real user feedback -- see the
+    // POSITION_TWEEN comment below: only data-driven motion is acceptable on
+    // this map. A ring that simply sits there says "this is the one you picked"
+    // just as clearly and does not compete with the duress pulse, which is the
+    // one animation on this map that must never be mistaken for anything else.
+    const ring = document.createElement("div");
+    ring.style.position = "absolute";
+    ring.style.inset = "-9px";
+    ring.style.borderRadius = "999px";
+    ring.style.border = "2px solid var(--brand-accent)";
+    ring.style.boxShadow = "0 0 0 3px rgba(0,0,0,0.35)";
+    ring.style.pointerEvents = "none";
+    iconWrap.appendChild(ring);
+  }
 
   if (duressEvent) {
     // Pulsing ring around duress vehicles — same "red pin" treatment as the
@@ -553,7 +617,16 @@ function tweenMarkerTo(entry: MarkerEntry, to: [number, number]) {
   entry.rafId = requestAnimationFrame(step);
 }
 
-function MapboxFleetMap({ plotted, duressByVehicleId, geofences, routes, onSelectVehicle }: MapDataProps) {
+function MapboxFleetMap({
+  plotted,
+  duressByVehicleId,
+  geofences,
+  routes,
+  onSelectVehicle,
+  selectedVehicleId,
+  follow,
+  onFollowInterrupted,
+}: MapDataProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -651,6 +724,57 @@ function MapboxFleetMap({ plotted, duressByVehicleId, geofences, routes, onSelec
   // separate, much-less-frequent update than the marker-sync effect below
   // (geofences rarely change, see useGeofences.ts's long staleTime), so it's
   // kept as its own effect rather than folded into that one.
+  // Fly to the selected vehicle when the selection changes.
+  //
+  // Deliberately keyed on the id alone, not on its position: a flyTo per
+  // position update would fight the 3.5s marker tween and re-animate the camera
+  // every few seconds. Following a moving vehicle is the separate effect below,
+  // which eases gently instead.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selectedVehicleId) return;
+    const target = plotted.find((v) => v.id === selectedVehicleId);
+    if (!target) return;
+    map.flyTo({
+      center: [target.lng, target.lat],
+      zoom: Math.max(map.getZoom(), SINGLE_VEHICLE_ZOOM),
+      duration: 900,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVehicleId]);
+
+  // Follow mode: keep the camera on the vehicle as fresh positions arrive.
+  //
+  // easeTo rather than flyTo, and only when the vehicle has actually moved
+  // beyond FOLLOW_RECENTRE_M -- a camera that re-animates on every GPS jitter is
+  // unusable for reading anything else on the map. The threshold matches the
+  // order of magnitude the marker tween already smooths over.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !follow || !selectedVehicleId) return;
+    const target = plotted.find((v) => v.id === selectedVehicleId);
+    if (!target) return;
+    const centre = map.getCenter();
+    const movedM = haversineMetres(centre.lat, centre.lng, target.lat, target.lng);
+    if (movedM < FOLLOW_RECENTRE_M) return;
+    map.easeTo({ center: [target.lng, target.lat], duration: 1200 });
+  }, [follow, selectedVehicleId, plotted]);
+
+  // A manual pan while following hands the camera back to the operator.
+  //
+  // Without this, dragging the map would be undone by the next position frame,
+  // which reads as the map being broken rather than as a mode being on. Same
+  // idiom the tablet's own follow-cam uses (MeterBackdropMap's followSuspended).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !follow || !onFollowInterrupted) return;
+    const onDragStart = () => onFollowInterrupted();
+    map.on("dragstart", onDragStart);
+    return () => {
+      map.off("dragstart", onDragStart);
+    };
+  }, [follow, onFollowInterrupted]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !styleLoaded) return;
@@ -703,7 +827,7 @@ function MapboxFleetMap({ plotted, duressByVehicleId, geofences, routes, onSelec
 
       if (!existing) {
         const { el, iconWrap, labelEl } = buildMarkerShell();
-        renderMarkerContent(iconWrap, labelEl, vehicle, duressEvent);
+        renderMarkerContent(iconWrap, labelEl, vehicle, duressEvent, vehicle.id === selectedVehicleId);
         const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
           .setLngLat([vehicle.lng, vehicle.lat])
           .addTo(map);
@@ -747,7 +871,7 @@ function MapboxFleetMap({ plotted, duressByVehicleId, geofences, routes, onSelec
 
       existing.vehicle = vehicle;
       existing.duressEvent = duressEvent;
-      renderMarkerContent(existing.iconWrap, existing.labelEl, vehicle, duressEvent);
+      renderMarkerContent(existing.iconWrap, existing.labelEl, vehicle, duressEvent, vehicle.id === selectedVehicleId);
       if (existing.popup.isOpen()) {
         existing.popup.setDOMContent(buildHoverCardElement(vehicle, duressEvent));
       }
@@ -766,7 +890,10 @@ function MapboxFleetMap({ plotted, duressByVehicleId, geofences, routes, onSelec
       entry.marker.remove();
       markersRef.current.delete(id);
     }
-  }, [plotted, duressByVehicleId, navigate, onSelectVehicle]);
+    // selectedVehicleId is a dependency because the ring is drawn by
+    // renderMarkerContent: without it, picking a different vehicle would leave the
+    // halo on the old one until its next position update.
+  }, [plotted, duressByVehicleId, navigate, onSelectVehicle, selectedVehicleId]);
 
   return (
     <div className="relative">
@@ -801,7 +928,7 @@ const VEHICLE_ARROW_LOCAL_PATH = "M0,-8 L6,8 L0,4 L-6,8 Z";
  * position is its vehicle's last-known position); any other vehicle opens
  * the vehicle detail panel instead.
  */
-function PlainCanvasMap({ plotted, duressByVehicleId, geofences, routes, onSelectVehicle }: MapDataProps) {
+function PlainCanvasMap({ plotted, duressByVehicleId, geofences, routes, onSelectVehicle, selectedVehicleId }: MapDataProps) {
   const navigate = useNavigate();
   // No Mapbox Popup infra exists in this fallback -- track the hovered
   // vehicle id ourselves and render the same theme-aware hover card as a

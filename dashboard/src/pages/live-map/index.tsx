@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Radio, RadioTower, WifiOff } from "lucide-react";
 import apiClient from "@/lib/apiClient";
@@ -27,6 +27,7 @@ import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 // Fleet & Drivers will otherwise never see an expiring licence/rego/
 // insurance date at all.
 import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
+import { FleetLocateList } from "./FleetLocateList";
 import { FleetMapCanvas, ROUTE_LINE_COLOR, type VehicleMapState } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
 import { ResolveDuressModal } from "./ResolveDuressModal";
@@ -72,7 +73,28 @@ export default function LiveMapPage() {
   const { positions, connectionState } = useFleetLiveSocket();
 
   const [publishOpen, setPublishOpen] = useState(false);
-  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  // Selection lives in the URL so it can be linked to -- Fleet > Devices' Locate
+  // cell deep-links straight here, which is the whole reason that cell stopped
+  // pointing at Google Maps. Same `?key=id` shape the duress markers already use.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedVehicleId = searchParams.get("vehicle");
+  const setSelectedVehicleId = useCallback(
+    (id: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("vehicle", id);
+          else next.delete("vehicle");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  /** Camera-follows-the-vehicle mode. Turned on by picking a vehicle (that is
+   * what picking one is FOR), off by dragging the map. */
+  const [follow, setFollow] = useState(Boolean(searchParams.get("vehicle")));
   const [resolvingEvent, setResolvingEvent] = useState<DuressEventRead | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
@@ -380,9 +402,8 @@ export default function LiveMapPage() {
         <CardHeader>
           <CardTitle>Fleet map</CardTitle>
           <CardDescription>
-            Vehicles plotted by last-known lat/lng, colored by status. Vehicles with an active duress
-            event are shown oversized in red — click one to open its event; click any other vehicle
-            to view its detail.
+            Search a rego, driver or tablet on the left and click it to fly there. Vehicles with an
+            active duress event are shown oversized in red — click one to open its event.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -395,12 +416,50 @@ export default function LiveMapPage() {
               Failed to load vehicle positions.
             </div>
           ) : (
-            <FleetMapCanvas
-              vehicles={mapVehicleStates}
-              duressEvents={duressEvents}
-              geofences={geofences}
-              onSelectVehicle={setSelectedVehicleId}
-            />
+            // Map and list side by side, not stacked. Locating a vehicle is a
+            // two-handed job -- find it in a list, see it on a map -- and the
+            // previous layout put a paginated table below the fold where
+            // filtering it left the map untouched.
+            <div className="flex flex-col gap-4 lg:flex-row">
+              <FleetLocateList
+                vehicles={mapVehicleStates}
+                selectedVehicleId={selectedVehicleId}
+                onSelect={(id) => {
+                  setSelectedVehicleId(id);
+                  setFollow(true);
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <FleetMapCanvas
+                  vehicles={mapVehicleStates}
+                  duressEvents={duressEvents}
+                  geofences={geofences}
+                  onSelectVehicle={(id) => {
+                    setSelectedVehicleId(id);
+                    setFollow(true);
+                  }}
+                  selectedVehicleId={selectedVehicleId}
+                  follow={follow}
+                  onFollowInterrupted={() => setFollow(false)}
+                />
+                {selectedVehicleId && (
+                  <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+                    <Button
+                      variant={follow ? "primary" : "outline"}
+                      size="sm"
+                      onClick={() => setFollow((f) => !f)}
+                    >
+                      {follow ? "Following" : "Follow"}
+                    </Button>
+                    <span>
+                      {follow
+                        ? "The camera stays on this vehicle. Drag the map to take it back."
+                        : "The camera is yours. Turn Follow on to track this vehicle."}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
