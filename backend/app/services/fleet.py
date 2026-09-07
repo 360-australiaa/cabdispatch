@@ -399,6 +399,52 @@ async def record_heartbeat(
     return device
 
 
+async def record_locate_response(
+    session: AsyncSession,
+    device: Device,
+    *,
+    lat: float,
+    lng: float,
+    accuracy_m: float | None,
+) -> Device:
+    """Stores a device's answer to a locate request, and CLEARS the flag.
+
+    The clearing is the part that was missing. `locate_requested` was set by an
+    admin and read back by the tablet, but nothing anywhere ever set it back to
+    false -- so the dashboard's badge said "Pending" for the life of the row,
+    whether the device had answered or not, and an operator had no way to tell a
+    tablet that reported from one that was in a drawer with a flat battery.
+
+    Recorded on the DEVICE, not on a vehicle. The old answer path published a
+    vehicle position, which needs a live driver session and a current vehicle
+    binding -- neither of which a parked, logged-off tablet has, and that tablet
+    is precisely what someone reaching for "locate" is trying to find.
+    """
+    device.last_locate_lat = lat
+    device.last_locate_lng = lng
+    device.last_locate_accuracy_m = accuracy_m
+    device.last_locate_at = datetime.now(UTC)
+    device.locate_requested = False
+    await session.commit()
+    await session.refresh(device)
+    return device
+
+
+async def record_command_ack(session: AsyncSession, device: Device, *, command: str) -> Device:
+    """Records that a device acted on a queued command, and clears its flag.
+
+    Only `restart` today. Same missing-clear problem as locate: an admin could
+    queue a restart and watch it read "Pending" forever, with no way to know
+    whether the tablet had ever seen it.
+    """
+    if command == "restart":
+        device.reboot_requested = False
+    device.command_acked_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(device)
+    return device
+
+
 async def set_kiosk_lock(session: AsyncSession, device: Device, *, enabled: bool) -> Device:
     device.kiosk_locked = enabled
     await session.commit()

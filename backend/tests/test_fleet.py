@@ -21,6 +21,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
+from app.models.audit_log import AuditLog
 from app.models.fleet import (  # noqa: F401
     Device,
     DevicePairingCode,
@@ -28,7 +29,6 @@ from app.models.fleet import (  # noqa: F401
     Vehicle,
     VehiclePositionHistory,
 )
-from app.models.audit_log import AuditLog
 from app.models.shift import Shift
 from app.models.user import ROLE_DRIVER, User
 from tests.conftest import auth_headers
@@ -1199,3 +1199,145 @@ async def test_vehicle_shift_history_is_tenant_isolated(client, session):
     resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers_a)
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
+
+
+# --- remote locate: the answer path, and the flag actually clearing -------------
+
+
+async def _paired_device(client, session, *, tenant_name: str, rego: str, android_id: str):
+    """A really-enrolled device plus its secret and its tenant's admin headers."""
+    headers = await auth_headers(client, session, role="admin", tenant_name=tenant_name)
+    vehicle_id = (await _create_vehicle(client, headers, rego=rego)).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": android_id, "pairing_code": code},
+        )
+    ).json()
+    return headers, registered["id"], registered["device_secret"]
+
+
+async def test_answering_a_locate_clears_the_flag_and_records_where_it_is(client, session):
+    """The bug reported from the field: "when I try to locate it's showing
+    pending, but nothing is working".
+
+    `locate_requested` was set by an admin and read by the tablet, but NOTHING
+    anywhere ever set it back to false -- no route, no service call, not the
+    heartbeat -- so the badge said Pending for the life of the row whether or not
+    the device had answered. There was also nowhere for an answer to go.
+    """
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Locate Tenant", rego="TX-LOC", android_id="android-loc-1"
+    )
+
+    requested = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate", json={"enabled": True}, headers=headers
+    )
+    assert requested.json()["locate_requested"] is True
+
+    answered = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.8688, "lng": 151.2093, "accuracy_m": 12.5},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert answered.status_code == 200
+    body = answered.json()
+    assert body["locate_requested"] is False  # the whole point
+    assert body["last_locate_lat"] == -33.8688
+    assert body["last_locate_lng"] == 151.2093
+    assert body["last_locate_accuracy_m"] == 12.5
+    assert body["last_locate_at"] is not None
+
+    # And it stays cleared on the next read -- an admin refreshing the page sees
+    # the answer, not a stale Pending.
+    reread = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+    assert reread["locate_requested"] is False
+    assert reread["last_locate_lat"] == -33.8688
+
+
+async def test_a_locate_can_be_answered_with_nobody_logged_in(client, session):
+    """The reason this route is device-authenticated and lives on the DEVICE.
+
+    The old answer path published a vehicle position, which needs a live driver
+    session and a current vehicle binding. A parked, logged-off tablet has
+    neither -- and that is exactly the tablet someone reaching for "locate" is
+    trying to find. Note the absence of any bearer token here.
+    """
+    _, device_id, secret = await _paired_device(
+        client, session, tenant_name="Parked Tenant", rego="TX-PARK", android_id="android-park-1"
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.9, "lng": 151.1},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["last_locate_at"] is not None
+    # Accuracy is optional and never invented -- a device that cannot say how
+    # good its fix is sends nothing rather than a guess.
+    assert resp.json()["last_locate_accuracy_m"] is None
+
+
+async def test_a_locate_answer_needs_a_real_credential(client, session):
+    _, device_id, _secret = await _paired_device(
+        client, session, tenant_name="Loc Auth Tenant", rego="TX-LOCA", android_id="android-loca-1"
+    )
+
+    wrong = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.9, "lng": 151.1},
+        headers={"X-Device-Secret": "nope"},
+    )
+    assert wrong.status_code == 401
+
+    none_at_all = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response", json={"lat": -33.9, "lng": 151.1}
+    )
+    assert none_at_all.status_code == 401
+
+
+async def test_a_restart_ack_clears_the_reboot_flag(client, session):
+    """Same missing-clear problem as locate. The app now restarts its own
+    process on this flag (it cannot reboot the OS without Device Owner) and says
+    so here, which is what turns a permanent "Pending" into a carried-out
+    command."""
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Restart Tenant", rego="TX-RST", android_id="android-rst-1"
+    )
+
+    queued = await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": True}, headers=headers
+    )
+    assert queued.json()["reboot_requested"] is True
+
+    acked = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "restart"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert acked.status_code == 200
+    assert acked.json()["reboot_requested"] is False
+    assert acked.json()["command_acked_at"] is not None
+
+
+async def test_an_unknown_command_is_rejected_rather_than_silently_accepted(client, session):
+    _, device_id, secret = await _paired_device(
+        client, session, tenant_name="Bad Cmd Tenant", rego="TX-BADC", android_id="android-badc-1"
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "self-destruct"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    # A device claiming to have carried out something this server has no concept
+    # of must not be recorded as having carried anything out.
+    assert resp.status_code == 422

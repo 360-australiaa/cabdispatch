@@ -23,6 +23,7 @@ from app.core.security import (
 from app.models.fleet import Device, Vehicle
 from app.models.user import User
 from app.schemas.fleet import (
+    CommandAckRequest,
     ComplianceExpiryItem,
     DeviceCreate,
     DeviceHeartbeatRequest,
@@ -34,6 +35,7 @@ from app.schemas.fleet import (
     ForceUpdateRequest,
     KioskLockRequest,
     LocateRequest,
+    LocateResponseRequest,
     Page,
     PairingCodeRead,
     RebootRequest,
@@ -558,6 +560,48 @@ async def register_device(
     return response
 
 
+async def _authenticate_device_or_bearer(
+    session: AsyncSession,
+    *,
+    device_id: str,
+    secret: str | None,
+    tenant_id: str | None,
+) -> Device:
+    """The device row for `device_id`, authenticated by its own secret or by a
+    human bearer token — the shared front door for every route a TABLET calls.
+
+    The secret is the one that matters: it lets a tablet with nobody logged into
+    it heartbeat, answer a locate, and acknowledge a command. The bearer path
+    stays because every tablet paired before device secrets existed has none,
+    and would otherwise go silent the moment this deployed; those pick up a
+    secret the next time they re-pair.
+
+    `get_optional_tenant_id` authorises nothing by itself, so the final branch
+    here is what actually keeps these routes closed.
+    """
+    if secret:
+        try:
+            return await fleet_service.authenticate_device(session, device_id=device_id, secret=secret)
+        except fleet_service.DeviceAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+            ) from exc
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    if tenant_id is not None:
+        try:
+            return await fleet_service.get_device_or_404(
+                session, tenant_id=tenant_id, device_id=device_id
+            )
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="This endpoint requires an X-Device-Secret header or a bearer token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 @router.post("/devices/{device_id}/heartbeat", response_model=DeviceRead)
 async def device_heartbeat(
     device_id: str,
@@ -587,32 +631,9 @@ async def device_heartbeat(
     deployed; those acquire a secret the next time they re-pair. A device
     presenting a secret needs no tenant from a token -- its own row carries one.
     """
-    if x_device_secret:
-        try:
-            device = await fleet_service.authenticate_device(
-                session, device_id=device_id, secret=x_device_secret
-            )
-        except fleet_service.DeviceAuthError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
-            ) from exc
-        except fleet_service.FleetError as exc:
-            raise _fleet_error_to_http(exc) from exc
-    elif tenant_id is not None:
-        try:
-            device = await fleet_service.get_device_or_404(
-                session, tenant_id=tenant_id, device_id=device_id
-            )
-        except fleet_service.FleetError as exc:
-            raise _fleet_error_to_http(exc) from exc
-    else:
-        # Neither credential. get_optional_tenant_id authorises nothing by
-        # itself, so this branch is what actually keeps the route protected.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Device heartbeat requires an X-Device-Secret header or a bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
 
     device = await fleet_service.record_heartbeat(
         session,
@@ -673,15 +694,66 @@ async def set_device_locate(
     _admin=Depends(_require_admin),
 ):
     """Admin-only. Sets/clears the locate_requested flag the device reads back
-    on its next heartbeat — the on-device app is expected to respond to a set
-    flag by reporting a fresh location fix out of band; building that
-    reporting path is the mobile app's responsibility, not this endpoint's."""
+    on its next heartbeat; the device answers on `/locate-response` below, and
+    answering is what clears the flag again."""
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
     return await fleet_service.set_locate_requested(session, device, enabled=payload.enabled)
+
+
+@router.post("/devices/{device_id}/locate-response", response_model=DeviceRead)
+async def device_locate_response(
+    device_id: str,
+    payload: LocateResponseRequest,
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """A device answering the locate request above with its real fix, which also
+    clears `locate_requested`.
+
+    This route is the half that never existed. The flag had no clear path at
+    all, so the dashboard read "Pending" forever whether or not the tablet had
+    responded; and the tablet's answer went to `POST /v1/fleet/positions`, a
+    VEHICLE endpoint needing a live driver session and a current vehicle
+    binding. A parked, logged-off tablet has neither -- and that is the tablet
+    someone reaching for "locate" is trying to find. One holding a binding to a
+    since-deleted vehicle got a 404 instead, surfaced on the tablet as
+    "Location request failed to send - HTTP 404 not found".
+
+    Authenticates the same way the heartbeat does (device secret, or a bearer
+    token for a tablet paired before secrets existed) so it works with nobody
+    signed in.
+    """
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
+    return await fleet_service.record_locate_response(
+        session, device, lat=payload.lat, lng=payload.lng, accuracy_m=payload.accuracy_m
+    )
+
+
+@router.post("/devices/{device_id}/command-ack", response_model=DeviceRead)
+async def device_command_ack(
+    device_id: str,
+    payload: CommandAckRequest,
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """A device reporting that it acted on a queued command, clearing its flag.
+
+    Same reason as `/locate-response`: without it an admin queues a restart and
+    watches it say "Pending" for the life of the row, with no way to tell a
+    tablet that restarted from one that never saw the request.
+    """
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
+    return await fleet_service.record_command_ack(session, device, command=payload.command)
 
 
 @router.post("/devices/{device_id}/reboot", response_model=DeviceRead)
@@ -692,16 +764,18 @@ async def set_device_reboot(
     session: AsyncSession = Depends(get_session),
     _admin=Depends(_require_admin),
 ):
-    """Admin-only. Sets/clears the reboot_requested flag the device reads back
-    on its next heartbeat.
+    """Admin-only. Queues a RESTART OF THE METER APP, which the device reads back
+    on its next heartbeat and now actually carries out.
 
-    HONESTY NOTE (blueprint 4.1.3/6.2.1): this is a real command QUEUE, not a
-    claim that the device actually reboots. See `Device.reboot_requested`'s
-    doc comment — actually rebooting the OS needs device-owner-level Android
-    permissions this codebase does not provision, so nothing currently acts
-    on this flag on the device side. It is still useful as-is: an admin can
-    queue the request and see it pending, ready for a future device-owner-
-    aware app build to consume."""
+    HONESTY NOTE (blueprint 4.1.3/6.2.1), revised 2026-09-08: this still does
+    not reboot the OS, and cannot -- that needs Device-Owner provisioning this
+    fleet does not have (see `Device.reboot_requested`). What changed is that
+    the flag is no longer inert: the app restarts its own process on seeing it
+    and acknowledges via `POST /devices/{id}/command-ack`, which clears the flag.
+    That covers the operational need this button exists for ("the meter is
+    stuck, restart it") without claiming the thing it cannot do. The dashboard
+    labels it "Restart app" for the same reason.
+    """
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:

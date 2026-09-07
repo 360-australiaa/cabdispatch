@@ -1,10 +1,12 @@
 package au.com.threesixty.cabdispatch.domain
 
 import android.content.Context
+import android.content.Intent
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
-import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DeviceCommandAckDto
+import au.com.threesixty.cabdispatch.data.remote.DeviceLocateResponseDto
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -387,13 +389,21 @@ class DeviceCommandHeartbeat(
             kioskLocked = device.kioskLocked,
             forceUpdatePending = device.forceUpdatePending,
         )
-        // device.rebootRequested is deliberately NOT acted on (see DeviceDto's doc / backend
-        // HONESTY NOTE) — real OS reboot needs device-owner permissions this app doesn't hold, so
-        // it stays a backend-only queue. It is not even read here, on purpose.
         if (shouldAnswerLocate(device.locateRequested)) {
-            respondToLocateRequest()
+            respondToLocateRequest(deviceId)
         }
         previousLocateRequested = device.locateRequested
+
+        // `rebootRequested` used to be deliberately unread, because a real OS reboot needs
+        // device-owner permissions this app does not hold. That reasoning still stands for the OS
+        // — what changed (2026-09-08) is that the flag is no longer treated as unactionable
+        // because the strongest possible response is unavailable. Restarting the meter app's own
+        // process IS available, and it is what an operator pressing this actually wants: the meter
+        // is stuck, restart it. Reported from the field as "when I try to reboot or locate it's
+        // showing pending, but nothing is working" — which is precisely what it did.
+        if (device.rebootRequested) {
+            actOnRestartRequest(deviceId)
+        }
     }
 
     /**
@@ -417,82 +427,91 @@ class DeviceCommandHeartbeat(
 
     /**
      * Answers an admin's MDM "locate" request (`Device.locateRequested`, read back on the heartbeat
-     * above) by publishing this device's current real position through the same live-position
-     * pipeline the fleet dashboard's Live Map already watches (`POST /v1/fleet/positions` —
-     * [ApiService.publishPosition], shared/API_SUMMARY.md "Live Ops"), so a dispatcher sees a fresh
-     * pin appear/move as evidence the request was answered.
+     * above) by reporting this device's own real fix to
+     * [ApiService.deviceLocateResponse] — which is also what CLEARS the flag server-side.
      *
-     * No acknowledge/clear step: the only endpoint that flips `locate_requested` back off is
-     * `POST /v1/fleet/devices/{id}/locate`, which is admin-only server-side
-     * (`backend/app/api/v1/fleet.py::set_device_locate`) — this device's own JWT (driver or staff
-     * role) is never an admin, so it structurally cannot call it. Per that pass's brief, a fresh
-     * position publish is treated as sufficient evidence on its own — the dispatcher watching Live
-     * Map sees the pin, which is the actual thing they're waiting on. The flag simply stays set
-     * server-side until an admin clears it from the dashboard; see [shouldAnswerLocate] for how
-     * this loop avoids re-publishing on every tick because of that.
+     * ### Why not the vehicle-position pipeline it used to use
+     * This published a vehicle position (`POST /v1/fleet/positions`) so a dispatcher would see a
+     * pin move on Live Map. Two things were wrong with that, and both were reported from the field:
      *
-     * Moved here from `SettingsViewModel` (2026-08-29) unchanged in intent — the limitation its
-     * old doc flagged ("loadDeviceStatus only runs once ... there's no periodic/background
-     * heartbeat anywhere in this app yet") is what this class closes, so that paragraph is gone
-     * rather than left standing as a stale warning.
+     * 1. It needs the fleet UUID of the car this tablet is currently bound to, which means a live
+     *    driver session AND a resolved binding. A parked, logged-off tablet has neither — and that
+     *    is exactly the tablet an operator reaching for "locate" is trying to find. It answered
+     *    [LocateOutcome.NoVehicleBound] and gave up.
+     * 2. A tablet holding a binding to a since-deleted vehicle (a fleet wipe, say) got a 404 back,
+     *    which Settings ▸ About surfaced verbatim as "Location request failed to send — HTTP 404
+     *    not found". The tablet was working perfectly; the identity it was publishing against had
+     *    been deleted out from under it.
      *
-     * ### One honest gap this does NOT close
-     * Publishing is keyed off [DriverSession.vehicleUuid], not [DriverSession.vehicleId]: the
-     * positions endpoint was found live to 404 "Vehicle not found" on the driver-entered rego
-     * string and to accept only the real fleet-vehicle UUID (see [LivePositionHeartbeat.start]'s
-     * own note, which is why that class was switched to the UUID). The old S6 implementation
-     * published the rego and was therefore, in all likelihood, silently 404ing on the real device.
-     * Using the UUID is strictly more correct, but it does not make locate work unconditionally:
-     * with no session bound at all — the parked, logged-off tablet — there is no vehicle to publish
-     * a position *for*, so locate reports [LocateOutcome.NoVehicleBound] and sends nothing.
-     * Publishing against the rego as a fallback would only trade a silent skip for a guaranteed 404.
+     * A tablet's location belongs to the tablet. Reporting it on the device route needs no session,
+     * no vehicle, and no driver — and it is authenticated by the device's own secret, so a tablet
+     * sitting in a drawer can still say where it is.
      *
-     * In practice that gap is narrower than it looks, and not in a flattering way: an earlier
-     * version of this paragraph said "this pass fixes kiosk-lock and force-update on an idle tablet,
-     * but locate still needs a bound vehicle", which credited the pass with more than it delivers.
-     * Nothing at all is delivered to an idle tablet — the heartbeat that carries *every* command is
-     * bearer-authenticated and this app holds no token until an online login (see this class's "real
-     * precondition" section). So by the time a locate request can even be read off a poll, a driver
-     * is logged in; what remains genuinely missing is the narrower case of a driver logged in with
-     * no vehicle bound, or with a rego whose fleet-UUID lookup never resolved.
-     *
-     * Best-effort and silent-on-failure beyond [LocateOutcome] diagnostics, matching every other
-     * background call here: no vehicle bound, or [SpeedSource.locationFix] having no fix yet (no
-     * permission, cold start, no signal), both mean there is nothing honest to publish, so this
-     * skips rather than sending a fabricated position.
+     * ### It now acknowledges
+     * The old note here recorded that there was no clear step, because the only endpoint that
+     * flipped `locate_requested` off was admin-only and this device could never call it — so the
+     * flag stayed set forever and the dashboard read "Pending" whether or not anyone had answered.
+     * The device route above clears it as part of recording the answer, which is what turns that
+     * permanent badge into a real position and a timestamp.
      */
-    private suspend fun respondToLocateRequest() {
-        val vehicleUuid = SessionHolder.session.value?.vehicleUuid
-        if (vehicleUuid == null) {
-            _state.update { it.copy(locate = LocateOutcome.NoVehicleBound) }
-            return
-        }
+    private suspend fun respondToLocateRequest(deviceId: String) {
         val fix = speedSource.locationFix.value
         if (fix == null) {
             _state.update { it.copy(locate = LocateOutcome.NoFixYet) }
             return
         }
         runCatching {
-            apiService.publishPosition(
-                PositionPublishRequestDto(
-                    vehicleId = vehicleUuid,
-                    lat = fix.lat,
-                    lng = fix.lng,
-                    // Deliberately a fixed placeholder, not a guess: this call site only knows "an
-                    // admin asked where this device is", not the driver's real
-                    // available/on-trip/offline status — that's the Idle screen's separate,
-                    // still-unwired "For Hire" toggle (HANDOFF.md "Availability broadcast not
-                    // wired"). No server-side enum constraint on `status` (see
-                    // PositionPublishRequestDto's doc), so this is a safe, honest value until that
-                    // toggle publishes a real one.
-                    status = LOCATE_RESPONSE_STATUS,
-                ),
+            apiService.deviceLocateResponse(
+                deviceId,
+                DeviceLocateResponseDto(lat = fix.lat, lng = fix.lng, accuracyM = fix.accuracyM.toDouble()),
+                deviceSecret = pairingStore.getDeviceSecret(),
             )
         }.onSuccess {
             _state.update { it.copy(locate = LocateOutcome.Sent) }
         }.onFailure { error ->
             _state.update { it.copy(locate = LocateOutcome.Failed(error.message ?: "Unknown error")) }
         }
+    }
+
+    /**
+     * Acts on a queued restart, then tells the server it did.
+     *
+     * This is NOT an OS reboot and never claims to be — that needs Device-Owner provisioning this
+     * fleet does not have (see the server's `Device.reboot_requested`). Restarting the meter app's
+     * own process is what this can genuinely do, and it is what the button is actually reached for:
+     * the meter is stuck, restart it. Until now the flag was inert on this side, so an admin
+     * queued a restart and watched it read "Pending" for the life of the row.
+     *
+     * Acknowledged BEFORE the process dies, deliberately. A restart that killed the app first
+     * would leave the flag set, and the tablet would restart again on every poll for the rest of
+     * its life — a reboot loop driven by an un-clearable flag is far worse than a missed restart.
+     * If the ack fails the restart does not happen, and the next poll tries again.
+     */
+    private suspend fun actOnRestartRequest(deviceId: String) {
+        val acked = runCatching {
+            apiService.deviceCommandAck(
+                deviceId,
+                DeviceCommandAckDto(command = "restart"),
+                deviceSecret = pairingStore.getDeviceSecret(),
+            )
+        }.isSuccess
+        if (acked) restartApp()
+    }
+
+    /**
+     * Restarts this app's process.
+     *
+     * Relaunches [MainActivity] on a fresh task and then ends the current process, so the app comes
+     * back up cold — the same state a driver gets from force-stopping and reopening it, which is
+     * the manual workaround this replaces.
+     */
+    private fun restartApp() {
+        val intent = appContext.packageManager
+            .getLaunchIntentForPackage(appContext.packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            ?: return
+        appContext.startActivity(intent)
+        Runtime.getRuntime().exit(0)
     }
 
     private companion object {

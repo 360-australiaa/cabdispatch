@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachMoney
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.GpsFixed
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.Lock
@@ -157,6 +158,7 @@ private enum class SettingsTab(val label: String) {
 @Composable
 fun SettingsScreen(
     navController: NavHostController,
+    onRerunSetup: () -> Unit,
     onFactoryReset: () -> Unit,
     viewModel: SettingsViewModel = viewModel(),
 ) {
@@ -185,6 +187,7 @@ fun SettingsScreen(
                 viewModel.clearPairMeterError()
                 subScreen = SettingsSubScreen.PAIR_METER
             },
+            onRerunSetup = onRerunSetup,
         )
         SettingsSubScreen.FACTORY_RESET_PIN -> AdminPinGateScreen(
             subtitle = "Enter the admin PIN to wipe all local trip/shift data and sign out. This cannot be undone.",
@@ -215,6 +218,7 @@ private fun MainSettingsContent(
     onOpenPermissions: () -> Unit,
     onOpenOfflineSync: () -> Unit,
     onOpenPairMeter: () -> Unit,
+    onRerunSetup: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -283,6 +287,7 @@ private fun MainSettingsContent(
                             SettingsTab.ABOUT -> AboutTabContent(
                                 state = state,
                                 onOpenPairMeter = onOpenPairMeter,
+                                onRerunSetup = onRerunSetup,
                                 onFactoryResetClick = onFactoryResetClick,
                             )
                         }
@@ -604,6 +609,7 @@ private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewMod
 private fun AboutTabContent(
     state: SettingsUiState,
     onOpenPairMeter: () -> Unit,
+    onRerunSetup: () -> Unit,
     onFactoryResetClick: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -615,6 +621,11 @@ private fun AboutTabContent(
         }
         Spacer(Modifier.height(14.dp))
         LocateTile(state, Modifier.fillMaxWidth())
+        Spacer(Modifier.height(14.dp))
+        // A technician servicing an ALREADY-commissioned tablet needs the checklist back. Without
+        // this the only route to it was a factory reset, which wipes the pairing and the driver's
+        // session to answer a question as ordinary as "is the offline map still there?".
+        RerunSetupTile(onRerunSetup, Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(24.dp))
         SectionLabel("GPS SIMULATOR (TESTING)")
@@ -806,6 +817,26 @@ private fun AppVersionTile(state: SettingsUiState, modifier: Modifier) {
     DiagTile(icon = Icons.Rounded.Inventory2, name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)
 }
 
+/**
+ * Sends a technician back through the first-install commissioning checklist.
+ *
+ * Clears only the "someone has set this tablet up" flag — not the pairing, not the driver session,
+ * not anything the meter needs to keep working. The checklist re-reads live state, so a tablet that
+ * is genuinely fine shows six ticks and a Finish button, and one that has quietly lost its offline
+ * map or its GPS shows exactly which.
+ */
+@Composable
+private fun RerunSetupTile(onRerunSetup: () -> Unit, modifier: Modifier) {
+    DiagTile(
+        icon = Icons.Rounded.Checklist,
+        name = "Re-run setup checks",
+        sub = "Technician checklist — registration, GPS, offline map, tariff",
+        tone = DiagTone.OK,
+        onClick = onRerunSetup,
+        modifier = modifier,
+    )
+}
+
 /** Binds the frame's "Live heartbeat" tile to the real one-shot heartbeat result — see class doc. */
 @Composable
 private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -> Unit, modifier: Modifier) {
@@ -835,7 +866,6 @@ private fun LocateTile(state: SettingsUiState, modifier: Modifier) {
         LocateResponseState.Idle -> null
         LocateResponseState.Sent -> "Position sent to fleet server" to DiagTone.OK
         LocateResponseState.NoFixYet -> "Waiting for GPS fix" to DiagTone.WARN
-        LocateResponseState.NoVehicleBound -> "No vehicle bound" to DiagTone.WARN
         is LocateResponseState.Failed -> "Failed to send — ${locate.message}" to DiagTone.BAD
     }
     if (row == null) {

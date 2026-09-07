@@ -55,6 +55,17 @@ object DeviceReadiness {
         /** Not sitting on a build the depot has flagged as needing replacement. */
         UpToDate,
 
+        /**
+         * Location permission granted AND a real fix arriving.
+         *
+         * A meter that cannot see satellites cannot charge a distance rate, so this is the check a
+         * technician most needs before leaving a vehicle — and the one nothing surfaced before.
+         * Advisory rather than blocking only because a tablet indoors at a depot legitimately has
+         * no fix yet; commissioning shows it as an outstanding warning instead of pretending it
+         * passed.
+         */
+        Location,
+
         /** Map tiles cached for the area this tablet works in. */
         OfflineMaps,
 
@@ -93,6 +104,12 @@ object DeviceReadiness {
         val heartbeatSucceeding: Boolean?,
         val offlineMapsPresent: Boolean?,
         val signedTariffCached: Boolean?,
+        /** True once the location permission is granted; false when it is not; null when nothing
+         * has looked yet. */
+        val locationPermissionGranted: Boolean? = null,
+        /** True once a real fix has actually arrived — permission granted is not the same thing as
+         * a working GPS, and a technician needs to know which one they are looking at. */
+        val hasLocationFix: Boolean? = null,
     )
 
     /**
@@ -102,6 +119,7 @@ object DeviceReadiness {
     fun evaluate(inputs: Inputs): List<ReadinessResult> = listOf(
         registered(inputs),
         upToDate(inputs),
+        location(inputs),
         offlineMaps(inputs),
         signedTariff(inputs),
         heartbeat(inputs),
@@ -145,6 +163,23 @@ object DeviceReadiness {
             },
         )
     }
+
+    private fun location(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.Location,
+        // Permission alone is not enough. A tablet can hold the permission and still never see a
+        // satellite -- a dead aerial, a faulty unit, a factory-reset location setting -- and that
+        // tablet cannot charge a distance rate. The technician needs to see a real fix arrive.
+        passed = inputs.locationPermissionGranted == true && inputs.hasLocationFix == true,
+        severity = Severity.ADVISORY,
+        detail = when {
+            inputs.locationPermissionGranted == false ->
+                "Location permission denied — the meter cannot measure distance without it"
+            inputs.hasLocationFix == true -> "GPS fix acquired"
+            inputs.hasLocationFix == false ->
+                "Permission granted, but no GPS fix yet — take the tablet outside"
+            else -> "Not checked"
+        },
+    )
 
     private fun offlineMaps(inputs: Inputs) = ReadinessResult(
         check = ReadinessCheck.OfflineMaps,

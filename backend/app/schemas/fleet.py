@@ -155,6 +155,14 @@ class DeviceRead(BaseModel):
     # columns means "not recorded", not "never paired".
     paired_at: datetime | None = None
     revoked_at: datetime | None = None
+    # The device's own last reported position, and when it last acted on a
+    # queued command. Both are how a dashboard can show that a remote command
+    # was actually carried out instead of a permanent "Pending".
+    last_locate_lat: float | None = None
+    last_locate_lng: float | None = None
+    last_locate_accuracy_m: float | None = None
+    last_locate_at: datetime | None = None
+    command_acked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     # Not a Device column -- populated only by POST /devices/{id}/heartbeat
@@ -206,6 +214,24 @@ class DeviceHeartbeatRequest(BaseModel):
     app_version: str | None = Field(default=None, max_length=30)
 
 
+class LocateResponseRequest(BaseModel):
+    """A device answering an admin's locate request with its real fix.
+
+    `accuracy_m` is optional and never invented: a device that cannot say how
+    accurate its fix is sends nothing rather than a guess, and the dashboard
+    shows the position without a precision claim."""
+
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+
+
+class CommandAckRequest(BaseModel):
+    """A device reporting that it has acted on a queued command."""
+
+    command: Literal["restart"]
+
+
 class KioskLockRequest(BaseModel):
     enabled: bool = True
 
@@ -219,9 +245,14 @@ class LocateRequest(BaseModel):
 
 
 class RebootRequest(BaseModel):
-    """See the HONESTY NOTE on `Device.reboot_requested` — setting `enabled`
-    queues a reboot request the device can read back; it does not itself
-    reboot anything."""
+    """Queues a RESTART OF THE METER APP on the device — not an OS reboot.
+
+    Rebooting Android needs Device-Owner provisioning this fleet does not have
+    (see `Device.reboot_requested`). What the app can genuinely do, and now
+    does, is restart itself, which is what the operational need behind this
+    button actually is: "the meter is stuck, restart it". The device clears the
+    flag via `POST /devices/{id}/command-ack` once it has acted, so an admin
+    sees it carried out rather than permanently pending."""
 
     enabled: bool = True
 

@@ -18,6 +18,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
+import androidx.core.app.ActivityCompat
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.Icons
+import android.Manifest
 import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_ALPHABET
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -95,6 +104,18 @@ fun DeviceReadinessScreen(
         onDispose { CaptainChromeMetrics.setFullScreenGateVisible(false) }
     }
 
+    // The system permission dialog is a separate window; nothing tells this screen the technician
+    // answered it. Re-read on resume so the row ticks over the moment they come back, rather than
+    // sitting on a stale cross that makes a granted permission look denied.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshLocationPermission()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -104,7 +125,7 @@ fun DeviceReadinessScreen(
         // Left column — what is wrong and why it matters, with the app stamp for a depot phone call.
         Column(modifier = Modifier.width(392.dp)) {
             Text(
-                "Meter not ready",
+                if (state.commissioning) "Set up this tablet" else "Meter not ready",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 40.sp,
@@ -112,8 +133,14 @@ fun DeviceReadinessScreen(
             )
             Spacer(Modifier.height(18.dp))
             Text(
-                "This tablet must be registered with the depot before it can take fares. " +
-                    "Ask the depot for a pairing code — they generate one from Fleet ▸ Vehicles ▸ Pair.",
+                if (state.commissioning) {
+                    "Work down the list before handing this tablet to a driver. Everything with a " +
+                        "cross has a button to fix it. The driver will never see this screen — they " +
+                        "go straight to the login page."
+                } else {
+                    "This tablet must be registered with the depot before it can take fares. " +
+                        "Ask the depot for a pairing code — they generate one from Fleet ▸ Vehicles ▸ Pair."
+                },
                 fontFamily = InterFamily,
                 fontSize = 17.sp,
                 lineHeight = 26.sp,
@@ -137,6 +164,28 @@ fun DeviceReadinessScreen(
                 )
             }
             Spacer(Modifier.weight(1f))
+
+            if (state.commissioning) {
+                // Enabled as soon as nothing BLOCKS, with any remaining warnings counted on the
+                // label rather than hidden. A tablet commissioned indoors will never get a GPS fix
+                // no matter how long the technician waits, so refusing to let them finish would
+                // only teach them to work around this screen.
+                val warnings = state.warnings.size
+                CaptainButton(
+                    text = when {
+                        !state.canFinishSetup -> "Fix the items above"
+                        warnings == 0 -> "Finish setup"
+                        warnings == 1 -> "Finish setup · 1 warning"
+                        else -> "Finish setup · $warnings warnings"
+                    },
+                    modifier = Modifier.width(320.dp),
+                    heightDp = 64,
+                    enabled = state.canFinishSetup,
+                    onClick = { viewModel.finishSetup(onReady) },
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
             // Same escape as the disclaimer's Cancel: close the app. Deliberately not "continue
             // anyway" -- there is no such thing here.
             CaptainButton(
@@ -201,10 +250,32 @@ fun DeviceReadinessScreen(
 
             // Advisory fix, always offered: the map row is the one advisory check with an action a
             // driver can usefully take while they are standing here anyway.
-            val mapsMissing = state.results.any {
-                it.check == DeviceReadiness.ReadinessCheck.OfflineMaps && !it.passed
+            val outstanding = state.results.filter { !it.passed }.map { it.check }.toSet()
+
+            if (DeviceReadiness.ReadinessCheck.Location in outstanding) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CaptainButton(
+                        text = "Grant location permission",
+                        outline = true,
+                        modifier = Modifier.width(300.dp),
+                        heightDp = 56,
+                        fontSize = 16.sp,
+                        onClick = { (context as? Activity)?.let(::requestLocationPermission) },
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        // Says which half is missing, because they need different actions: a denied
+                        // permission is a dialog, a missing fix is a walk outside.
+                        "Then wait for a fix — take the tablet outside if it does not arrive",
+                        fontFamily = InterFamily,
+                        fontSize = 14.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
             }
-            if (mapsMissing) {
+
+            if (DeviceReadiness.ReadinessCheck.OfflineMaps in outstanding) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CaptainButton(
                         text = "Download offline maps",
@@ -224,7 +295,25 @@ fun DeviceReadinessScreen(
     }
 }
 
-/** One check: a status dot, its name, and the honest detail line from [DeviceReadiness]. */
+/**
+ * Asks for the meter-critical location permission.
+ *
+ * Uses the plain Activity request rather than a Compose launcher because this screen may be the
+ * very first thing composed on a fresh install and the technician can arrive here from several
+ * routes; the result is picked up on resume by the observer above, not by a callback, so it works
+ * however the dialog was dismissed.
+ */
+private fun requestLocationPermission(activity: Activity) {
+    ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+        LOCATION_PERMISSION_REQUEST_CODE,
+    )
+}
+
+private const val LOCATION_PERMISSION_REQUEST_CODE = 4801
+
+/** One check: a tick or a cross, its name, and the honest detail line from [DeviceReadiness]. */
 @Composable
 private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
     val tone = when {
@@ -233,11 +322,14 @@ private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
         else -> CaptainPalette.warning
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(12.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(tone),
+        // A real tick or cross, not a coloured dot. A technician working down this list on a
+        // vehicle needs to see at a glance which items are done, and a dot only says "something
+        // about this is amber" -- it does not say done or not done.
+        Icon(
+            imageVector = if (result.passed) Icons.Rounded.CheckCircle else Icons.Rounded.Cancel,
+            contentDescription = if (result.passed) "Passed" else "Not done",
+            tint = tone,
+            modifier = Modifier.size(22.dp),
         )
         Spacer(Modifier.width(14.dp))
         Column {
@@ -280,6 +372,7 @@ private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
 private fun DeviceReadiness.ReadinessCheck.label(): String = when (this) {
     DeviceReadiness.ReadinessCheck.Registered -> "Registered with the depot"
     DeviceReadiness.ReadinessCheck.UpToDate -> "Meter software"
+    DeviceReadiness.ReadinessCheck.Location -> "Location \u0026 GPS"
     DeviceReadiness.ReadinessCheck.OfflineMaps -> "Offline maps"
     DeviceReadiness.ReadinessCheck.SignedTariff -> "Signed tariff"
     DeviceReadiness.ReadinessCheck.Heartbeat -> "Depot heartbeat"

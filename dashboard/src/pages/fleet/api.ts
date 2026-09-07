@@ -298,6 +298,27 @@ export function useForceUpdateAll() {
   });
 }
 
+/**
+ * Queues a restart of the meter APP on a tablet — not an OS reboot.
+ *
+ * Rebooting Android needs Device-Owner provisioning this fleet does not have. Restarting the
+ * meter's own process is both possible and what an operator pressing this actually wants ("the
+ * meter is stuck, restart it"), and the tablet acknowledges once it has, which clears the flag.
+ * The endpoint keeps its historical `/reboot` path.
+ */
+export function useRestartApp() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<Device>(`/v1/fleet/devices/${id}/reboot`, {
+        enabled: true,
+      });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
 export function useLocateDevice() {
   const qc = useQueryClient();
   return useMutation({

@@ -231,6 +231,10 @@ fun CabDispatchNavHost(
         composable(CabDispatchRoutes.SETTINGS) {
             SettingsScreen(
                 navController = navController,
+                onRerunSetup = {
+                    AppContainer.commissioningStore.clear()
+                    navController.navigate(CabDispatchRoutes.DEVICE_READINESS) { popUpTo(0) }
+                },
                 onFactoryReset = {
                     navController.navigate(CabDispatchRoutes.LOGIN_VEHICLE_BIND) {
                         popUpTo(0)
@@ -346,6 +350,16 @@ fun postAuthDestination(): String {
     // readiness check for every returning driver on the fleet, which is most of them, and the
     // feature would have looked like it worked while doing almost nothing.
     val midShift = session?.shiftId != null
+
+    // First install. A technician commissions the tablet before any driver ever sees it, and works
+    // through the whole checklist -- not just the two things that would block a driver. Until that
+    // is finished the readiness screen is the destination regardless of how healthy the tablet
+    // looks, because "nothing is broken" is not the same as "somebody set this up and confirmed
+    // it". Never while a shift is open: a tablet already earning is past this point by definition.
+    if (!midShift && !AppContainer.commissioningStore.isCommissioned()) {
+        return CabDispatchRoutes.DEVICE_READINESS
+    }
+
     if (!midShift && DeviceReadiness.blockingFailures(currentReadinessInputs()).isNotEmpty()) {
         // Both blocking checks read state that AppContainer.init has already restored from
         // DevicePairingStore, so this costs no network round-trip and a healthy tablet never

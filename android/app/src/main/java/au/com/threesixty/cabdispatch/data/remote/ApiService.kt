@@ -95,6 +95,38 @@ interface ApiService {
      * device paired before this field existed (no secret == this header omitted == old behaviour).
      * `null` -> the header is omitted, not sent empty, via [retrofit2.http.Header]'s null handling.
      */
+    /**
+     * `POST /v1/fleet/devices/{id}/locate-response` — this DEVICE answering an admin's locate
+     * request with its own real fix, which is also what clears `locate_requested` server-side.
+     *
+     * Replaces answering on [publishPosition]. That is a VEHICLE endpoint: it needs the fleet UUID
+     * of the car this tablet is currently bound to, which means a live driver session and a
+     * current binding. A parked, logged-off tablet has neither — and that is precisely the tablet
+     * an operator reaching for "locate" is trying to find. A tablet holding a binding to a
+     * since-deleted vehicle got a 404 from it instead, which surfaced in Settings ▸ About as
+     * "Location request failed to send — HTTP 404 not found".
+     *
+     * Authenticated by [deviceSecret], so it works with nobody signed in.
+     */
+    @POST("/v1/fleet/devices/{deviceId}/locate-response")
+    suspend fun deviceLocateResponse(
+        @Path("deviceId") deviceId: String,
+        @Body body: DeviceLocateResponseDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
+    ): DeviceDto
+
+    /**
+     * `POST /v1/fleet/devices/{id}/command-ack` — this device reporting that it has carried out a
+     * queued command, which clears that command's flag. Without it an admin queues a restart and
+     * watches it read "Pending" for the life of the row.
+     */
+    @POST("/v1/fleet/devices/{deviceId}/command-ack")
+    suspend fun deviceCommandAck(
+        @Path("deviceId") deviceId: String,
+        @Body body: DeviceCommandAckDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
+    ): DeviceDto
+
     @POST("/v1/fleet/devices/{deviceId}/heartbeat")
     suspend fun deviceHeartbeat(
         @Path("deviceId") deviceId: String,
@@ -775,6 +807,20 @@ data class DeviceRegisterRequestDto(
     @SerialName("app_version") val appVersion: String? = null,
 )
 
+/** Body of [ApiService.deviceLocateResponse]. [accuracyM] is null when the fix carries no accuracy
+ * — never a guessed number, so the dashboard shows a position without a precision claim it cannot
+ * support. */
+@Serializable
+data class DeviceLocateResponseDto(
+    val lat: Double,
+    val lng: Double,
+    @SerialName("accuracy_m") val accuracyM: Double? = null,
+)
+
+/** Body of [ApiService.deviceCommandAck]. `restart` is the only command the server accepts. */
+@Serializable
+data class DeviceCommandAckDto(val command: String)
+
 @Serializable
 data class DeviceHeartbeatRequestDto(
     val battery: Int? = null,
@@ -792,13 +838,16 @@ data class DeviceHeartbeatRequestDto(
  * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat] polls this endpoint for the
  * process lifetime and acts on the first three: [kioskLocked] drives app-wide screen pinning in
  * [au.com.threesixty.cabdispatch.MainActivity], [forceUpdatePending] drives a persistent driver-
- * facing banner (this app has no self-update path — see that class's doc), and [locateRequested] is
- * answered by publishing a fresh position (see [PositionPublishRequestDto] /
- * [ApiService.publishPosition]). [rebootRequested] is deliberately left unconsumed here — see the
- * backend's own HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`: actually rebooting the OS
- * needs device-owner-level Android permissions this app does not hold, so this stays a
- * backend-only command queue an admin can see pending, not something this DTO's presence should
- * be mistaken for "implemented" — see HANDOFF.md.
+ * facing banner, and [locateRequested] is answered on [ApiService.deviceLocateResponse] — the
+ * DEVICE route, which needs no vehicle and no driver session, so a parked tablet can still say
+ * where it is. It used to be answered by publishing a vehicle position; see that method's doc for
+ * the two field failures that caused.
+ *
+ * [rebootRequested] is now consumed too, as a RESTART OF THIS APP, not an OS reboot. The backend's
+ * HONESTY NOTE still holds for the OS — that needs device-owner permissions this app does not hold
+ * — but restarting the meter's own process is both possible and what the button is actually
+ * reached for, and the app acknowledges on [ApiService.deviceCommandAck] so the flag clears
+ * instead of reading "Pending" for the life of the row.
  */
 @Serializable
 data class DeviceDto(

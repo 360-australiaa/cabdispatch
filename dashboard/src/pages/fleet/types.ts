@@ -94,6 +94,15 @@ export interface Device {
   // columns means "not recorded", not "never paired".
   paired_at: string | null;
   revoked_at: string | null;
+  // The device's OWN last reported position, and when it last acted on a queued
+  // command. Both exist so a remote command can be shown as carried out rather
+  // than permanently "Pending" — which is what Locate and Reboot both did,
+  // because nothing anywhere ever cleared their flags.
+  last_locate_lat: number | null;
+  last_locate_lng: number | null;
+  last_locate_accuracy_m: number | null;
+  last_locate_at: string | null;
+  command_acked_at: string | null;
   created_at: string;
   updated_at: string;
 }

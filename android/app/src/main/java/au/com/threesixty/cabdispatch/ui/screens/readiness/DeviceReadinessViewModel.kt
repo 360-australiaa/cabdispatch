@@ -1,6 +1,9 @@
 package au.com.threesixty.cabdispatch.ui.screens.readiness
 
 import android.app.Application
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
+import android.Manifest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
@@ -29,9 +32,32 @@ data class DeviceReadinessUiState(
     val pairing: Boolean = false,
     val pairError: String? = null,
     val mapDownloadMessage: String? = null,
+    /**
+     * First-install setup, rather than the ordinary guard gate. A technician sees the whole
+     * checklist and finishes it explicitly; a driver only ever sees this screen when something is
+     * genuinely stopping them, and it clears itself the moment it is fixed.
+     */
+    val commissioning: Boolean = false,
 ) {
-    /** True once nothing blocking remains — [DeviceReadinessScreen] navigates onward on this. */
-    val ready: Boolean get() = results.isNotEmpty() && blocking.isEmpty()
+    /**
+     * True once nothing blocking remains — [DeviceReadinessScreen] navigates onward on this.
+     *
+     * Never true while commissioning: setup ends when the technician says it does, not the instant
+     * the last blocking check goes green. Half the point of the checklist is the items that do not
+     * block — offline maps, a real GPS fix — and a screen that vanished mid-setup would take them
+     * with it.
+     */
+    val ready: Boolean get() = !commissioning && results.isNotEmpty() && blocking.isEmpty()
+
+    /** Advisory checks still outstanding, so "Finish setup" can say how many it is signing off. */
+    val warnings: List<DeviceReadiness.ReadinessResult>
+        get() = results.filter { !it.passed && it.severity == DeviceReadiness.Severity.ADVISORY }
+
+    /** Setup can only be finished once nothing is actually blocking. Warnings are allowed through
+     * deliberately — a tablet being commissioned indoors has no GPS fix and no amount of waiting
+     * will give it one, so trapping the technician there would just teach them to skip the
+     * screen. They are counted on the button instead. */
+    val canFinishSetup: Boolean get() = results.isNotEmpty() && blocking.isEmpty()
 }
 
 class DeviceReadinessViewModel(application: Application) : AndroidViewModel(application) {
@@ -46,6 +72,7 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
      */
     private val offlineMapsPresent = MutableStateFlow<Boolean?>(null)
     private val signedTariffCached = MutableStateFlow<Boolean?>(null)
+    private val locationPermissionGranted = MutableStateFlow<Boolean?>(null)
 
     init {
         // Re-evaluate whenever any input moves: the heartbeat landing, a pairing succeeding, the
@@ -57,7 +84,11 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                 AppContainer.appUpdateChecker.state,
                 offlineMapsPresent,
                 signedTariffCached,
-            ) { command, update, maps, tariff ->
+                // A real fix arriving, not merely the permission being held: a tablet can have the
+                // permission and still never see a satellite, and that tablet cannot charge a
+                // distance rate.
+                AppContainer.speedSource.locationFix,
+            ) { command, update, maps, tariff, fix ->
                 val inputs = DeviceReadiness.Inputs(
                     deviceId = command.deviceId,
                     deviceRejected = command.deviceRejected,
@@ -72,6 +103,8 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                     heartbeatSucceeding = command.lastPollSucceeded,
                     offlineMapsPresent = maps,
                     signedTariffCached = tariff,
+                    locationPermissionGranted = locationPermissionGranted.value,
+                    hasLocationFix = fix != null,
                 )
                 Triple(DeviceReadiness.evaluate(inputs), DeviceReadiness.blockingFailures(inputs), update)
             }.collect { (results, blocking, update) ->
@@ -90,6 +123,33 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
 
         probeOfflineMaps()
         probeSignedTariff()
+        refreshLocationPermission()
+
+        _uiState.update { it.copy(commissioning = !AppContainer.commissioningStore.isCommissioned()) }
+    }
+
+    /** Re-read after the technician returns from the system permission dialog. */
+    fun refreshLocationPermission() {
+        locationPermissionGranted.value = ContextCompat.checkSelfPermission(
+            getApplication(),
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        // Nudge the combine so the row re-renders even when no other input moved.
+        signedTariffCached.value = signedTariffCached.value
+    }
+
+    /**
+     * Technician signs off first-install setup.
+     *
+     * Recorded on the tablet rather than the server: it describes what a person did to this
+     * physical unit, and it has to be answerable with no network, before the tablet has any server
+     * identity at all.
+     */
+    fun finishSetup(onDone: () -> Unit) {
+        if (!_uiState.value.canFinishSetup) return
+        AppContainer.commissioningStore.markCommissioned()
+        _uiState.update { it.copy(commissioning = false) }
+        onDone()
     }
 
     private fun probeOfflineMaps() {

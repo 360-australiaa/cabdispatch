@@ -26,6 +26,7 @@ import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
 import au.com.threesixty.cabdispatch.domain.QrScanner
+import au.com.threesixty.cabdispatch.domain.CommissioningStore
 import au.com.threesixty.cabdispatch.domain.DevicePairingStore
 import au.com.threesixty.cabdispatch.domain.MaxiVehicleStore
 import au.com.threesixty.cabdispatch.domain.SessionStore
@@ -174,6 +175,10 @@ object AppContainer {
         private set
 
     lateinit var devicePairingStore: DevicePairingStore
+
+    /** Whether a technician has ever completed first-install setup on this tablet — see
+     * [CommissioningStore]. Chooses which framing the readiness screen takes. */
+    lateinit var commissioningStore: CommissioningStore
         private set
 
     /** See [SessionStore]'s own doc — durable half of [SessionHolder]'s driver identity/vehicle
@@ -213,6 +218,7 @@ object AppContainer {
         // and heartbeat silently went back to a no-op even after a real pairing had succeeded.
         devicePairingStore = DevicePairingStore(appContext)
         SessionHolder.deviceId = devicePairingStore.getDeviceId()
+        commissioningStore = CommissioningStore(appContext)
 
         // Restore the driver's session across process death (2026-09-04 session-persistence
         // pass) — see SessionStore's own doc for exactly what is/isn't restored and how shift

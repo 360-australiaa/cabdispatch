@@ -8,9 +8,9 @@ import {
   MapPin,
   Pencil,
   Plus,
-  Power,
   RefreshCw,
   Trash2,
+  RotateCw,
   Unlock,
 } from "lucide-react";
 import {
@@ -32,6 +32,7 @@ import {
   useForceUpdateAll,
   useKioskLock,
   useLocateDevice,
+  useRestartApp,
   useUpdateDevice,
   useVehicleOptions,
   type DeviceFilters,
@@ -60,10 +61,10 @@ const KIOSK_FILTER_OPTIONS = [
  * functional trap" policy already used for locked settings rows in the
  * Android app's own SettingsScreen ("COMING SOON" badge, greyed out,
  * tap-safe). */
-const REBOOT_NOT_SUPPORTED_REASON =
-  "Remote reboot isn't supported yet — a tablet's Android app can't restart its own OS " +
-  "without Device Owner provisioning, which this build doesn't have. This control is " +
-  "disabled so it never looks like it worked when it didn't.";
+const RESTART_APP_REASON =
+  "Restarts the meter app on the tablet — not the Android OS. Rebooting the OS needs Device " +
+  "Owner provisioning this build doesn't have. The tablet picks this up on its next heartbeat " +
+  "(within a minute), restarts, and reports back, which is what clears the pending state.";
 
 function BatteryIcon({ battery }: { battery: number | null }) {
   if (battery === null) return <span className="text-muted-foreground">—</span>;
@@ -120,6 +121,7 @@ export function DevicesPanel() {
   const forceUpdate = useForceUpdate();
   const forceUpdateAll = useForceUpdateAll();
   const locateDevice = useLocateDevice();
+  const restartApp = useRestartApp();
   const [confirmingPushAll, setConfirmingPushAll] = useState(false);
   const [pushAllResult, setPushAllResult] = useState<{ flagged: number; total: number } | null>(null);
 
@@ -200,6 +202,15 @@ export function DevicesPanel() {
     }
   }
 
+  async function triggerRestart(d: Device) {
+    setPendingActionId(d.id);
+    try {
+      await restartApp.mutateAsync(d.id);
+    } finally {
+      setPendingActionId(null);
+    }
+  }
+
   const columns: TableColumn<Device>[] = [
     { key: "android_id", header: "Android ID", render: (d) => <span className="font-medium">{d.android_id}</span> },
     { key: "model", header: "Model", render: (d) => d.model || "—" },
@@ -257,18 +268,58 @@ export function DevicesPanel() {
       render: (d) => (d.force_update_pending ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">Up to date</span>),
     },
     {
+      // Three real states, where there used to be one. Locate said "Pending"
+      // forever whether or not the tablet had answered, because nothing ever
+      // cleared `locate_requested` — no route, no service call, not the
+      // heartbeat. The device now answers on its own route and answering is
+      // what clears the flag, so this can finally distinguish "asked and
+      // waiting" from "asked and answered".
       key: "locate_requested",
       header: "Locate",
-      render: (d) => (d.locate_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+      render: (d) => {
+        if (d.locate_requested) {
+          return <Badge variant="accent">Waiting…</Badge>;
+        }
+        if (d.last_locate_at && d.last_locate_lat != null && d.last_locate_lng != null) {
+          const accuracy =
+            d.last_locate_accuracy_m != null ? ` ±${Math.round(d.last_locate_accuracy_m)}m` : "";
+          return (
+            <a
+              className="underline underline-offset-2"
+              href={`https://www.google.com/maps?q=${d.last_locate_lat},${d.last_locate_lng}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`${d.last_locate_lat}, ${d.last_locate_lng}${accuracy} · ${formatDateTime(d.last_locate_at)}`}
+            >
+              {relativeFromNow(d.last_locate_at)}
+            </a>
+          );
+        }
+        return <span className="text-muted-foreground">—</span>;
+      },
     },
     {
+      // "Restart app", not "Reboot". Rebooting Android needs Device-Owner
+      // provisioning this fleet does not have, and this column used to say so
+      // and stop there. Restarting the meter's own process is both possible and
+      // what an operator pressing this actually wants — the meter is stuck,
+      // restart it — and the app acknowledges when it has, so this shows a
+      // carried-out command instead of a permanent "Pending".
       key: "reboot_requested",
-      header: "Reboot",
-      render: () => (
-        <span className="text-muted-foreground" title={REBOOT_NOT_SUPPORTED_REASON}>
-          Not supported yet
-        </span>
-      ),
+      header: "Restart app",
+      render: (d) => {
+        if (d.reboot_requested) {
+          return <Badge variant="accent">Waiting…</Badge>;
+        }
+        if (d.command_acked_at) {
+          return (
+            <span title={`Restarted ${formatDateTime(d.command_acked_at)}`}>
+              {relativeFromNow(d.command_acked_at)}
+            </span>
+          );
+        }
+        return <span className="text-muted-foreground">—</span>;
+      },
     },
     {
       key: "actions",
@@ -287,6 +338,19 @@ export function DevicesPanel() {
             disabled={pendingActionId === d.id}
           >
             {d.kiosk_locked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Restart meter app"
+            title={d.reboot_requested ? "Restart already queued" : RESTART_APP_REASON}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerRestart(d);
+            }}
+            disabled={pendingActionId === d.id || d.reboot_requested}
+          >
+            <RotateCw className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
@@ -313,15 +377,6 @@ export function DevicesPanel() {
             disabled={pendingActionId === d.id || d.locate_requested}
           >
             <MapPin className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Reboot device (not yet supported)"
-            title={REBOOT_NOT_SUPPORTED_REASON}
-            disabled
-          >
-            <Power className="h-4 w-4 opacity-40" />
           </Button>
           <Button
             variant="ghost"

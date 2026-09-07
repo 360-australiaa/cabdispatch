@@ -114,6 +114,31 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     battery: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-100
     network: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "wifi", "4g", "offline"
 
+    # --- where a remote-locate answer lands -----------------------------------
+    #
+    # The device's OWN last reported position, not the vehicle's. Remote locate
+    # used to be answered by publishing a vehicle position, which needs a real
+    # vehicle UUID from a live driver session -- so a parked, logged-off tablet,
+    # which is the whole reason remote locate exists, could never answer, and one
+    # holding a UUID for a since-deleted vehicle got a 404 the driver saw as
+    # "Location request failed to send". A tablet's location belongs to the
+    # tablet; it is answerable whether or not anyone is signed in, and whether or
+    # not it is currently bolted into a car.
+    #
+    # Reporting a position is also what CLEARS `locate_requested` below -- see
+    # fleet_service.record_locate_response.
+    last_locate_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_locate_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_locate_accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_locate_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # When the device last acted on a queued command (today only the restart
+    # request). An admin who queues one needs to see that something on the other
+    # end took it, rather than a badge that reads "Pending" for the life of the
+    # row -- which is what both of these flags did before, because nothing ever
+    # cleared them.
+    command_acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # --- device credential + pairing lifecycle -------------------------------
     #
     # SHA-256 of a secret minted at registration and handed to the tablet exactly

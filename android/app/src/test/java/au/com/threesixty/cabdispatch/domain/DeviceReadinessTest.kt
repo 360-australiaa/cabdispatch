@@ -32,6 +32,8 @@ class DeviceReadinessTest {
         heartbeatSucceeding: Boolean? = true,
         offlineMapsPresent: Boolean? = true,
         signedTariffCached: Boolean? = true,
+        locationPermissionGranted: Boolean? = true,
+        hasLocationFix: Boolean? = true,
     ) = DeviceReadiness.Inputs(
         deviceId = deviceId,
         deviceRejected = deviceRejected,
@@ -40,6 +42,8 @@ class DeviceReadinessTest {
         heartbeatSucceeding = heartbeatSucceeding,
         offlineMapsPresent = offlineMapsPresent,
         signedTariffCached = signedTariffCached,
+        locationPermissionGranted = locationPermissionGranted,
+        hasLocationFix = hasLocationFix,
     )
 
     private fun blockedChecks(inputs: DeviceReadiness.Inputs) =
@@ -121,19 +125,71 @@ class DeviceReadinessTest {
     // --- advisories ------------------------------------------------------------------------
 
     @Test
-    fun `maps, tariff and heartbeat never block, however bad they look`() {
+    fun `maps, tariff, location and heartbeat never block, however bad they look`() {
         val everythingAdvisoryFailing = inputs(
             heartbeatSucceeding = false,
             offlineMapsPresent = false,
             signedTariffCached = false,
+            locationPermissionGranted = false,
+            hasLocationFix = false,
         )
 
         assertTrue(DeviceReadiness.blockingFailures(everythingAdvisoryFailing).isEmpty())
 
         val advisories = DeviceReadiness.evaluate(everythingAdvisoryFailing)
             .filter { !it.passed }
-        assertEquals(3, advisories.size)
+        assertEquals(4, advisories.size)
         assertTrue(advisories.all { it.severity == DeviceReadiness.Severity.ADVISORY })
+    }
+
+    // --- location -------------------------------------------------------------------------
+
+    @Test
+    fun `holding the location permission is not the same as having a fix`() {
+        // The distinction a technician needs and nothing surfaced before. A tablet can hold the
+        // permission and still never see a satellite -- a dead aerial, a faulty unit -- and that
+        // tablet cannot charge a distance rate. Passing this check on the permission alone would
+        // have signed off exactly the vehicle that then bills every trip at flagfall.
+        val permittedButBlind = inputs(locationPermissionGranted = true, hasLocationFix = false)
+
+        val row = DeviceReadiness.evaluate(permittedButBlind)
+            .first { it.check == DeviceReadiness.ReadinessCheck.Location }
+
+        assertFalse(row.passed)
+        assertTrue(row.detail.contains("no GPS fix"))
+    }
+
+    @Test
+    fun `a denied permission and a missing fix read differently`() {
+        // They need different actions from the technician -- a dialog versus a walk outside -- so
+        // the row must not collapse them into one message.
+        fun detailFor(granted: Boolean?, fix: Boolean?) = DeviceReadiness
+            .evaluate(inputs(locationPermissionGranted = granted, hasLocationFix = fix))
+            .first { it.check == DeviceReadiness.ReadinessCheck.Location }
+            .detail
+
+        assertTrue(detailFor(false, false).contains("permission denied"))
+        assertTrue(detailFor(true, false).contains("outside"))
+        assertEquals("GPS fix acquired", detailFor(true, true))
+        assertEquals("Not checked", detailFor(null, null))
+    }
+
+    @Test
+    fun `location passes only when permission AND a real fix are both present`() {
+        assertTrue(
+            DeviceReadiness.evaluate(inputs(locationPermissionGranted = true, hasLocationFix = true))
+                .first { it.check == DeviceReadiness.ReadinessCheck.Location }
+                .passed,
+        )
+        for (combination in listOf(true to false, false to true, false to false)) {
+            val (granted, fix) = combination
+            assertFalse(
+                "granted=$granted fix=$fix",
+                DeviceReadiness.evaluate(inputs(locationPermissionGranted = granted, hasLocationFix = fix))
+                    .first { it.check == DeviceReadiness.ReadinessCheck.Location }
+                    .passed,
+            )
+        }
     }
 
     @Test

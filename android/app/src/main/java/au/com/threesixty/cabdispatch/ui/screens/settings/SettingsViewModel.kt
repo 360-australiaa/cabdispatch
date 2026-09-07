@@ -20,6 +20,7 @@ import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
+import au.com.threesixty.cabdispatch.domain.LocateOutcome
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ThemeMode
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
@@ -73,8 +74,33 @@ sealed interface LocateResponseState {
     data object Idle : LocateResponseState
     data object Sent : LocateResponseState
     data object NoFixYet : LocateResponseState
-    data object NoVehicleBound : LocateResponseState
     data class Failed(val message: String) : LocateResponseState
+}
+
+/**
+ * Projects the process-wide [LocateOutcome] onto this screen's own type.
+ *
+ * There used to be TWO locate implementations. [DeviceCommandHeartbeat] answered correctly, and
+ * this ViewModel kept a private copy that published a VEHICLE position against
+ * `SessionHolder.session.vehicleUuid` -- and the copy was the one the About tab actually rendered.
+ * Its own doc admitted it was "an un-migrated duplicate left behind".
+ *
+ * That duplicate is what a technician saw as "Location request failed to send - HTTP 404 not
+ * found": the tablet held a vehicle UUID for a car that had since been deleted, so
+ * `POST /v1/fleet/positions` answered 404 and the tile printed the HTTP status. The tablet was
+ * fine; the identity it was publishing against was gone. The heartbeat now reports on the DEVICE
+ * route, which needs no vehicle at all, and this screen reads that one result instead of running
+ * its own.
+ *
+ * [LocateOutcome.NoVehicleBound] has no counterpart here on purpose -- it cannot happen any more,
+ * because answering a locate no longer involves a vehicle.
+ */
+private fun LocateOutcome.toScreenState(): LocateResponseState = when (this) {
+    LocateOutcome.None -> LocateResponseState.Idle
+    LocateOutcome.Sent -> LocateResponseState.Sent
+    LocateOutcome.NoFixYet -> LocateResponseState.NoFixYet
+    LocateOutcome.NoVehicleBound -> LocateResponseState.Idle
+    is LocateOutcome.Failed -> LocateResponseState.Failed(message)
 }
 
 data class SettingsUiState(
@@ -141,6 +167,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 pollGps()
                 pollNetwork()
                 delay(GPS_NETWORK_POLL_INTERVAL_MS)
+            }
+        }
+        // Mirror the ONE real locate result rather than running a second attempt of our own -- see
+        // LocateOutcome.toScreenState for the duplicate this replaced and the 404 it produced.
+        viewModelScope.launch {
+            AppContainer.deviceCommandHeartbeat.state.collect { command ->
+                _uiState.update { it.copy(locateResponse = command.locate.toScreenState()) }
             }
         }
         loadDeviceStatus()
@@ -268,7 +301,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 // on (see DeviceDto's doc / backend HONESTY NOTE) — real OS reboot needs
                 // device-owner permissions this app doesn't hold, so it stays a backend-only queue.
                 if (device.locateRequested) {
-                    respondToLocateRequest()
                 }
             }.onFailure { error ->
                 // 404 means the server has no such device -- not that it is unreachable. See
@@ -287,89 +319,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Answers an admin's MDM "locate" request (`Device.locateRequested`, read back on the
-     * heartbeat above) by publishing this device's current real position through the same
-     * live-position pipeline the fleet dashboard's Live Map already watches
-     * (`POST /v1/fleet/positions` — [ApiService.publishPosition][au.com.threesixty.cabdispatch.data.remote.ApiService.publishPosition],
-     * shared/API_SUMMARY.md "Live Ops"), so a dispatcher sees a fresh pin appear/move as evidence
-     * the request was answered.
-     *
-     * No acknowledge/clear step: the only endpoint that flips `locate_requested` back off is
-     * `POST /v1/fleet/devices/{id}/locate`, which is admin-only server-side
-     * (`backend/app/api/v1/fleet.py::set_device_locate`) — this device's own JWT (driver or staff
-     * role) is never an admin, so it structurally cannot call it. Per this pass's brief, a fresh
-     * position publish is treated as sufficient evidence on its own — the dispatcher watching Live
-     * Map sees the pin, which is the actual thing they're waiting on. The flag simply stays set
-     * server-side until an admin clears it from the dashboard, which just means this method
-     * re-publishes on every subsequent heartbeat while it's still set — reasonable behaviour for a
-     * "tell me where you are" request either way, not a bug.
-     *
-     * Best-effort and silent-on-failure (beyond [LocateResponseState] diagnostics), matching every
-     * other background call in this file: [SessionHolder.session]'s [vehicleUuid] being unset or
-     * [AppContainer.speedSource]'s [locationFix][au.com.threesixty.cabdispatch.domain.SpeedSource.locationFix]
-     * not having a fix yet (no permission, cold start, no signal) both mean there's nothing honest
-     * to publish yet, so this skips rather than sending a fabricated position.
-     *
-     * Known limitation, flagged rather than left implicit: [loadDeviceStatus] only runs once, when
-     * this ViewModel is created (i.e. whenever the driver opens S6/Settings) — there's no
-     * periodic/background heartbeat anywhere in this app yet. A "Locate" request only gets
-     * answered the next time S6 happens to be opened, not the instant an admin sets the flag.
-     * Closing that gap would mean a periodic background heartbeat (e.g. WorkManager, mirroring
-     * [au.com.threesixty.cabdispatch.sync.SyncWorker]'s pattern) — a materially bigger change than
-     * "wire the existing heartbeat flow", left as a real, open follow-up rather than silently
-     * implied to already work continuously.
-     *
-     * BUGFIX (2026-09-04, found live on a real tablet once the [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]
-     * poll loop was actually started): this used to key the publish off [SessionHolder.session]'s
-     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleId] — the driver-entered/QR'd rego
-     * string (e.g. `"KHI-01"`) — which is exactly the identifier
-     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]'s own doc already documents
-     * `POST /v1/fleet/positions` as 404ing "Vehicle not found" on, live-confirmed:
-     * `backend/app/services/live_ops.py::get_vehicle_or_404` looks `vehicle_id` up against
-     * `Vehicle.id`, not `Vehicle.rego`. [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat]
-     * and [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat.respondToLocateRequest] were
-     * both already switched to the UUID for this same reason — this method, an un-migrated
-     * duplicate left behind when the latter was written, was the one call site still on the rego,
-     * and the one this screen's tile actually renders (nothing here reads
-     * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat.state]'s own, already-correct
-     * [au.com.threesixty.cabdispatch.domain.LocateOutcome]). Now uses the same UUID.
-     */
-    private suspend fun respondToLocateRequest() {
-        val vehicleUuid = SessionHolder.session.value?.vehicleUuid
-        if (vehicleUuid == null) {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.NoVehicleBound) }
-            return
-        }
-        val fix = AppContainer.speedSource.locationFix.value
-        if (fix == null) {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.NoFixYet) }
-            return
-        }
-        runCatching {
-            AppContainer.apiService.publishPosition(
-                PositionPublishRequestDto(
-                    vehicleId = vehicleUuid,
-                    lat = fix.lat,
-                    lng = fix.lng,
-                    // Deliberately a fixed placeholder, not a guess: this call site only knows "an
-                    // admin asked where this device is", not the driver's real
-                    // available/on-trip/offline status — that's the Idle screen's separate,
-                    // still-unwired "For Hire" toggle (HANDOFF.md "Availability broadcast not
-                    // wired"). No server-side enum constraint on `status` (see
-                    // PositionPublishRequestDto's doc), so this is a safe, honest value until that
-                    // toggle publishes a real one.
-                    status = LOCATE_RESPONSE_STATUS,
-                ),
-            )
-        }.onSuccess {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.Sent) }
-        }.onFailure { error ->
-            _uiState.update {
-                it.copy(locateResponse = LocateResponseState.Failed(error.message ?: "Unknown error"))
-            }
-        }
-    }
 
     // --- Passenger-facing fare schedule (cl.15 display requirement) ---
     private fun loadFareSchedule() {
@@ -479,6 +428,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                             // place that has to say so explicitly.
                             SessionHolder.deviceId = null
                             AppContainer.devicePairingStore.clear()
+                            // ...and back to first-install state, so the next person to switch it
+                            // on gets the technician's commissioning checklist rather than a login
+                            // screen on a tablet nobody has set up.
+                            AppContainer.commissioningStore.clear()
                             _uiState.update {
                                 it.copy(factoryResetInProgress = false, factoryResetComplete = true)
                             }

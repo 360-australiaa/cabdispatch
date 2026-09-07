@@ -41,6 +41,12 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 7 / 0.5.1 (2026-09-08): technician commissioning checklist on first install; remote
+        // locate answered on the device route (it used to publish a vehicle position, which 404'd
+        // on a tablet whose vehicle had been deleted -- the "Location request failed to send"
+        // report); remote restart of the meter app actually implemented and acknowledged, so
+        // Locate and Restart stop reading "Pending" forever. Needs the matching backend.
+        //
         // 6 / 0.5.0 (2026-09-08): a tablet must be REGISTERED with the depot before anyone can log
         // into the meter -- see domain/DeviceReadiness.kt. Requires the matching backend
         // (device_secret + code-authenticated POST /v1/fleet/devices/register): against an older
@@ -58,8 +64,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 6
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.5.1"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

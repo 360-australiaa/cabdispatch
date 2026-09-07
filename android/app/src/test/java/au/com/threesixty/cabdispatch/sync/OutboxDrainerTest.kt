@@ -12,7 +12,9 @@ import au.com.threesixty.cabdispatch.data.remote.ComplianceDossierDto
 import au.com.threesixty.cabdispatch.data.remote.ComplianceExpiryPageDto
 import au.com.threesixty.cabdispatch.data.remote.CorporateAccountPageDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceDto
+import au.com.threesixty.cabdispatch.data.remote.DeviceCommandAckDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
+import au.com.threesixty.cabdispatch.data.remote.DeviceLocateResponseDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DriverAvailabilityDto
 import au.com.threesixty.cabdispatch.data.remote.DriverAvailabilityUpdateDto
@@ -541,6 +543,8 @@ private class FakeApiService : ApiService {
     // deviceSecret param added 2026-08-29 (device-scoped heartbeat auth pass) — see
     // ApiService.deviceHeartbeat's own doc; not exercised by this test, default kept.
     override suspend fun deviceHeartbeat(deviceId: String, body: DeviceHeartbeatRequestDto, deviceSecret: String?): DeviceDto = notUsed()
+    override suspend fun deviceLocateResponse(deviceId: String, body: DeviceLocateResponseDto, deviceSecret: String?): DeviceDto = notUsed()
+    override suspend fun deviceCommandAck(deviceId: String, body: DeviceCommandAckDto, deviceSecret: String?): DeviceDto = notUsed()
     override suspend fun activeTariff(region: String, at: String?): TariffDto = notUsed()
     override suspend fun currentFaresOrder(region: String, at: String?): TariffDto = notUsed()
     override suspend fun createTrip(body: TripCreateDto): TripDto = notUsed()
