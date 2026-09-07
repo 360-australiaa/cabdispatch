@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { Badge, Modal, Table, type TableColumn } from "@/components/ui";
+import { Badge, Button, Modal, Table, type TableColumn } from "@/components/ui";
 import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
 import {
@@ -16,6 +16,7 @@ import {
 } from "./utils";
 import { useDriverDetailQuery, useVehicleDetailQuery } from "./useVehicleDetail";
 import { useVehicleShiftHistoryQuery } from "./useVehicleShiftHistory";
+import { useDevices, useKioskLock, useLocateDevice, useRestartApp } from "@/pages/fleet/api";
 import { usePositionHistoryQuery } from "./useVehiclePositionHistory";
 
 export interface VehicleDetailModalProps {
@@ -169,6 +170,78 @@ function ReplayMiniMap({ items, index }: { items: PositionHistoryItem[]; index: 
  * reusing whatever row triggered it, so the panel never shows a stale value
  * from a paused table/map poll.
  */
+/**
+ * Locate / kiosk lock / restart, for the tablet in this vehicle.
+ *
+ * Reuses the Fleet page's own mutations rather than re-implementing them, so the
+ * two surfaces cannot drift on what a button does. The device row is fetched by
+ * android-id-less lookup on the device list, which is already cached by that
+ * page's query — an operator arriving from Fleet > Devices pays nothing for it.
+ *
+ * Deliberately shows what the depot ASKED for and what came back, not just a
+ * button: "Waiting..." until the tablet answers on its next heartbeat, then the
+ * answer. A control that looks identical before and after the device has acted is
+ * the exact failure that made Locate and Restart read "Pending" forever.
+ */
+function RemoteActions({ deviceId }: { deviceId: string }) {
+  const devicesQuery = useDevices(0, {}, 100);
+  const device = devicesQuery.data?.items?.find((d) => d.id === deviceId);
+  const locate = useLocateDevice();
+  const kioskLock = useKioskLock();
+  const restart = useRestartApp();
+
+  if (!device) {
+    return (
+      <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+        {devicesQuery.isLoading ? "Loading remote controls…" : "This tablet is not in the device list."}
+      </p>
+    );
+  }
+
+  const busy = locate.isPending || kioskLock.isPending || restart.isPending;
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Remote
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || device.locate_requested}
+          onClick={() => locate.mutate(device.id)}
+        >
+          {device.locate_requested ? "Locating…" : "Locate"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => kioskLock.mutate({ id: device.id, enabled: !device.kiosk_locked })}
+        >
+          {device.kiosk_locked ? "Unlock kiosk" : "Lock kiosk"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || device.reboot_requested}
+          onClick={() => restart.mutate(device.id)}
+        >
+          {device.reboot_requested ? "Restarting…" : "Restart app"}
+        </Button>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {/* The honest latency. There is no push channel to a tablet: every remote
+            command waits for its 60-second heartbeat, and saying so stops an
+            operator pressing the button repeatedly. */}
+        Commands reach the tablet on its next heartbeat, within about a minute.
+        {device.last_locate_at && ` Last located ${formatRelativeTime(device.last_locate_at)}.`}
+      </p>
+    </div>
+  );
+}
+
 export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: VehicleDetailModalProps) {
   const vehicleQuery = useVehicleDetailQuery(vehicleId);
   const vehicle = vehicleQuery.data;
@@ -307,6 +380,11 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
                 )}
               </Field>
             </div>
+            {/* The remote controls, where the operator is already looking.
+                They existed only on Fleet > Devices, which meant locating a
+                vehicle here and then acting on it was a page change and a
+                search for the right Android ID. */}
+            {vehicle.device_id && <RemoteActions deviceId={vehicle.device_id} />}
           </div>
 
           <div className="rounded-lg border border-border p-3">
