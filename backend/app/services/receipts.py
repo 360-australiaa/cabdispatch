@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -131,6 +132,59 @@ def _fmt(amount) -> str:
     return f"${amount:.2f}"
 
 
+def fare_line_items(trip) -> tuple[list[tuple[str, Decimal]], list[tuple[str, Decimal]]]:
+    """Split a trip's fare into the rows that SUM to `trip.subtotal` and the rows
+    that are merely disclosed as already included in it.
+
+    Returns `(line_items, included_items)`. `line_items` are additive and must
+    reconcile to `trip.subtotal`; `included_items` are informational only and
+    must never be added to anything.
+
+    A negotiated (fixed) fare is ALL-INCLUSIVE — the agreed price IS what the
+    passenger pays, with tolls and the levy absorbed inside it rather than added
+    on top (see `app.services.fare_engine.FareEngine.close`'s `negotiated_total`
+    branch). This receipt used to itemise those absorbed components as ordinary
+    additive rows, which produced a breakdown whose visible lines did not sum to
+    the printed Subtotal. The TOTAL was always correct, but on a fare-regulated
+    receipt an itemisation that doesn't reconcile is exactly what a passenger
+    disputes and an operator then cannot defend.
+
+    So a fixed-price receipt leads with the agreed price, and reports the
+    absorbed components as "included" — still disclosed (the levy and any toll
+    really were incurred, and the operator still remits the levy: see
+    `app.models.psl_ledger`), just never presented as charged on top.
+
+    Extracted from the PDF renderer specifically so this reconciliation is
+    directly assertable in tests rather than only observable by reading a
+    generated PDF.
+    """
+    if trip.negotiated_total is not None:
+        line_items = [("Agreed fixed price (all-inclusive)", trip.negotiated_total)]
+        included_items = [
+            (label, amount)
+            for label, amount in (
+                ("Tolls", trip.tolls),
+                ("Passenger Service Levy (PSL)", trip.psl),
+                ("Extras", trip.extras),
+            )
+            if amount
+        ]
+        return line_items, included_items
+
+    return (
+        [
+            ("Flag fall", trip.flag_fall),
+            ("Distance charge", trip.dist_amount),
+            ("Waiting charge", trip.wait_amount),
+            ("Peak surcharge", trip.peak_amount),
+            ("Tolls", trip.tolls),
+            ("Passenger Service Levy (PSL)", trip.psl),
+            ("Extras", trip.extras),
+        ],
+        [],
+    )
+
+
 def _render_pdf_bytes(
     *, trip: Trip, driver_name: str, vehicle_label: str, tenant_name: str, tenant_abn: str | None
 ) -> bytes:
@@ -192,18 +246,15 @@ def _render_pdf_bytes(
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Fare Breakdown", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 10)
-    line_items = [
-        ("Flag fall", trip.flag_fall),
-        ("Distance charge", trip.dist_amount),
-        ("Waiting charge", trip.wait_amount),
-        ("Peak surcharge", trip.peak_amount),
-        ("Tolls", trip.tolls),
-        ("Passenger Service Levy (PSL)", trip.psl),
-        ("Extras", trip.extras),
-    ]
+    line_items, included_items = fare_line_items(trip)
+
     for label, amount in line_items:
         pdf.cell(130, 6, label)
         pdf.cell(0, 6, _fmt(amount), new_x="LMARGIN", new_y="NEXT", align="R")
+
+    for label, amount in included_items:
+        pdf.cell(130, 6, f"  {label} — included in agreed price")
+        pdf.cell(0, 6, f"({_fmt(amount)})", new_x="LMARGIN", new_y="NEXT", align="R")
 
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(130, 6, "Subtotal")
