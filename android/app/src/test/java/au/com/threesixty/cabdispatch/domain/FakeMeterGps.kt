@@ -117,9 +117,20 @@ class FakeMeterGps(
     private companion object {
         const val NANOS_PER_MILLI = 1_000_000L
 
-        /** Metres per degree of longitude at [lat] — the standard spherical approximation. */
+        /**
+         * Kilometres-per-degree-of-longitude at [lat], on the SAME sphere [GeoMath] uses.
+         *
+         * 6371.0088 km mean radius x pi/180 = 111.19493 km per degree. Deliberately not the
+         * WGS84 equatorial 111.31949: this fake exists to hand the engine a track whose length
+         * [GeoMath.distanceKm] will read back exactly, and a radius that disagreed with GeoMath's
+         * by 0.1% would put a systematic 0.1% error between what the fake drove and what the meter
+         * measured — small, but exactly the kind of quiet bias a distance test must not carry.
+         */
         fun kmToLngDegrees(km: Double, lat: Double): Double =
-            km / (111.31949079327357 * cos(Math.toRadians(lat)))
+            km / (KM_PER_DEGREE * cos(Math.toRadians(lat)))
+
+        /** [GeoMath]'s own mean Earth radius (6371.0088 km) expressed as km per degree. */
+        const val KM_PER_DEGREE = 111.19492664455873
     }
 }
 

@@ -1,6 +1,9 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
+import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
+import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -217,6 +220,95 @@ class FareEngineImplRunningDisplayTest {
         val state = engine.state.value
         assertEquals(BigDecimal("50.00"), state.total)
         assertEquals(BigDecimal("6.43"), state.breakdown.tolls)
+    }
+
+    // --- (D) F8: the dial IS the bill, maxi multiplier and all ------------------------------
+
+    @Test
+    fun `on a maxi trip the dial shows exactly what Close and Pay will bill`() = runTest {
+        // F8 (architecture audit 2026-09-08, §2.2), the audit's own words: "a maxi trip's live dial
+        // under-reads the actual bill by 50% of the metered base".
+        //
+        // The cause was structural rather than arithmetical. FareBreakdown carries the RAW
+        // cumulative flagfall/distance/waiting figures, because the pure engine applies the 150%
+        // maxi multiplier ONCE, wholesale, at close time — never per tick. FareState.total summed
+        // those raw components itself, so it could not have known about a multiplier that had not
+        // been applied yet. A driver on a maxi hiring watched a dial reading two-thirds of the
+        // metered fare for the whole trip and then saw it jump at Close & Pay.
+        //
+        // This test does not check the dial against a formula. It checks it against the OTHER CODE
+        // PATH — the one Close & Pay actually bills from — which is the only comparison that can
+        // prove the two agree.
+        val gps = FakeMeterGps(70.0)
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        engine.startTrip(
+            urbanTariffDto(),
+            startLat = -33.87,
+            startLng = 151.21,
+            isMaxiVehicle = true,
+            passengerCount = 7,
+        )
+        repeat(180) { advanceOneTick(gps) } // three minutes at 70 km/h — 3.5 km, a real fare
+
+        val dial = engine.state.value
+        assertTrue("this hiring must genuinely be on the maxi rate", dial.maxiRateApplied)
+        assertTrue("the meter must have accrued something real", dial.breakdown.distanceAmount > BigDecimal.ZERO)
+
+        // Rebuild the bill the way Close & Pay does: hand the accrued state to the pure,
+        // golden-vector-tested engine and close it. (CloseAndPayViewModel reaches this same
+        // close() via reconstructFareState off the persisted row; the accrued figures are the
+        // same either way, which is what F9 makes true to the cent.)
+        val billed = CalcFareEngine().close(
+            CalcFareState(
+                tariff = urbanTariffDto().toDomainTariff(),
+                timeClass = au.com.threesixty.cabdispatch.domain.fare.TimeClass.DAY,
+                isPeak = false,
+                isMaxiVehicle = true,
+                passengerCount = 7,
+                cumulativeDistanceKm = dial.distanceKm,
+                accruedDistanceCharge = dial.breakdown.distanceAmount,
+                accruedWaitingCharge = dial.breakdown.waitingAmount,
+                hired = true,
+            ),
+            includePsl = true,
+        )
+
+        assertEquals("the live dial must equal the bill, to the cent", billed.grandTotal, dial.total)
+        assertTrue("and the maxi rate must genuinely be in that figure", billed.maxiRateApplied)
+
+        // The regression guard, stated concretely: the naive breakdown sum the dial used to show is
+        // materially LOWER than the bill, because the maxi half of the metered fare is missing from
+        // it. If FareState.total ever falls back to that sum, this fails.
+        assertTrue(
+            "the old naive sum under-reads the maxi bill (sum ${dial.breakdown.total}, bill ${billed.grandTotal})",
+            dial.breakdown.total < billed.grandTotal,
+        )
+    }
+
+    @Test
+    fun `on an ordinary trip the dial also equals the bill`() = runTest {
+        // The non-maxi control for the test above: F8's fix must not have moved the ordinary case,
+        // which was already very nearly right (it differed only by the Act s76(5)/(6) round-down).
+        val gps = FakeMeterGps(50.0)
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+        repeat(120) { advanceOneTick(gps) }
+
+        val dial = engine.state.value
+        val billed = CalcFareEngine().close(
+            CalcFareState(
+                tariff = urbanTariffDto().toDomainTariff(),
+                timeClass = au.com.threesixty.cabdispatch.domain.fare.TimeClass.DAY,
+                isPeak = false,
+                cumulativeDistanceKm = dial.distanceKm,
+                accruedDistanceCharge = dial.breakdown.distanceAmount,
+                accruedWaitingCharge = dial.breakdown.waitingAmount,
+                hired = true,
+            ),
+            includePsl = true,
+        )
+
+        assertEquals(billed.grandTotal, dial.total)
     }
 
     @Test
