@@ -461,7 +461,7 @@ fun CaptainChip(label: String, value: String, modifier: Modifier = Modifier, onC
     }
 }
 
-/** `CaptainKey` — one keypad key, mirrors [au.com.threesixty.cabdispatch.ui.deck.DeckKey]'s
+/** `CaptainKey` — one keypad key, mirrors `DeckKey` (deleted, P0.3)'s
  * layout/typography exactly but on [CaptainPalette] tokens, at a slightly larger 84dp height for
  * the elderly-friendly standard. */
 @Composable

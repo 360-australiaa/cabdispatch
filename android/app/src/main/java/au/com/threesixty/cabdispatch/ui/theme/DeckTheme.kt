@@ -30,7 +30,7 @@ import au.com.threesixty.cabdispatch.R
  * The surface/text tokens below ("always dark" per the note above, until now) are
  * `mutableStateOf`-backed `var`s, swapped in bulk by [applyTheme] — see [CaptainPalette]'s own,
  * more detailed doc for why plain `State<Color>` fields (not a `CompositionLocal`) is the right
- * shape here: [ui.deck.DeckWidgets.DeckKey] (the live meter keypad's key) reads these from ordinary
+ * shape here: `DeckKey` (deleted, P0.3) (the live meter keypad's key) reads these from ordinary
  * Compose code, not a draw scope, but keeping both design systems' tokens the same *shape* means
  * one mental model for the whole app. The five meter-state/brand colours
  * ([yellow]/[info]/[ledGreen]/[ledAmber]/[forHire]/[hired]/[stopped]/[offDuty]/[duress]) are
@@ -141,7 +141,7 @@ private object DeckDarkTokens : DeckTokenSet {
 /** [Deck]'s light-mode surface/text values (2026-09-04 day-mode pass) — same design rules as
  * [CaptainPalette]'s light token set (soft off-white canvas, near-white elevated cards, near-black
  * primary text); see that object's doc for the full rationale. The meter keypad
- * ([au.com.threesixty.cabdispatch.ui.deck.DeckKey]) is the one live consumer of these — its
+ * (`DeckKey` (deleted, P0.3)) is the one live consumer of these — its
  * `stopped` accent glyph colour is left theme-invariant per [Deck]'s own class doc. */
 private object DeckLightTokens : DeckTokenSet {
     override val canvas = Color(0xFFEDEBF4)

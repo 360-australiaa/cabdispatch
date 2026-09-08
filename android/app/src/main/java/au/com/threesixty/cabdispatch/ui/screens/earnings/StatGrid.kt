@@ -26,7 +26,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
  * wants the plain shared version back.
  *
  * **2026-09-02 Captain Taxis pass:** last remaining file on the old v2
- * [WheelColorsV2] token set after the rest of the app's purple-redesign
+ * `WheelColorsV2` (deleted, P0.3) token set after the rest of the app's purple-redesign
  * migration — re-themed onto [CaptainPalette] here so no screen (dead-code
  * call sites included) can reintroduce the legacy look by copying this file.
  */

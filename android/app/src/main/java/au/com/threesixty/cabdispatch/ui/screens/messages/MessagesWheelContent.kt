@@ -36,7 +36,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
- * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES] wheel-slot content, per design spec
+ * `WheelSlot.MESSAGES` (deleted, P0.3) wheel-slot content, per design spec
  * TCT-DRIVER-APP-01.md §4 ("Messages: list of dispatch messages — sender, preview text,
  * timestamp") — a direct Compose port of the reference prototype's `row(...)`-generated
  * `.list-row` markup for the Messages slot (docs/driver-dashboard-full-prototype.html lines
@@ -54,8 +54,8 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen] — colors/typography/shapes
  * only, no behavior change.
  *
- * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
- * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES], wiring
+ * Verified (reconciliation pass): `WheelDashboardScreen` (deleted, P0.3)
+ * renders this composable for `WheelSlot.MESSAGES` (deleted, P0.3), wiring
  * [onOpenThread] exactly as suggested below — see that screen's `MessagesSlotContent`:
  * `MessagesWheelContent(onOpenThread = { navController.navigate(CabDispatchRoutes.MESSAGES_THREAD) })`.
  */

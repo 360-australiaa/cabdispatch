@@ -23,7 +23,7 @@ import kotlin.coroutines.resume
  * settings.gradle.kts's Maven-credentials block; without that secret token this whole SDK
  * dependency fails to resolve at all, which is why the app previously used the Static Images API
  * fallback instead — see [MapboxStaticImage]'s doc for that history, kept as the loading/error/
- * no-token fallback in [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]).
+ * no-token fallback in `WheelDashboardScreen` (deleted, P0.3)).
  *
  * **API-surface risk flag, read before touching this file:** this was written against a solid
  * general understanding of the Mapbox v11 offline API shape (`TileStore.create()` +
@@ -37,7 +37,7 @@ import kotlin.coroutines.resume
  * for reconciling any mismatch, not this comment.
  *
  * Once a region has been downloaded via [downloadSydneyMetroRegion], the SDK's [TileStore] serves
- * matching map/style requests from the local cache automatically — [WheelDashboardScreen]'s
+ * matching map/style requests from the local cache automatically — `WheelDashboardScreen` (deleted, P0.3)'s
  * `MapView` needs no separate "offline mode" code path, this is transparent to it.
  */
 object MapboxOfflineRegion {

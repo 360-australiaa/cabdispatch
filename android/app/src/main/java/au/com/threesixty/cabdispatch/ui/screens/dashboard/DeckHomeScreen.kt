@@ -125,7 +125,7 @@ import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import au.com.threesixty.cabdispatch.ui.overlays.DuressActiveBanner
 import au.com.threesixty.cabdispatch.ui.overlays.DuressTriggeredOverlay
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
-import au.com.threesixty.cabdispatch.ui.deck.DeckKeypad
+import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelContent
@@ -238,7 +238,7 @@ import java.util.Locale
  *   preserving the previous Command Deck's live-position map view ([StatusMapPanel], unchanged)
  *   rather than deleting a working feature just because it isn't one of the 3 given frames.
  * - **SOS control.** Figma draws SOS as a plain circular tap target. This app's existing duress
- *   trigger is deliberately LONG-PRESS only — see [au.com.threesixty.cabdispatch.ui.deck.DeckNavRail]'s
+ *   trigger is deliberately LONG-PRESS only — see `DeckNavRail` (deleted, P0.3)'s
  *   own doc: "so a knee-bump can't fire a silent alarm." Matching Figma's tap-to-fire literally
  *   would remove a real safety property for a visual detail, so [SosControl] below keeps the same
  *   press-and-hold gesture, styled to match Figma's red-ringed circle, with a short "HOLD" caption
@@ -2535,7 +2535,7 @@ private fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit)
                     color = CaptainPalette.success,
                 )
             }
-            DeckKeypad(
+            CaptainKeypad(
                 onDigit = { d -> if (amount.length < 3) amount += d }, // matches the Fares Order cap this dialog already enforced: $1-$500
                 onBackspace = { amount = amount.dropLast(1) },
                 onClear = { amount = "" },

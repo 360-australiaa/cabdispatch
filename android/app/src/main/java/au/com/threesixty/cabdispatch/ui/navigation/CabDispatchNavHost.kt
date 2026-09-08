@@ -27,8 +27,6 @@ import au.com.threesixty.cabdispatch.ui.screens.shiftsubmitted.ShiftSubmittedScr
 import au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen
 import au.com.threesixty.cabdispatch.ui.screens.terms.TermsDisclaimerScreen
 import au.com.threesixty.cabdispatch.ui.screens.tripdetail.TripDetailScreen
-import au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneScreen
-import au.com.threesixty.cabdispatch.ui.screens.zones.ZoneStatisticsScreen
 
 /**
  * Route name constants for the six meter screens (spec B5, S1–S6). Screens
@@ -65,7 +63,7 @@ object CabDispatchRoutes {
     const val RATE_PASSENGER = "rate_passenger"
 
     /** S14 — Messages thread detail/quick-reply (wheel redesign, spec §8 row 13-14). Verified
-     * (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]'s
+     * (reconciliation pass): `WheelDashboardScreen` (deleted, P0.3)'s
      * Messages wheel-slot content ([au.com.threesixty.cabdispatch.ui.screens.messages.MessagesWheelContent])
      * `onOpenThread` callback now navigates here — see that screen's `MessagesSlotContent`. */
     const val MESSAGES_THREAD = "messages_thread"
@@ -98,18 +96,6 @@ object CabDispatchRoutes {
      * surfaces the Compliance Vault dossier. See
      * [au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen]. */
     const val PROFILE = "profile"
-
-    /** Plot / Statistics — zone-based demand screens (matches a real competitor taxi meter's
-     * screens, backend/app/api/v1/zones.py). All 6 wheel slots are already spoken for
-     * ([au.com.threesixty.cabdispatch.ui.wheel.WheelState.SLOT_COUNT] is a fixed 6, with the
-     * angle/geometry math in [au.com.threesixty.cabdispatch.ui.wheel.WheelGeometry] hardcoded
-     * against that count) so these are separate destinations, not a 7th/8th wheel slot — reached
-     * from a small "Zones" entry point on the dashboard's [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
-     * top status strip, same "demoted off the wheel" precedent [PROFILE] above already
-     * documents for a low-frequency screen. [PLOT_ZONE] is the entry point (zone list + current
-     * plot state); [ZONE_STATISTICS] is reached from a button on that screen and pops back to it. */
-    const val PLOT_ZONE = "plot_zone"
-    const val ZONE_STATISTICS = "zone_statistics"
 
     /** Boot-time Terms and Conditions / Privacy Policy disclaimer (2026-08-10 meter-polish
      * pass), registered ahead of S1 -- see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]
@@ -177,8 +163,9 @@ fun CabDispatchNavHost(
             // Command Deck v2 home (2026-08-27 redesign port) — replaces the rotating-wheel
             // dashboard; still registered under the same IDLE route key so every sibling
             // navigate(CabDispatchRoutes.IDLE) call keeps working unchanged. The old
-            // WheelDashboardScreen (and the older IdleScreen before it) are left in the tree
-            // unreferenced; DeckHomeScreen reuses WheelDashboardViewModel as-is.
+            // WheelDashboardScreen (and the older IdleScreen before it) sat unreferenced in the
+            // tree until Phase 0 (P0.3) deleted them; DeckHomeScreen is now the only post-login
+            // home, and it reuses WheelDashboardViewModel as-is.
             DeckHomeScreen(navController = navController)
         }
         composable(CabDispatchRoutes.HIRED) {
@@ -266,12 +253,6 @@ fun CabDispatchNavHost(
                     }
                 },
             )
-        }
-        composable(CabDispatchRoutes.PLOT_ZONE) {
-            PlotZoneScreen(navController = navController)
-        }
-        composable(CabDispatchRoutes.ZONE_STATISTICS) {
-            ZoneStatisticsScreen(navController = navController)
         }
         composable(CabDispatchRoutes.TERMS_DISCLAIMER) {
             TermsDisclaimerScreen(

@@ -45,7 +45,7 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  * throughout" / §6 step 8: "never shown as a visible control, only documented/annotated for the
  * design team"). Shared composable rather than each screen re-implementing its own tap-timing
  * logic — [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] (where this gesture was
- * first wired) and [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen] both
+ * first wired) and `WheelDashboardScreen` (deleted, P0.3) both
  * use this exact composable, each supplying its own [onTriggered] (typically
  * `AppContainer.duressController.trigger(vehicleId, driverId)` — see [DuressController]).
  *
