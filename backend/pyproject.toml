@@ -23,6 +23,14 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "bcrypt<4.1",  # passlib 1.7.4 is incompatible with bcrypt>=4.1's dropped __about__ attr
     "python-multipart>=0.0.12",
+    # Rate limiting (app/core/ratelimit.py). slowapi supplies the per-route
+    # decorator + 429 plumbing; `limits` (its own dependency, pinned explicitly
+    # because we use it directly for the body-keyed limits slowapi's sync
+    # key_func cannot express) supplies the storage backends and the fixed-window
+    # strategy shared by both. Redis is optional at runtime -- absent it, the
+    # in-memory backend is used; see that module's docstring.
+    "slowapi>=0.1.9",
+    "limits>=3.0",
     "stripe>=11.0",
     "redis>=5.2",
     "websockets>=13.1",

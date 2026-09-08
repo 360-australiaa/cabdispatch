@@ -461,6 +461,17 @@ async def test_tick_raises_new_alert_after_previous_one_acknowledged(client: Asy
 # --- driver-login expiry block -----------------------------------------------
 
 
+async def _tenant_slug(session: AsyncSession, tenant_id: str) -> str:
+    """POST /v1/auth/driver-login now requires a `tenant_slug` — the lookup used
+    to run globally across every tenant (backend audit §5 ADDENDUM) and is now
+    scoped to one. Nothing about the expiry behaviour these tests cover changed;
+    only the request shape did."""
+    from app.models.tenant import Tenant
+
+    tenant = await session.get(Tenant, tenant_id)
+    return tenant.slug
+
+
 async def _create_driver_via_api(client: AsyncClient, headers: dict, **overrides) -> dict:
     payload = {
         "name": overrides.pop("name", "Login Expiry Driver"),
@@ -481,7 +492,12 @@ async def test_driver_login_blocked_when_license_actually_expired(client: AsyncC
     )
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver["driver_code"], "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={
+            "tenant_slug": await _tenant_slug(session, driver["tenant_id"]),
+            "driver_code": driver["driver_code"],
+            "pin": _PASSWORD,
+        },
     )
     assert login.status_code == 403
     assert "expired" in login.json()["detail"].lower()
@@ -494,7 +510,12 @@ async def test_driver_login_allowed_when_license_expiring_soon(client: AsyncClie
     )
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver["driver_code"], "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={
+            "tenant_slug": await _tenant_slug(session, driver["tenant_id"]),
+            "driver_code": driver["driver_code"],
+            "pin": _PASSWORD,
+        },
     )
     assert login.status_code == 200
 
@@ -504,7 +525,12 @@ async def test_driver_login_allowed_when_license_expiry_is_null(client: AsyncCli
     driver = await _create_driver_via_api(client, admin_headers)
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver["driver_code"], "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={
+            "tenant_slug": await _tenant_slug(session, driver["tenant_id"]),
+            "driver_code": driver["driver_code"],
+            "pin": _PASSWORD,
+        },
     )
     assert login.status_code == 200
 
@@ -518,7 +544,12 @@ async def test_driver_login_not_blocked_by_expired_authority_alone(client: Async
     )
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver["driver_code"], "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={
+            "tenant_slug": await _tenant_slug(session, driver["tenant_id"]),
+            "driver_code": driver["driver_code"],
+            "pin": _PASSWORD,
+        },
     )
     assert login.status_code == 200
 
@@ -535,7 +566,12 @@ async def test_driver_login_wrong_pin_still_401s_even_with_expired_license(
     )
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver["driver_code"], "pin": "wrong-pin"}
+        "/v1/auth/driver-login",
+        json={
+            "tenant_slug": await _tenant_slug(session, driver["tenant_id"]),
+            "driver_code": driver["driver_code"],
+            "pin": "wrong-pin",
+        },
     )
     assert login.status_code == 401
 

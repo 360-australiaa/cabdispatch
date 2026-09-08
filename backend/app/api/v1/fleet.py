@@ -9,11 +9,20 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.core.ratelimit import (
+    DEVICE_REGISTER_PER_IP,
+    VERIFY_ADMIN_PIN_LOCKOUT,
+    VERIFY_ADMIN_PIN_PER_USER,
+    enforce,
+    limiter,
+    peek_exhausted,
+    register_failure,
+)
 from app.core.security import (
     get_current_tenant_id,
     get_current_user,
@@ -521,7 +530,9 @@ async def delete_device(
 
 
 @router.post("/devices/register", response_model=DeviceRead)
+@limiter.limit(DEVICE_REGISTER_PER_IP)
 async def register_device(
+    request: Request,
     payload: DeviceRegisterRequest,
     session: AsyncSession = Depends(get_session),
 ):
@@ -788,6 +799,7 @@ async def set_device_reboot(
 async def verify_device_admin_pin(
     device_id: str,
     payload: VerifyAdminPinRequest,
+    user: User = Depends(_require_admin),
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
@@ -795,16 +807,48 @@ async def verify_device_admin_pin(
     the Android app's factory-reset flow — see
     au...SettingsViewModel.attemptFactoryReset) to check a PIN against the
     tenant's server-side admin_pin_hash, without the hash itself ever being
-    sent to the device. No admin-role gate: this is the device-facing check
-    endpoint, not the set endpoint (see POST /v1/tenants/{id}/admin-pin,
-    owner-only, in app/api/v1/tenants.py) — any authenticated user of this
-    tenant's device can attempt a PIN, same as anyone can attempt an admin
-    PIN on the physical device itself.
+    sent to the device.
+
+    ⚠ ROLE GATE (behaviour change). This route previously had NO role gate, and
+    its docstring argued that was fine because "anyone can attempt an admin PIN
+    on the physical device itself". That reasoning does not survive contact with
+    a network endpoint: attempting a PIN on a tablet is one guess per physical
+    interaction, whereas this is an unauthenticated-rate HTTP oracle that any
+    tenant user — including a **driver** token, which is what the tablet holds —
+    could query in a loop until the tenant's admin PIN fell out (backend audit
+    §5). It is now `owner|admin` only.
+
+    Consequence for the tablet's factory-reset flow, stated plainly rather than
+    papered over: that flow runs on a driver token today and will now get a 403.
+    The intended replacement is device-secret authentication
+    (`X-Device-Secret`), whose general mechanism is a separate workstream; until
+    that lands, an owner/admin token is required for this route.
+
+    ⚠ RATE LIMIT + LOCKOUT. Keyed on the authenticated user (not the IP): the
+    threat is a valid token grinding the PIN, and that token moves between IPs
+    freely. VERIFY_ADMIN_PIN_PER_USER caps the attempt rate; independently, once
+    VERIFY_ADMIN_PIN_LOCKOUT *failed* attempts accumulate the user is refused
+    outright for the rest of that window. The lockout counter is advanced ONLY
+    by a wrong PIN, and it is *checked* without being advanced, so a locked-out
+    caller polling the endpoint cannot extend their own lockout indefinitely.
 
     `configured=False` (tenant has never set an admin PIN) is always
     accompanied by `valid=False`, but callers must check `configured`
     explicitly rather than inferring "not configured" from `valid=False`
     alone — that would be indistinguishable from "PIN set, but wrong"."""
+    if peek_exhausted(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", user.id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed admin PIN attempts; locked out temporarily",
+            headers={"Retry-After": "900"},
+        )
+    enforce(
+        VERIFY_ADMIN_PIN_PER_USER,
+        "admin-pin",
+        user.id,
+        detail="Too many admin PIN attempts",
+    )
+
     try:
         await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
@@ -816,6 +860,8 @@ async def verify_device_admin_pin(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
 
     configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
+    if not valid:
+        register_failure(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", user.id)
     return VerifyAdminPinResponse(valid=valid, configured=configured)
 
 

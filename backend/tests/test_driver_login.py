@@ -26,6 +26,24 @@ def _unique_email(prefix: str = "driver-login") -> str:
     return f"{prefix}-{uuid.uuid4()}@example.com"
 
 
+async def _tenant_slug_for_user(session, user_id: str) -> str:
+    """The `tenant_slug` a driver's client must now send.
+
+    driver-login used to resolve `driver_code` globally across every tenant on
+    the platform; it is now scoped to one tenant, and `tenant_slug` is the
+    required discriminator (see app/api/v1/auth.py::driver_login). These tests
+    read the slug off the tenant that `auth_headers` created rather than
+    hardcoding one, because the slug is auto-derived per tenant
+    (app/models/tenant.py::_ensure_tenant_slug).
+    """
+    from app.models.tenant import Tenant
+    from app.models.user import User
+
+    user = await session.get(User, user_id)
+    tenant = await session.get(Tenant, user.tenant_id)
+    return tenant.slug
+
+
 async def _create_driver(client, headers, **overrides):
     payload = {
         "name": overrides.pop("name", "PIN Driver"),
@@ -87,9 +105,11 @@ async def test_driver_can_log_in_with_driver_code_and_pin(client, session):
 
     resp = await _create_driver(client, headers)
     driver_code = resp.json()["driver_code"]
+    slug = await _tenant_slug_for_user(session, resp.json()["id"])
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver_code, "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": _PASSWORD},
     )
     assert login.status_code == 200
     body = login.json()
@@ -109,18 +129,55 @@ async def test_driver_login_wrong_pin_is_401(client, session):
 
     resp = await _create_driver(client, headers)
     driver_code = resp.json()["driver_code"]
+    slug = await _tenant_slug_for_user(session, resp.json()["id"])
 
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver_code, "pin": "wrong-pin"}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": "wrong-pin"},
     )
     assert login.status_code == 401
 
 
 async def test_driver_login_unknown_driver_code_is_401(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("unknown-code"))
+    slug = await _tenant_slug_for_user(session, resp.json()["id"])
+
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": "ZZZZZ", "pin": "whatever"}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": "ZZZZZ", "pin": "whatever"},
     )
     assert login.status_code == 401
+
+
+async def test_driver_login_unknown_tenant_slug_is_401_not_404(client, session):
+    """An unknown tenant must be indistinguishable from a wrong PIN.
+
+    A 404 here would make driver-login an enumeration oracle for which
+    operators exist on the platform — see app/api/v1/auth.py::driver_login.
+    """
+    login = await client.post(
+        "/v1/auth/driver-login",
+        json={"tenant_slug": "no-such-tenant-anywhere", "driver_code": "ZZZZZ", "pin": "whatever"},
+    )
+    assert login.status_code == 401
+
+
+async def test_driver_login_without_tenant_slug_is_rejected(client, session):
+    """The old request shape (driver_code + pin only) must now FAIL validation.
+
+    This is the breaking change, asserted explicitly: if `tenant_slug` were
+    optional, the global cross-tenant lookup would still be reachable simply by
+    omitting it, which is the entire hole this workstream closes.
+    """
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("no-slug"))
+    driver_code = resp.json()["driver_code"]
+
+    login = await client.post(
+        "/v1/auth/driver-login", json={"driver_code": driver_code, "pin": _PASSWORD}
+    )
+    assert login.status_code == 422
 
 
 async def test_staff_cannot_log_in_via_driver_login_even_with_pin_hash(client, session):
@@ -140,8 +197,10 @@ async def test_staff_cannot_log_in_via_driver_login_even_with_pin_hash(client, s
     dispatcher.driver_code = "STAFF1"
     await session.commit()
 
+    slug = await _tenant_slug_for_user(session, user_id)
     login = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": "STAFF1", "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": "STAFF1", "pin": _PASSWORD},
     )
     assert login.status_code == 401
 
@@ -155,8 +214,10 @@ async def test_mfa_enabled_driver_gets_two_step_driver_login(client, session):
 
     # Enable MFA the same way test_auth_mfa.py does: log the driver in via
     # their own (now real) driver-login step 1, then run setup/verify.
+    slug = await _tenant_slug_for_user(session, user_id)
     step1 = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver_code, "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": _PASSWORD},
     )
     driver_headers = {"Authorization": f"Bearer {step1.json()['access_token']}"}
 
@@ -169,7 +230,8 @@ async def test_mfa_enabled_driver_gets_two_step_driver_login(client, session):
     # Step 1 of driver-login now returns mfa_required instead of real tokens
     # — the exact same MfaRequiredResponse contract as POST /v1/auth/login.
     login2 = await client.post(
-        "/v1/auth/driver-login", json={"driver_code": driver_code, "pin": _PASSWORD}
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": _PASSWORD},
     )
     assert login2.status_code == 200
     body = login2.json()

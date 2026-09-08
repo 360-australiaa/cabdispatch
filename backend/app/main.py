@@ -103,8 +103,11 @@ policy exception is still required per-fleet before this works end-to-end,
 and every install still needs one Android system confirmation tap (this
 app is not Device Owner, so it cannot install silently).
 """
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.announcements import router as announcements_router
 from app.api.v1.app_releases import platform_router as app_releases_platform_router
@@ -133,16 +136,48 @@ from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
 from app.api.v1.tariffs import fares_order_router
 from app.api.v1.tariffs import router as tariffs_router
-from app.api.v1.toll_roads import router as toll_roads_router
 from app.api.v1.tenants import router as tenants_router
+from app.api.v1.toll_roads import router as toll_roads_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
 from app.api.v1.vouchers import router as vouchers_router
 from app.api.v1.wallet import router as wallet_router
 from app.api.v1.zones import router as zones_router
 from app.core.config import settings
+from app.core.ratelimit import RateLimitExceeded, limiter
+from app.core.ratelimit import backend as ratelimit_backend
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Cab Dispatch API", version="0.1.0")
+
+# --- rate limiting (backend audit §5 "Rate limiting": there was none, anywhere) --
+# `limiter` is attached to app.state because that is where slowapi's decorators
+# look it up from the Request. The exception handler turns a tripped decorator
+# limit into a 429 with Retry-After rather than an unhandled exception. The
+# per-route limits live as decorators next to the routes they protect
+# (app/api/v1/auth.py, app/api/v1/fleet.py) so a reader of a route sees its
+# limit; the numbers themselves are constants in app/core/ratelimit.py.
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": f"Rate limit exceeded: {exc.detail}"},
+        headers={"Retry-After": "60"},
+    )
+
+
+# Logged at import so a deploy can see, in its very first lines of output,
+# whether it is actually sharing limits across workers (Redis) or silently
+# multiplying every limit by the worker count (in-memory fallback).
+logger.info(
+    "Rate limiting %s (backend: %s)",
+    "enabled" if limiter.enabled else "DISABLED",
+    "redis" if ratelimit_backend.using_redis else "in-memory fallback",
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -17,8 +17,24 @@ class LoginRequest(BaseModel):
 class DriverLoginRequest(BaseModel):
     """Body for POST /v1/auth/driver-login — the driver-facing counterpart to
     LoginRequest above. `pin` is verified against the same `User.pin_hash`
-    column `password` is (see app/api/v1/auth.py)."""
+    column `password` is (see app/api/v1/auth.py).
 
+    ⚠ BREAKING CHANGE: `tenant_slug` is REQUIRED as of this revision.
+
+    It was previously absent, and the driver-code lookup ran unfiltered across
+    every tenant on the platform (backend audit §5 ADDENDUM) — one 6-digit-PIN
+    credential space shared by every operator, on an endpoint with no rate
+    limiting. `tenant_slug` is `Tenant.slug` (see app/models/tenant.py): a
+    public, stable, URL-safe handle, unique platform-wide. It is not a secret
+    and is not a second authentication factor; it is the discriminator that
+    turns one global PIN space into one PIN space per tenant.
+
+    Required, not optional-with-fallback: an optional field would leave the
+    global lookup reachable by simply omitting it, which is the whole hole.
+    The Android client change is tracked as a separate workstream.
+    """
+
+    tenant_slug: str
     driver_code: str
     pin: str
 

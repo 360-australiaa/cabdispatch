@@ -1,9 +1,10 @@
 """Tenant model — one row per taxi network / operator (TSP) on the platform."""
 from __future__ import annotations
 
+import re
 import uuid
 
-from sqlalchemy import JSON, String
+from sqlalchemy import JSON, String, event
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -24,6 +25,19 @@ class Tenant(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Short, stable, URL-safe public handle for this tenant — the discriminator a
+    # client sends when it needs to name a tenant WITHOUT already holding a
+    # tenant-scoped token. Today that is exactly one caller: POST
+    # /v1/auth/driver-login, where the driver has no token yet and the lookup was
+    # previously global across every tenant on the platform (backend audit §5
+    # ADDENDUM) — one 6-digit-PIN space shared by the whole platform.
+    #
+    # Unique platform-wide, because that is the entire point: a slug must resolve
+    # to exactly one tenant. Nullable in the column definition only so the
+    # accompanying migration can add it to a live table and backfill it in the
+    # same revision; the `before_insert` listener below means no NEW row can be
+    # created without one, so application code may treat it as present.
+    slug: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     abn: Mapped[str | None] = mapped_column(String(20), nullable=True)
     tsp_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     bsp_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -45,3 +59,41 @@ class Tenant(Base, TimestampMixin):
     # device; devices call POST /v1/fleet/devices/{id}/verify-admin-pin
     # instead, which checks the PIN server-side and returns a bool.
     admin_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+def slugify_tenant_name(name: str, *, fallback: str | None = None) -> str:
+    """Derives a URL-safe slug from a tenant's display name.
+
+    Deliberately conservative and ASCII-only: lowercase, non-alphanumerics
+    collapsed to single hyphens, trimmed to 64 characters (the column width).
+    A name that reduces to nothing (all punctuation, or a non-Latin script with
+    no ASCII residue) falls back to `fallback` -- in practice the tenant's UUID
+    -- so this can never return an empty slug, which would be a slug matching
+    nothing that then collides with the next such tenant.
+
+    Uniqueness is NOT enforced here; that is the caller's job (the migration
+    de-duplicates its backfill, the `before_insert` listener appends a UUID
+    fragment). The unique index on the column is the real guarantee.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:64].strip("-")
+    if slug:
+        return slug
+    return (fallback or str(uuid.uuid4()))[:64]
+
+
+@event.listens_for(Tenant, "before_insert")
+def _ensure_tenant_slug(mapper, connection, target: Tenant) -> None:
+    """Guarantees every newly inserted tenant has a slug, without every caller
+    (POST /v1/platform/tenants, scripts/seed.py, a dozen test fixtures) having to
+    remember to set one -- none of which this workstream owns.
+
+    A short UUID fragment is appended so two tenants both called "City Cabs" do
+    not collide on the unique index: the slug stays human-recognisable while the
+    suffix keeps it unique. A slug supplied explicitly by the caller is left
+    exactly as given.
+    """
+    if getattr(target, "slug", None):
+        return
+    base = slugify_tenant_name(target.name, fallback=target.id or str(uuid.uuid4()))
+    suffix = uuid.uuid4().hex[:8]
+    target.slug = f"{base[: 64 - len(suffix) - 1]}-{suffix}"
