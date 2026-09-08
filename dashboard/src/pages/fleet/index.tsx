@@ -16,6 +16,7 @@ import {
   type WipeAllFleetDataResult,
 } from "./api";
 import { errorMessage } from "./format";
+import { canUseFleetTestTooling } from "./testTooling";
 
 type FleetTab = "vehicles" | "drivers" | "devices";
 
@@ -58,16 +59,25 @@ interface WipeOutcome {
 }
 
 /**
- * TEMPORARY testing-only bulk wipe (2026-09-07, direct product instruction —
- * see useWipeAllFleetData's own doc). Deletes every vehicle, driver, and
- * device on this tenant in one action, so a fresh-onboarding test ("like a
- * new user is onboarding properly") starts from a genuinely clean fleet
- * instead of the real accumulated test data (multiple tablets/drivers/
- * vehicles from past sessions) that made today's testing confusing. Gated
- * behind typing the literal word DELETE, not just a click-through confirm —
- * this is a bigger blast radius than any other destructive action on this
- * page (every vehicle/driver/device at once, not one row), and it should be
- * removed from the dashboard entirely once onboarding testing is done.
+ * Testing-only bulk wipe (2026-09-07, direct product instruction — see
+ * useWipeAllFleetData's own doc). Deletes every vehicle, driver, and device on
+ * this tenant in one action, so a fresh-onboarding test ("like a new user is
+ * onboarding properly") starts from a genuinely clean fleet instead of the
+ * real accumulated test data (multiple tablets/drivers/vehicles from past
+ * sessions) that made that day's testing confusing.
+ *
+ * This is test tooling, and it is no longer part of the production UI: it
+ * renders only when BOTH `VITE_ENABLE_TEST_TOOLING === "true"` at build time
+ * AND the signed-in account is a platform owner (canUseFleetTestTooling, which
+ * documents why both). The gate is applied by FleetPage below, which does not
+ * render this component at all otherwise, and re-checked here so no future
+ * caller can mount it ungated. The backend wipe routes are deliberately left
+ * untouched — whether they survive is a separate decision.
+ *
+ * Even behind those gates it still demands the literal word DELETE typed out
+ * rather than a click-through confirm: this has a bigger blast radius than any
+ * other destructive action on this page (every vehicle/driver/device at once,
+ * not one row).
  *
  * Two distinct actions live in this one modal:
  *   1. The default wipe (unchanged): deletes vehicles/devices/every driver
@@ -82,6 +92,9 @@ interface WipeOutcome {
  */
 function WipeAllFleetDataButton() {
   const { user } = useAuth();
+  // Second, independent check of the same gate FleetPage applies before
+  // rendering this at all — see this component's own doc.
+  const allowed = canUseFleetTestTooling(user);
   const canForceWipe = user?.role === "owner";
   const wipeAll = useWipeAllFleetData();
   const forceWipe = useForceWipeAllFleetData();
@@ -126,6 +139,10 @@ function WipeAllFleetDataButton() {
   const evidenceEntries = result?.evidenceRowsDestroyed
     ? Object.entries(result.evidenceRowsDestroyed).filter(([, count]) => count > 0)
     : [];
+
+  // Nothing at all — no button, no disabled affordance, no hint that the
+  // capability exists. Placed after every hook so the hook order is stable.
+  if (!allowed) return null;
 
   return (
     <>
@@ -261,6 +278,7 @@ function WipeAllFleetDataButton() {
  * `vehicle_id` param; the tab itself is not kept in sync with the URL after
  * that, matching how this page's other filters already behave. */
 export default function FleetPage() {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<FleetTab>(() => {
     const requested = searchParams.get("tab");
@@ -269,10 +287,13 @@ export default function FleetPage() {
 
   return (
     <div>
+      {/* The wipe is test tooling, not a product feature: this header carries
+          no actions at all unless the build and the account both allow it (see
+          canUseFleetTestTooling). Everyone else gets a plain page header. */}
       <PageHeader
         title="Fleet & Drivers"
         description="Manage vehicles, their linked kiosk devices, and view driver live-status."
-        actions={<WipeAllFleetDataButton />}
+        actions={canUseFleetTestTooling(user) ? <WipeAllFleetDataButton /> : undefined}
       />
 
       <FatigueAlertsBanner />

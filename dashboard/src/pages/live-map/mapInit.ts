@@ -30,14 +30,28 @@ export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
 export const MAP_STYLE_URL = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za";
 
-// Field-testing default (2026-08-27): Karachi, Pakistan -- swap back to Sydney CBD
-// ([151.2093, -33.8688]) once Karachi field testing wraps. Only matters before any
-// vehicle position has loaded -- fitToVehicles() below re-centers on real GPS the
-// moment a vehicle publishes, from anywhere in the world (the custom global style
-// set below isn't tied to any region).
-export const DEFAULT_CENTER: [number, number] = [67.0011, 24.8607];
-export const DEFAULT_ZOOM = 10.5;
-export const SINGLE_VEHICLE_ZOOM = 13;
+/**
+ * The camera the map opens on when it has nothing better to show, resolved by
+ * `resolveInitialCamera` below. No city is hardcoded anywhere in this module:
+ * the fallback of last resort is a whole-world view, which is honest about
+ * knowing nothing rather than implying the fleet is somewhere it is not.
+ */
+export interface MapCamera {
+  center: [number, number];
+  zoom: number;
+}
+
+/** Whole-world view -- the only view this codebase is entitled to assume. */
+export const WORLD_VIEW: MapCamera = { center: [0, 0], zoom: 1 };
+
+/** Zoom used for a single known point (one vehicle, or one tablet's last locate). */
+export const SINGLE_POINT_ZOOM = 13;
+
+/** Never zoom the bounding-box fallback in further than this: a fleet parked at
+ * one depot should still show its surroundings, not a rooftop. */
+const MAX_FITTED_ZOOM = 14;
+
+export const SINGLE_VEHICLE_ZOOM = SINGLE_POINT_ZOOM;
 
 /** How far the followed vehicle must drift from the map centre before the camera
  * re-centres. Below this, GPS jitter would re-animate the camera constantly and
@@ -121,16 +135,114 @@ export function fitToVehicles(map: mapboxgl.Map, vehicles: PlottedVehicle[]) {
   map.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 0 });
 }
 
-/** Constructs the map itself, on the default camera, with the nav control
- * attached. Sources and layers are added separately, on `load`, by
- * installMapLayers below. */
-export function createFleetMap(container: HTMLDivElement): mapboxgl.Map {
+/** A minimal lat/lng -- vehicles and tablet locates are both reduced to this
+ * before the camera helpers below look at them, so neither helper needs to
+ * know which kind of thing it is framing. */
+export interface KnownPoint {
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Reads a tenant-configured default map centre out of the tenant's
+ * `theme_json`, or returns null if it does not carry one.
+ *
+ * Written defensively against `unknown` rather than against a typed field
+ * because this is arbitrary server-stored JSON: a tenant row written by an
+ * older build, by the platform console, or by hand can carry anything at all
+ * under `default_center`, and a malformed value must fall through to the next
+ * fallback rather than hand Mapbox a NaN and blank the map. Accepted shape is
+ * `[lng, lat]` -- Mapbox's own order, so what is stored is what is passed --
+ * with an optional numeric `default_zoom`.
+ */
+export function parseTenantCamera(theme: unknown): MapCamera | null {
+  if (!theme || typeof theme !== "object") return null;
+  const raw = (theme as Record<string, unknown>).default_center;
+  if (!Array.isArray(raw) || raw.length !== 2) return null;
+  const [lng, lat] = raw;
+  if (typeof lng !== "number" || typeof lat !== "number") return null;
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  if (lng < -180 || lng > 180 || lat < -90 || lat > 90) return null;
+  const rawZoom = (theme as Record<string, unknown>).default_zoom;
+  const zoom =
+    typeof rawZoom === "number" && Number.isFinite(rawZoom) && rawZoom >= 0 && rawZoom <= 22
+      ? rawZoom
+      : SINGLE_POINT_ZOOM - 2;
+  return { center: [lng, lat], zoom };
+}
+
+/**
+ * The camera that frames every point the fleet is known to have reported
+ * from, or null when the fleet has never reported a position at all.
+ *
+ * This duplicates none of `fitToVehicles`' work -- that one drives a live map
+ * through `fitBounds`, this one computes a camera *before* a map exists, for
+ * the constructor. The zoom comes from the longitudinal span against the 360
+ * degrees a full world spans at zoom 0, which is the same doubling-per-level
+ * relationship Mapbox uses; it is deliberately approximate, since anything it
+ * frames is immediately refined by `fitToVehicles` on the map's `load`.
+ */
+export function cameraForPoints(points: KnownPoint[]): MapCamera | null {
+  if (points.length === 0) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  for (const p of points) {
+    minLat = Math.min(minLat, p.lat);
+    maxLat = Math.max(maxLat, p.lat);
+    minLng = Math.min(minLng, p.lng);
+    maxLng = Math.max(maxLng, p.lng);
+  }
+  const center: [number, number] = [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+  const span = Math.max(maxLng - minLng, maxLat - minLat);
+  // A single point, or a fleet parked close enough together that the span
+  // rounds to nothing, has no meaningful extent to fit -- frame it directly.
+  if (span < 1e-4) return { center, zoom: SINGLE_POINT_ZOOM };
+  const zoom = Math.log2(360 / span) - 0.5;
+  return {
+    center,
+    zoom: Math.min(MAX_FITTED_ZOOM, Math.max(WORLD_VIEW.zoom, zoom)),
+  };
+}
+
+/** Which of the three fallbacks the opening camera came from. Surfaced to the
+ * user in the empty-state caption, so the map never shows a region without
+ * saying where that region came from. */
+export type CameraSource = "tenant" | "fleet" | "world";
+
+/**
+ * The opening camera, in the order of preference this product owes a tenant:
+ * their own configured default centre, else wherever their own fleet was last
+ * seen, else the whole world. There is no fourth option and no hardcoded city
+ * -- an installation in any country gets a view that is either configured or
+ * derived from its own data.
+ *
+ * Note this only decides where the map *opens*. Once it loads, `fitToVehicles`
+ * still frames whatever vehicles are actually live, so a tenant with a
+ * configured centre and vehicles on the road still gets its fleet framed.
+ */
+export function resolveInitialCamera(
+  theme: unknown,
+  points: KnownPoint[],
+): { camera: MapCamera; source: CameraSource } {
+  const tenant = parseTenantCamera(theme);
+  if (tenant) return { camera: tenant, source: "tenant" };
+  const fleet = cameraForPoints(points);
+  if (fleet) return { camera: fleet, source: "fleet" };
+  return { camera: WORLD_VIEW, source: "world" };
+}
+
+/** Constructs the map itself, on the camera resolved by `resolveInitialCamera`,
+ * with the nav control attached. Sources and layers are added separately, on
+ * `load`, by installMapLayers below. */
+export function createFleetMap(container: HTMLDivElement, camera: MapCamera): mapboxgl.Map {
   mapboxgl.accessToken = MAPBOX_TOKEN as string;
   const map = new mapboxgl.Map({
     container,
     style: MAP_STYLE_URL,
-    center: DEFAULT_CENTER,
-    zoom: DEFAULT_ZOOM,
+    center: camera.center,
+    zoom: camera.zoom,
   });
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
   return map;
