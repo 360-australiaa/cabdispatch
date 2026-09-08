@@ -149,7 +149,7 @@ class TripCreate(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_payment_fields(self) -> "TripCreate":
+    def _validate_payment_fields(self) -> TripCreate:
         # split_payments isn't a TripCreate field — the trip's total isn't
         # known until close, so split-fare requires closing with
         # payment_method="split_fare" + split_payments rather than opening
@@ -179,7 +179,7 @@ class TripUpdate(BaseModel):
     end_lng: float | None = None
 
     @model_validator(mode="after")
-    def _validate_payment_fields(self) -> "TripUpdate":
+    def _validate_payment_fields(self) -> TripUpdate:
         if self.payment_method is not None:
             _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
             _validate_split_payments_required(self.payment_method, self.split_payments)
@@ -228,7 +228,7 @@ class TripCloseRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_payment_fields(self) -> "TripCloseRequest":
+    def _validate_payment_fields(self) -> TripCloseRequest:
         _validate_tip_amount(self.tip_amount)
         # payment_method=None here means "keep the trip's existing
         # payment_method" (see app.api.v1.trips.close_trip_endpoint) — only
@@ -321,7 +321,7 @@ class TripSyncItem(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_payment_fields(self) -> "TripSyncItem":
+    def _validate_payment_fields(self) -> TripSyncItem:
         _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
         _validate_split_payments_required(self.payment_method, self.split_payments)
         _validate_negotiated_total(self.negotiated_total)

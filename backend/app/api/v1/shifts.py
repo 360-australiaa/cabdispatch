@@ -35,12 +35,16 @@ from app.schemas.shift import (
 from app.services.shift import (
     ShiftConflictError,
     build_report,
-    end_break as end_break_service,
     end_shift,
     render_report_csv,
     render_report_pdf,
-    start_break as start_break_service,
     start_shift,
+)
+from app.services.shift import (
+    end_break as end_break_service,
+)
+from app.services.shift import (
+    start_break as start_break_service,
 )
 
 router = APIRouter(prefix="/v1/shifts", tags=["shifts"])

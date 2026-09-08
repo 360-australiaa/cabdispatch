@@ -83,6 +83,7 @@ enforces offer expiry -- see `POSITION_HISTORY_RETENTION_HOURS` and
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -798,7 +799,7 @@ def _count_harsh_events(
     misread as an implausible one-second deceleration/acceleration."""
     harsh_brake_events = 0
     rapid_accel_events = 0
-    for previous, current in zip(points, points[1:]):
+    for previous, current in itertools.pairwise(points):
         if previous.speed_kmh is None or current.speed_kmh is None:
             continue
         dt_seconds = (current.recorded_at - previous.recorded_at).total_seconds()

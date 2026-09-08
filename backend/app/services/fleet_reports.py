@@ -130,9 +130,9 @@ async def vehicle_pilot_report(
             window_end = window_end.replace(tzinfo=None)
         staleness = window_end - last_seen
         if staleness.total_seconds() <= UPTIME_STALENESS_HOURS * 3600:
-            uptime_estimate_pct = Decimal("100")
+            uptime_estimate_pct = Decimal(100)
         else:
-            uptime_estimate_pct = Decimal("0")
+            uptime_estimate_pct = Decimal(0)
 
     avg_variance = trip_row.avg_variance_pct
     return {

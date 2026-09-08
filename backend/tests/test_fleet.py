@@ -1060,8 +1060,8 @@ async def _make_driver(session, *, tenant_id, name="Driver One"):
 
 
 async def _make_shift(
-    session, *, tenant_id, driver_id, vehicle_id, start_at, end_at=None, km_total=Decimal("0"),
-    cash_total=Decimal("0"), card_total=Decimal("0"),
+    session, *, tenant_id, driver_id, vehicle_id, start_at, end_at=None, km_total=Decimal(0),
+    cash_total=Decimal(0), card_total=Decimal(0),
 ):
     shift = Shift(
         tenant_id=tenant_id,

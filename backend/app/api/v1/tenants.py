@@ -23,7 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, require_role
-from app.schemas.tenant import AdminPinSetRequest, AdminPinSetResponse, TenantRead, TenantThemeUpdate
+from app.schemas.tenant import (
+    AdminPinSetRequest,
+    AdminPinSetResponse,
+    TenantRead,
+    TenantThemeUpdate,
+)
 from app.services import tenant as tenant_service
 
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])

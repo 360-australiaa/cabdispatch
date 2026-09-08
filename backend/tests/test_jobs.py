@@ -139,7 +139,7 @@ async def _available_driver(client, session, *, tenant_id, name="Available Drive
 async def test_create_job_broadcasts_offers_only_to_available_drivers(client: AsyncClient, session: AsyncSession):
     tenant_id, admin_headers = await _tenant_and_headers(client, session)
 
-    eligible_driver, eligible_headers = await _available_driver(session=session, client=client, tenant_id=tenant_id)
+    eligible_driver, _eligible_headers = await _available_driver(session=session, client=client, tenant_id=tenant_id)
 
     # Available flag set, but never went on shift.
     off_shift_driver = await _make_driver(session, tenant_id=tenant_id, name="Off Shift Driver")
@@ -174,7 +174,7 @@ async def test_create_job_broadcasts_offers_only_to_available_drivers(client: As
 
 
 async def test_create_job_with_no_available_drivers_stays_queued(client: AsyncClient, session: AsyncSession):
-    tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant No Drivers")
+    _tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant No Drivers")
 
     resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
     assert resp.status_code == 201
@@ -276,7 +276,7 @@ async def test_accept_wrong_driver_is_forbidden(client: AsyncClient, session: As
 
 async def test_accept_expired_offer_conflicts(client: AsyncClient, session: AsyncSession):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant Expired")
-    driver_a, headers_a = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="A")
+    _driver_a, headers_a = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="A")
 
     create_resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
     job_id = create_resp.json()["id"]
@@ -300,7 +300,7 @@ async def test_accept_expired_offer_conflicts(client: AsyncClient, session: Asyn
 
 async def test_decline_flow(client: AsyncClient, session: AsyncSession):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant Decline")
-    driver_a, headers_a = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="A")
+    _driver_a, headers_a = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="A")
 
     create_resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
     job_id = create_resp.json()["id"]
@@ -323,7 +323,7 @@ async def test_decline_flow(client: AsyncClient, session: AsyncSession):
 
 
 async def test_tenant_isolation_on_jobs(client: AsyncClient, session: AsyncSession):
-    tenant_a_id, headers_a = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant A")
+    _tenant_a_id, headers_a = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant A")
     _tenant_b_id, headers_b = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant B")
 
     create_resp = await client.post("/v1/jobs", json=_job_body(), headers=headers_a)

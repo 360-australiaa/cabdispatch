@@ -18,9 +18,8 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tariffs import Tariff as TariffRow
 from app.models.tenant import Tenant
@@ -315,21 +314,21 @@ class _FakeTrip:
     """Minimal stand-in carrying only the columns fare_line_items reads."""
 
     def __init__(self, **kw):
-        defaults = dict(
-            type="rank_hail",
-            flag_fall=Decimal("0"),
-            dist_amount=Decimal("0"),
-            wait_amount=Decimal("0"),
-            peak_amount=Decimal("0"),
-            tolls=Decimal("0"),
-            psl=Decimal("0"),
-            extras=Decimal("0"),
-            subtotal=Decimal("0"),
-            surcharge=Decimal("0"),
-            total=Decimal("0"),
-            payment_method="cash",
-            negotiated_total=None,
-        )
+        defaults = {
+            "type": "rank_hail",
+            "flag_fall": Decimal(0),
+            "dist_amount": Decimal(0),
+            "wait_amount": Decimal(0),
+            "peak_amount": Decimal(0),
+            "tolls": Decimal(0),
+            "psl": Decimal(0),
+            "extras": Decimal(0),
+            "subtotal": Decimal(0),
+            "surcharge": Decimal(0),
+            "total": Decimal(0),
+            "payment_method": "cash",
+            "negotiated_total": None,
+        }
         defaults.update(kw)
         for k, v in defaults.items():
             setattr(self, k, v)

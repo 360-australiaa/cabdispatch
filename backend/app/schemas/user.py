@@ -100,7 +100,7 @@ class UserRead(UserBase):
     suitability_status: str | None = None
 
     @model_validator(mode="after")
-    def _derive_suitability_status(self) -> "UserRead":
+    def _derive_suitability_status(self) -> UserRead:
         self.suitability_status = compliance_expiry_service.suitability_status_for(
             self.driver_license_expiry, self.driver_authority_expiry
         )

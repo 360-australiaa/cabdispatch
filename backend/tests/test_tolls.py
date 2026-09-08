@@ -693,17 +693,17 @@ async def test_network_group_roads_share_one_capped_total(client: AsyncClient, s
     # Two stages of one network. Each is generously capped on its own
     # (9.00 each = 18.00 if the network cap were not applied), against a
     # shared network cap of 12.74 -- the real published WestConnex figure.
-    common = dict(
-        pricing_model="distance_with_flagfall",
-        charging_policy="distance_metered",
-        directional="both",
-        network_group="TESTNET",
-        price_class_a=None,
-        rate_per_km_class_a="5.0000",
-        flagfall_class_a="1.80",
-        cap_class_a="9.00",
-        network_cap_class_a="12.74",
-    )
+    common = {
+        "pricing_model": "distance_with_flagfall",
+        "charging_policy": "distance_metered",
+        "directional": "both",
+        "network_group": "TESTNET",
+        "price_class_a": None,
+        "rate_per_km_class_a": "5.0000",
+        "flagfall_class_a": "1.80",
+        "cap_class_a": "9.00",
+        "network_cap_class_a": "12.74",
+    }
     road_a = await _make_road(session, road_id="TESTNETA", **common)
     road_b = await _make_road(session, road_id="TESTNETB", **common)
 

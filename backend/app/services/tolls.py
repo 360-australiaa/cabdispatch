@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.toll import (
     TollGantry,
-    TollPoint,
     TollPointPriceRevision,
     TollRoad,
     TollRoadPriceRevision,

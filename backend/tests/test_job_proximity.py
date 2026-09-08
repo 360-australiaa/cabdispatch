@@ -21,7 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
 from app.models.fleet import Vehicle
-from app.models.jobs import DriverAvailability  # noqa: F401 (see tests/test_jobs.py's module docstring)
+from app.models.jobs import (
+    DriverAvailability,
+)
 from app.models.shift import Shift
 from app.models.tenant import Tenant
 from app.models.user import ROLE_DRIVER, User
@@ -120,16 +122,16 @@ async def _available_driver_at(
 
 
 def _job_kwargs(**overrides):
-    kwargs = dict(
-        origin_lat=_ORIGIN_LAT,
-        origin_lng=_ORIGIN_LNG,
-        origin_address="1 Test St, Sydney",
-        dest_lat=-33.8568,
-        dest_lng=151.2153,
-        dest_address="2 Test Ave, Sydney",
-        fare_estimate_low=Decimal("20.00"),
-        fare_estimate_high=Decimal("28.00"),
-    )
+    kwargs = {
+        "origin_lat": _ORIGIN_LAT,
+        "origin_lng": _ORIGIN_LNG,
+        "origin_address": "1 Test St, Sydney",
+        "dest_lat": -33.8568,
+        "dest_lng": 151.2153,
+        "dest_address": "2 Test Ave, Sydney",
+        "fare_estimate_low": Decimal("20.00"),
+        "fare_estimate_high": Decimal("28.00"),
+    }
     kwargs.update(overrides)
     return kwargs
 

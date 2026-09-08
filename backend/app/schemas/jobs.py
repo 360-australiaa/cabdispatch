@@ -43,7 +43,7 @@ class JobCreate(BaseModel):
     fare_estimate_high: Decimal = Field(ge=0)
 
     @model_validator(mode="after")
-    def _check_fare_range(self) -> "JobCreate":
+    def _check_fare_range(self) -> JobCreate:
         if self.fare_estimate_high < self.fare_estimate_low:
             raise ValueError("fare_estimate_high must be >= fare_estimate_low")
         return self
@@ -88,7 +88,7 @@ class JobRead(BaseModel):
     distance_km: Decimal | None = None
 
     @model_validator(mode="after")
-    def _derive_distance_km(self) -> "JobRead":
+    def _derive_distance_km(self) -> JobRead:
         raw = haversine_km(self.origin_lat, self.origin_lng, self.dest_lat, self.dest_lng)
         self.distance_km = raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return self

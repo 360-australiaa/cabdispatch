@@ -20,7 +20,13 @@ from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
 from app.models.duress_snapshot import DuressSnapshot
 from app.models.fatigue_alert import FatigueAlert
-from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle, VehiclePositionHistory
+from app.models.fleet import (
+    Device,
+    DevicePairingCode,
+    DeviceVersionHistory,
+    Vehicle,
+    VehiclePositionHistory,
+)
 from app.models.geofence import Geofence
 from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
@@ -49,6 +55,7 @@ from app.models.zones import Zone
 
 __all__ = [
     "Announcement",
+    "AppRelease",
     "AuditLog",
     "Base",
     "ComplianceDocument",

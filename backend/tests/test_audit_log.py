@@ -16,7 +16,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.models import Tenant, User
-from app.models.audit_log import AuditLog  # noqa: F401 — registers table on Base.metadata
+from app.models.audit_log import AuditLog
 from app.services.audit_log import record_audit
 from tests.conftest import auth_headers
 

@@ -185,14 +185,14 @@ async def get_platform_billing_summary(session: AsyncSession) -> dict:
     result = await session.execute(select(Subscription))
     subscriptions = list(result.scalars().all())
 
-    mrr_aud = Decimal("0")
+    mrr_aud = Decimal(0)
     plan_counts: dict[str, int] = {}
     status_counts: dict[str, int] = {}
 
     for sub in subscriptions:
         status_counts[sub.status] = status_counts.get(sub.status, 0) + 1
         if sub.status in ACTIVE_EQUIVALENT_SUBSCRIPTION_STATUSES:
-            mrr_aud += PLAN_PRICES_AUD.get(sub.plan, Decimal("0"))
+            mrr_aud += PLAN_PRICES_AUD.get(sub.plan, Decimal(0))
             plan_counts[sub.plan] = plan_counts.get(sub.plan, 0) + 1
 
     return {

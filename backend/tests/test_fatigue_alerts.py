@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.fatigue_alert import FatigueAlert  # noqa: F401 - see test_fleet.py's module docstring pattern
+from app.models.fatigue_alert import (
+    FatigueAlert,
+)
 from app.models.tariffs import Tariff as TariffRow
 from tests.conftest import auth_headers
 

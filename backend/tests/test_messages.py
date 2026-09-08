@@ -243,7 +243,7 @@ def test_messages_broadcast_to_live_websocket_listeners(app):
 
     driver_id, driver_token, dispatcher_token = asyncio.run(_setup())
 
-    with TestClient(app) as test_client:
+    with TestClient(app) as test_client:  # noqa: SIM117 - inner ws context depends on this client; flattening needs a full-body dedent for no gain
         with test_client.websocket_connect(f"/v1/messages/live?driver_id={driver_id}&token={driver_token}") as ws:
             send_resp = test_client.post(
                 "/v1/messages",
@@ -469,7 +469,7 @@ def test_template_message_broadcasts_to_live_websocket_listeners(app):
 
     driver_id, driver_token, dispatcher_token = asyncio.run(_setup())
 
-    with TestClient(app) as test_client:
+    with TestClient(app) as test_client:  # noqa: SIM117 - inner ws context depends on this client; flattening needs a full-body dedent for no gain
         with test_client.websocket_connect(f"/v1/messages/live?driver_id={driver_id}&token={driver_token}") as ws:
             send_resp = test_client.post(
                 "/v1/messages/templates/return_to_depot",

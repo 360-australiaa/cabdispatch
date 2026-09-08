@@ -49,7 +49,7 @@ def _as_aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
-def shift_duration_limit_hours(tenant_id: str) -> float:  # noqa: ARG001 - see docstring
+def shift_duration_limit_hours(tenant_id: str) -> float:
     """Returns the shift-duration fatigue-alert threshold, in hours, for a
     tenant.
 

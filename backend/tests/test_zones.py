@@ -509,18 +509,18 @@ async def test_zone_stats_jobs_holding_and_trip_counts(client, session):
     two_hours_ago = now - timedelta(hours=2)
 
     def _trip(**overrides):
-        base = dict(
-            tenant_id=tenant_id,
-            client_uuid=str(uuid.uuid4()),
-            vehicle_id=str(uuid.uuid4()),
-            driver_id=str(uuid.uuid4()),
-            tariff_id=str(uuid.uuid4()),
-            status="closed",
-            start_at=now,
-            start_lat=_INSIDE["lat"],
-            start_lng=_INSIDE["lng"],
-            total=Decimal("20.00"),
-        )
+        base = {
+            "tenant_id": tenant_id,
+            "client_uuid": str(uuid.uuid4()),
+            "vehicle_id": str(uuid.uuid4()),
+            "driver_id": str(uuid.uuid4()),
+            "tariff_id": str(uuid.uuid4()),
+            "status": "closed",
+            "start_at": now,
+            "start_lat": _INSIDE["lat"],
+            "start_lng": _INSIDE["lng"],
+            "total": Decimal("20.00"),
+        }
         base.update(overrides)
         return Trip(**base)
 

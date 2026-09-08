@@ -19,7 +19,12 @@ from app.models.billing import (
     STATUS_TRIALING,
     Subscription,
 )
-from app.models.duress import DURESS_STATUS_OPEN, DURESS_STATUS_RESOLVED, DURESS_TRIGGER_BUTTON, DuressEvent
+from app.models.duress import (
+    DURESS_STATUS_OPEN,
+    DURESS_STATUS_RESOLVED,
+    DURESS_TRIGGER_BUTTON,
+    DuressEvent,
+)
 from app.models.fleet import Vehicle
 from app.models.tenant import Tenant
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_RANK_HAIL, Trip

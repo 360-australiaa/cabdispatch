@@ -49,7 +49,6 @@ class VehicleNotFoundError(ComplianceError):
     vehicle_id that does not correspond to a real fleet.Vehicle row for this
     tenant would produce a misleading document, so it 404s instead."""
 
-    pass
 
 
 class InvalidUploadError(ComplianceError):

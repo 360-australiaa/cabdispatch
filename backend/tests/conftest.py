@@ -9,11 +9,12 @@ constructed. Every sibling domain's test files should rely on this conftest
 from __future__ import annotations
 
 import os
-import uuid
-from pathlib import Path
 
 # --- test environment, MUST be set before any app import -------------------
 import os as _os
+import uuid
+from pathlib import Path
+
 _TEST_DB_FILE = Path(_os.environ.get("_TEST_DB_FILE_OVERRIDE") or (Path(__file__).parent / "test_dev.db"))
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DB_FILE.as_posix()}"
 os.environ["JWT_SECRET"] = "test-only-secret-do-not-use-in-prod"

@@ -40,7 +40,7 @@ engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True)
 # on for sqlite makes dev/test parity with postgres real, so this whole class
 # of bug is caught before it reaches production, not after.
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:  # noqa: ANN001 — DBAPI event signature
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
     if engine.sync_engine.dialect.name != "sqlite":
         return
     cursor = dbapi_connection.cursor()

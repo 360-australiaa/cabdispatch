@@ -51,7 +51,7 @@ class WalletTransactionCreate(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
-    def _validate_sign(self) -> "WalletTransactionCreate":
+    def _validate_sign(self) -> WalletTransactionCreate:
         if self.amount_aud == 0:
             raise ValueError("amount_aud must be non-zero")
         if self.kind == "top_up" and self.amount_aud < 0:
@@ -136,7 +136,7 @@ class AnnouncementCreate(BaseModel):
         return _utc(value)
 
     @model_validator(mode="after")
-    def _validate_window(self) -> "AnnouncementCreate":
+    def _validate_window(self) -> AnnouncementCreate:
         if self.ends_at is not None and self.ends_at <= self.starts_at:
             raise ValueError("ends_at must be after starts_at")
         return self
@@ -195,7 +195,7 @@ class IncentiveCreate(BaseModel):
         return to_utc(value)
 
     @model_validator(mode="after")
-    def _validate_window(self) -> "IncentiveCreate":
+    def _validate_window(self) -> IncentiveCreate:
         if self.ends_at <= self.starts_at:
             raise ValueError("ends_at must be after starts_at")
         return self
