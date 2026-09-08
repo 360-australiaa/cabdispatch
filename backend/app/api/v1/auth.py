@@ -17,6 +17,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,12 +39,13 @@ from app.core.security import (
     decode_token,
     generate_mfa_secret,
     get_current_user,
+    get_token_payload,
     mfa_provisioning_uri,
     revocation_store,
     verify_password,
     verify_totp_code,
 )
-from app.models.tenant import Tenant
+from app.models.tenant import TENANT_STATUS_SUSPENDED, Tenant
 from app.models.user import User
 from app.schemas.auth import (
     DriverLoginRequest,
@@ -76,6 +78,51 @@ _LICENSE_EXPIRED = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Driver license has expired — contact your operator to renew before logging in",
 )
+
+
+_TENANT_SUSPENDED = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="This operator's account is suspended — contact support",
+)
+
+
+async def _assert_tenant_not_suspended(session: AsyncSession, user: User) -> None:
+    """Enforces `Tenant.status == "suspended"` at the two places a session can
+    begin or be extended (login and refresh).
+
+    Until this existed, suspension was purely cosmetic: the platform owner
+    could flip a tenant to `suspended` via PATCH /v1/platform/tenants/{id} and
+    every one of that tenant's users kept logging in and working normally,
+    because `_login_result` only ever checked `user.status`. Suspending an
+    operator is a commercial/compliance action (non-payment, licence issue) —
+    it has to actually stop them.
+
+    A user with no `tenant_id` at all (there is no such row today, but the
+    column is nullable) is not blocked here: there is no tenant to be
+    suspended, and `get_current_tenant_id` already refuses to give such a token
+    any tenant scope.
+    """
+    if not user.tenant_id:
+        return
+
+    result = await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if tenant is not None and tenant.status == TENANT_STATUS_SUSPENDED:
+        raise _TENANT_SUSPENDED
+
+
+async def _revoke_jti(payload: dict) -> None:
+    """Adds a token's `jti` to the revocation store for exactly as long as the
+    token would otherwise have remained valid — past its own `exp` there is
+    nothing left to revoke, so a longer TTL would only grow the store.
+
+    Mirrors the single-use burn `mfa_login` already does on the mfa_token."""
+    jti = payload.get("jti")
+    if not jti:
+        return
+    exp = payload.get("exp")
+    ttl = max(int(exp - time.time()), 1) if exp else 1
+    await revocation_store.revoke(jti, ttl)
 
 
 def _issue_tokens(user: User) -> TokenResponse:
@@ -120,6 +167,10 @@ async def login(
 
     if user is None or not user.pin_hash or not verify_password(body.password, user.pin_hash):
         raise _INVALID_CREDENTIALS
+
+    # After credentials verify, so a wrong password still 401s rather than
+    # leaking which operators are suspended.
+    await _assert_tenant_not_suspended(session, user)
 
     return _login_result(user)
 
@@ -207,6 +258,12 @@ async def driver_login(
     ):
         raise _INVALID_DRIVER_CREDENTIALS
 
+    # The tenant row is already in hand here, so this is the same suspension
+    # gate `login` applies via `_assert_tenant_not_suspended`, without a second
+    # query. Checked after credentials verify, for the same reason.
+    if tenant.status == TENANT_STATUS_SUSPENDED:
+        raise _TENANT_SUSPENDED
+
     if is_expired(user.driver_license_expiry):
         raise _LICENSE_EXPIRED
 
@@ -256,6 +313,16 @@ async def mfa_login(
 
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_session)) -> RefreshResponse:
+    """Rotating refresh: the presented refresh token is REVOKED as part of
+    issuing the new pair, so each refresh token is single-use.
+
+    Without rotation (the previous behaviour) a leaked 14-day refresh token was
+    a skeleton key — legitimate refreshes by the real user did nothing to
+    invalidate it, and there was no other way to kill it. With rotation, the
+    attacker and the real client race for each token, and whichever one loses
+    is left holding a revoked token and gets a 401 — which is at least
+    *detectable*, and self-heals the moment the real client refreshes once.
+    """
     try:
         payload = decode_token(body.refresh_token)
     except JWTError as exc:
@@ -276,20 +343,71 @@ async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_sess
     if user is None or user.status != "active":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer active")
 
+    await _assert_tenant_not_suspended(session, user)
+
+    # Rotation: burn the presented jti BEFORE handing out the replacement, so
+    # there is no window in which both the old and the new refresh token work.
+    await _revoke_jti(payload)
+
     return RefreshResponse(
         access_token=create_access_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role),
         refresh_token=create_refresh_token(user_id=user.id, tenant_id=user.tenant_id, role=user.role),
     )
 
 
+class LogoutRequest(BaseModel):
+    """Optional body for POST /v1/auth/logout.
+
+    Lives here rather than in `app/schemas/auth.py` only because this
+    workstream owns this router and not that module; it should move there on
+    the next pass through the schemas file.
+
+    `refresh_token` is optional: a client that only holds an access token can
+    still log out (the access jti is taken from the Authorization header), but
+    a client that passes its refresh token gets the whole session killed rather
+    than just the 30-minute half of it.
+    """
+
+    refresh_token: str | None = None
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(user: User = Depends(get_current_user)) -> None:
-    """Revokes nothing server-side beyond what a real jti-blacklist entry would
-    need the raw token for (the dependency only decodes+validates it, it
-    doesn't hand the jti back here) — clients should discard their tokens
-    client-side. Kept as a named endpoint for API symmetry / future
-    jti-revocation wiring rather than omitted entirely."""
-    return
+async def logout(
+    body: LogoutRequest | None = None,
+    payload: dict = Depends(get_token_payload),
+) -> None:
+    """Revokes the caller's access token server-side, and the refresh token too
+    if one is supplied in the body.
+
+    This endpoint used to be a documented no-op: it depended on
+    `get_current_user`, which never handed the jti back, so a stolen access
+    token stayed valid for its full 30 minutes and a stolen refresh token for
+    14 days after the user pressed "Log out". Both clients call this and
+    reasonably assume it works. It now depends on `get_token_payload` instead —
+    the same validated payload, with the `jti` still attached — and puts it in
+    the revocation store the rest of the auth path already consults
+    (`_payload_from_credentials` for HTTP, `authenticate_websocket_token` for
+    websockets).
+
+    A bad/expired/foreign refresh token in the body is ignored rather than
+    fatal: logout must never fail in a way that leaves the client believing it
+    is still logged in, and there is nothing an attacker gains by submitting a
+    token they would like revoked.
+    """
+    await _revoke_jti(payload)
+
+    if body is not None and body.refresh_token:
+        try:
+            refresh_payload = decode_token(body.refresh_token)
+        except JWTError:
+            return
+        if refresh_payload.get("type") != TOKEN_TYPE_REFRESH:
+            return
+        # Only the same subject's refresh token — a valid token belonging to
+        # somebody else is not this caller's to revoke.
+        if refresh_payload.get("sub") != payload.get("sub"):
+            return
+        await _revoke_jti(refresh_payload)
 
 
 @router.get("/me", response_model=UserRead)

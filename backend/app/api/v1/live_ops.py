@@ -42,15 +42,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import (
-    PLATFORM_TENANT_ID,
-    decode_token,
+    WebSocketAuthError,
+    authenticate_websocket_token,
     get_current_tenant_id,
-    revocation_store,
 )
 from app.schemas.live_ops import (
     DriverLiveRead,
@@ -248,37 +246,19 @@ async def get_position(
 async def _authenticate_ws(websocket: WebSocket) -> str:
     """Resolves tenant_id for a websocket connection.
 
-    Browser websocket clients can't set an `Authorization` header, so the
-    access token travels as a `?token=` query param instead — same
-    claims/expiry/revocation rules as the HTTP bearer flow in
-    `app.core.security.get_token_payload`, just a different transport. Mirrors
-    `get_current_tenant_id`'s owner/PLATFORM_TENANT_ID cross-tenant override,
-    via a `tenant_id` query param instead of `Request.query_params` (there is
-    no `Request` object on a websocket connection).
+    The rule itself now lives in `app.core.security.authenticate_websocket_token`
+    — one implementation shared by all four websocket routes in this codebase,
+    because the four hand-rolled copies had drifted and none of them checked
+    the token TYPE (a `mfa_pending` or `refresh` token opened a live feed). This
+    wrapper exists only to keep this route's existing close-code contract: it
+    re-raises as the `HTTPException` the handler below already maps to the
+    4401/4403 application close codes the dashboard client understands.
     """
-    token = websocket.query_params.get("token")
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
-
     try:
-        payload = decode_token(token)
-    except JWTError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
-
-    jti = payload.get("jti")
-    if jti and await revocation_store.is_revoked(jti):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
-
-    token_tenant_id = payload.get("tenant_id")
-    role = payload.get("role")
-
-    if role == "owner" and token_tenant_id == PLATFORM_TENANT_ID:
-        override = websocket.query_params.get("tenant_id")
-        return override or token_tenant_id
-
-    if not token_tenant_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token has no tenant scope")
-    return token_tenant_id
+        auth = await authenticate_websocket_token(websocket)
+    except WebSocketAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.reason) from exc
+    return auth.tenant_id
 
 
 @router.websocket("/v1/fleet/live")

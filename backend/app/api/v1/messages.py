@@ -60,13 +60,13 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import (
-    PLATFORM_TENANT_ID,
-    decode_token,
+    WebSocketAuth,
+    WebSocketAuthError,
+    authenticate_websocket_token,
     get_current_tenant_id,
     get_current_user,
 )
@@ -222,47 +222,23 @@ async def send_template_message(
 # --- live websocket relay ------------------------------------------------------
 
 
-async def _authenticate_websocket(websocket: WebSocket) -> dict | None:
-    """Mirrors `app.api.v1.duress._authenticate_websocket` exactly, minus
-    that domain's dispatch-only role restriction — see module docstring for
-    who may connect here and the extra per-driver check applied after this
-    returns. The token is accepted either as a `?token=` query param
-    (browsers can't set custom headers on the websocket handshake) or an
-    `Authorization: Bearer` header (non-browser clients).
+async def _authenticate_websocket(websocket: WebSocket) -> WebSocketAuth | None:
+    """Applies `app.core.security.authenticate_websocket_token` — the one
+    shared websocket auth rule (token present, type == access, jti not revoked,
+    tenant resolved) — with no extra role restriction here; see the module
+    docstring for who may connect, and the per-driver check applied after this
+    returns. This route previously checked neither the token type nor
+    revocation, so a refresh token, a pre-TOTP `mfa_pending` token, or a token
+    revoked by logout all opened a driver's message thread.
 
-    Returns the decoded JWT payload, or `None` if the connection was rejected
+    Returns the authenticated result, or `None` if the connection was rejected
     (a close frame has already been sent in that case — the caller must not
     call `.accept()`)."""
-    token = websocket.query_params.get("token")
-    if not token:
-        auth_header = websocket.headers.get("authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ", 1)[1]
-
-    if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing bearer token")
-        return None
-
     try:
-        payload = decode_token(token)
-    except JWTError:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        return await authenticate_websocket_token(websocket)
+    except WebSocketAuthError as exc:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.reason)
         return None
-
-    return payload
-
-
-def _resolve_ws_tenant_id(websocket: WebSocket, payload: dict) -> str | None:
-    """Mirrors `app.core.security.get_current_tenant_id`'s owner/PLATFORM_TENANT_ID
-    cross-tenant rule, for the websocket route (same as `app.api.v1.duress`)."""
-    token_tenant_id = payload.get("tenant_id")
-    role = payload.get("role")
-
-    if role == "owner" and token_tenant_id == PLATFORM_TENANT_ID:
-        override = websocket.query_params.get("tenant_id")
-        return override or token_tenant_id
-
-    return token_tenant_id
 
 
 @router.websocket("/live")
@@ -272,16 +248,15 @@ async def live(websocket: WebSocket, driver_id: str) -> None:
     Backed by the in-process pub/sub in
     `app.services.messages.message_broadcaster` (see that class's docstring
     for the Redis swap-in path)."""
-    payload = await _authenticate_websocket(websocket)
-    if payload is None:
-        return  # rejected + closed inside _authenticate_websocket
-
-    tenant_id = _resolve_ws_tenant_id(websocket, payload)
-    if not tenant_id:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token has no tenant scope")
+    auth = await _authenticate_websocket(websocket)
+    if auth is None:
+        # rejected + closed inside _authenticate_websocket — that now includes
+        # the "token has no tenant scope" case, which the shared rule refuses.
         return
 
-    if payload.get("role") == _DRIVER_ROLE and payload.get("sub") != driver_id:
+    tenant_id = auth.tenant_id
+
+    if auth.payload.get("role") == _DRIVER_ROLE and auth.payload.get("sub") != driver_id:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Drivers may only subscribe to their own thread",
