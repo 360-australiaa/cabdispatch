@@ -411,7 +411,7 @@ async def expire_stale_offers(session: AsyncSession, *, tenant_id: str, job_id: 
     """Flips any `pending` offer whose `expires_at` has passed to `expired`.
     Scoped to `tenant_id` always; optionally narrowed to one `job_id`. Called
     lazily at the top of every read/action path that touches offers (list
-    offers, get job, accept, decline) so state is always correct-as-of-now
+    jobs, list offers, get job, accept, decline) so state is always correct-as-of-now
     without any background process. Returns the number of offers flipped."""
     filters = [
         JobOffer.tenant_id == tenant_id,
@@ -544,6 +544,14 @@ async def list_jobs(
     skip: int = 0,
     limit: int = 20,
 ) -> tuple[list[Job], int]:
+    # Lazy offer expiry on the jobs LIST read (workstream B6). Every other
+    # offer-touching path already did this, but the jobs list did not — so a
+    # job whose offers nobody ever opened kept them `pending` forever and the
+    # job was never re-offered to anyone. The dashboard's jobs page is in
+    # practice the read that happens; hanging expiry off it is what makes
+    # "expires_at" mean anything for an unattended job.
+    await expire_stale_offers(session, tenant_id=tenant_id)
+
     stmt = select(Job).where(Job.tenant_id == tenant_id)
     count_stmt = select(func.count()).select_from(Job).where(Job.tenant_id == tenant_id)
 

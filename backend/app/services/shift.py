@@ -544,6 +544,72 @@ async def close_open_shifts_for_vehicle_deletion(
     return list(open_shifts)
 
 
+async def close_open_shifts_for_driver_deletion(
+    session: AsyncSession, *, tenant_id: str, driver_id: str, actor_user_id: str | None
+) -> list[Shift]:
+    """Closes every currently-open shift belonging to a driver who is about to
+    be deleted. The exact counterpart of
+    `close_open_shifts_for_vehicle_deletion` above, one axis over — read
+    that function's DECISION note first; every word of its reasoning applies
+    here unchanged, and this function exists rather than a `vehicle_id or
+    driver_id` parameter on that one purely so the audit action, the log line
+    and the recorded reason can each name what actually happened.
+
+    The gap this closes (backend audit §4/§6): `app.services.fleet_wipe
+    .force_wipe_fleet` already routed every VEHICLE it deleted through
+    `close_open_shifts_for_vehicle_deletion`, but deleted DRIVERS without
+    touching their shifts at all. A wipe therefore left behind open shifts
+    pointing at a driver_id that no longer resolves — the same dangling-open-
+    shift bug that was already fixed for vehicles, still live on the other
+    side of the same operation, and worse here because a wipe deletes every
+    driver at once.
+
+    In practice most of a wiped tenant's open shifts are caught by the vehicle
+    pass first (a shift has both a vehicle and a driver, and vehicles are
+    deleted before drivers). This catches the remainder: a shift whose
+    vehicle_id no longer matches any live vehicle row, or that was force-wiped
+    in a tenant whose vehicles failed to delete.
+
+    Same honest-closure contract as the vehicle case: `psl_owed=Decimal(0)`,
+    `reconciled=False`, trip-derived aggregates recomputed for real inside
+    `end_shift`, and a hash-chained audit entry
+    (`action="shift_force_closed_driver_deleted"`) recording WHY the shift
+    ended when it did. Does not commit — the caller owns the transaction,
+    matching `force_wipe_fleet`'s per-row-delete/outer-commit pattern.
+    """
+    result = await session.execute(
+        select(Shift).where(
+            Shift.tenant_id == tenant_id, Shift.driver_id == driver_id, Shift.end_at.is_(None)
+        )
+    )
+    open_shifts = result.scalars().all()
+    for shift in open_shifts:
+        logger.info(
+            "delete_driver: driver %s has open shift %s (vehicle %s) — force-closing it as "
+            "unreconciled before the driver row is removed.",
+            driver_id,
+            shift.id,
+            shift.vehicle_id,
+        )
+        await end_shift(session, shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+        await record_audit(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            action="shift_force_closed_driver_deleted",
+            entity_type="shift",
+            entity_id=shift.id,
+            before={"end_at": None, "reconciled": False},
+            after={
+                "end_at": shift.end_at.isoformat() if shift.end_at else None,
+                "reconciled": False,
+                "reason": "driver_deleted",
+                "driver_id": driver_id,
+            },
+        )
+    return list(open_shifts)
+
+
 def build_report(shift: Shift) -> dict:
     """Builds the JSON summary payload for `GET /v1/shifts/{id}/report`.
 

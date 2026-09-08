@@ -59,6 +59,7 @@ from app.schemas.live_ops import (
     VehicleLiveRead,
     VehiclePositionHistoryRead,
 )
+from app.services import lazy_maintenance
 from app.services import live_ops as live_ops_service
 
 router = APIRouter(tags=["live-ops"])
@@ -120,7 +121,7 @@ async def get_vehicle_position_history(
         default=None,
         description="ISO datetime -- only return points recorded at/after this time. Omit for the "
         "vehicle's full remaining retention window (see "
-        "app.services.live_ops.POSITION_HISTORY_RETENTION_HOURS).",
+        "app.services.live_ops.position_history_retention_hours).",
     ),
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
@@ -196,9 +197,19 @@ async def publish_position(
     """Publishes one vehicle's current position/status: updates the in-memory
     latest-position cache (enriches `GET /v1/vehicles`) and fans the update
     out to every `WS /v1/fleet/live` listener currently connected for this
-    tenant. 404s if `vehicle_id` doesn't belong to the caller's tenant."""
+    tenant. 404s if `vehicle_id` doesn't belong to the caller's tenant.
+
+    Also runs this vehicle's fatigue and compliance-expiry checks as a lazy
+    side effect (workstream B6). Before that, both fired ONLY off
+    `PATCH /v1/trips/{id}/tick`, so a driver on a long shift who was not
+    inside a fare was never flagged and an idle vehicle's expired rego was
+    never alerted (backend audit §6). This heartbeat arrives every ~5 seconds
+    from every on-shift tablet whether or not a fare is running, which makes
+    it the right hook. It cannot fail this endpoint — see
+    `app.services.lazy_maintenance`.
+    """
     try:
-        return await live_ops_service.publish_position(
+        published = await live_ops_service.publish_position(
             session,
             tenant_id=tenant_id,
             vehicle_id=payload.vehicle_id,
@@ -212,6 +223,13 @@ async def publish_position(
         )
     except live_ops_service.LiveOpsError as exc:
         raise _live_ops_error_to_http(exc) from exc
+
+    # After the publish, never before: the broadcast is the contract of this
+    # endpoint, the checks are advisory enrichment on top of it.
+    await lazy_maintenance.run_checks_for_vehicle(
+        session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id
+    )
+    return published
 
 
 @router.get("/v1/fleet/positions", response_model=list[PositionRead])
