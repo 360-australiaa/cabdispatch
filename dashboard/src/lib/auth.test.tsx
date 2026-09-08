@@ -19,6 +19,22 @@ import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from "./apiClient";
 
 startMockServer();
 
+/**
+ * `AuthProvider` fetches the tenant record alongside the user (D6's "tenant in
+ * context"). It is not the subject of any test here, but `server.listen` runs
+ * with `onUnhandledRequest: "error"`, so leaving it unstubbed makes every test
+ * in this file race an erroring request -- which is exactly how it showed up:
+ * green in isolation, one order-dependent failure under the full suite.
+ * Registered per-test because `resetHandlers()` runs after each one.
+ */
+beforeEach(() => {
+  server.use(
+    http.get(`${API}/v1/tenants/me`, () =>
+      HttpResponse.json({ id: "t1", name: "Test Tenant", theme_json: null }),
+    ),
+  );
+});
+
 const USER = {
   id: "u1",
   tenant_id: "t1",
