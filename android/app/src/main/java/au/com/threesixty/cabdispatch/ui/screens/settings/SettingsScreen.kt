@@ -79,6 +79,8 @@ import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.screens.adminpin.AdminPinGateScreen
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
+import au.com.threesixty.cabdispatch.ui.overlays.reportsChromeHeader
+import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_ALPHABET
 import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_LENGTH
@@ -255,7 +257,15 @@ private fun MainSettingsContent(
             .padding(horizontal = 32.dp, vertical = 24.dp),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
+            // reportsChromeHeader (tablet, 2026-09-08): this title row IS the screen's top chrome.
+            // Without reporting it, the app-level status chips positioned off the last header they
+            // had measured -- the 120dp home header -- and FLEET LOCKED landed across the first
+            // settings tab. Reported, the chip lane sits just under this row; SettingsTabRail then
+            // leaves a lane above its first tab so the two never meet.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.reportsChromeHeader().padding(bottom = 16.dp),
+            ) {
                 Box(
                     modifier = Modifier.size(48.dp).clip(CircleShape)
                         .background(CaptainPalette.hudGlass)
@@ -340,6 +350,8 @@ private fun SettingsTabRail(selected: SettingsTab, onSelect: (SettingsTab) -> Un
             modifier = Modifier.fillMaxSize().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            // Chip lane -- see the title row's reportsChromeHeader note.
+            Spacer(Modifier.height(Space.lg))
             SettingsTab.values().forEach { t ->
                 val isSelected = t == selected
                 val shape = RoundedCornerShape(12.dp)
