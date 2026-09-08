@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { Button, Card, CardContent, Modal, Table, type TableColumn } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  Modal,
+  Pagination,
+  Table,
+  type TableColumn,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
@@ -109,29 +117,16 @@ export function TollZonesPanel() {
       </Card>
 
       {pageCount > 1 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount} ({total} zone{total === 1 ? "" : "s"})
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+          summary={
+            <>
+              Page {page + 1} of {pageCount} ({total} zone{total === 1 ? "" : "s"})
+            </>
+          }
+        />
       )}
 
       <TollZoneFormModal open={createOpen} onClose={() => setCreateOpen(false)} mode="create" />

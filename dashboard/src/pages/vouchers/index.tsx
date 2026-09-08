@@ -7,11 +7,13 @@ import {
   CardContent,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
+  Tabs,
+  type TabItem,
   type TableColumn,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import {
   useCorporateAccountsQuery,
@@ -29,9 +31,9 @@ const PAGE_SIZE = 15;
 
 type VouchersTab = "vouchers" | "corporate-accounts";
 
-const TABS: { key: VouchersTab; label: string; icon: typeof Ticket }[] = [
-  { key: "vouchers", label: "Vouchers", icon: Ticket },
-  { key: "corporate-accounts", label: "Corporate Accounts", icon: Building2 },
+const TABS: TabItem<VouchersTab>[] = [
+  { value: "vouchers", label: "Vouchers", icon: Ticket },
+  { value: "corporate-accounts", label: "Corporate Accounts", icon: Building2 },
 ];
 
 const REDEEMED_FILTER_OPTIONS = [
@@ -202,24 +204,14 @@ export default function VouchersPage() {
         }
       />
 
-      <div className="mb-6 flex gap-1 border-b border-border">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={cn(
-              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              tab === key
-                ? "border-brand-primary text-brand-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="underline"
+        label="Vouchers sections"
+        className="mb-6"
+      />
 
       {tab === "vouchers" && (
         <>
@@ -267,29 +259,17 @@ export default function VouchersPage() {
           />
 
           {voucherPageCount > 1 && (
-            <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-              <span>
-                Page {voucherPage + 1} of {voucherPageCount} ({voucherTotal} vouchers)
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={voucherPage === 0}
-                  onClick={() => setVoucherPage((p) => Math.max(0, p - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={voucherPage >= voucherPageCount - 1}
-                  onClick={() => setVoucherPage((p) => Math.min(voucherPageCount - 1, p + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={voucherPage}
+              pageCount={voucherPageCount}
+              onPageChange={setVoucherPage}
+              label="Voucher pagination"
+              summary={
+                <>
+                  Page {voucherPage + 1} of {voucherPageCount} ({voucherTotal} vouchers)
+                </>
+              }
+            />
           )}
         </>
       )}
@@ -340,29 +320,17 @@ export default function VouchersPage() {
           />
 
           {accountPageCount > 1 && (
-            <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-              <span>
-                Page {accountPage + 1} of {accountPageCount} ({accountTotal} accounts)
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={accountPage === 0}
-                  onClick={() => setAccountPage((p) => Math.max(0, p - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={accountPage >= accountPageCount - 1}
-                  onClick={() => setAccountPage((p) => Math.min(accountPageCount - 1, p + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={accountPage}
+              pageCount={accountPageCount}
+              onPageChange={setAccountPage}
+              label="Corporate account pagination"
+              summary={
+                <>
+                  Page {accountPage + 1} of {accountPageCount} ({accountTotal} accounts)
+                </>
+              }
+            />
           )}
         </>
       )}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Sparkles } from "lucide-react";
-import { Badge, Button, Input, Modal, Select } from "@/components/ui";
+import { Badge, Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
   FARES_ORDER_CAPPED_FIELDS,
   UNCAPPED_RATE_FIELDS,
@@ -308,7 +308,7 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
         {isCreate && (
           <div className="flex flex-col gap-2 rounded-md border border-dashed border-border bg-muted/40 p-3 sm:col-span-2">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Sparkles className="h-4 w-4 text-brand-primary" />
+              <Sparkles className="h-4 w-4 text-brand-primary dark:text-brand-accent" />
               Start from a preset
             </div>
             <div className="flex flex-wrap gap-2">
@@ -359,18 +359,12 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
             required
           />
         </div>
-        <div className="flex items-center gap-2 pt-5">
-          <input
-            id="booked"
-            type="checkbox"
-            checked={form.booked}
-            onChange={(e) => update("booked", e.target.checked)}
-            className="h-4 w-4 rounded border-input"
-          />
-          <label htmlFor="booked" className="text-sm text-foreground">
-            Booked (pre-arranged, unregulated by the Fares Order)
-          </label>
-        </div>
+        <Checkbox
+          label="Booked (pre-arranged, unregulated by the Fares Order)"
+          checked={form.booked}
+          onChange={(e) => update("booked", e.target.checked)}
+          wrapperClassName="pt-5"
+        />
 
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium text-muted-foreground">Effective from</label>

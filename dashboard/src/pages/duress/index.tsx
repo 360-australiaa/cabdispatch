@@ -1,10 +1,21 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, Siren } from "lucide-react";
-import { Badge, Button, Card, CardContent, PageHeader, Select, Table } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  PageHeader,
+  Pagination,
+  Select,
+  Table,
+  Tabs,
+  type TabItem,
+} from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
-import { cn } from "@/lib/utils";
 import { listDuressEvents } from "./api";
 import { DevicesPanel } from "./DevicesPanel";
 import { EventDetailPanel } from "./EventDetailPanel";
@@ -13,6 +24,11 @@ import { formatDateTime, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
 
 type ViewTab = "events" | "devices";
+
+const VIEW_TABS: TabItem<ViewTab>[] = [
+  { value: "events", label: "Events", icon: Siren },
+  { value: "devices", label: "Devices", icon: Cpu },
+];
 
 const PAGE_SIZE = 20;
 
@@ -100,14 +116,14 @@ export default function DuressPage() {
         }
       />
 
-      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
-        <TabButton active={tab === "events"} onClick={() => setTab("events")} icon={<Siren className="h-4 w-4" />}>
-          Events
-        </TabButton>
-        <TabButton active={tab === "devices"} onClick={() => setTab("devices")} icon={<Cpu className="h-4 w-4" />}>
-          Devices
-        </TabButton>
-      </div>
+      <Tabs
+        items={VIEW_TABS}
+        value={tab}
+        onChange={setTab}
+        variant="pill"
+        label="Duress desk sections"
+        className="mb-4"
+      />
 
       {tab === "devices" && <DevicesPanel />}
 
@@ -129,18 +145,15 @@ export default function DuressPage() {
                   }}
                 />
               </div>
-              <label className="mb-2 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-border"
-                  checked={openOnly}
-                  onChange={(e) => {
-                    setOpenOnly(e.target.checked);
-                    setPage(0);
-                  }}
-                />
-                Open events only
-              </label>
+              <Checkbox
+                label="Open events only"
+                wrapperClassName="mb-2"
+                checked={openOnly}
+                onChange={(e) => {
+                  setOpenOnly(e.target.checked);
+                  setPage(0);
+                }}
+              />
               <span className="mb-2 ml-auto text-xs text-muted-foreground">
                 {total} event{total === 1 ? "" : "s"}
               </span>
@@ -163,29 +176,7 @@ export default function DuressPage() {
           />
 
           {pageCount > 1 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground">
-              <span>
-                Page {page + 1} of {pageCount}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page === 0}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= pageCount - 1}
-                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+            <Pagination page={page} pageCount={pageCount} onPageChange={setPage} />
           )}
         </div>
 
@@ -218,31 +209,5 @@ export default function DuressPage() {
       </>
       )}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-  icon,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  icon?: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
-      {children}
-    </button>
   );
 }

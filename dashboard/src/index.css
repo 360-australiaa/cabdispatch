@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theming mechanism: `data-theme` on <html>, written by ThemeProvider
+ * (src/lib/theme.tsx) and by the anti-flash script in index.html. It is always
+ * one of the two concrete values -- "light" or "dark", never "system" -- so a
+ * single attribute selector styles every case.
+ *
+ * There is deliberately NO `prefers-color-scheme` block any more. There used to
+ * be one, and it fought with the (never-applied) `.dark` class hook: dark mode
+ * was purely OS-driven and could not be overridden by the operator. The OS
+ * preference is now read in JS and folded into `data-theme`, so the cascade has
+ * exactly one source of truth and "System" is still honoured.
+ */
 :root {
   /* Cab Dispatch brand tokens */
   --brand-primary: #2a1c58; /* indigo */
@@ -10,7 +22,8 @@
   --brand-secondary-foreground: #ffffff;
   --brand-accent: #f4c300; /* gold */
   --brand-accent-foreground: #2a1c58;
-  --brand-lavender: #efeaf8; /* light bg */
+  --brand-lavender: #efeaf8; /* light surface tint */
+  --brand-lavender-foreground: #1a1424;
 
   --background: #ffffff;
   --foreground: #1a1424;
@@ -25,6 +38,8 @@
   --destructive-foreground: #ffffff;
   --success: #16a34a;
   --success-foreground: #ffffff;
+  --warning: #d97706;
+  --warning-foreground: #ffffff;
 
   --radius: 0.5rem;
 }
@@ -39,20 +54,37 @@
   --border: #3a2774;
   --input: #3a2774;
   --ring: #f4c300;
-}
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --background: #19113a;
-    --foreground: #efeaf8;
-    --card: #221749;
-    --card-foreground: #efeaf8;
-    --muted: #2a1c58;
-    --muted-foreground: #c3b5e7;
-    --border: #3a2774;
-    --input: #3a2774;
-    --ring: #f4c300;
-  }
+  /*
+   * --brand-lavender is a *surface* token: a pale tint to lay text on. In light
+   * mode that is #efeaf8. It was never redefined here, so in dark mode it kept
+   * its light value -- which is exactly --foreground's dark value (#efeaf8),
+   * making every `text-brand-lavender` element invisible against a
+   * `bg-brand-lavender` surface, and near-invisible on the dark shell. Same bug
+   * class AppShell already documents working around. Redefining it as a dark
+   * surface, with an explicit foreground to pair with, fixes it at the token
+   * level so the workarounds can go.
+   */
+  --brand-lavender: #2f2261;
+  --brand-lavender-foreground: #efeaf8;
+
+  /*
+   * --brand-primary is deliberately NOT redefined here. It is the sidebar and
+   * header ground, it is overridable per tenant by AppShell's
+   * useApplyTenantTheme(), and its light value already reads correctly against
+   * the dark page. Redefining it to a near-lavender value would recreate the
+   * exact bug this block exists to fix: every `bg-brand-lavender
+   * text-brand-primary` chip in the app would become one flat colour again.
+   * Those chips pair the surface with --brand-lavender-foreground instead.
+   */
+
+  /* Both semantic states need lifting for contrast on a dark ground. */
+  --destructive: #f87171;
+  --destructive-foreground: #19113a;
+  --success: #4ade80;
+  --success-foreground: #19113a;
+  --warning: #fbbf24;
+  --warning-foreground: #19113a;
 }
 
 * {
@@ -63,4 +95,20 @@ body {
   background-color: var(--background);
   color: var(--foreground);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/*
+ * Keyboard-only "skip to content" link (AppShell). Off-screen until focused,
+ * then pinned to the top-left -- the standard first Tab stop on every page.
+ */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 200;
+}
+
+.skip-link:focus {
+  left: 0.5rem;
+  top: 0.5rem;
 }

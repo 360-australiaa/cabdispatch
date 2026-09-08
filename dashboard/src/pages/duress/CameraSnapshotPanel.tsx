@@ -1,6 +1,7 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { Camera } from "lucide-react";
+import { Spinner } from "@/components/ui";
 import apiClient from "@/lib/apiClient";
 import { formatTime } from "./format";
 import { SnapshotGallery } from "./SnapshotGallery";
@@ -118,7 +119,7 @@ export function CameraSnapshotPanel({
         />
       ) : (
         <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-border text-xs text-muted-foreground">
-          {state === "loading" && "Loading…"}
+          {state === "loading" && <Spinner size="sm" label="Loading camera snapshot" />}
           {state === "empty" &&
             "No camera snapshot captured for this event yet -- frames only arrive while the tablet has an active duress event open."}
           {state === "error" && "—"}

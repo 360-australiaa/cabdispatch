@@ -205,7 +205,7 @@ export function ThreadPanel({
     <Card className="flex h-[calc(100vh-10rem)] flex-col">
       <CardHeader className="flex-row items-center justify-between gap-2 space-y-0 border-b border-border">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-primary">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-lavender-foreground">
             {initials(driver.name)}
           </div>
           <div>

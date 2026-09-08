@@ -109,7 +109,7 @@ export default function MessagesPage() {
                           selectedDriver?.id === driver.id && "bg-muted",
                         )}
                       >
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-primary">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-lavender-foreground">
                           {initials(driver.name)}
                         </div>
                         <div className="min-w-0 flex-1">

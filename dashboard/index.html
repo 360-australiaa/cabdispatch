@@ -5,6 +5,31 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cab Dispatch — Fleet Ops</title>
+    <!--
+      Resolve the theme before first paint. React would otherwise mount with no
+      data-theme, paint the light palette, then swap to dark on the first
+      effect -- a white flash on every load for a dark-mode operator. Kept in
+      sync with src/lib/theme.tsx: same storage key, same "system resolves to
+      the OS setting" rule, same "always write a concrete value" contract.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("cabdispatch.theme");
+          var pref = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+          var dark =
+            pref === "dark" ||
+            (pref === "system" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var theme = dark ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

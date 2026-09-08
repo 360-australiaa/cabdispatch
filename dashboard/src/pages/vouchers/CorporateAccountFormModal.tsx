@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { Button, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import {
   useCreateCorporateAccountMutation,
   useUpdateCorporateAccountMutation,
@@ -128,15 +128,12 @@ export function CorporateAccountFormModal({ open, onClose, mode, account }: Corp
         </div>
 
         {mode === "edit" && (
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-input"
-              checked={form.active}
-              onChange={(e) => update("active", e.target.checked)}
-            />
-            Active
-          </label>
+          <Checkbox
+            label="Active"
+            wrapperClassName="text-foreground"
+            checked={form.active}
+            onChange={(e) => update("active", e.target.checked)}
+          />
         )}
 
         {error && (

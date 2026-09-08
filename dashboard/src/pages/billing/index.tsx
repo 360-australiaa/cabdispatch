@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { isAxiosError } from "axios";
 import { FileText, Link2, Plus, Receipt } from "lucide-react";
 import {
@@ -8,13 +8,17 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  ErrorBanner,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
+  Tabs,
+  useToast,
+  type TabItem,
   type TableColumn,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import {
   formatAud,
@@ -83,6 +87,11 @@ function apiErrorMessage(err: unknown, fallback: string): string {
 
 type ViewTab = "subscriptions" | "invoices";
 
+const VIEW_TABS: TabItem<ViewTab>[] = [
+  { value: "subscriptions", label: "Subscriptions", icon: Receipt },
+  { value: "invoices", label: "Invoices", icon: FileText },
+];
+
 export default function BillingPage() {
   const { user } = useAuth();
   const canManage = user?.role === "owner" || user?.role === "admin" || user?.role === "dispatcher";
@@ -104,51 +113,17 @@ export default function BillingPage() {
         }
       />
 
-      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
-        <TabButton
-          active={tab === "subscriptions"}
-          onClick={() => setTab("subscriptions")}
-          icon={<Receipt className="h-4 w-4" />}
-        >
-          Subscriptions
-        </TabButton>
-        <TabButton
-          active={tab === "invoices"}
-          onClick={() => setTab("invoices")}
-          icon={<FileText className="h-4 w-4" />}
-        >
-          Invoices
-        </TabButton>
-      </div>
+      <Tabs
+        items={VIEW_TABS}
+        value={tab}
+        onChange={setTab}
+        variant="pill"
+        label="Billing sections"
+        className="mb-4"
+      />
 
       {tab === "subscriptions" ? <SubscriptionsView canManage={canManage} /> : <InvoicesView />}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-  icon,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  icon?: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
-      {children}
-    </button>
   );
 }
 
@@ -170,10 +145,17 @@ function CreateSubscriptionButton() {
 function ConnectPaymentsButton() {
   const [open, setOpen] = useState(false);
   const onboardMutation = useConnectOnboard();
+  const toast = useToast();
 
   function handleClick() {
     setOpen(true);
-    onboardMutation.mutate();
+    onboardMutation.mutate(undefined, {
+      onSuccess: () => toast.success("Onboarding link created"),
+      onError: (err) =>
+        toast.error("Failed to create onboarding link", {
+          description: apiErrorMessage(err, "Failed to create onboarding link."),
+        }),
+    });
   }
 
   function handleClose() {
@@ -362,29 +344,16 @@ function SubscriptionsView({ canManage }: { canManage: boolean }) {
               emptyState="No subscriptions match these filters."
             />
             {total > 0 && (
-              <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-                <span>
-                  {total} subscription{total === 1 ? "" : "s"} — page {page + 1} of {pageCount}
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page === 0}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= pageCount - 1}
-                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
+              <Pagination
+                page={page}
+                pageCount={pageCount}
+                onPageChange={setPage}
+                summary={
+                  <>
+                    {total} subscription{total === 1 ? "" : "s"} — page {page + 1} of {pageCount}
+                  </>
+                }
+              />
             )}
           </>
         )}
@@ -501,14 +470,6 @@ function InvoicesView() {
   );
 }
 
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-      {message}
-    </div>
-  );
-}
-
 function planLabel(plan: BillingPlan): string {
   return PLAN_OPTIONS.find((p) => p.value === plan)?.label ?? plan;
 }
@@ -526,6 +487,7 @@ function invoiceStatusLabel(status: InvoiceRead["status"]): string {
 function CreateSubscriptionModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { data: vehicles, isLoading: vehiclesLoading } = useVehiclesForBilling();
   const createMutation = useCreateSubscription();
+  const toast = useToast();
   const [vehicleId, setVehicleId] = useState("");
   const [plan, setPlan] = useState<BillingPlan>("basic");
 
@@ -539,7 +501,19 @@ function CreateSubscriptionModal({ open, onClose }: { open: boolean; onClose: ()
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!vehicleId) return;
-    createMutation.mutate({ vehicle_id: vehicleId, plan }, { onSuccess: () => handleClose() });
+    createMutation.mutate(
+      { vehicle_id: vehicleId, plan },
+      {
+        onSuccess: () => {
+          handleClose();
+          toast.success("Subscription created", { description: planLabel(plan) });
+        },
+        onError: (err) =>
+          toast.error("Failed to create subscription", {
+            description: apiErrorMessage(err, "Failed to create subscription."),
+          }),
+      },
+    );
   }
 
   const vehicleOptions = (vehicles ?? []).map((v) => ({ value: v.id, label: v.rego }));
@@ -604,6 +578,7 @@ function ChangePlanModal({
   onClose: () => void;
 }) {
   const updateMutation = useUpdateSubscription();
+  const toast = useToast();
   const [plan, setPlan] = useState<BillingPlan>(subscription?.plan ?? "basic");
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>(
     subscription?.status ?? "trialing",
@@ -629,7 +604,16 @@ function ChangePlanModal({
     if (!subscription) return;
     updateMutation.mutate(
       { id: subscription.id, body: { plan, status: subscriptionStatus } },
-      { onSuccess: () => handleClose() },
+      {
+        onSuccess: () => {
+          handleClose();
+          toast.success("Plan updated", { description: planLabel(plan) });
+        },
+        onError: (err) =>
+          toast.error("Failed to update plan", {
+            description: apiErrorMessage(err, "Failed to update plan."),
+          }),
+      },
     );
   }
 
@@ -703,6 +687,7 @@ function CancelSubscriptionModal({
   onClose: () => void;
 }) {
   const cancelMutation = useCancelSubscription();
+  const toast = useToast();
 
   function handleClose() {
     cancelMutation.reset();
@@ -711,7 +696,16 @@ function CancelSubscriptionModal({
 
   function handleConfirm() {
     if (!subscription) return;
-    cancelMutation.mutate(subscription.id, { onSuccess: () => handleClose() });
+    cancelMutation.mutate(subscription.id, {
+      onSuccess: () => {
+        handleClose();
+        toast.success("Subscription canceled", { description: vehicleLabel || undefined });
+      },
+      onError: (err) =>
+        toast.error("Failed to cancel subscription", {
+          description: apiErrorMessage(err, "Failed to cancel subscription."),
+        }),
+    });
   }
 
   return (

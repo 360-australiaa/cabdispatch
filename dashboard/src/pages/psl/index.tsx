@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Banknote, ListChecks, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardContent, Input, Modal, PageHeader, Select, Table, type TableColumn } from "@/components/ui";
+import { Badge, Button, Card, CardContent, Input, Modal, PageHeader, Select, Table, Tabs, type TabItem, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import {
   useDeleteLedgerEntryMutation,
@@ -32,6 +32,12 @@ const PAYMENT_METHOD_LABELS = new Map(
 );
 
 type Tab = "ledger" | "topups" | "report";
+
+const TABS: TabItem<Tab>[] = [
+  { value: "ledger", label: "Ledger", icon: ListChecks },
+  { value: "topups", label: "Top-ups", icon: Receipt },
+  { value: "report", label: "Remittance report", icon: Banknote },
+];
 
 export default function PslPage() {
   const { user } = useAuth();
@@ -244,44 +250,14 @@ export default function PslPage() {
         }
       />
 
-      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
-        <button
-          type="button"
-          onClick={() => setTab("ledger")}
-          className={
-            "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors " +
-            (tab === "ledger"
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground")
-          }
-        >
-          <ListChecks className="h-4 w-4" /> Ledger
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("topups")}
-          className={
-            "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors " +
-            (tab === "topups"
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground")
-          }
-        >
-          <Receipt className="h-4 w-4" /> Top-ups
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("report")}
-          className={
-            "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors " +
-            (tab === "report"
-              ? "bg-card text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground")
-          }
-        >
-          <Banknote className="h-4 w-4" /> Remittance report
-        </button>
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="pill"
+        label="PSL Centre sections"
+        className="mb-4"
+      />
 
       {(tab === "ledger" || tab === "topups") && (
         <>

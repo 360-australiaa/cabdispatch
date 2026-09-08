@@ -19,10 +19,13 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Input,
   Modal,
+  Pagination,
   Select,
   Table,
+  useToast,
   type TableColumn,
 } from "@/components/ui";
 import {
@@ -39,7 +42,6 @@ import {
   type DeviceFilters,
   PAGE_LIMIT,
 } from "./api";
-import { PaginationBar } from "./PaginationBar";
 import { errorMessage, formatDateTime, relativeFromNow } from "./format";
 import { EMPTY_DEVICE_FORM, type Device, type DeviceFormValues } from "./types";
 
@@ -79,6 +81,9 @@ function BatteryIcon({ battery }: { battery: number | null }) {
 }
 
 export function DevicesPanel() {
+  // Row actions here report nothing inline at all beyond the table re-rendering
+  // on refetch, which is invisible if the row is off-screen.
+  const toast = useToast();
   const [skip, setSkip] = useState(0);
   const [androidIdSearch, setAndroidIdSearch] = useState("");
   const [kioskFilter, setKioskFilter] = useState("");
@@ -92,6 +97,14 @@ export function DevicesPanel() {
   );
 
   const devicesQuery = useDevices(skip, filters);
+
+  // Server-side pagination is offset-based (`skip`), so the shared zero-based
+  // `Pagination` needs the offset translated to a page index and back.
+  const total = devicesQuery.data?.total ?? 0;
+  const page = Math.floor(skip / PAGE_LIMIT);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_LIMIT));
+  const rangeStart = total === 0 ? 0 : skip + 1;
+  const rangeEnd = Math.min(total, skip + PAGE_LIMIT);
   const vehicleOptionsQuery = useVehicleOptions();
 
   const vehicleRegoById = useMemo(() => {
@@ -127,8 +140,14 @@ export function DevicesPanel() {
   const [pushAllResult, setPushAllResult] = useState<{ flagged: number; total: number } | null>(null);
 
   async function confirmPushAll() {
-    const result = await forceUpdateAll.mutateAsync();
+    const result = await forceUpdateAll.mutateAsync(undefined, {
+      onError: (err) =>
+        toast.error("Failed to push update to all tablets", { description: errorMessage(err) }),
+    });
     setPushAllResult(result);
+    toast.success("Update pushed to all tablets", {
+      description: `Flagged ${result.flagged} of ${result.total}.`,
+    });
   }
 
   function openCreate() {
@@ -153,33 +172,55 @@ export function DevicesPanel() {
 
   async function submitForm() {
     setFormError(null);
+    const wasEditing = editing;
     try {
-      if (editing) {
-        await updateDevice.mutateAsync({ id: editing.id, values: formValues });
+      if (wasEditing) {
+        await updateDevice.mutateAsync({ id: wasEditing.id, values: formValues });
       } else {
         await createDevice.mutateAsync(formValues);
       }
       setFormOpen(false);
+      toast.success(wasEditing ? "Device saved" : "Device registered", {
+        description: formValues.android_id.trim() || undefined,
+      });
     } catch (err) {
       setFormError(errorMessage(err));
+      toast.error(wasEditing ? "Failed to save device" : "Failed to register device", {
+        description: errorMessage(err),
+      });
     }
   }
 
   async function confirmDelete() {
     if (!deleteTarget) return;
+    const androidId = deleteTarget.android_id;
     try {
       await deleteDevice.mutateAsync(deleteTarget.id);
       setDeleteTarget(null);
+      toast.success("Device deleted", { description: androidId });
     } catch (err) {
       setFormError(errorMessage(err));
       setDeleteTarget(null);
+      toast.error("Failed to delete device", { description: errorMessage(err) });
     }
   }
 
   async function toggleKioskLock(d: Device) {
     setPendingActionId(d.id);
     try {
-      await kioskLock.mutateAsync({ id: d.id, enabled: !d.kiosk_locked });
+      await kioskLock.mutateAsync(
+        { id: d.id, enabled: !d.kiosk_locked },
+        {
+          onSuccess: () =>
+            toast.success(d.kiosk_locked ? "Kiosk unlocked" : "Kiosk locked", {
+              description: d.android_id,
+            }),
+          onError: (err) =>
+            toast.error(d.kiosk_locked ? "Failed to unlock kiosk" : "Failed to lock kiosk", {
+              description: errorMessage(err),
+            }),
+        },
+      );
     } finally {
       setPendingActionId(null);
     }
@@ -188,7 +229,11 @@ export function DevicesPanel() {
   async function triggerForceUpdate(d: Device) {
     setPendingActionId(d.id);
     try {
-      await forceUpdate.mutateAsync(d.id);
+      await forceUpdate.mutateAsync(d.id, {
+        onSuccess: () => toast.success("Update queued", { description: d.android_id }),
+        onError: (err) =>
+          toast.error("Failed to queue update", { description: errorMessage(err) }),
+      });
     } finally {
       setPendingActionId(null);
     }
@@ -197,7 +242,11 @@ export function DevicesPanel() {
   async function triggerLocate(d: Device) {
     setPendingActionId(d.id);
     try {
-      await locateDevice.mutateAsync(d.id);
+      await locateDevice.mutateAsync(d.id, {
+        onSuccess: () => toast.success("Locate requested", { description: d.android_id }),
+        onError: (err) =>
+          toast.error("Failed to request location", { description: errorMessage(err) }),
+      });
     } finally {
       setPendingActionId(null);
     }
@@ -206,7 +255,11 @@ export function DevicesPanel() {
   async function triggerRestart(d: Device) {
     setPendingActionId(d.id);
     try {
-      await restartApp.mutateAsync(d.id);
+      await restartApp.mutateAsync(d.id, {
+        onSuccess: () => toast.success("App restart queued", { description: d.android_id }),
+        onError: (err) =>
+          toast.error("Failed to queue app restart", { description: errorMessage(err) }),
+      });
     } finally {
       setPendingActionId(null);
     }
@@ -470,12 +523,19 @@ export function DevicesPanel() {
             onRowClick={openEdit}
             emptyState="No devices match these filters."
           />
-          <PaginationBar
-            skip={skip}
-            limit={PAGE_LIMIT}
-            total={devicesQuery.data?.total ?? 0}
-            onSkipChange={setSkip}
-          />
+          {/* Hidden while the whole list fits on one page. */}
+          {total > PAGE_LIMIT && (
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onPageChange={(p) => setSkip(p * PAGE_LIMIT)}
+              summary={
+                <>
+                  {rangeStart}–{rangeEnd} of {total} (page {page + 1} of {pageCount})
+                </>
+              }
+            />
+          )}
         </>
       )}
 
@@ -535,15 +595,12 @@ export function DevicesPanel() {
               onChange={(e) => setFormValues((f) => ({ ...f, vehicle_id: e.target.value }))}
             />
           </div>
-          <label className="flex items-center gap-2 text-sm sm:col-span-2">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-input"
-              checked={formValues.kiosk_locked}
-              onChange={(e) => setFormValues((f) => ({ ...f, kiosk_locked: e.target.checked }))}
-            />
-            Start kiosk-locked
-          </label>
+          <Checkbox
+            label="Start kiosk-locked"
+            wrapperClassName="sm:col-span-2"
+            checked={formValues.kiosk_locked}
+            onChange={(e) => setFormValues((f) => ({ ...f, kiosk_locked: e.target.checked }))}
+          />
         </div>
         {formError && <p className="mt-3 text-sm text-destructive">{formError}</p>}
       </Modal>

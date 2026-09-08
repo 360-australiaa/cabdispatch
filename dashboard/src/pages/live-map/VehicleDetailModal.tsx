@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { Badge, Button, Sheet, Table, type TableColumn } from "@/components/ui";
+import { Badge, Button, Sheet, Spinner, Table, type TableColumn } from "@/components/ui";
 import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
 import {
@@ -402,7 +402,7 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
                 <Field label="Name">{vehicle.current_driver_name ?? vehicle.current_driver_id}</Field>
                 <Field label="Phone">
                   {driverQuery.isLoading ? (
-                    <span className="text-muted-foreground">Loading…</span>
+                    <Spinner size="sm" className="text-muted-foreground" label="Loading driver phone" />
                   ) : (
                     driver?.phone ?? "—"
                   )}

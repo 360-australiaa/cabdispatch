@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { CheckCircle2, Download, FileSpreadsheet, Pencil, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import {
@@ -11,11 +11,13 @@ import {
   CardTitle,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
+  Tabs,
+  type TabItem,
   type TableColumn,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import {
   downloadComplianceDocument,
@@ -38,6 +40,11 @@ const DOC_TYPE_FILTER_OPTIONS = [{ value: "", label: "All document types" }, ...
 
 type ViewTab = "vault" | "reports";
 
+const VIEW_TABS: TabItem<ViewTab>[] = [
+  { value: "vault", label: "Document Vault", icon: ShieldCheck },
+  { value: "reports", label: "Reports", icon: FileSpreadsheet },
+];
+
 /** Mirrors `compliance.py`'s write-endpoint restriction (upload/update/
  * delete documents) — owner/admin/dispatcher only. Without this, every role
  * including `driver` saw fully-enabled write controls that just 403'd. */
@@ -58,47 +65,17 @@ export default function CompliancePage() {
         description="Per-vehicle regulatory documents, NSW PtP export, and revenue/GST reporting."
       />
 
-      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
-        <TabButton active={tab === "vault"} onClick={() => setTab("vault")} icon={<ShieldCheck className="h-4 w-4" />}>
-          Document Vault
-        </TabButton>
-        <TabButton
-          active={tab === "reports"}
-          onClick={() => setTab("reports")}
-          icon={<FileSpreadsheet className="h-4 w-4" />}
-        >
-          Reports
-        </TabButton>
-      </div>
+      <Tabs
+        items={VIEW_TABS}
+        value={tab}
+        onChange={setTab}
+        variant="pill"
+        label="Compliance sections"
+        className="mb-4"
+      />
 
       {tab === "vault" ? <VaultView /> : <ReportsView />}
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-  icon,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  icon?: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
-        active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {icon}
-      {children}
-    </button>
   );
 }
 
@@ -360,29 +337,16 @@ function VaultView() {
       />
 
       {pageCount > 1 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount} ({total} documents)
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+          summary={
+            <>
+              Page {page + 1} of {pageCount} ({total} documents)
+            </>
+          }
+        />
       )}
 
       {vehicleId && (

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardContent, Modal, Table } from "@/components/ui";
+import { Badge, Button, Card, CardContent, Modal, Pagination, Table } from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
 import { useAuth } from "@/lib/auth";
 import { deleteDuressDevice, listDuressDevices, listVehicleOptionsForDeviceLink } from "./api";
@@ -205,29 +205,7 @@ export function DevicesPanel() {
       />
 
       {pageCount > 1 && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination page={page} pageCount={pageCount} onPageChange={setPage} />
       )}
 
       <DeviceFormModal

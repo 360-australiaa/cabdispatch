@@ -47,7 +47,7 @@ export function TariffSuggestPanel() {
           className="flex w-full items-center justify-between gap-2 text-left"
         >
           <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Lightbulb className="h-4 w-4 text-brand-primary" />
+            <Lightbulb className="h-4 w-4 text-brand-primary dark:text-brand-accent" />
             Suggested tariff for a location/time
           </span>
           {open ? (

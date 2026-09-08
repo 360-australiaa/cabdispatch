@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
   createDuressDevice,
   listVehicleOptionsForDeviceLink,
@@ -160,16 +160,11 @@ export function DeviceFormModal({
         )}
 
         {isEdit && (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border"
-              checked={active}
-              onChange={(e) => setActive(e.target.checked)}
-            />
-            Active (unchecking rejects this device at its next authentication attempt, without
-            deleting its history)
-          </label>
+          <Checkbox
+            label="Active (unchecking rejects this device at its next authentication attempt, without deleting its history)"
+            checked={active}
+            onChange={(e) => setActive(e.target.checked)}
+          />
         )}
 
         {mutation.isError && (
