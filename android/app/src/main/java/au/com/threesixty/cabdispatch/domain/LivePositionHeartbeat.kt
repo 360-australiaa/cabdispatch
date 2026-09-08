@@ -106,6 +106,10 @@ class LivePositionHeartbeat(
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
     private val appContext: Context,
+    /** How a rego becomes a fleet-vehicle UUID again when the persisted one stops working -- see
+     * `VehicleBinding.kt`'s file doc for the defect this closes. Injectable so a test can drive the
+     * recovery without a Retrofit stack; defaults to the real roster lookup. */
+    private val vehicleUuidResolver: VehicleUuidResolver = ApiVehicleUuidResolver(apiService),
 ) {
 
     /** The currently-running publish loop, or `null` while off-shift. Only ever touched from the
@@ -126,39 +130,88 @@ class LivePositionHeartbeat(
      * dedupes structurally-equal consecutive values on its own, so this does not re-launch on a
      * no-op re-emission of the same [DriverSession].
      */
-    // Keyed off [DriverSession.vehicleUuid], not [DriverSession.vehicleId] — found live that
-    // `POST /v1/fleet/positions` 404s "Vehicle not found" on the driver-entered rego string
-    // ([DriverSession.vehicleId]) and only ever accepts the real fleet-vehicle UUID. A session
-    // whose rego->UUID lookup hasn't resolved yet (still in flight, offline, or no server-side
-    // match) has no publish loop running at all — same "nothing honest to send" posture as
-    // [publishOnce]'s own missing-GPS-fix skip, just one level up: it degrades to *no heartbeat
-    // this shift* rather than a guaranteed-404 spammed every 30s.
+    // Keyed off "is there an open shift", and nothing more.
+    //
+    // It used to be keyed off [DriverSession.vehicleUuid] being non-null, on the reasoning that a
+    // session with no resolved UUID has nothing honest to publish. True as far as it went, but the
+    // consequence was that one failed roster lookup at bind time (a tablet binding a vehicle with
+    // no signal in a basement car park, which is exactly where they bind) cost the depot sight of
+    // that car for the entire shift, with nothing anywhere that would ever try again. The loop now
+    // starts regardless and resolves the binding itself — see [publishLoop].
     fun start() {
         scope.launch {
             SessionHolder.session.collect { session ->
                 publishJob?.cancel()
-                val onShiftVehicleUuid = session?.takeIf { it.shiftId != null }?.vehicleUuid
-                publishJob = onShiftVehicleUuid?.let { vehicleUuid -> scope.launch { publishLoop(vehicleUuid) } }
+                val onShift = session?.takeIf { it.shiftId != null }
+                publishJob = onShift?.let { scope.launch { publishLoop(it) } }
             }
         }
     }
 
-    /** Publishes immediately (so a dispatcher sees a fresh dot the moment a shift starts, not up
-     * to [HEARTBEAT_INTERVAL_MS] later) and then every [HEARTBEAT_INTERVAL_MS] after that — same
-     * "act then delay" shape as [DuressController.runActivePhase]'s own poll loop. */
-    private suspend fun publishLoop(vehicleUuid: String) {
+    /**
+     * Publishes immediately (so a dispatcher sees a fresh dot the moment a shift starts, not up to
+     * [HEARTBEAT_INTERVAL_MS] later) and then every [HEARTBEAT_INTERVAL_MS] after that — same "act
+     * then delay" shape as [DuressController.runActivePhase]'s own poll loop.
+     *
+     * ### Keeping the binding alive
+     * The loop owns the vehicle UUID rather than being handed one, because the persisted one can be
+     * absent (the bind happened offline) or wrong (the vehicle was deleted and re-seeded
+     * server-side under the same rego, which is what a fleet wipe does). Both cases used to be
+     * permanent for the life of the session. Now:
+     *
+     * - No UUID: look the rego up every [REBIND_INTERVAL_MS] until it resolves.
+     * - `404 Vehicle not found`: look it up once immediately; if it resolves to a different car,
+     *   that is the fleet-wipe case and the session is rebound. If it resolves to the same id, or
+     *   not at all, back off to [REBIND_INTERVAL_MS] rather than 404-ing every five seconds for the
+     *   rest of the shift.
+     *
+     * Rebinding writes through [SessionHolder.set], which persists it and — because [start]'s
+     * collector is watching the same flow — cancels this coroutine and starts a fresh loop on the
+     * new UUID. So the `return` after a rebind is documentation, not control flow: the cancellation
+     * usually gets there first.
+     */
+    private suspend fun publishLoop(session: DriverSession) {
+        var vehicleUuid = session.vehicleUuid
         while (scope.isActive) {
-            publishOnce(vehicleUuid)
+            val uuid = vehicleUuid
+            if (uuid == null) {
+                val resolved = resolveAndPersist(session)
+                if (resolved == null) delay(REBIND_INTERVAL_MS) else vehicleUuid = resolved
+                continue
+            }
+            if (publishOnce(uuid) == PositionPublishOutcome.UNKNOWN_VEHICLE) {
+                val resolved = resolveAndPersist(session)
+                if (resolved != null && resolved != uuid) return
+                delay(REBIND_INTERVAL_MS)
+                continue
+            }
             delay(HEARTBEAT_INTERVAL_MS)
         }
+    }
+
+    /**
+     * Re-resolves this session's rego and, if that names a different vehicle than the session is
+     * carrying, writes it back so the fix outlives this loop, this screen and this process.
+     *
+     * Reads [SessionHolder.session] fresh rather than copying the [session] it was passed: a shift
+     * can have been submitted, or a trip's id written into the session, in the seconds this lookup
+     * was in flight, and rebinding must not resurrect a stale snapshot of everything else.
+     */
+    private suspend fun resolveAndPersist(session: DriverSession): String? {
+        val resolved = vehicleUuidResolver.resolve(session.vehicleId) ?: return null
+        val current = SessionHolder.session.value
+        if (current != null && current.vehicleUuid != resolved) {
+            SessionHolder.set(current.copy(vehicleUuid = resolved))
+        }
+        return resolved
     }
 
     /** Skips silently (not an error) when there is no fix yet — same "nothing honest to publish
      * yet" reasoning as [SettingsViewModel.respondToLocateRequest]: no permission granted, cold
      * start, no signal. */
-    private suspend fun publishOnce(vehicleUuid: String) {
-        val fix = speedSource.locationFix.value ?: return
-        runCatching {
+    private suspend fun publishOnce(vehicleUuid: String): PositionPublishOutcome {
+        val fix = speedSource.locationFix.value ?: return PositionPublishOutcome.NO_FIX
+        return runCatching {
             apiService.publishPosition(
                 PositionPublishRequestDto(
                     vehicleId = vehicleUuid,
@@ -175,7 +228,13 @@ class LivePositionHeartbeat(
                     heading = fix.heading,
                 ),
             )
-        }
+        }.fold(
+            onSuccess = { PositionPublishOutcome.PUBLISHED },
+            // A 404 here is the only failure that means anything other than "try again shortly" --
+            // see `classifyPublishError`. Still silent to the driver, as every background publish in
+            // this app is; the difference is that the loop now acts on it.
+            onFailure = ::classifyPublishError,
+        )
     }
 
     /** [BatteryManager.BATTERY_PROPERTY_CAPACITY] on the system [Context.BATTERY_SERVICE] —
@@ -211,6 +270,17 @@ class LivePositionHeartbeat(
         // See this class's own "Interval" doc above for why this is 5s, not the blueprint's
         // literal 30s figure.
         const val HEARTBEAT_INTERVAL_MS = 5_000L
+
+        /**
+         * How often to re-attempt a rego to UUID lookup while the binding is missing or rejected.
+         *
+         * Deliberately far slower than [HEARTBEAT_INTERVAL_MS]: this is a whole fleet-roster fetch,
+         * and the conditions it recovers from (no signal at bind time, a fleet re-seeded mid-shift)
+         * resolve on the scale of minutes, not seconds. 60s means a wiped-and-restored fleet is back
+         * on the dispatcher's map within a minute, without a roster fetch every 5 seconds all shift.
+         * Chosen, not derived — same flagging convention as [HEARTBEAT_INTERVAL_MS] above.
+         */
+        const val REBIND_INTERVAL_MS = 60_000L
 
         /** See this class's own doc ("Why 'shift open'...") for why this is a fixed placeholder
          * rather than a real availability/on-trip status — no such signal exists to read from a

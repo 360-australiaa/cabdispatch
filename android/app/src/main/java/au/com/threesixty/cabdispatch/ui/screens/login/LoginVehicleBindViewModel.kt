@@ -9,6 +9,7 @@ import au.com.threesixty.cabdispatch.domain.DevicePairingStatus
 import au.com.threesixty.cabdispatch.domain.DriverLoginResult
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.ApiVehicleUuidResolver
 import au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -240,11 +241,12 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         // best-effort network calls already use; a failed/offline lookup just leaves
         // resolvedVehicleUuid null, and startShift() below reads whatever is in state at that point.
         viewModelScope.launch {
-            runCatching { AppContainer.apiService.listVehicles() }
-                .onSuccess { page ->
-                    val match = page.items.firstOrNull { it.rego.equals(vehicleId, ignoreCase = true) }
-                    if (match != null) _uiState.update { it.copy(resolvedVehicleUuid = match.id) }
-                }
+            // Same resolver the heartbeat uses to REPAIR a binding that has gone stale
+            // (`domain/VehicleBinding.kt`), rather than a second hand-rolled rego match here. Two
+            // copies of "which row of the roster is this rego" is exactly how one of them ends up
+            // trimming whitespace and the other not.
+            ApiVehicleUuidResolver(AppContainer.apiService).resolve(vehicleId)
+                ?.let { uuid -> _uiState.update { it.copy(resolvedVehicleUuid = uuid) } }
         }
     }
 
