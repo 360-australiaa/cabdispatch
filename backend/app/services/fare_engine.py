@@ -340,7 +340,19 @@ def is_day_before_nsw_public_holiday(d: date) -> bool:
 NSW_FARE_ZONE = ZoneInfo("Australia/Sydney")
 
 
-def resolve_time_class_and_peak(*, tariff: Tariff, occurred_at: datetime) -> tuple[TimeClass, bool]:
+def _default_region():
+    # Deferred import: app.services.regions.nsw imports this module (to reuse
+    # NSW_PUBLIC_HOLIDAYS), so importing it back at fare_engine module scope
+    # would be a circular import. The seam (X1) — see
+    # app.services.regions.FareRegion's own doc.
+    from app.services.regions.nsw import NSW_REGION
+
+    return NSW_REGION
+
+
+def resolve_time_class_and_peak(
+    *, tariff: Tariff, occurred_at: datetime, region=None
+) -> tuple[TimeClass, bool]:
     """The authoritative, deterministic time_class/is_peak classification for
     a trip commencing at `occurred_at`, on `tariff` -- see this module's own
     docstring ("time_class ... and the peak-hiring flag are fixed at journey
@@ -401,21 +413,27 @@ def resolve_time_class_and_peak(*, tariff: Tariff, occurred_at: datetime) -> tup
     which keeps the existing callers and tests that pass local wall-clock
     times meaning exactly what they meant before.
     """
+    if region is None:
+        region = _default_region()
     if occurred_at.tzinfo is not None:
-        occurred_at = occurred_at.astimezone(NSW_FARE_ZONE)
+        occurred_at = occurred_at.astimezone(region.tz)
     hour = occurred_at.hour
-    is_late_night = hour >= 22 or hour < 6
+    is_late_night = hour >= region.night_start_hour or hour < region.night_end_hour
     occurred_date = occurred_at.date()
     weekday = occurred_at.weekday()  # Monday=0 ... Sunday=6
 
     if is_late_night:
         time_class = TimeClass.NIGHT
-    elif tariff.area == AreaClass.COUNTRY and (weekday == 6 or is_nsw_public_holiday(occurred_date)):
+    elif tariff.area == AreaClass.COUNTRY and (
+        weekday in region.holiday_weekdays or region.is_public_holiday(occurred_date)
+    ):
         time_class = TimeClass.HOLIDAY
     else:
         time_class = TimeClass.DAY
 
-    is_fri_sat_or_pre_holiday = weekday in (4, 5) or is_day_before_nsw_public_holiday(occurred_date)
+    is_fri_sat_or_pre_holiday = (
+        weekday in region.peak_weekdays or region.is_day_before_public_holiday(occurred_date)
+    )
     is_peak = is_late_night and is_fri_sat_or_pre_holiday
 
     return time_class, is_peak
@@ -581,10 +599,21 @@ class FareEngine:
         surcharge_pct: Decimal | None = None,
         cleaning_fee: Decimal = Decimal(0),
         include_psl: bool = False,
+        region=None,
     ) -> FareBreakdown:
         """Assembles the final (or checkpoint — this method does not mutate
         `state`, so it may safely be called mid-trip e.g. at each hirer's
-        drop-off in a multiple-hiring scenario) fare breakdown."""
+        drop-off in a multiple-hiring scenario) fare breakdown.
+
+        `region` (X1, `app.services.regions.FareRegion`) supplies the GST(-
+        equivalent) divisor used below — defaults to `NSWRegion`'s `/11`,
+        bit-identical to this method's behaviour before the parameter
+        existed. `None` disables the whole gst_component line (some
+        jurisdictions levy no such tax); it stays `Decimal(0)` in that case
+        rather than being omitted, since FareBreakdown always carries the
+        field."""
+        if region is None:
+            region = _default_region()
 
         # Order cl 2(f): clamp any requested cleaning fee to the tariff's cap
         # regardless of what the caller asked for — the enforced maximum,
@@ -608,7 +637,7 @@ class FareEngine:
                 )
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
             grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
-            gst_component = round_half_up(grand_total / Decimal(11))
+            gst_component = round_half_up(grand_total / region.gst_divisor) if region.gst_divisor else Decimal(0)
             return FareBreakdown(
                 flag_fall=Decimal(0),
                 peak_charge=Decimal(0),
@@ -670,7 +699,7 @@ class FareEngine:
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
 
             grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
-            gst_component = round_half_up(grand_total / Decimal(11))
+            gst_component = round_half_up(grand_total / region.gst_divisor) if region.gst_divisor else Decimal(0)
 
             return FareBreakdown(
                 flag_fall=flag_fall,
@@ -760,7 +789,7 @@ class FareEngine:
             surcharge = round_half_up(fare_total * pct / Decimal(100))
 
         grand_total = fare_total + surcharge
-        gst_component = round_half_up(grand_total / Decimal(11))
+        gst_component = round_half_up(grand_total / region.gst_divisor) if region.gst_divisor else Decimal(0)
 
         return FareBreakdown(
             flag_fall=flag_fall,

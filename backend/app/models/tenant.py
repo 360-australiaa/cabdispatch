@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import re
 import uuid
+from decimal import Decimal
 
-from sqlalchemy import JSON, String, event
+from sqlalchemy import JSON, Numeric, String, event
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -59,6 +60,32 @@ class Tenant(Base, TimestampMixin):
     # device; devices call POST /v1/fleet/devices/{id}/verify-admin-pin
     # instead, which checks the PIN server-side and returns a bool.
     admin_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- jurisdiction seam (X1, docs/plans/2026-09-08-global-meter-program.md
+    # Wave 3) — the tenant-level facts app.services.regions.FareRegion needs
+    # to resolve which jurisdiction's fare-time/money rules apply to this
+    # tenant. Defaulted server-side so every existing row (created before
+    # these columns existed) becomes NSW/AUD/Australia-Sydney/11 exactly —
+    # see the accompanying migration; nothing changes for NSW.
+    #
+    # `jurisdiction` is deliberately a plain string, not a FK to a
+    # jurisdictions table: app.services.regions has no such table yet (see
+    # that package's module docstring, "What this is not (yet)") — this is
+    # the seam a real per-jurisdiction data model would key off, not that
+    # model itself.
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="Australia/Sydney"
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="AUD")
+    jurisdiction: Mapped[str] = mapped_column(String(20), nullable=False, server_default="NSW")
+    # Divisor applied to a GST(-equivalent)-inclusive grand total to report
+    # its tax component (see app.services.fare_engine.FareEngine.close).
+    # Nullable: a jurisdiction that levies no such tax has none — see
+    # app.services.regions.FareRegion.gst_divisor's own doc for why that
+    # must render as "no figure" rather than a fabricated 0.
+    gst_divisor: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 4), nullable=True, server_default="11"
+    )
 
 
 def slugify_tenant_name(name: str, *, fallback: str | None = None) -> str:

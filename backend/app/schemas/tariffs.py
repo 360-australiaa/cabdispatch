@@ -38,6 +38,14 @@ class TariffBase(BaseModel):
     surcharge_pct_cap: Decimal = Decimal("5.0")
     cleaning_fee_cap: Decimal = Decimal("124.14")
 
+    # Jurisdiction seam (X1) — per-tariff overrides of the tenant's
+    # FareRegion default night window / peak-eligible weekdays. `None`
+    # (the default for every tariff created without them) means "use the
+    # region default" — see app.models.tariffs.Tariff's own doc.
+    night_start_hour: int | None = Field(default=None, ge=0, le=23)
+    night_end_hour: int | None = Field(default=None, ge=0, le=23)
+    peak_weekdays: str | None = Field(default=None, max_length=20)
+
     @model_validator(mode="after")
     def _effective_to_after_from(self) -> TariffBase:
         if self.effective_to is not None and self.effective_to <= self.effective_from:
@@ -75,6 +83,9 @@ class TariffUpdate(BaseModel):
     psl_amount: Decimal | None = None
     surcharge_pct_cap: Decimal | None = None
     cleaning_fee_cap: Decimal | None = None
+    night_start_hour: int | None = None
+    night_end_hour: int | None = None
+    peak_weekdays: str | None = None
 
 
 class TariffRead(TariffBase):
@@ -86,6 +97,22 @@ class TariffRead(TariffBase):
     updated_at: datetime
 
 
+class JurisdictionRead(BaseModel):
+    """The resolved jurisdiction block `GET /v1/tariffs/active` carries
+    alongside the tariff itself (X1, `docs/plans/2026-09-08-global-meter-
+    program.md` Wave 3 task 2) — so the tablet does not need a second call
+    to learn which timezone/currency/GST rule its own tenant runs under.
+    Mirrors `app.services.regions.FareRegion`'s money/clock fields (not its
+    holiday-calendar/weekday-rule internals, which the device does not need
+    verbatim — see app.services.regions.get_region for where these values
+    are actually resolved from)."""
+
+    jurisdiction: str  # Tenant.jurisdiction, e.g. "NSW"
+    timezone: str
+    currency: str
+    gst_divisor: Decimal | None
+
+
 class SignedTariffRead(TariffRead):
     """TariffRead + an Ed25519 signature over the tariff's canonical rate
     payload (see app.services.tariff_signing). Used only by
@@ -95,6 +122,7 @@ class SignedTariffRead(TariffRead):
     docstring for the exact canonical-serialization format this signs."""
 
     signature: str  # base64 Ed25519 signature, standard (non-URL-safe) alphabet
+    jurisdiction: JurisdictionRead
 
 
 class TariffSigningPublicKeyRead(BaseModel):

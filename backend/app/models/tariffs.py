@@ -81,6 +81,22 @@ class Tariff(Base, TimestampMixin):
         _RATE, nullable=False, default=Decimal("124.14")
     )
 
+    # --- jurisdiction seam (X1) — per-tariff overrides of the region's
+    # default night window / peak-eligible weekdays. NULL means "use the
+    # tenant's FareRegion default" (app.services.regions.FareRegion.
+    # night_start_hour/night_end_hour/peak_weekdays) rather than a
+    # fabricated NSW value — see app.services.tariffs for the resolution
+    # order. Every existing row is NULL after the accompanying migration,
+    # so today's NSW behaviour (region default = NSW's own 22/6/{Fri,Sat})
+    # is unchanged.
+    night_start_hour: Mapped[int | None] = mapped_column(nullable=True)
+    night_end_hour: Mapped[int | None] = mapped_column(nullable=True)
+    # Comma-separated Python date.weekday() ints (e.g. "4,5" for Fri/Sat) —
+    # a plain scalar column rather than a JSON array to match this table's
+    # existing convention of simple column types only (see _RATE/_MONEY
+    # above); parsed by app.services.tariffs when present.
+    peak_weekdays: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
 
 class Extra(Base, TimestampMixin):
     __tablename__ = "tariff_extras"

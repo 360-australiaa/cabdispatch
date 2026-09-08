@@ -50,11 +50,13 @@ from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import VALID_VEHICLE_CLASSES
 from app.models.tariffs import VALID_REGIONS, Extra, Tariff, TariffChangeLog
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.tariffs import (
     ExtraCreate,
     ExtraRead,
     ExtraUpdate,
+    JurisdictionRead,
     Page,
     SignedTariffRead,
     TariffChangeLogRead,
@@ -172,7 +174,23 @@ async def get_active_tariff(
             detail=f"No effective '{region}' tariff for tenant at {resolved_at.isoformat()}",
         )
     signed_fields = TariffRead.model_validate(row).model_dump()
-    return SignedTariffRead(**signed_fields, signature=tariff_signing.sign_tariff(row))
+
+    # X1 jurisdiction seam: resolve the tenant's own timezone/currency/GST
+    # rule alongside the tariff, so the device does not need a second call
+    # (docs/plans/2026-09-08-global-meter-program.md Wave 3 task 2). Every
+    # tenant row has these columns with a NSW-matching server_default (see
+    # the accompanying migration), so this is never missing for an existing
+    # tenant -- it is defensive, not a real "tenant vanished" branch.
+    tenant = await session.get(Tenant, tenant_id)
+    jurisdiction = JurisdictionRead(
+        jurisdiction=tenant.jurisdiction if tenant else "NSW",
+        timezone=tenant.timezone if tenant else "Australia/Sydney",
+        currency=tenant.currency if tenant else "AUD",
+        gst_divisor=tenant.gst_divisor if tenant else None,
+    )
+    return SignedTariffRead(
+        **signed_fields, signature=tariff_signing.sign_tariff(row), jurisdiction=jurisdiction
+    )
 
 
 @router.get("/signing-public-key", response_model=TariffSigningPublicKeyRead)
