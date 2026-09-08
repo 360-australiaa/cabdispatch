@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -108,7 +111,22 @@ private fun FixedDesignCanvas(content: @Composable () -> Unit) {
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            // EXCLUDE the IME from the measurement the design scale is computed from.
+            //
+            // The window is `adjustResize` (see AndroidManifest) so the soft keyboard shrinks it
+            // rather than covering the Pair button on a gate a driver cannot leave. But the scale
+            // below is derived from the height this box is given, so with the keyboard up that
+            // height collapsed and the scale went with it: on the pilot tablet
+            // `minOf(1920/1280, ~500/800)` = 0.62, and the ENTIRE interface -- text, dial, rails,
+            // every screen, not just the field being typed into -- redrew at 62%. Reported as
+            // "when open keyboard, whole screen alignment not good" (2026-09-08), and it was:
+            // the design canvas itself was being rescaled by a keyboard.
+            //
+            // The canvas now always measures the window as if no keyboard were present, so the
+            // scale is a property of the panel and nothing else. The keyboard is handled where it
+            // belongs -- as padding on the content below -- which moves things without resizing
+            // them.
+            .windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime)),
     ) {
         val systemDensity = LocalDensity.current
         val widthPx = constraints.maxWidth.toFloat()
@@ -134,7 +152,13 @@ private fun FixedDesignCanvas(content: @Composable () -> Unit) {
         CompositionLocalProvider(
             LocalDensity provides Density(density = scale, fontScale = systemDensity.fontScale),
         ) {
-            content()
+            // The keyboard, applied AFTER the scale is fixed. Inside the canvas, so this padding is
+            // in design dp like everything else: a screen with a text field gets shorter and can
+            // scroll to its field, while type size, stroke widths and every other screen's layout
+            // stay exactly as authored.
+            Box(modifier = Modifier.fillMaxSize().imePadding()) {
+                content()
+            }
         }
     }
 }
