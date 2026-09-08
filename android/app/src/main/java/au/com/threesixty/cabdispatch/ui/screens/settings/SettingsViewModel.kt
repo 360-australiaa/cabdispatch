@@ -103,6 +103,27 @@ private fun LocateOutcome.toScreenState(): LocateResponseState = when (this) {
     is LocateOutcome.Failed -> LocateResponseState.Failed(message)
 }
 
+/**
+ * TEMPORARY (owner decision, 2026-09-08): the GPS simulator is open to every user, no admin PIN.
+ *
+ * Asked for verbatim — *"simulation of gps should be unlock temporary for all users, later we will
+ * completely remove it, dont strict with admin pin"* — so this is deliberate, not an oversight.
+ *
+ * What it costs, stated once so the trade is on the record: the panel drives synthetic speed and
+ * position into the same `SpeedSource` the fare engine bills from. Ungated, any driver can make the
+ * meter run distance on a stationary vehicle and produce a fare for a trip that never happened.
+ * That is a metering-integrity risk, not a cosmetic one, and it is why the gate existed. It is
+ * acceptable while every tablet is a field-test unit under the owner's own eye; it must not ship to
+ * a real fleet.
+ *
+ * Flip this to `true` to restore the PIN gate — the whole PIN path is intact and untouched — or
+ * delete the simulator outright, which is the stated end state. One line either way, on purpose.
+ */
+const val SIMULATOR_REQUIRES_ADMIN_PIN = false
+
+/** Whether the simulator panel starts visible. Inverse of [SIMULATOR_REQUIRES_ADMIN_PIN]. */
+const val SIMULATOR_OPEN_TO_ALL = !SIMULATOR_REQUIRES_ADMIN_PIN
+
 data class SettingsUiState(
     val gpsQuality: GpsQuality = GpsQuality.NO_FIX,
     val gpsAccuracyM: Float? = null,
@@ -122,7 +143,7 @@ data class SettingsUiState(
      * [SettingsViewModel.attemptUnlockSimulator]. Deliberately NOT persisted: the unlock lasts
      * for the life of this ViewModel, so a technician who walks away doesn't leave the simulator
      * open on a tablet that goes back into service. */
-    val simulatorUnlocked: Boolean = false,
+    val simulatorUnlocked: Boolean = SIMULATOR_OPEN_TO_ALL,
     val simulatorPinError: String? = null,
     val simulatorPinVerifying: Boolean = false,
     val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,

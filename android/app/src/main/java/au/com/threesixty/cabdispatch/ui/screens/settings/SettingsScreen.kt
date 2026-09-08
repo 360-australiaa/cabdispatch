@@ -658,7 +658,9 @@ private fun AboutTabContent(
         RerunSetupTile(onRerunSetup, Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(24.dp))
-        SectionLabel("GPS SIMULATOR (TESTING)")
+        SectionLabel(
+            if (SIMULATOR_REQUIRES_ADMIN_PIN) "GPS SIMULATOR (TESTING)" else "GPS SIMULATOR (TESTING · UNLOCKED)",
+        )
         Spacer(Modifier.height(12.dp))
         // Admin-PIN gated. The panel drives synthetic speed/position into the same SpeedSource the
         // fare engine bills from, so an ungated one is a one-tap way for any driver to make the

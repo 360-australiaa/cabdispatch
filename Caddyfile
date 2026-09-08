@@ -1,0 +1,75 @@
+# Caddy reverse proxy for the cabdispatch stack.
+#
+# WHY THIS FILE IS COMMITTED
+# docker-compose.yml bind-mounts ./Caddyfile into the caddy container. When the
+# file does not exist, Docker creates a DIRECTORY with that name and the mount
+# fails with "not a directory: Are you trying to mount a directory onto a file",
+# taking the whole stack down on a first deploy. That happened on 2026-09-08.
+# A committed default means the stack always starts. Edit it; do not delete it.
+#
+# If you hit that error on a server that already has the directory:
+#     sudo rm -rf /opt/cabdispatch/Caddyfile
+#     # then copy this file into place and re-run compose.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# READ THIS BEFORE PRODUCTION: the block below serves plain HTTP on port 80.
+#
+# It exists because a bare IP address CANNOT get a Let's Encrypt certificate --
+# ACME issues for domain names only. So until a domain points at this server,
+# there is no TLS, and everything this API carries crosses the network in the
+# clear: JWTs, device shared secrets, live GPS traces, and duress AUDIO
+# RECORDINGS. That is acceptable for a field-test tablet on a known network. It
+# is not acceptable for a real fleet, and it is the single largest operational
+# risk in this deployment.
+#
+# THE MOMENT YOU HAVE A DOMAIN: comment out the `:80` block, uncomment the two
+# named blocks at the bottom, point both A records at this host, and restart.
+# Caddy then issues and renews certificates on its own and redirects HTTP to
+# HTTPS automatically. Nothing else in the stack changes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+:80 {
+	encode gzip zstd
+
+	# Duress audio uploads are the largest thing this API accepts.
+	request_body {
+		max_size 50MB
+	}
+
+	# One origin, split by path, because with no domain there is no second
+	# hostname to give the API. Keep this list in step with the API's own
+	# top-level routes -- everything the backend serves must match here, or it
+	# falls through to the SPA and the client gets HTML where it expected JSON.
+	@api path /v1/* /health /health/* /docs /docs/* /openapi.json /redoc /redoc/*
+	handle @api {
+		# WebSockets (live map, job offers, messages, duress) need no special
+		# config -- Caddy proxies the Upgrade handshake transparently. They do
+		# need flush_interval -1: these sockets are long-lived and idle between
+		# GPS fixes, and buffering would stall the live map.
+		reverse_proxy backend:8001 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the React SPA.
+	handle {
+		reverse_proxy dashboard:80
+	}
+}
+
+# ── With a domain (preferred). Replace the names, then remove the :80 block. ──
+#
+# admin.yourdomain.example {
+# 	encode gzip zstd
+# 	reverse_proxy dashboard:80
+# }
+#
+# api.yourdomain.example {
+# 	encode gzip zstd
+# 	request_body {
+# 		max_size 50MB
+# 	}
+# 	reverse_proxy backend:8001 {
+# 		flush_interval -1
+# 	}
+# }
