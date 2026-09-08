@@ -23,6 +23,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
+import androidx.compose.runtime.remember
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ShiftDurationLimit
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
@@ -47,6 +50,15 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 fun ShiftStartScreen(navController: NavHostController) {
     val session by SessionHolder.session.collectAsState()
     val s = session
+    // REAL region and tariff (2026-09-08). These two rows were literals -- "Urban (auto-detected
+    // via GPS)" and "Lilly Cabs urban rank/hail · Ed25519 signed ✓" -- printed on every tablet
+    // regardless of where it was or whether any tariff had ever been cached, on the screen whose
+    // whole job is to confirm what the driver is about to work under. Now: the region the
+    // resolver actually picks from the current fix, and the cached signed tariff for it, or an
+    // honest "none yet" when there is none.
+    val hasFix = AppContainer.speedSource.locationFix.value != null
+    val region = remember { RegionResolver.resolve(AppContainer.speedSource.locationFix.value) }
+    val tariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }.collectAsState(initial = null)
 
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
         Column(modifier = Modifier.align(Alignment.Center)) {
@@ -68,8 +80,16 @@ fun ShiftStartScreen(navController: NavHostController) {
                     }
                     ConfirmRow("DRIVER", if (s != null) "${s.driverName} · ${s.driverId.take(8)}" else "—")
                     ConfirmRow("VEHICLE", s?.vehicleId?.let { "Vehicle $it" } ?: "—")
-                    ConfirmRow("REGION", "Urban (auto-detected via GPS)")
-                    ConfirmRow("TARIFF", "Lilly Cabs urban rank/hail · Ed25519 signed ✓", valueColor = CaptainPalette.success)
+                    ConfirmRow(
+                        "REGION",
+                        region.replaceFirstChar { it.uppercase() } + if (hasFix) " (from GPS)" else " (default — no GPS fix yet)",
+                    )
+                    val t = tariff
+                    if (t != null) {
+                        ConfirmRow("TARIFF", "${t.name} · signed ✓", valueColor = CaptainPalette.success)
+                    } else {
+                        ConfirmRow("TARIFF", "No signed tariff cached yet — fetched before the first fare", valueColor = CaptainPalette.warning)
+                    }
                     ConfirmRow(
                         "SHIFT LIMIT",
                         "${ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS.toInt()}h 00m — countdown shows on the status strip",

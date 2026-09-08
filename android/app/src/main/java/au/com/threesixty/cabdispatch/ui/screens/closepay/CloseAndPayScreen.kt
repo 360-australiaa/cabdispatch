@@ -63,6 +63,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.TenantBranding
 import au.com.threesixty.cabdispatch.domain.RatePassengerHandoff
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
@@ -1353,8 +1355,17 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 val r = s.receipt
-                ReceiptMono(r.tripId.let { "LILLY CABS PTY LTD" }, bold = true, size = 20)
-                ReceiptMono("ABN 12 345 678 901")
+                // The operator, from the one place its name lives -- never the "Lilly Cabs"
+                // preset this printed until 2026-09-08. TenantBranding documents whether the
+                // value is a compiled default or a fetched tenant record.
+                ReceiptMono(TenantBranding.operatorName.uppercase(), bold = true, size = 20)
+                // NO ABN LINE. The ABN it used to print ("12 345 678 901") was invented, and this
+                // document is titled TAX INVOICE / RECEIPT: a fabricated ABN on a tax invoice is a
+                // legal defect, not a cosmetic one. There is no ABN anywhere in this app's data
+                // model or the backend's tenant record today, so nothing is printed rather than
+                // something plausible. The authorisation number IS real (TenantBranding) and is
+                // the NSW-regulated identifier a passenger can check, so it is shown instead.
+                TenantBranding.authorisationNumber?.let { ReceiptMono("TSP authorisation $it") }
                 if (r.simulated) {
                     // A5 · Hardware honesty: the marker is on the docket itself, in the
                     // passenger's line of sight, not only in the driver-facing chrome.
@@ -1365,7 +1376,15 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                 ReceiptMono("TAX INVOICE / RECEIPT", bold = true, size = 15)
                 ReceiptMono("Receipt ${r.receiptRef ?: "—"}")
                 ReceiptMono("${r.startedAt} → ${r.closedAt}")
-                ReceiptMono("Driver ${r.driverId} · Vehicle ${r.vehicleId}")
+                // Human identity, not row uuids (tablet, 2026-09-08: the passenger copy printed
+                // "Driver f96598dc-b351-... · Vehicle ad0d0d57-..."). Driver name and rego come
+                // from the live session; the uuids remain the honest fallback only when there is
+                // no session to read -- which on a just-closed fare there always is.
+                val session = SessionHolder.session.value
+                ReceiptMono(
+                    if (session != null) "Driver ${session.driverName} · Vehicle ${session.vehicleId}"
+                    else "Driver ${r.driverId} · Vehicle ${r.vehicleId}",
+                )
                 ReceiptMono("------------------------------------", color = Color(0xFF9A968A))
                 r.fareLines.forEach { line ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
