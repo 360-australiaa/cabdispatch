@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DirectionsCar
@@ -332,13 +333,31 @@ internal fun NavBottomBar(
                         // 9sp -> 12sp (A4: Type.tiny, the accessibility floor).
                         style = Type.tiny,
                         color = CaptainPalette.hudSweepMid,
-                        modifier = Modifier.padding(start = 8.dp).clickable(onClick = onChange),
+                        // A8 a11y pass: `minimumInteractiveComponentSize()` pads the hit rect out
+                        // to the 48dp minimum on all sides without growing the visible glyph or
+                        // this slim nav bar's own height — the same trick Material3 buttons use
+                        // internally. Row order is unaffected; it only widens the invisible target.
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .minimumInteractiveComponentSize()
+                            .clickable(onClick = onChange)
+                            .semantics { role = Role.Button },
                     )
+                    // A8 a11y pass: was a bare 13dp icon with the clickable on the glyph itself —
+                    // ~19dp of hit area, well under the 48dp minimum, and unlabelled/no button
+                    // role for TalkBack. Sibling `onClear` above (line ~163) already got the full
+                    // 48dp treatment (A4); this one was missed. Same `minimumInteractiveComponentSize()`
+                    // approach as CHANGE above so the compact bar doesn't grow visually.
                     Icon(
                         Icons.Rounded.Close,
                         contentDescription = "Clear destination",
                         tint = CaptainPalette.textMuted,
-                        modifier = Modifier.size(13.dp).padding(start = 6.dp).clickable(onClick = onClear),
+                        modifier = Modifier
+                            .padding(start = 6.dp)
+                            .minimumInteractiveComponentSize()
+                            .clickable(onClick = onClear)
+                            .semantics { role = Role.Button }
+                            .size(13.dp),
                     )
                 }
             }
