@@ -24,6 +24,12 @@ data class LoginRequestDto(val email: String, val password: String)
 data class DriverLoginRequestDto(
     @SerialName("driver_code") val driverCode: String,
     val pin: String,
+    // REQUIRED by the backend. Driver codes are unique per tenant, not platform-wide, so a code
+    // alone does not identify a driver. Omitting this is not a soft failure: the endpoint answers
+    // `422 Field required: tenant_slug` and login is impossible for every driver on every tablet.
+    // The tablet learns the value at pairing time (DevicePairingStore.getTenantSlug) rather than
+    // asking a driver to type their operator's name at the start of every shift.
+    @SerialName("tenant_slug") val tenantSlug: String,
 )
 
 /**

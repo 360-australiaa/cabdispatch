@@ -182,6 +182,21 @@ class DeviceRead(BaseModel):
     # only as "no hint was computed this response".
     latest_version_code: int | None = None
 
+    # NOT a Device column either. The tenant's slug, resolved from `tenant_id`
+    # and set on the response by the pairing routes -- same technique as
+    # `device_secret` below.
+    #
+    # It exists because `POST /v1/auth/driver-login` REQUIRES `tenant_slug`, and
+    # nothing told a tablet what its tenant's slug was: `tenant_id` is a uuid,
+    # `GET /v1/tenants/me` needs a bearer token the driver does not have yet,
+    # and driver codes stopped being unique platform-wide the moment X2 made
+    # them per-tenant. The observed result on the test tablet (2026-09-08) was
+    # `422 Field required: tenant_slug` for every driver -- login was
+    # impossible, not merely awkward. Pairing is the right place to learn it:
+    # the pairing code is already tenant-scoped, so a tablet finds out which
+    # operator it belongs to at exactly the moment it is bound to one.
+    tenant_slug: str | None = None
+
     # Also not a Device column, and the one field here that is a SECRET.
     # Populated only by POST /devices/register, which mints it and hands it over
     # exactly once -- the server keeps a hash and can never return it again.

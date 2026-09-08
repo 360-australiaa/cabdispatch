@@ -91,6 +91,12 @@ sealed interface DriverLoginResult {
 class SharedPreferencesDriverAuthRepository internal constructor(
     private val prefs: SharedPreferences,
     private val apiService: ApiService,
+    /**
+     * The tenant slug to send with a driver login, read lazily so tests can supply one without
+     * standing up [AppContainer]. Injected rather than reached for: the login path is the one
+     * place in this class that must work identically in a unit test and on a tablet.
+     */
+    private val tenantSlug: () -> String? = { AppContainer.devicePairingStore.getTenantSlug() },
 ) : DriverAuthRepository {
 
     constructor(context: Context, apiService: ApiService) : this(
@@ -101,8 +107,22 @@ class SharedPreferencesDriverAuthRepository internal constructor(
     private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun login(driverId: String, pin: String): DriverLoginResult {
+        // The backend requires `tenant_slug`: driver codes are unique per tenant, not
+        // platform-wide. The tablet learns it when it pairs. If it is missing the request would
+        // fail with a 422 whose message names a field no driver has ever heard of, so fail here
+        // instead and say the actual thing that is wrong -- the tablet is not paired.
+        val slug = tenantSlug()
+        if (slug.isNullOrBlank()) {
+            return DriverLoginResult.Failure(
+                IllegalStateException(
+                    "This tablet is not paired to an operator yet. Pair it in Settings before signing in.",
+                ),
+            )
+        }
         val onlineResult = runCatching {
-            apiService.driverLogin(DriverLoginRequestDto(driverCode = driverId, pin = pin))
+            apiService.driverLogin(
+                DriverLoginRequestDto(driverCode = driverId, pin = pin, tenantSlug = slug),
+            )
         }
 
         onlineResult.onSuccess { response ->

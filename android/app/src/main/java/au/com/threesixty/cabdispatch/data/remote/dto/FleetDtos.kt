@@ -69,6 +69,13 @@ data class DeviceHeartbeatRequestDto(
 data class DeviceDto(
     val id: String,
     @SerialName("tenant_id") val tenantId: String,
+    // The tenant's SLUG, not its uuid. Set by the backend only on the two routes a tablet can
+    // reach with no bearer token -- POST /devices/register and GET /devices/me -- because those
+    // are the only points at which a device that cannot yet log anybody in needs to know its
+    // operator. POST /v1/auth/driver-login requires it, and without it every driver login failed
+    // with 422 (test tablet, 2026-09-08). Nullable: absent on every other DeviceRead response,
+    // and on an older backend that does not send it at all.
+    @SerialName("tenant_slug") val tenantSlug: String? = null,
     @SerialName("android_id") val androidId: String,
     val model: String?,
     @SerialName("app_version") val appVersion: String?,

@@ -37,7 +37,7 @@ class DriverAuthRepositoryTest {
     fun `offline - a cached driver logs in when the server is unreachable`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         // One successful online login to populate the cache.
         api.response = successResponse()
@@ -55,7 +55,7 @@ class DriverAuthRepositoryTest {
     fun `offline - a socket timeout also falls back, and a wrong PIN still fails`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         api.response = successResponse()
         repo.login(DRIVER, PIN)
@@ -72,7 +72,7 @@ class DriverAuthRepositoryTest {
     fun `revoked - a 401 clears the cached hash and fails the login`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         // The driver has logged in here before, so the tablet holds their credential.
         api.response = successResponse()
@@ -93,7 +93,7 @@ class DriverAuthRepositoryTest {
     fun `revoked - a 403 clears the cache too`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         api.response = successResponse()
         repo.login(DRIVER, PIN)
@@ -113,7 +113,7 @@ class DriverAuthRepositoryTest {
     fun `revoked then offline - the driver cannot get back in`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         // 1. A normal, successful login. The tablet caches the credential.
         api.response = successResponse()
@@ -137,7 +137,7 @@ class DriverAuthRepositoryTest {
     fun `a 500 fails closed but does not destroy the cached credential`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         api.response = successResponse()
         repo.login(DRIVER, PIN)
@@ -156,7 +156,7 @@ class DriverAuthRepositoryTest {
     fun `a malformed 2xx does not fall through to the offline cache`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         api.response = successResponse()
         repo.login(DRIVER, PIN)
@@ -170,10 +170,50 @@ class DriverAuthRepositoryTest {
 
     @Test
     fun `with no cached credential at all, an offline login simply fails`() = runTest {
-        val repo = SharedPreferencesDriverAuthRepository(FakeSharedPreferences(), FakeAuthApi().apply {
-            failure = IOException("offline")
-        })
+        val repo = SharedPreferencesDriverAuthRepository(
+            FakeSharedPreferences(),
+            FakeAuthApi().apply { failure = IOException("offline") },
+        ) { "demo-operator" }
         assertTrue(repo.login("never-seen-here", PIN) is DriverLoginResult.Failure)
+    }
+
+    /**
+     * Regression, 2026-09-08. `POST /v1/auth/driver-login` requires `tenant_slug` -- driver codes
+     * are unique per tenant, not platform-wide -- and the app sent only `driver_code` and `pin`.
+     * Every driver on every tablet got `422 Field required: tenant_slug`; login was impossible.
+     *
+     * Two things are asserted, and the second matters as much as the first: the request must not
+     * be attempted at all, because a 422 naming an internal field is not something a driver
+     * standing at a taxi rank can act on. An unpaired tablet should be told it is unpaired.
+     */
+    @Test
+    fun `without a tenant slug the login fails locally and never reaches the API`() = runTest {
+        val api = FakeAuthApi()
+        val repo = SharedPreferencesDriverAuthRepository(FakeSharedPreferences(), api) { null }
+
+        val result = repo.login(DRIVER, PIN)
+
+        assertTrue(result is DriverLoginResult.Failure)
+        assertEquals(0, api.loginCallCount)
+    }
+
+    @Test
+    fun `a blank tenant slug is treated as missing, not sent as an empty field`() = runTest {
+        val api = FakeAuthApi()
+        val repo = SharedPreferencesDriverAuthRepository(FakeSharedPreferences(), api) { "   " }
+
+        assertTrue(repo.login(DRIVER, PIN) is DriverLoginResult.Failure)
+        assertEquals(0, api.loginCallCount)
+    }
+
+    @Test
+    fun `the slug the tablet learned at pairing is what gets sent`() = runTest {
+        val api = FakeAuthApi()
+        val repo = SharedPreferencesDriverAuthRepository(FakeSharedPreferences(), api) { "captain-taxis" }
+
+        repo.login(DRIVER, PIN)
+
+        assertEquals("captain-taxis", api.lastLoginRequest?.tenantSlug)
     }
 
     // ========================================================================
@@ -184,7 +224,7 @@ class DriverAuthRepositoryTest {
     fun `X2 - the stored record is salted PBKDF2, not a bare SHA-256 digest`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi().apply { response = successResponse() }
-        SharedPreferencesDriverAuthRepository(prefs, api).login(DRIVER, PIN)
+        SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }.login(DRIVER, PIN)
 
         val record = prefs.getString("hash_$DRIVER", null)!!
         assertTrue("must be a self-describing PBKDF2 record", record.startsWith("pbkdf2_sha256$"))
@@ -228,7 +268,7 @@ class DriverAuthRepositoryTest {
     fun `X2 - a legacy unsalted entry still works offline, then migrates on the next online login`() = runTest {
         val prefs = FakeSharedPreferences()
         val api = FakeAuthApi()
-        val repo = SharedPreferencesDriverAuthRepository(prefs, api)
+        val repo = SharedPreferencesDriverAuthRepository(prefs, api) { "demo-operator" }
 
         // Simulate a tablet provisioned before this pass: the pre-X2 SHA-256(driverId:pin) hex.
         val legacyRecord = legacySha256(DRIVER, PIN)
@@ -302,7 +342,17 @@ class DriverAuthRepositoryTest {
         var response: DriverLoginResponseDto? = null
         var failure: Exception? = null
 
+        /** How many times the network was actually reached, so a test can assert it was NOT. */
+        var loginCallCount: Int = 0
+            private set
+
+        /** The last body sent, so a test can assert what the tablet put on the wire. */
+        var lastLoginRequest: DriverLoginRequestDto? = null
+            private set
+
         override suspend fun driverLogin(body: DriverLoginRequestDto): DriverLoginResponseDto {
+            loginCallCount++
+            lastLoginRequest = body
             failure?.let { throw it }
             return response ?: error("test did not configure a response")
         }

@@ -55,6 +55,29 @@ class DevicePairingStore(context: Context) {
     }
 
     /**
+     * The tenant slug this tablet is paired into, captured off the register/`devices/me` response.
+     *
+     * `POST /v1/auth/driver-login` REQUIRES `tenant_slug`, and before this the app had no way to
+     * know it: `tenant_id` is a uuid the endpoint does not accept, and `GET /v1/tenants/me` needs a
+     * bearer token that by definition does not exist before a driver logs in. Every driver login
+     * therefore failed with `422 Field required: tenant_slug` -- observed on the test tablet,
+     * 2026-09-08. Pairing is where it belongs: the pairing code is tenant-scoped, so the tablet
+     * learns its operator at the moment it is bound to one.
+     *
+     * `null` on a tablet paired before this field existed. Those re-learn it from the next
+     * successful `devices/me`, so no re-pair is needed.
+     */
+    fun getTenantSlug(): String? = prefs.getString(KEY_TENANT_SLUG, null)
+
+    /** Persists the tenant slug -- see [getTenantSlug]. Blank is treated as absent, never stored,
+     * so a server that omits the field cannot overwrite a good value with an empty one. */
+    fun saveTenantSlug(tenantSlug: String?) {
+        val cleaned = tenantSlug?.trim().orEmpty()
+        if (cleaned.isEmpty()) return
+        prefs.edit().putString(KEY_TENANT_SLUG, cleaned).apply()
+    }
+
+    /**
      * Last `kiosk_locked` / `force_update_pending` this device actually read back off a *successful*
      * heartbeat, persisted so a reboot or process kill comes up in the last commanded state instead
      * of the `false` defaults (2026-08-29 review pass).
@@ -98,6 +121,7 @@ class DevicePairingStore(context: Context) {
         prefs.edit()
             .remove(KEY_DEVICE_ID)
             .remove(KEY_DEVICE_SECRET)
+            .remove(KEY_TENANT_SLUG)
             .remove(KEY_KIOSK_LOCKED)
             .remove(KEY_FORCE_UPDATE_PENDING)
             .apply()
@@ -107,6 +131,7 @@ class DevicePairingStore(context: Context) {
         const val PREFS_NAME = "device_pairing"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_DEVICE_SECRET = "device_secret"
+        const val KEY_TENANT_SLUG = "tenant_slug"
         const val KEY_KIOSK_LOCKED = "kiosk_locked"
         const val KEY_FORCE_UPDATE_PENDING = "force_update_pending"
     }

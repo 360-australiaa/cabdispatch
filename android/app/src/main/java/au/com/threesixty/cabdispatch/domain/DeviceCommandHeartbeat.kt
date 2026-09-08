@@ -327,9 +327,17 @@ class DeviceCommandHeartbeat(
      * "still no id", which is the state the tablet was already in. Nothing here fabricates one.
      */
     private suspend fun recoverDeviceIdFromSecret() {
-        if (SessionHolder.deviceId != null) return
+        val needsDeviceId = SessionHolder.deviceId == null
+        // Also recover the tenant slug. A tablet paired before that field existed has a perfectly
+        // good pairing and still cannot log a driver in (422 Field required: tenant_slug), and
+        // asking an operator to re-pair working tablets to fix a field they never knew about is
+        // the wrong answer. `devices/me` carries it, authenticated by the device secret alone.
+        val needsTenantSlug = pairingStore.getTenantSlug().isNullOrBlank()
+        if (!needsDeviceId && !needsTenantSlug) return
         val secret = pairingStore.getDeviceSecret() ?: return
         val device = runCatching { apiService.deviceMe(secret) }.getOrNull() ?: return
+        pairingStore.saveTenantSlug(device.tenantSlug)
+        if (!needsDeviceId) return
         // Re-check: a pairing could have completed on S6 while this call was in flight, and that
         // id is the fresher of the two (registering rotates the secret this call authenticated
         // with). Never overwrite it.

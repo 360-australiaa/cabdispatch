@@ -525,6 +525,20 @@ async def create_device(
     return device
 
 
+async def _with_tenant_slug(session: AsyncSession, device: Device) -> DeviceRead:
+    """`DeviceRead` for a tablet, carrying its tenant's slug.
+
+    Only the two routes a tablet can reach WITHOUT a bearer token use this --
+    pairing and `devices/me` -- because they are the only points at which a
+    device that cannot yet log anybody in needs to learn its operator. See
+    `DeviceRead.tenant_slug` for why driver login is impossible without it.
+    """
+    response = DeviceRead.model_validate(device)
+    tenant = await tenant_service.get_tenant_or_404(session, tenant_id=device.tenant_id)
+    response.tenant_slug = tenant.slug
+    return response
+
+
 @router.get("/devices/me", response_model=DeviceRead)
 async def get_own_device(
     x_device_secret: str = Header(alias="X-Device-Secret"),
@@ -556,7 +570,8 @@ async def get_own_device(
     exist.
     """
     try:
-        return await fleet_service.authenticate_device_by_secret(session, secret=x_device_secret)
+        device = await fleet_service.authenticate_device_by_secret(session, secret=x_device_secret)
+        return await _with_tenant_slug(session, device)
     except fleet_service.DeviceAuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
@@ -665,7 +680,7 @@ async def register_device(
     # The single moment the plaintext secret exists outside the tablet. Set on
     # the response object rather than the ORM row -- DeviceRead.device_secret is
     # not a column, and every other read of this model leaves it None.
-    response = DeviceRead.model_validate(device)
+    response = await _with_tenant_slug(session, device)
     response.device_secret = secret
     return response
 

@@ -70,6 +70,9 @@ object DevicePairingRepository {
                 AppContainer.devicePairingStore.saveDeviceId(device.id)
                 // Null on an older server; see this object's doc for why that is survivable.
                 device.deviceSecret?.let { AppContainer.devicePairingStore.saveDeviceSecret(it) }
+                // The tenant this tablet now belongs to. Driver login is impossible without it
+                // (422 Field required: tenant_slug) -- see DevicePairingStore.getTenantSlug.
+                AppContainer.devicePairingStore.saveTenantSlug(device.tenantSlug)
                 PairResult.Success(device.vehicleId)
             },
             onFailure = { PairResult.Failure(errorMessage(it)) },

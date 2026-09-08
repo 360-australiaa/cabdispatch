@@ -1852,3 +1852,50 @@ async def test_pruning_never_reaches_across_tenants(client, session):
         await session.execute(select(DevicePairingCode).where(DevicePairingCode.code == b_code))
     ).scalar_one_or_none()
     assert still_there is not None
+
+
+@pytest.mark.asyncio
+async def test_pairing_tells_the_tablet_its_tenant_slug(client, session):
+    """`POST /devices/register` and `GET /devices/me` must return `tenant_slug`.
+
+    Regression, 2026-09-08, found on the test tablet. `POST /v1/auth/driver-login`
+    requires `tenant_slug` -- driver codes became unique per tenant rather than
+    platform-wide, so a code alone no longer identifies a driver -- but nothing
+    ever told a tablet what its slug was. `tenant_id` is a uuid the login
+    endpoint does not accept, and `GET /v1/tenants/me` needs a bearer token that
+    by definition does not exist before a driver has logged in. The result was
+    `422 Field required: tenant_slug` for every driver on every tablet: login
+    was impossible, not merely awkward.
+
+    Pairing is the right place to answer it, because the pairing code is already
+    tenant-scoped. These two routes are also the only ones a tablet can reach
+    with no bearer token, which is exactly the state it is in when it needs this.
+    """
+    headers = await auth_headers(client, session, role="admin", tenant_name="Slug Cabs")
+
+    resp = await client.post("/v1/fleet/vehicles", json={"rego": "SLUG01"}, headers=headers)
+    assert resp.status_code == 201
+    vehicle_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    code = resp.json()["code"]
+
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-slug-1", "pairing_code": code},
+    )
+    assert resp.status_code == 200
+    registered = resp.json()
+    slug = registered["tenant_slug"]
+    # A real slug, not an echo of the uuid: the login endpoint matches on slug.
+    assert slug
+    assert slug != registered["tenant_id"]
+
+    secret = registered["device_secret"]
+    assert secret
+
+    # And again on devices/me, which is how a tablet paired before this field
+    # existed recovers its slug without anyone re-pairing working hardware.
+    resp = await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": secret})
+    assert resp.status_code == 200
+    assert resp.json()["tenant_slug"] == slug
