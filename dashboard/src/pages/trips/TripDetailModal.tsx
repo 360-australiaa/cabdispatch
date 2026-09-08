@@ -1,8 +1,15 @@
 import { useState } from "react";
 import axios from "axios";
-import { AlertTriangle, CheckCircle2, Flag } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Flag, Plus, Trash2 } from "lucide-react";
 import { Badge, Button, Input, Modal, Select } from "@/components/ui";
-import { useCloseTripMutation, useFlagTripMutation, type Trip } from "@/hooks/useTrips";
+import {
+  useCloseTripMutation,
+  useFlagTripMutation,
+  useTripGpsTraceQuery,
+  type PaymentMethod,
+  type SplitPaymentItem,
+  type Trip,
+} from "@/hooks/useTrips";
 import {
   formatDateTime,
   formatDistance,
@@ -15,6 +22,7 @@ import {
   TIME_CLASS_LABELS,
   TRIP_TYPE_LABELS,
 } from "./format";
+import { TripRouteMap } from "./TripRouteMap";
 
 export interface TripDetailModalProps {
   open: boolean;
@@ -61,6 +69,9 @@ export function TripDetailModal({
   const [cleaningFee, setCleaningFee] = useState("0");
   const [includePsl, setIncludePsl] = useState(false);
   const [closePaymentMethod, setClosePaymentMethod] = useState<string>("");
+  const [closeVoucherCode, setCloseVoucherCode] = useState("");
+  const [closeAccountReference, setCloseAccountReference] = useState("");
+  const [closeSplitPayments, setCloseSplitPayments] = useState<SplitPaymentItem[]>([]);
 
   const [flagging, setFlagging] = useState(false);
   const [flagReason, setFlagReason] = useState("");
@@ -68,6 +79,10 @@ export function TripDetailModal({
 
   const closeMutation = useCloseTripMutation();
   const flagMutation = useFlagTripMutation();
+  // Fetched only while this modal is actually open (`open` gates `enabled`)
+  // -- never for the trips list/table. See useTripGpsTraceQuery's own doc
+  // comment for why this is a dedicated fetch rather than a Trip field.
+  const gpsTraceQuery = useTripGpsTraceQuery(trip?.id ?? null, open);
 
   if (!trip) return null;
 
@@ -76,6 +91,29 @@ export function TripDetailModal({
 
   async function handleClose() {
     setCloseError(null);
+
+    const method = closePaymentMethod ? (closePaymentMethod as PaymentMethod) : undefined;
+    if (method === "voucher" && !closeVoucherCode.trim()) {
+      setCloseError("Voucher code is required for the voucher payment method.");
+      return;
+    }
+    if (method === "account" && !closeAccountReference.trim()) {
+      setCloseError("Account reference is required for the account payment method.");
+      return;
+    }
+    if (method === "split_fare") {
+      if (closeSplitPayments.length < 2) {
+        setCloseError("Split fare needs at least two payment legs.");
+        return;
+      }
+      for (const leg of closeSplitPayments) {
+        if (!leg.method.trim() || !leg.amount.trim() || Number.isNaN(Number(leg.amount))) {
+          setCloseError("Every split-fare leg needs a method and a valid amount.");
+          return;
+        }
+      }
+    }
+
     try {
       await closeMutation.mutateAsync({
         id: trip!.id,
@@ -83,13 +121,26 @@ export function TripDetailModal({
           surcharge_pct: surchargePct || undefined,
           cleaning_fee: cleaningFee || "0",
           include_psl: includePsl,
-          payment_method: closePaymentMethod ? (closePaymentMethod as "cash" | "card") : undefined,
+          payment_method: method,
+          voucher_code: method === "voucher" ? closeVoucherCode.trim() : undefined,
+          account_reference: method === "account" ? closeAccountReference.trim() : undefined,
+          split_payments: method === "split_fare" ? closeSplitPayments : undefined,
         },
       });
       setClosing(false);
     } catch (err) {
       setCloseError(extractErrorMessage(err));
     }
+  }
+
+  function addCloseSplitLeg() {
+    setCloseSplitPayments((legs) => [...legs, { method: "cash", amount: "" }]);
+  }
+  function removeCloseSplitLeg(index: number) {
+    setCloseSplitPayments((legs) => legs.filter((_, i) => i !== index));
+  }
+  function updateCloseSplitLeg(index: number, patch: Partial<SplitPaymentItem>) {
+    setCloseSplitPayments((legs) => legs.map((leg, i) => (i === index ? { ...leg, ...patch } : leg)));
   }
 
   async function handleFlag() {
@@ -228,6 +279,26 @@ export function TripDetailModal({
           </div>
         </div>
 
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Route
+          </p>
+          <TripRouteMap
+            startLat={trip.start_lat}
+            startLng={trip.start_lng}
+            endLat={trip.end_lat}
+            endLng={trip.end_lng}
+            // Real recorded points from GET /v1/trips/{id}/gps-trace, fetched
+            // above only while this modal is open. `undefined` while the
+            // fetch is still pending, or `[]`/a too-short trace once it
+            // resolves with no real trace stored for this trip -- either way
+            // TripRouteMap's own `validTracePoints` degrades honestly to the
+            // A/B markers + labeled straight-line stand-in, never a
+            // fabricated route.
+            trace={gpsTraceQuery.data?.points}
+          />
+        </div>
+
         <div className="rounded-lg border border-border p-3">
           <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Fare breakdown
@@ -291,6 +362,55 @@ export function TripDetailModal({
                     Include PSL
                   </label>
                 </div>
+                {closePaymentMethod === "voucher" && (
+                  <Input
+                    placeholder="Voucher code"
+                    value={closeVoucherCode}
+                    onChange={(e) => setCloseVoucherCode(e.target.value)}
+                  />
+                )}
+                {closePaymentMethod === "account" && (
+                  <Input
+                    placeholder="Account reference"
+                    value={closeAccountReference}
+                    onChange={(e) => setCloseAccountReference(e.target.value)}
+                  />
+                )}
+                {closePaymentMethod === "split_fare" && (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Split-fare legs (must sum to the total)
+                      </span>
+                      <Button type="button" variant="outline" size="sm" onClick={addCloseSplitLeg}>
+                        <Plus className="h-3.5 w-3.5" /> Add leg
+                      </Button>
+                    </div>
+                    {closeSplitPayments.map((leg, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <Select
+                          className="w-28"
+                          options={[
+                            { value: "cash", label: "Cash" },
+                            { value: "card", label: "Card" },
+                          ]}
+                          value={leg.method}
+                          onChange={(e) => updateCloseSplitLeg(index, { method: e.target.value })}
+                        />
+                        <Input
+                          className="w-28"
+                          inputMode="decimal"
+                          placeholder="Amount"
+                          value={leg.amount}
+                          onChange={(e) => updateCloseSplitLeg(index, { amount: e.target.value })}
+                        />
+                        <Button type="button" variant="ghost" size="icon" onClick={() => removeCloseSplitLeg(index)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {closeError && <p className="text-sm text-destructive">{closeError}</p>}
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleClose} disabled={closeMutation.isPending}>

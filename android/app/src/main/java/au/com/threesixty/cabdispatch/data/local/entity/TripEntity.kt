@@ -51,13 +51,57 @@ data class TripEntity(
     val shiftId: String?,
     val tariffId: String,
     val type: String, // rank_hail | booked | airport_fixed | multi_hire
+    /**
+     * True when this trip was driven on FABRICATED GPS from
+     * [GpsSimulator][au.com.threesixty.cabdispatch.domain.location.GpsSimulator], not a real road.
+     *
+     * Load-bearing, not diagnostic. A simulated trip's gps_trace is internally consistent and
+     * replays cleanly through the server's own `reconstruct_fare`, so without this column it is
+     * indistinguishable from a real fare -- it would sit in the operator's ledger as real revenue
+     * and stand as real compliance evidence for a fare-regulated meter. Set from the simulator's
+     * own live state when the trip is opened (see TripRepository.openTrip), never passed in by a
+     * screen, so it cannot be forgotten at a call site.
+     *
+     * Synced to the server (`TripSyncItemDto.simulated` -> `Trip.simulated`) and badged on the
+     * dashboard. Defaults false so every pre-existing row, and every ordinary trip, is real.
+     */
+    val simulated: Boolean = false,
 
     /** [TripStatus]: OPEN while HIRED, CLOSED once fare is finalized on-device, SYNCED once the server has confirmed it. */
     val status: String,
 
     val timeClass: String, // day | night | holiday
     val isPeak: Boolean,
+    /** Vehicle has 5+ seats excluding the driver — one of four inputs to the fare engine's
+     * `FareState.maxiRateApplied` (Point to Point Transport (Fares) Order 2026 compliance pass,
+     * see [au.com.threesixty.cabdispatch.domain.fare.FareState]); on its own this no longer
+     * decides whether the 150% maxi rate is charged, see [passengerCount]/[wheelchairHiring]. */
     val maxi: Boolean,
+
+    /** Passenger count for this hiring, including anyone in a wheelchair — second input to
+     * `FareState.maxiRateApplied`. Defaults to 1 (the ordinary single-passenger case) so every
+     * existing row/call site keeps decoding and behaving exactly as before. */
+    val passengerCount: Int = 1,
+
+    /** True when the hiring is for a passenger travelling in a wheelchair — per the Fares Order
+     * this always charges the ordinary (non-maxi) rate regardless of [maxi]/[passengerCount].
+     * Defaults false so every existing row/call site keeps decoding and behaving unchanged. */
+    val wheelchairHiring: Boolean = false,
+
+    /** True only when the hirer specifically requested a maxi-cab at a Sydney Airport rank —
+     * third input to `FareState.maxiRateApplied`: triggers the 150% maxi rate independent of
+     * [passengerCount] (i.e. even with fewer than 5 passengers), except when [wheelchairHiring] is
+     * also true (Fares Order cl 2(d)(ii) always wins). See
+     * [au.com.threesixty.cabdispatch.domain.fare.FareState.maxiRateApplied]'s doc and the backend's
+     * mirror field `Trip.airport_rank_requested_maxi` (`backend/app/schemas/trips.py`). Defaults
+     * false so every existing row/call site keeps decoding and behaving unchanged. Fare-integrity
+     * fix (2026-09-05): this flag was already correctly used by the on-device fare engine (see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s `fareEngine.startTrip`
+     * call) but was never persisted here or sent over the wire, so a maxi-at-airport-rank trip's
+     * [deviceTotal] (which correctly included the surcharge) could diverge from the server's
+     * independent recompute (which had no way to know the flag was set) and get rejected for
+     * exceeding the sync variance tolerance. */
+    val airportRankRequestedMaxi: Boolean = false,
 
     val startAt: String, // ISO-8601, set at openTrip()
     val endAt: String? = null, // ISO-8601, set at closeTrip()
@@ -112,6 +156,54 @@ data class TripEntity(
      * backend's own "settable only at trip creation" contract.
      */
     val negotiatedTotal: String? = null,
+
+    /**
+     * Driver tip (Close & Pay "tips" pass) — mirrors the backend's `Trip.tip_amount`. Decimal-
+     * as-string, same convention as [tolls]/[extras]/[negotiatedTotal]. Deliberately NOT part of
+     * [deviceTotal]/the fare engine's own total (backend `Trip.tip_amount`'s doc, deviation #6) —
+     * a tip is a voluntary, non-fare amount, never allowed to distort the regulated fare/GST
+     * figures. `null` for every trip closed without one (the default, unchanged for every
+     * existing call site).
+     */
+    val tip: String? = null,
+
+    /**
+     * Human-readable pickup/drop-off addresses (History pane columns, Phase C 2026-09-03) — mirror
+     * of [au.com.threesixty.cabdispatch.domain.TripContext.originAddress]/`.destAddress`,
+     * captured once at [au.com.threesixty.cabdispatch.data.repository.TripRepository.openTrip]
+     * time (see that method's doc for exactly how, given its sole call site was out of this pass's
+     * edit scope). `null` for a trip with no dispatch-offer address to carry — a street-hail/rank
+     * job, a Start Meter/Set Price trip, or one accepted via the Dispatch wheel-content pane's own
+     * accept path (a real, already-flagged gap — see [au.com.threesixty.cabdispatch.domain.TripContext]'s
+     * own doc). History must render "—" for a `null` value here, never fabricate an address.
+     */
+    val pickupAddress: String? = null,
+    val dropoffAddress: String? = null,
+
+    /**
+     * Local audit trail for the automatic NSW toll-road detector (see
+     * [au.com.threesixty.cabdispatch.domain.fare.onFix]) — JSON-encoded
+     * `Map<String, String>` (toll-road id -> current charged amount, decimal-as-string), mirroring
+     * the SHAPE of the backend's own `Trip.auto_tolled_roads` (which this trip's sync payload never
+     * populates itself — see [tolls]'s own doc: the server runs no toll detection on the
+     * `POST /v1/trips/sync` path this app actually uses, so that server-side column stays empty for
+     * every trip closed through this app; [tolls] is the one figure that DOES reach the server,
+     * verbatim, already including every amount recorded here). Local-only, same "not part of
+     * [au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto]" status as [pickupAddress]/
+     * [dropoffAddress] above — read by the Close & Pay / History views on this device so a driver
+     * can see which real roads their auto-detected tolls came from, never sent over the wire.
+     * Defaults to `"{}"` so every pre-9->10-migration row decodes as "no auto-tolls recorded" rather
+     * than crashing a decode.
+     */
+    val autoTolledRoadsJson: String = "{}",
+
+    /**
+     * Local audit trail of real toll roads crossed this trip that the registry could not
+     * auto-price (`zone_flat`/unpriced — see [au.com.threesixty.cabdispatch.domain.UnpricedTollRoad]'s
+     * doc) — JSON-encoded `List<String>` of toll-road ids. Same local-only, never-synced status as
+     * [autoTolledRoadsJson] above.
+     */
+    val unpricedTollRoadIdsJson: String = "[]",
 
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",

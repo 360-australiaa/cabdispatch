@@ -5,17 +5,11 @@ import apiClient from "@/lib/apiClient";
  * Data layer for the White-label Settings page
  * (`src/pages/settings/white-label`).
  *
- * NOTE FOR DOWNSTREAM AGENTS / REVIEWERS: `shared/openapi.json` and
- * `shared/API_SUMMARY.md` do not currently list a `/v1/tenants` router —
- * only `app/models/tenant.py` exists server-side (with a `theme_json: dict
- * | None` JSON column), and there is no `app/api/v1/tenants.py`. This hook
- * calls `GET/PATCH /v1/tenants/me`, mirroring the existing `GET /v1/auth/me`
- * "current caller" convention, as the most likely intended shape for a
- * "current tenant" settings endpoint. Until that backend route is added,
- * both calls will 404 in a live environment — the page surfaces that via
- * its normal React Query error state rather than falling back to mock data
- * (per this module's brief). Swap the URLs below if the backend lands on a
- * different path (e.g. `/v1/tenants/{tenant_id}`).
+ * `GET`/`PATCH /v1/tenants/me` are real, live backend routes
+ * (`backend/app/api/v1/tenants.py`) — confirmed against both source and the
+ * deployed server. `shared/openapi.json`/`shared/API_SUMMARY.md` predate
+ * that router and are stale on this point; don't take their absence there
+ * as evidence the route doesn't exist.
  */
 
 export interface TenantTheme {
@@ -32,6 +26,7 @@ export interface TenantRead {
   bsp_number: string | null;
   theme_json: TenantTheme | null;
   plan: string;
+  status: string;
 }
 
 export interface TenantThemeUpdateInput {

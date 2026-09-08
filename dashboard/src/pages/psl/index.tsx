@@ -1,26 +1,42 @@
 import { useMemo, useState } from "react";
-import { Banknote, ListChecks, Pencil, Plus, Trash2 } from "lucide-react";
+import { Banknote, ListChecks, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardContent, Input, Modal, PageHeader, Select, Table, type TableColumn } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import {
   useDeleteLedgerEntryMutation,
   usePSLLedgerQuery,
+  useTopUpsQuery,
   type PSLLedgerEntry,
+  type PSLTopUp,
 } from "@/hooks/usePSLCentre";
 import { useDriversLookupQuery } from "@/hooks/useTrips";
+
+/** Mirrors `psl_ledger.py`'s write-endpoint restriction — create/update/
+ * delete ledger entries and top-ups are owner/admin/dispatcher only. Without
+ * this the page showed fully-enabled write controls to every role,
+ * including `driver`, which then just 403'd. */
+const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
 import { LedgerFormModal } from "./LedgerFormModal";
 import { TopUpFormModal } from "./TopUpFormModal";
 import { RemittanceReport } from "./RemittanceReport";
-import { formatDate, formatMoney, formatPeriod, subtractMoney } from "./format";
+import { PAYMENT_METHOD_OPTIONS, formatDate, formatDateTime, formatMoney, formatPeriod, subtractMoney } from "./format";
 
-// The backend caps GET /v1/psl/ledger at limit=200 with no total count (see
-// shared/API_SUMMARY.md) — driver/period are filtered server-side, the
-// capped page is then paginated client-side via <Table pageSize>.
+// The backend caps GET /v1/psl/ledger and /v1/psl/topups at limit=200 with no
+// total count (see shared/API_SUMMARY.md) — driver/period are filtered
+// server-side, the capped page is then paginated client-side via <Table pageSize>.
 const FETCH_LIMIT = 200;
 const PAGE_SIZE = 15;
 
-type Tab = "ledger" | "report";
+const PAYMENT_METHOD_LABELS = new Map(
+  PAYMENT_METHOD_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
+
+type Tab = "ledger" | "topups" | "report";
 
 export default function PslPage() {
+  const { user } = useAuth();
+  const canManage = !!user && MANAGE_ROLES.has(user.role);
+
   const [tab, setTab] = useState<Tab>("ledger");
 
   const [driverFilter, setDriverFilter] = useState("");
@@ -33,6 +49,12 @@ export default function PslPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const ledgerQuery = usePSLLedgerQuery({
+    driver_id: driverFilter || undefined,
+    period: periodFilter || undefined,
+    skip: 0,
+    limit: FETCH_LIMIT,
+  });
+  const topUpsQuery = useTopUpsQuery({
     driver_id: driverFilter || undefined,
     period: periodFilter || undefined,
     skip: 0,
@@ -55,6 +77,7 @@ export default function PslPage() {
   ];
 
   const entries = ledgerQuery.data ?? [];
+  const topUps = topUpsQuery.data ?? [];
 
   const columns: TableColumn<PSLLedgerEntry>[] = [
     {
@@ -118,36 +141,85 @@ export default function PslPage() {
       sortable: true,
       sortAccessor: (row) => (row.remitted_at ? 1 : 0),
     },
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: "",
+            className: "text-right",
+            render: (row: PSLLedgerEntry) => (
+              <div className="flex justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Edit entry"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingEntry(row);
+                  }}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Delete entry"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeletingEntry(row);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            ),
+          } satisfies TableColumn<PSLLedgerEntry>,
+        ]
+      : []),
+  ];
+
+  const topUpColumns: TableColumn<PSLTopUp>[] = [
     {
-      key: "actions",
-      header: "",
-      className: "text-right",
-      render: (row) => (
-        <div className="flex justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Edit entry"
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditingEntry(row);
-            }}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Delete entry"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDeletingEntry(row);
-            }}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-        </div>
-      ),
+      key: "period",
+      header: "Period",
+      render: (row) => formatPeriod(row.period),
+      sortable: true,
+      sortAccessor: (row) => row.period,
+    },
+    {
+      key: "driver_id",
+      header: "Driver",
+      render: (row) => driverLabelById.get(row.driver_id) ?? row.driver_id.slice(0, 8),
+      sortable: true,
+      sortAccessor: (row) => driverLabelById.get(row.driver_id) ?? row.driver_id,
+    },
+    {
+      key: "amount",
+      header: "Amount",
+      render: (row) => formatMoney(row.amount),
+      sortable: true,
+      sortAccessor: (row) => Number(row.amount),
+    },
+    {
+      key: "payment_method",
+      header: "Payment method",
+      render: (row) => PAYMENT_METHOD_LABELS.get(row.payment_method) ?? row.payment_method,
+      sortable: true,
+      sortAccessor: (row) => row.payment_method,
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (row) => <Badge variant="outline">{row.status}</Badge>,
+      sortable: true,
+      sortAccessor: (row) => row.status,
+    },
+    {
+      key: "created_at",
+      header: "Recorded",
+      render: (row) => formatDateTime(row.created_at),
+      sortable: true,
+      sortAccessor: (row) => row.created_at,
     },
   ];
 
@@ -159,14 +231,16 @@ export default function PslPage() {
         title="PSL Centre"
         description="Passenger Service Levy accrual ledger, driver top-ups, and monthly remittance reporting."
         actions={
-          <>
-            <Button variant="outline" onClick={() => setTopUpOpen(true)}>
-              <Banknote className="h-4 w-4" /> Record top-up
-            </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" /> New ledger entry
-            </Button>
-          </>
+          canManage ? (
+            <>
+              <Button variant="outline" onClick={() => setTopUpOpen(true)}>
+                <Banknote className="h-4 w-4" /> Record top-up
+              </Button>
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4" /> New ledger entry
+              </Button>
+            </>
+          ) : undefined
         }
       />
 
@@ -185,6 +259,18 @@ export default function PslPage() {
         </button>
         <button
           type="button"
+          onClick={() => setTab("topups")}
+          className={
+            "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors " +
+            (tab === "topups"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground")
+          }
+        >
+          <Receipt className="h-4 w-4" /> Top-ups
+        </button>
+        <button
+          type="button"
           onClick={() => setTab("report")}
           className={
             "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors " +
@@ -197,7 +283,7 @@ export default function PslPage() {
         </button>
       </div>
 
-      {tab === "ledger" ? (
+      {(tab === "ledger" || tab === "topups") && (
         <>
           <Card className="mb-4">
             <CardContent className="flex flex-wrap items-end gap-3 pt-4">
@@ -234,31 +320,61 @@ export default function PslPage() {
             </CardContent>
           </Card>
 
-          {ledgerQuery.isError && (
-            <p className="mb-3 text-sm text-destructive">
-              Failed to load the PSL ledger. Check the backend connection and try again.
-            </p>
-          )}
+          {tab === "ledger" ? (
+            <>
+              {ledgerQuery.isError && (
+                <p className="mb-3 text-sm text-destructive">
+                  Failed to load the PSL ledger. Check the backend connection and try again.
+                </p>
+              )}
 
-          {entries.length === FETCH_LIMIT && (
-            <p className="mb-3 text-xs text-muted-foreground">
-              Showing the first {FETCH_LIMIT} matching entries — narrow the filters to see more.
-            </p>
-          )}
+              {entries.length === FETCH_LIMIT && (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Showing the first {FETCH_LIMIT} matching entries — narrow the filters to see
+                  more.
+                </p>
+              )}
 
-          <Table
-            key={tableKey}
-            columns={columns}
-            data={entries}
-            rowKey={(row) => row.id}
-            isLoading={ledgerQuery.isLoading}
-            emptyState="No PSL ledger entries match these filters."
-            pageSize={PAGE_SIZE}
-          />
+              <Table
+                key={tableKey}
+                columns={columns}
+                data={entries}
+                rowKey={(row) => row.id}
+                isLoading={ledgerQuery.isLoading}
+                emptyState="No PSL ledger entries match these filters."
+                pageSize={PAGE_SIZE}
+              />
+            </>
+          ) : (
+            <>
+              {topUpsQuery.isError && (
+                <p className="mb-3 text-sm text-destructive">
+                  Failed to load top-ups. Check the backend connection and try again.
+                </p>
+              )}
+
+              {topUps.length === FETCH_LIMIT && (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Showing the first {FETCH_LIMIT} matching top-ups — narrow the filters to see
+                  more.
+                </p>
+              )}
+
+              <Table
+                key={tableKey}
+                columns={topUpColumns}
+                data={topUps}
+                rowKey={(row) => row.id}
+                isLoading={topUpsQuery.isLoading}
+                emptyState="No top-ups recorded for these filters."
+                pageSize={PAGE_SIZE}
+              />
+            </>
+          )}
         </>
-      ) : (
-        <RemittanceReport />
       )}
+
+      {tab === "report" && <RemittanceReport />}
 
       <LedgerFormModal
         open={createOpen}

@@ -55,6 +55,15 @@ def _validate_split_payments_required(
         raise ValueError("split_payments is required (and non-empty) when payment_method is 'split_fare'")
 
 
+def _validate_tip_amount(tip_amount: Decimal | None) -> None:
+    """Shared sanity check for the driver-entered tip (Close & Pay "tips"
+    pass) — a tip is never negative. No upper cap: unlike `negotiated_total`
+    (a substitute for the regulated fare, which the Fares Order caps) a tip
+    is a voluntary, uncapped, non-fare payment."""
+    if tip_amount is not None and tip_amount < 0:
+        raise ValueError("tip_amount must not be negative")
+
+
 def _validate_negotiated_total(negotiated_total: Decimal | None) -> None:
     """Shared sanity-cap check for the negotiated/"Set Price" fixed fare
     (competitor "Set Price" feature; NSW allows pre-arranged/negotiated
@@ -94,9 +103,35 @@ class TripCreate(BaseModel):
     payment_method: PaymentMethod = "cash"
     voucher_code: str | None = None
     account_reference: str | None = None
+    # DEVICE ADVISORY ONLY, both fields: accepted for backward compatibility
+    # but never trusted for billing — the router deterministically derives
+    # the real values server-side from the tariff's own night/peak-window +
+    # public-holiday-calendar definitions and the trip's actual start_at (see
+    # app.services.fare_engine.resolve_time_class_and_peak), ignoring
+    # whatever a device sends here. Same pattern as `maxi` below.
     time_class: TimeClass = "day"
     is_peak: bool = False
+    # DEVICE ADVISORY ONLY: this raw flag is accepted for backward
+    # compatibility but never trusted for billing — the router looks up the
+    # real Vehicle.vehicle_class server-side (see
+    # app.services.trips.resolve_is_maxi_vehicle) to decide whether the
+    # trip's vehicle is actually a maxi-cab, ignoring whatever a device
+    # sends here.
     maxi: bool = False
+    passenger_count: int = Field(
+        default=1,
+        ge=1,
+        le=11,
+        description="Actual passengers carried — the primary legal trigger (>=5) for the maxi rate.",
+    )
+    wheelchair_hiring: bool = Field(
+        default=False,
+        description="Carrying a wheelchair passenger — always overrides the maxi rate off (Order cl 2(d)(ii)).",
+    )
+    airport_rank_requested_maxi: bool = Field(
+        default=False,
+        description="A maxi-cab specifically requested at a Sydney Airport rank — triggers the maxi rate independent of passenger_count, except for a wheelchair hiring.",
+    )
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     gps_trace_ref: str | None = None
@@ -107,7 +142,9 @@ class TripCreate(BaseModel):
             "the driver enters this before starting the meter (NSW allows this "
             "for pre-arranged/negotiated fares). Settable only at trip creation "
             "— not mid-trip. Replaces the metered flag/distance/time components "
-            "at close; PSL and tolls still accrue and add on top of it."
+            "at close and is all-inclusive: PSL and tolls are still recorded on "
+            "the trip for ledger/audit purposes but are never added on top of "
+            "this amount."
         ),
     )
 
@@ -154,6 +191,16 @@ class TripUpdate(BaseModel):
 
 class TripTickRequest(BaseModel):
     points: list[TelemetryPoint] = Field(..., min_length=1)
+    # Sibling fields, NOT part of TelemetryPoint above -- these describe the
+    # trip's destination (a single mid-trip decision), not one GPS sample.
+    # See app.models.trips.Trip.planned_dest_lat/lng's doc comment (module
+    # docstring deviation #7) for the end_lat/end_lng distinction. Optional:
+    # None here means "this tick doesn't carry a destination update" and
+    # app.services.trips.apply_tick leaves whatever's already on the trip
+    # row untouched -- a driver who already picked one is not required to
+    # keep re-sending it on every subsequent tick.
+    dest_lat: float | None = Field(default=None, ge=-90, le=90)
+    dest_lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 # --- Close ------------------------------------------------------------------
@@ -171,9 +218,18 @@ class TripCloseRequest(BaseModel):
     cleaning_fee: Decimal = Decimal(0)
     include_psl: bool = False
     receipt_ref: str | None = None
+    tip_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Driver tip (Close & Pay 'tips' pass) — a voluntary, non-fare amount, "
+            "never folded into fare_total/surcharge/total/gst_component. `null` "
+            "means no tip was recorded for this close."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripCloseRequest":
+        _validate_tip_amount(self.tip_amount)
         # payment_method=None here means "keep the trip's existing
         # payment_method" (see app.api.v1.trips.close_trip_endpoint) — only
         # cross-validate voucher_code/account_reference/split_payments against
@@ -203,6 +259,10 @@ class TripSyncItem(BaseModel):
     driver_id: str
     shift_id: str | None = None
     tariff_id: str
+    # See `app.models.trips.Trip.simulated`. Defaulted so a device predating the
+    # GPS simulator still syncs, and so the absence of the field always means
+    # "real" -- never "unknown".
+    simulated: bool = False
     type: TripType
     start_at: datetime
     end_at: datetime
@@ -222,9 +282,17 @@ class TripSyncItem(BaseModel):
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[SplitPaymentItem] | None = None
+    # DEVICE ADVISORY ONLY — see TripCreate.time_class/is_peak's doc comment
+    # above; app.services.trips.recompute_from_trace resolves the
+    # authoritative values from the tariff + this item's own start_at.
     time_class: TimeClass = "day"
     is_peak: bool = False
+    # DEVICE ADVISORY ONLY — see TripCreate.maxi's doc comment above; the
+    # router resolves the authoritative value from Vehicle.vehicle_class.
     maxi: bool = False
+    passenger_count: int = Field(default=1, ge=1, le=11)
+    wheelchair_hiring: bool = False
+    airport_rank_requested_maxi: bool = False
     tolls: Decimal = Decimal(0)
     extras: Decimal = Decimal(0)
     cleaning_fee: Decimal = Decimal(0)
@@ -242,12 +310,22 @@ class TripSyncItem(BaseModel):
         ),
     )
     device_total: Decimal = Field(..., description="The total the offline device computed on-vehicle")
+    tip_amount: Decimal | None = Field(
+        default=None,
+        description=(
+            "Same driver tip as TripCloseRequest.tip_amount — carried through "
+            "offline sync so a trip opened+closed on-device with a driver-entered "
+            "tip doesn't lose it on replay. Never part of device_total: the "
+            "on-device fare engine's own total excludes it, same as the server's."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_payment_fields(self) -> "TripSyncItem":
         _validate_voucher_and_account(self.payment_method, self.voucher_code, self.account_reference)
         _validate_split_payments_required(self.payment_method, self.split_payments)
         _validate_negotiated_total(self.negotiated_total)
+        _validate_tip_amount(self.tip_amount)
         return self
 
 
@@ -265,10 +343,17 @@ class TripRead(BaseModel):
     shift_id: str | None
     tariff_id: str
     type: str
+    # See `app.models.trips.Trip.simulated`. Exposed on the read model, not just
+    # stored: the dashboard has to be able to badge a test trip, and an operator
+    # reconciling revenue has to be able to see which rows are not real money.
+    simulated: bool
     status: str
     time_class: str
     is_peak: bool
     maxi: bool
+    passenger_count: int
+    wheelchair_hiring: bool
+    airport_rank_requested_maxi: bool
     start_at: datetime
     end_at: datetime | None
     start_lat: float
@@ -295,12 +380,17 @@ class TripRead(BaseModel):
     variance_pct: Decimal | None
     receipt_ref: str | None
     auto_tolls_applied: list[str] | None = Field(default_factory=list)
+    # NSW toll-registry auto-detection (app.services.tolls) -- see
+    # app.models.trips.Trip's doc comments on these three columns.
+    auto_tolled_roads: dict[str, str] | None = Field(default_factory=dict)
+    unpriced_toll_road_ids: list[str] | None = Field(default_factory=list)
     flagged_for_review: bool
     review_notes: str | None
     voucher_code: str | None
     account_reference: str | None
     split_payments: list[dict] | None = Field(default_factory=list)
     negotiated_total: Decimal | None
+    tip_amount: Decimal | None
     created_at: datetime
     updated_at: datetime
 
@@ -320,6 +410,35 @@ class TripSyncResultItem(BaseModel):
 
 class TripSyncResponse(BaseModel):
     results: list[TripSyncResultItem]
+
+
+# --- GPS trace read (dashboard trip-detail route map) ------------------------
+
+
+class TripGpsTraceRead(BaseModel):
+    """`GET /v1/trips/{id}/gps-trace` response -- the dedicated fetch endpoint
+    for the durable trace `app.models.trips.TripGpsTrace` stores, kept OUT of
+    `TripRead`/`TripListResponse` entirely (see that model's own docstring for
+    why: a 50-row page of trips must never carry a ~100-300KB trace per row).
+
+    `points` reuses `TelemetryPoint` -- the exact wire shape
+    `TripSyncItem.gps_trace` already accepts, so a dashboard trip-detail view
+    fetching this looks like the same shape the device originally uploaded.
+    Chronological order (as recorded), never re-sorted here.
+
+    `points: []` / `point_count: 0` is this endpoint's own honest "no trace
+    stored for this (real) trip" answer -- e.g. a trip opened+closed via the
+    online create/tick/close flow (which never carries a raw trace at all), or
+    a synced trip whose device sent an empty `gps_trace` (today's Android-bug
+    reality). This is a 200, not a 404: the trip itself exists and was found;
+    only `GET /v1/trips/{id}` returning nothing at all for the id (wrong id,
+    or another tenant's trip) is a 404 -- see
+    `app.api.v1.trips.get_trip_gps_trace`.
+    """
+
+    trip_id: str
+    points: list[TelemetryPoint]
+    point_count: int
 
 
 # --- Dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema) ------
@@ -372,3 +491,34 @@ class ReceiptSmsResponse(BaseModel):
     receipt_ref: str | None = None
     pdf_relative_path: str
     pdf_generated_now: bool
+
+
+# --- Driver earnings today (dashboard tiles) ---------------------------------
+
+
+class DriverEarningsTodayRead(BaseModel):
+    """`GET /v1/trips/earnings/today` response — backs the driver-tablet
+    dashboard's earnings tile. Caller-scoped: always the authenticated
+    caller's own `driver_id` (see app.api.v1.trips.earnings_today), same
+    convention as app.api.v1.me.
+
+    `today`/`yesterday` are UTC calendar days (this codebase's one existing
+    "today" convention — see app.services.platform.get_platform_health's
+    `total_trips_today`), bucketed by `Trip.start_at` like every other
+    date-bucketed aggregate in this codebase (app.services.reports,
+    app.services.platform) — NOT `Trip.end_at`. Only `status == "closed"`
+    trips are counted (an open trip has no final `total` yet, same rule
+    app.services.reports.revenue_report already applies).
+
+    `pct_change` is `None` whenever there is no non-zero yesterday total to
+    compare against (no yesterday trips, or yesterday's total was exactly
+    zero) — callers must render "no comparison available", never a
+    fabricated 0%/100%.
+    """
+
+    driver_id: str
+    date: str = Field(description="Today's UTC calendar date, ISO-8601 (YYYY-MM-DD)")
+    today_total: Decimal
+    yesterday_total: Decimal
+    pct_change: float | None = None
+    trips_completed_today: int

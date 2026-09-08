@@ -2,15 +2,21 @@ package au.com.threesixty.cabdispatch.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import au.com.threesixty.cabdispatch.data.local.dao.ShiftDao
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
+import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
 /**
@@ -27,12 +33,44 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * (`voucherCode`, `accountReference`, `splitPaymentsJson`) — no new entity, just new columns on an
  * existing one, see that class's doc for each. Version bumped 4 -> 5 (2026-08-10 meter-polish
  * pass, "Set Price") adding one new nullable [TripEntity] column (`negotiatedTotal`) — same "no
- * new entity, no Migration" shortcut as the 3 -> 4 bump, for the same still-pre-release reason. No Migration
- * object is supplied for any bump so far because this project has never shipped v1 (no installed
- * base to migrate); the schema is still pre-release. Once this ships, bumping `version` again
- * MUST come with a real `Migration` — do NOT reach for
- * `fallbackToDestructiveMigration()`, offline trip data is financial/
- * compliance evidence per B6 ("immutable trip log").
+ * new entity, no Migration" shortcut as the 3 -> 4 bump, for the same still-pre-release reason.
+ * Version bumped 5 -> 6 (Point to Point Transport (Fares) Order 2026 compliance pass) adding two
+ * new defaulted [TripEntity] columns (`passengerCount` Int = 1, `wheelchairHiring` Boolean =
+ * false) feeding the fare engine's maxi-rate eligibility check — same no-Migration shortcut again.
+ * Version bumped 6 -> 7 (Close & Pay "tips" pass) adding one new nullable [TripEntity] column
+ * (`tip`) — same no-Migration shortcut again, for the same still-pre-release reason.
+ * Version bumped 7 -> 8 (History/Earnings real-data pass, Phase C 2026-09-03) adding two new
+ * nullable [TripEntity] columns (`pickupAddress`, `dropoffAddress`) — same no-Migration shortcut
+ * again, for the same still-pre-release reason.
+ * Version bumped 8 -> 9 (maxi-at-airport-rank fare-integrity fix, 2026-09-05) adding one new
+ * defaulted [TripEntity] column (`airportRankRequestedMaxi` Boolean = false) — the third input to
+ * the fare engine's maxi-rate eligibility check (alongside `passengerCount`/`wheelchairHiring`,
+ * added in the 5 -> 6 bump above) was already read correctly on-device but was never persisted or
+ * sent to the server.
+ *
+ * Version bumped 9 -> 10 (automatic NSW toll-road detection pass) adding two new entities —
+ * [TollRoadEntity]/[TollGantryEntity], the local cache of `GET /v1/toll-roads` that lets
+ * [au.com.threesixty.cabdispatch.domain.fare.onFix] auto-detect toll-road crossings with zero
+ * connectivity (see [au.com.threesixty.cabdispatch.sync.TollRegistryCache]'s doc) — and two new
+ * defaulted [TripEntity] columns (`autoTolledRoadsJson`, `unpricedTollRoadIdsJson`) recording, for
+ * local audit only, which roads a trip's auto-detected/needs-manual-entry tolls came from (the
+ * actual dollar figure was already flowing through the pre-existing `tolls` column — see
+ * [TripEntity.autoTolledRoadsJson]'s own doc for exactly what these two add on top). Also carries
+ * [TollRoadEntity]'s `rateClassAPerKm`/`flagfallClassA` columns (2026-09 pricing correction, folded
+ * into this same not-yet-released version rather than a separate bump — see that entity's own
+ * doc for why the device no longer derives a `distance`-model rate from a corridor length). Real
+ * `Migration` per [MIGRATION_8_9]'s own precedent below — never `fallbackToDestructiveMigration`
+ * for financial/compliance trip data.
+ *
+ * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
+ * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
+ * installed base to migrate)" — that assumption held only as long as every test device got a
+ * fresh uninstall between builds. It doesn't: a real tablet field-tested at v8 crashed hard
+ * (`IllegalStateException: A migration from 8 to 9 was required but not found`) the moment a v9
+ * build was installed over it (confirmed live, 2026-09-05). Do NOT reach for
+ * `fallbackToDestructiveMigration()` to paper over a future bump instead of writing a real
+ * `Migration` — offline trip data is financial/compliance evidence per B6 ("immutable trip log"),
+ * and it turns out real devices really do carry it across a version bump now.
  *
  * Local DB encryption (SQLCipher, per B6 anti-tamper: "local DB encrypted")
  * is left to a future pass — this class stays plain Room for now so the
@@ -54,8 +92,11 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TariffEntity::class,
         SyncOutboxEntity::class,
         TariffSigningKeyEntity::class,
+        TollRoadEntity::class,
+        TollPointEntity::class,
+        TollGantryEntity::class,
     ],
-    version = 5,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -64,4 +105,102 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tariffDao(): TariffDao
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
+    abstract fun tollRegistryDao(): TollRegistryDao
+}
+
+/**
+ * Real migration for the 8 -> 9 bump — see [AppDatabase]'s doc for why this one (unlike every
+ * earlier bump) actually needs one. A single defaulted-`false` column add; `trips` is the only
+ * table [TripEntity] backs (see its `@Entity(tableName = "trips")`).
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN airportRankRequestedMaxi INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** Real migration for the 9 -> 10 bump (automatic NSW toll-road detection pass) — see
+ * [AppDatabase]'s doc. Three brand-new tables (empty until the next [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
+ * succeeds — see that class's "offline-empty-cache" doc for why an empty cache is always a safe,
+ * handled state, never a crash) plus two new defaulted `trips` columns.
+ *
+ * Extended IN PLACE (rather than adding an 11) by the per-toll-point follow-up, because version 10
+ * has never been installed anywhere: the toll-detection work it belongs to was built but never
+ * shipped to a device, so no database in existence is at v10 and there is nothing for a 10 -> 11
+ * step to migrate. If a v10 build HAS since reached any device, this must become a separate
+ * MIGRATION_10_11 instead — silently changing the shape a shipped version created is exactly the
+ * corruption `fallbackToDestructiveMigration` was avoided to prevent.
+ *
+ * **How to check this SQL is right, since nothing here does it for you.** Room compares a
+ * migration's result against the schema it expects only at RUNTIME, on first open: one mismatched
+ * column type or a missing index is not a build failure, it is a crash on launch for every
+ * upgrading device. Room's schema export (`room.schemaLocation`) would surface it in the diff, but
+ * it produces nothing on this project's kapt setup (tried; not worth further chasing). The direct
+ * check, which is what the statements below were verified against, is Room's OWN generated
+ * `createAllTables`:
+ *
+ *     ./gradlew kaptDebugKotlin
+ *     grep 'CREATE TABLE IF NOT EXISTS `toll_'  *       app/build/generated/source/kapt/debug/au/com/threesixty/cabdispatch/data/local/AppDatabase_Impl.java
+ *
+ * That is the exact SQL Room expects for the CURRENT version. Every statement a migration writes
+ * must match its line there character-for-character in column names, types, nullability, primary
+ * key, foreign-key clause and indices. Do this for any future migration too. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_roads` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `pricingModel` TEXT NOT NULL,
+                `chargingPolicy` TEXT NOT NULL,
+                `networkGroup` TEXT,
+                `directional` TEXT,
+                `derivedCorridorKm` TEXT,
+                `priceClassAMax` TEXT,
+                `capClassA` TEXT,
+                `rateClassAPerKm` TEXT,
+                `flagfallClassA` TEXT,
+                `networkCapClassA` TEXT,
+                `timeOfDayRatesJson` TEXT,
+                `confidence` TEXT,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_gantries` (
+                `id` TEXT NOT NULL,
+                `tollRoadId` TEXT NOT NULL,
+                `tollPointId` TEXT,
+                `latitude` REAL NOT NULL,
+                `longitude` REAL NOT NULL,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_points` (
+                `id` TEXT NOT NULL,
+                `tollRoadId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `priceClassA` TEXT,
+                `confidence` TEXT,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_points_tollRoadId` ON `toll_points` (`tollRoadId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_toll_gantries_tollRoadId` ON `toll_gantries` (`tollRoadId`)")
+        db.execSQL("ALTER TABLE trips ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE trips ADD COLUMN autoTolledRoadsJson TEXT NOT NULL DEFAULT '{}'")
+        db.execSQL("ALTER TABLE trips ADD COLUMN unpricedTollRoadIdsJson TEXT NOT NULL DEFAULT '[]'")
+    }
 }

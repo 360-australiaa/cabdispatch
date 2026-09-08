@@ -53,6 +53,15 @@ per-zone demand snapshot matching a screen on a real competitor taxi meter
 (MTI). Owns one new table (`zones`); reads shifts/live_ops/jobs/trips
 read-only for the stats aggregation (see app.services.zones).
 
+vouchers (/v1/vouchers) and corporate-accounts (/v1/corporate-accounts) are
+new in this pass: real backing ledgers for the trips domain's "voucher"/
+"account" Trip.payment_method values, replacing the earlier non-empty-
+string-only stub validation in app.services.payments.redeem_voucher /
+validate_account_reference (see app/models/vouchers.py). Each owns one new
+table and its own CRUD router (list/get open to any authenticated tenant
+user, create/update/delete owner/admin-only); neither collides with any
+existing domain's path prefix.
+
 platform (/v1/platform) is new in this pass: a platform-owner-only admin
 console - GET/POST /v1/platform/tenants (list every tenant / onboard a
 new one), GET /v1/platform/tenants/{id}/summary (per-tenant health
@@ -64,33 +73,72 @@ platform tenant could already act cross-tenant via get_current_tenant_id
 tenant_id override (see app.core.security) but had no dedicated
 management surface. Path prefix platform does not collide with any
 existing domain routes.
+
+driver engagement (me / wallet / ratings / announcements / incentives) is
+new in this pass: the real backing for the four driver-tablet dashboard
+tiles (Wallet Balance, Driver Rating, Announcements, Incentive Progress).
+`/v1/me/*` is the driver-facing read surface (scoped to the caller's own
+user id, never a query param); `/v1/wallet`, `/v1/ratings`,
+`/v1/announcements`, `/v1/incentives` are the operator CRUD surfaces
+(owner/admin writes, same gate as vouchers). ratings additionally owns one
+literal `/v1/trips/{id}/rating` path (Close & Pay's post-close rating hook)
+verified not to collide with any route in the trips router itself -- same
+"literal path owned by a sibling router" precedent as live_ops. See
+app/models/driver_engagement.py for the "derived, never stored" rule.
+
+app_releases (/v1/app-releases + /v1/platform/app-releases) is new in this
+pass: real OTA self-update publishing for the Android meter app. Two
+routers under distinct prefixes -- same convention as payments/tariffs
+above. `POST /v1/platform/app-releases` (platform-owner only, same gate as
+the rest of `/v1/platform/...`) uploads a new APK; `GET
+/v1/app-releases/latest` and `GET /v1/app-releases/{id}/download` are open
+to any authenticated tenant/device user (not platform-owner-gated -- these
+are reads, and every tenant's devices run the same one app build). See
+app/models/app_release.py for why this table is platform-wide, not
+tenant-scoped. HONEST CAVEAT this pass does not paper over: these tablets
+are Knox Manage device-owner-enrolled, and Knox Manage's current policy
+blocks installs from unknown sources (see
+docs/KNOX_LOCKDOWN_RUNBOOK.md/docs/OTA_UPDATE_ROLLOUT.md) -- a Knox Manage
+policy exception is still required per-fleet before this works end-to-end,
+and every install still needs one Android system confirmation tap (this
+app is not Device Owner, so it cannot install silently).
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.announcements import router as announcements_router
+from app.api.v1.app_releases import platform_router as app_releases_platform_router
+from app.api.v1.app_releases import router as app_releases_router
 from app.api.v1.audit_log import router as audit_log_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
 from app.api.v1.compliance import router as compliance_router
+from app.api.v1.corporate_accounts import router as corporate_accounts_router
 from app.api.v1.duress import router as duress_router
 from app.api.v1.duress_device import router as duress_device_router
 from app.api.v1.fatigue_alerts import router as fatigue_alerts_router
 from app.api.v1.fleet import router as fleet_router
 from app.api.v1.geofences import router as geofences_router
+from app.api.v1.incentives import router as incentives_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.live_ops import router as live_ops_router
+from app.api.v1.me import router as me_router
 from app.api.v1.messages import router as messages_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.payments import webhook_router as payments_webhook_router
 from app.api.v1.platform import router as platform_router
 from app.api.v1.psl_ledger import router as psl_ledger_router
+from app.api.v1.ratings import router as ratings_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.shifts import router as shifts_router
 from app.api.v1.tariffs import fares_order_router
 from app.api.v1.tariffs import router as tariffs_router
+from app.api.v1.toll_roads import router as toll_roads_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
+from app.api.v1.vouchers import router as vouchers_router
+from app.api.v1.wallet import router as wallet_router
 from app.api.v1.zones import router as zones_router
 from app.core.config import settings
 
@@ -114,6 +162,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(fleet_router)
 app.include_router(geofences_router)
+app.include_router(toll_roads_router)
 app.include_router(tariffs_router)
 app.include_router(fares_order_router)
 app.include_router(trips_router)
@@ -134,3 +183,12 @@ app.include_router(fatigue_alerts_router)
 app.include_router(tenants_router)
 app.include_router(zones_router)
 app.include_router(platform_router)
+app.include_router(vouchers_router)
+app.include_router(corporate_accounts_router)
+app.include_router(me_router)
+app.include_router(wallet_router)
+app.include_router(ratings_router)
+app.include_router(announcements_router)
+app.include_router(incentives_router)
+app.include_router(app_releases_router)
+app.include_router(app_releases_platform_router)

@@ -8,11 +8,12 @@ import {
   MapPin,
   Pencil,
   Plus,
-  Power,
   RefreshCw,
   Trash2,
+  RotateCw,
   Unlock,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -29,9 +30,10 @@ import {
   useDeleteDevice,
   useDevices,
   useForceUpdate,
+  useForceUpdateAll,
   useKioskLock,
   useLocateDevice,
-  useRebootDevice,
+  useRestartApp,
   useUpdateDevice,
   useVehicleOptions,
   type DeviceFilters,
@@ -45,6 +47,25 @@ const KIOSK_FILTER_OPTIONS = [
   { value: "true", label: "Kiosk-locked" },
   { value: "false", label: "Unlocked" },
 ];
+
+/** HONESTY NOTE (matches the backend's own on `Device.reboot_requested` /
+ * `POST /v1/fleet/devices/{id}/reboot`, and the Android app's own
+ * `DeviceCommandHeartbeat` note that it deliberately never reads this flag):
+ * actually rebooting a tablet's OS needs the on-device app enrolled as
+ * Android Device Owner, which no build this dashboard talks to holds today.
+ * The backend still tracks the flag as real groundwork for a future
+ * device-owner-aware app build, but THIS control must never look like it
+ * does something now — an operator clicking "Reboot" and seeing a
+ * `Pending` badge would reasonably (and wrongly) believe the tablet is
+ * about to restart. Disabled outright, everywhere, rather than wired up to
+ * `POST .../reboot` at all, same "visible for completeness, never a
+ * functional trap" policy already used for locked settings rows in the
+ * Android app's own SettingsScreen ("COMING SOON" badge, greyed out,
+ * tap-safe). */
+const RESTART_APP_REASON =
+  "Restarts the meter app on the tablet — not the Android OS. Rebooting the OS needs Device " +
+  "Owner provisioning this build doesn't have. The tablet picks this up on its next heartbeat " +
+  "(within a minute), restarts, and reports back, which is what clears the pending state.";
 
 function BatteryIcon({ battery }: { battery: number | null }) {
   if (battery === null) return <span className="text-muted-foreground">—</span>;
@@ -99,8 +120,16 @@ export function DevicesPanel() {
   const deleteDevice = useDeleteDevice();
   const kioskLock = useKioskLock();
   const forceUpdate = useForceUpdate();
+  const forceUpdateAll = useForceUpdateAll();
   const locateDevice = useLocateDevice();
-  const rebootDevice = useRebootDevice();
+  const restartApp = useRestartApp();
+  const [confirmingPushAll, setConfirmingPushAll] = useState(false);
+  const [pushAllResult, setPushAllResult] = useState<{ flagged: number; total: number } | null>(null);
+
+  async function confirmPushAll() {
+    const result = await forceUpdateAll.mutateAsync();
+    setPushAllResult(result);
+  }
 
   function openCreate() {
     setEditing(null);
@@ -174,10 +203,10 @@ export function DevicesPanel() {
     }
   }
 
-  async function triggerReboot(d: Device) {
+  async function triggerRestart(d: Device) {
     setPendingActionId(d.id);
     try {
-      await rebootDevice.mutateAsync(d.id);
+      await restartApp.mutateAsync(d.id);
     } finally {
       setPendingActionId(null);
     }
@@ -204,6 +233,32 @@ export function DevicesPanel() {
       render: (d) => (d.vehicle_id ? vehicleRegoById.get(d.vehicle_id) ?? d.vehicle_id : "—"),
     },
     {
+      // "Is that tablet actually enrolled?" was unanswerable from this page: it
+      // showed Last seen, which a hand-created row that has never paired also
+      // has once anyone hits its heartbeat. A meter cannot be used unregistered
+      // any more, so this is now the first thing an operator needs when a driver
+      // phones in blocked.
+      key: "paired_at",
+      header: "Paired",
+      sortable: true,
+      sortAccessor: (d) => d.paired_at ?? "",
+      render: (d) => {
+        if (d.revoked_at) {
+          return (
+            <Badge variant="destructive" title={`Revoked ${formatDateTime(d.revoked_at)}`}>
+              Revoked
+            </Badge>
+          );
+        }
+        if (!d.paired_at) {
+          return <span className="text-muted-foreground">Never</span>;
+        }
+        return (
+          <span title={formatDateTime(d.paired_at)}>{relativeFromNow(d.paired_at)}</span>
+        );
+      },
+    },
+    {
       key: "kiosk_locked",
       header: "Kiosk",
       render: (d) => <Badge variant={d.kiosk_locked ? "destructive" : "success"}>{d.kiosk_locked ? "Locked" : "Unlocked"}</Badge>,
@@ -214,14 +269,61 @@ export function DevicesPanel() {
       render: (d) => (d.force_update_pending ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">Up to date</span>),
     },
     {
+      // Three real states, where there used to be one. Locate said "Pending"
+      // forever whether or not the tablet had answered, because nothing ever
+      // cleared `locate_requested` — no route, no service call, not the
+      // heartbeat. The device now answers on its own route and answering is
+      // what clears the flag, so this can finally distinguish "asked and
+      // waiting" from "asked and answered".
       key: "locate_requested",
       header: "Locate",
-      render: (d) => (d.locate_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+      render: (d) => {
+        if (d.locate_requested) {
+          return <Badge variant="accent">Waiting…</Badge>;
+        }
+        if (d.last_locate_at && d.last_locate_lat != null && d.last_locate_lng != null) {
+          const accuracy =
+            d.last_locate_accuracy_m != null ? ` ±${Math.round(d.last_locate_accuracy_m)}m` : "";
+          return (
+            // Into our own map, not out to Google's. An operator locating a tablet
+            // wants it in context -- next to the other cars, the geofences and the
+            // remote controls -- not a pin on a blank third-party page they then
+            // have to navigate back from. `?vehicle=` is the same deep-link shape
+            // the duress markers already use.
+            <Link
+              className="underline underline-offset-2"
+              to={d.vehicle_id ? `/live-map?vehicle=${d.vehicle_id}` : "/live-map"}
+              title={`${d.last_locate_lat}, ${d.last_locate_lng}${accuracy} · ${formatDateTime(d.last_locate_at)}`}
+            >
+              {relativeFromNow(d.last_locate_at)}
+            </Link>
+          );
+        }
+        return <span className="text-muted-foreground">—</span>;
+      },
     },
     {
+      // "Restart app", not "Reboot". Rebooting Android needs Device-Owner
+      // provisioning this fleet does not have, and this column used to say so
+      // and stop there. Restarting the meter's own process is both possible and
+      // what an operator pressing this actually wants — the meter is stuck,
+      // restart it — and the app acknowledges when it has, so this shows a
+      // carried-out command instead of a permanent "Pending".
       key: "reboot_requested",
-      header: "Reboot",
-      render: (d) => (d.reboot_requested ? <Badge variant="accent">Pending</Badge> : <span className="text-muted-foreground">—</span>),
+      header: "Restart app",
+      render: (d) => {
+        if (d.reboot_requested) {
+          return <Badge variant="accent">Waiting…</Badge>;
+        }
+        if (d.command_acked_at) {
+          return (
+            <span title={`Restarted ${formatDateTime(d.command_acked_at)}`}>
+              {relativeFromNow(d.command_acked_at)}
+            </span>
+          );
+        }
+        return <span className="text-muted-foreground">—</span>;
+      },
     },
     {
       key: "actions",
@@ -240,6 +342,19 @@ export function DevicesPanel() {
             disabled={pendingActionId === d.id}
           >
             {d.kiosk_locked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Restart meter app"
+            title={d.reboot_requested ? "Restart already queued" : RESTART_APP_REASON}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerRestart(d);
+            }}
+            disabled={pendingActionId === d.id || d.reboot_requested}
+          >
+            <RotateCw className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
@@ -266,19 +381,6 @@ export function DevicesPanel() {
             disabled={pendingActionId === d.id || d.locate_requested}
           >
             <MapPin className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Reboot device"
-            title={d.reboot_requested ? "Reboot already pending" : "Queue a remote reboot"}
-            onClick={(e) => {
-              e.stopPropagation();
-              triggerReboot(d);
-            }}
-            disabled={pendingActionId === d.id || d.reboot_requested}
-          >
-            <Power className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
@@ -336,9 +438,20 @@ export function DevicesPanel() {
             />
           </div>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" /> Register device
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setPushAllResult(null);
+              setConfirmingPushAll(true);
+            }}
+          >
+            <RefreshCw className="h-4 w-4" /> Push update to all tablets
+          </Button>
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" /> Register device
+          </Button>
+        </div>
       </div>
 
       {devicesQuery.isError ? (
@@ -449,6 +562,31 @@ export function DevicesPanel() {
               Delete
             </Button>
           </>
+        }
+      />
+
+      <Modal
+        open={confirmingPushAll}
+        onClose={() => setConfirmingPushAll(false)}
+        title={pushAllResult ? "Update pushed" : "Push update to every tablet?"}
+        description={
+          pushAllResult
+            ? `Flagged ${pushAllResult.flagged} of ${pushAllResult.total} registered device${pushAllResult.total === 1 ? "" : "s"} for update (the rest already had an update pending). Each one downloads and verifies the latest published release automatically; a driver still needs to tap Install unless that tablet has been set up as this app's own Device Owner.`
+            : "Flags every registered device that doesn't already have an update pending. Each tablet then auto-downloads and verifies the latest published release — make sure you've published the build you want first, from App Releases above."
+        }
+        footer={
+          pushAllResult ? (
+            <Button onClick={() => setConfirmingPushAll(false)}>Done</Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => setConfirmingPushAll(false)}>
+                Cancel
+              </Button>
+              <Button onClick={confirmPushAll} disabled={forceUpdateAll.isPending}>
+                {forceUpdateAll.isPending ? "Pushing…" : "Push to all"}
+              </Button>
+            </>
+          )
         }
       />
     </div>

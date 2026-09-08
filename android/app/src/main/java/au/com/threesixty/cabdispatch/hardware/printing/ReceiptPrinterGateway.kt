@@ -20,8 +20,11 @@ interface ReceiptPrinterGateway {
     /** Scans for nearby paired/unpaired BT thermal printers. */
     suspend fun discover(): Result<List<PrinterDevice>>
 
-    /** Pairs/connects to a specific discovered printer for subsequent [printReceipt] calls. */
-    suspend fun pair(deviceId: String): Result<Unit>
+    /** Pairs/connects to a specific discovered printer (the exact [PrinterDevice] handed back by
+     * [discover], not just its id) for subsequent [printReceipt] calls — see [pairedDevice]'s doc:
+     * the paired-status UI reads [PrinterDevice.name] straight off whatever this sets, so a real
+     * discovered device's name must survive the pair, not be replaced with a synthesized one. */
+    suspend fun pair(device: PrinterDevice): Result<Unit>
 
     /** Sends [receipt] to the currently paired printer. Fails if no printer is paired. */
     suspend fun printReceipt(receipt: Receipt): Result<Unit>
@@ -57,9 +60,16 @@ class MockReceiptPrinterGateway : ReceiptPrinterGateway {
         )
     }
 
-    override suspend fun pair(deviceId: String): Result<Unit> {
+    override suspend fun pair(device: PrinterDevice): Result<Unit> {
         delay(300)
-        pairedDevice = PrinterDevice(id = deviceId, name = "Paired printer ($deviceId)")
+        // BUGFIX: this used to discard the real discovered device and synthesize a generic
+        // "Paired printer (<id>)" name instead — S6's paired-status tile then showed a name that
+        // never matched anything in the scan-results list a driver had just looked at (e.g.
+        // "Sunmi BT-Printer (mock)" in the list, "Paired printer (mock-printer-1)" once paired).
+        // The pairing FLOW was never fake (discover -> pick -> connect -> status all really ran),
+        // but the status readback lied about which real discovered device it was. Now it just
+        // echoes the device that was actually picked.
+        pairedDevice = device
         return Result.success(Unit)
     }
 

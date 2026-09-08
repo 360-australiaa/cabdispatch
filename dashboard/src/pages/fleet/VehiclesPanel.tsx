@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Archive, BarChart3, Copy, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Archive, BarChart3, Copy, History, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -18,6 +19,7 @@ import {
   useDeviceOptions,
   useGeneratePairingCode,
   useUpdateVehicle,
+  useVehicleLiveOptions,
   useVehicles,
   type VehicleFilters,
   PAGE_LIMIT,
@@ -48,6 +50,7 @@ function statusBadgeVariant(status: VehicleStatus) {
 }
 
 export function VehiclesPanel() {
+  const navigate = useNavigate();
   const [skip, setSkip] = useState(0);
   const [regoSearch, setRegoSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -64,6 +67,7 @@ export function VehiclesPanel() {
 
   const vehiclesQuery = useVehicles(skip, filters);
   const deviceOptionsQuery = useDeviceOptions();
+  const vehicleLiveOptionsQuery = useVehicleLiveOptions();
 
   const deviceByVehicleId = useMemo(() => {
     const map = new Map<string, string>();
@@ -72,6 +76,19 @@ export function VehiclesPanel() {
     }
     return map;
   }, [deviceOptionsQuery.data]);
+
+  // "Who has this vehicle checked out right now" -- always derived live from
+  // the shift domain (see useVehicleLiveOptions' own doc comment), never a
+  // stored pointer on the vehicle row itself.
+  const currentDriverByVehicleId = useMemo(() => {
+    const map = new Map<string, { name: string; since: string }>();
+    for (const v of vehicleLiveOptionsQuery.data ?? []) {
+      if (v.current_driver_name && v.current_shift_start_at) {
+        map.set(v.id, { name: v.current_driver_name, since: v.current_shift_start_at });
+      }
+    }
+    return map;
+  }, [vehicleLiveOptionsQuery.data]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Vehicle | null>(null);
@@ -114,11 +131,15 @@ export function VehiclesPanel() {
     setFormValues({
       rego: v.rego,
       vin: v.vin ?? "",
+      make: v.make ?? "",
+      model: v.model ?? "",
       vehicle_class: v.vehicle_class,
       camera_serial: v.camera_serial ?? "",
       tracking_device_id: v.tracking_device_id ?? "",
       meter_device_id: v.meter_device_id ?? "",
       status: v.status,
+      registration_expiry: v.registration_expiry ?? "",
+      insurance_expiry: v.insurance_expiry ?? "",
     });
     setFormError(null);
     setFormOpen(true);
@@ -151,6 +172,11 @@ export function VehiclesPanel() {
 
   const columns: TableColumn<Vehicle>[] = [
     { key: "rego", header: "Rego", sortable: true, render: (v) => <span className="font-medium">{v.rego}</span> },
+    {
+      key: "make_model",
+      header: "Make/Model",
+      render: (v) => [v.make, v.model].filter(Boolean).join(" ") || "—",
+    },
     { key: "vin", header: "VIN", render: (v) => v.vin || "—" },
     {
       key: "vehicle_class",
@@ -186,12 +212,38 @@ export function VehiclesPanel() {
         );
       },
     },
+    {
+      key: "current_driver",
+      header: "Current driver",
+      render: (v) => {
+        const current = currentDriverByVehicleId.get(v.id);
+        if (!current) return <span className="text-xs text-muted-foreground">Unassigned</span>;
+        return (
+          <div className="text-sm">
+            <div className="font-medium">{current.name}</div>
+            <div className="text-xs text-muted-foreground">since {formatDateTime(current.since)}</div>
+          </div>
+        );
+      },
+    },
     { key: "updated_at", header: "Updated", sortable: true, render: (v) => formatDateTime(v.updated_at) },
     {
       key: "actions",
       header: "",
       render: (v) => (
         <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Shift history for ${v.rego}`}
+            title="Shift history — every driver who has had this vehicle, and when"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/shifts?vehicle_id=${v.id}`);
+            }}
+          >
+            <History className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -361,6 +413,22 @@ export function VehiclesPanel() {
             />
           </div>
           <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Make</label>
+            <Input
+              value={formValues.make}
+              onChange={(e) => setFormValues((f) => ({ ...f, make: e.target.value }))}
+              maxLength={60}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Model</label>
+            <Input
+              value={formValues.model}
+              onChange={(e) => setFormValues((f) => ({ ...f, model: e.target.value }))}
+              maxLength={60}
+            />
+          </div>
+          <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Class</label>
             <Select
               options={VEHICLE_CLASS_OPTIONS}
@@ -399,6 +467,29 @@ export function VehiclesPanel() {
             <Input
               value={formValues.meter_device_id}
               onChange={(e) => setFormValues((f) => ({ ...f, meter_device_id: e.target.value }))}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <p className="text-xs text-muted-foreground">
+              Required under NSW Point to Point Transport regulation to keep this vehicle compliant.
+              Cab Dispatch reminds you when these are expiring but does not verify or enforce them.
+              Both are optional — leave blank if unknown for now.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Registration expiry</label>
+            <Input
+              type="date"
+              value={formValues.registration_expiry}
+              onChange={(e) => setFormValues((f) => ({ ...f, registration_expiry: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Insurance expiry</label>
+            <Input
+              type="date"
+              value={formValues.insurance_expiry}
+              onChange={(e) => setFormValues((f) => ({ ...f, insurance_expiry: e.target.value }))}
             />
           </div>
         </div>

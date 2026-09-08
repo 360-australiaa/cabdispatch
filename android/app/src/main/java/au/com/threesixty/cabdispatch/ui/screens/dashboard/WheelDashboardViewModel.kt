@@ -4,16 +4,16 @@ import android.Manifest
 import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.DeviceTelemetry
 import au.com.threesixty.cabdispatch.domain.DriverSession
+import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TodayStats
 import au.com.threesixty.cabdispatch.domain.TripContext
@@ -48,6 +48,21 @@ data class DashboardStatusStrip(
     val printerOk: Boolean = false,
     val batteryOk: Boolean = true,
     val batteryPercent: Int? = null,
+    /**
+     * Real fix-quality tier (2026-09-02, Home-dashboard redesign pass) — replaces [gpsOk]'s former
+     * "permission granted + provider enabled" proxy, which said nothing about whether the fix a
+     * driver would actually get is any good. [gpsOk] above is now derived from this
+     * ([GpsQualityClassifier.isOk]) rather than computed independently, so every existing reader of
+     * [gpsOk] keeps working unchanged while this field lets the header/system-status UI show the
+     * real tier when it wants to.
+     */
+    val gpsQuality: GpsQuality = GpsQuality.NO_FIX,
+    /** `"wifi"` / `"4g"` / `"offline"`, or `null` if [DeviceTelemetry.readNetworkType] itself
+     * couldn't check (see that function's doc) — [networkOk] above is derived from this. Real
+     * transport type, not a hardcoded "4G" label; deliberately carries no signal-strength adjective
+     * ("STRONG"/"WEAK") since this app has no [android.telephony.TelephonyManager]/SignalStrength
+     * reading anywhere to honestly back one. */
+    val networkType: String? = null,
 )
 
 data class WheelDashboardUiState(
@@ -134,13 +149,37 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
             // active when this ViewModel was created. refresh() throws on failure — the dashboard
             // already has a cached tariff to render from observeActiveTariff above in the common
             // case, so a failed refresh here just means "using whatever's already cached".
-            region.collect { r -> runCatching { AppContainer.tariffCache.refresh(r) } }
+            region.collect { r ->
+                runCatching { AppContainer.tariffCache.refresh(r) }
+            }
         }
         viewModelScope.launch {
             while (isActive) {
                 _status.value = pollStatus()
                 delay(STATUS_POLL_INTERVAL_MS)
             }
+        }
+        viewModelScope.launch {
+            // Auto-available on shift start (2026-09-06, direct product instruction: "when I am
+            // logged in, it means my shift is started already... I can only take a break" — a
+            // driver should never have to separately tap "go available" after starting/resuming a
+            // shift). Fires once per real shiftId, via [autoAvailableAppliedForShiftId] — a plain
+            // companion-object var, not per-instance state, specifically BECAUSE this ViewModel is
+            // recreated on ordinary navigation back to the dashboard (same `viewModel()` scoping
+            // every other screen ViewModel gets); without a guard that survives recreation, simply
+            // navigating back to the dashboard while deliberately ON BREAK would silently flip the
+            // driver back to available every time. distinctUntilChanged on shiftId alone (not the
+            // whole DriverSession) so unrelated session field changes never re-trigger this for the
+            // same still-open shift.
+            SessionHolder.session
+                .map { it?.shiftId }
+                .distinctUntilChanged()
+                .collect { shiftId ->
+                    if (shiftId != null && autoAvailableAppliedForShiftId != shiftId) {
+                        autoAvailableAppliedForShiftId = shiftId
+                        setAvailable(true)
+                    }
+                }
         }
     }
 
@@ -171,27 +210,75 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
      * Off Duty/Available (i.e. whenever not already Hired), independent of the dispatch
      * availability toggle — a driver picking up a street hail doesn't need to be marked
      * "available for offers" first. Still requires a loaded [TariffDto] (can't compute a fare
-     * without one) and a real [DriverSession]. Returns `false` (no-op) if either is missing so
-     * the caller (the Start Meter button's tap animation) can skip navigating.
+     * without one), a real [DriverSession], and now a real GPS fix (see [TripContext.startLat]/
+     * [TripContext.startLng] below). Returns `false` (no-op) if any of those is missing so the
+     * caller (the Start Meter button's tap animation) can skip navigating.
      */
-    fun startMeter(negotiatedTotal: String? = null): Boolean {
+    fun startMeter(
+        negotiatedTotal: String? = null,
+        /** See [TripContext.passengerCount]'s doc. Defaulted `1` so every existing caller (Set
+         * Price, or a Start Meter tap made before this pass's UI existed) keeps behaving exactly
+         * as before. */
+        passengerCount: Int = 1,
+        /** See [TripContext.isMaxiVehicle]'s doc — driver self-declaration, not fleet data.
+         * Defaulted `false`. */
+        isMaxiVehicle: Boolean = false,
+        /** See [TripContext.wheelchairHiring]'s doc. Defaulted `false`. */
+        wheelchairHiring: Boolean = false,
+        /** See [TripContext.airportRankRequestedMaxi]'s doc. Defaulted `false`. */
+        airportRankRequestedMaxi: Boolean = false,
+    ): Boolean {
         val session = SessionHolder.session.value ?: return false
         val tariff = uiState.value.tariff ?: return false
+        // Real bug fixed (2026-09-04): this used to hardcode startLat=0.0/startLng=0.0 for every
+        // street-hail/rank Start Meter tap (the dispatched-job path,
+        // AvailableTripsWheelViewModel/AvailableTripOfferViewModel, already carries the real
+        // JobDto.originLat/originLng and was never affected) — silently recording every such
+        // trip's start position off the coast of Africa instead of where the vehicle actually
+        // was. Same fix pattern as CloseAndPayViewModel.finalizeClose's endLat/endLng: read the
+        // real live fix off AppContainer.speedSource.locationFix (the same feed
+        // MeterNavViewModel/SettingsViewModel.respondToLocateRequest/CloseAndPayViewModel already
+        // read) instead of fabricating a value.
+        //
+        // Unlike closeTrip's endLat/endLng, TripContext.startLat/startLng (and, downstream,
+        // TripEntity.startLat/startLng, TripCreateDto.start_lat/start_lng) are non-nullable —
+        // there is no already-open trip row to "leave untouched" the way closeTrip degrades, and
+        // the backend's TripCreate contract requires real start_lat/start_lng (422s otherwise), so
+        // `null` is not an option here (see TripRepository.updateDropoff's doc for the general
+        // "leave null rather than guess" precedent, which only applies where the field actually
+        // is nullable). With no fix yet (no GPS lock, permission denied, cold start), this matches
+        // this codebase's other no-fix-yet default — SettingsViewModel.respondToLocateRequest
+        // skips its own action entirely rather than publish a fabricated position — by mirroring
+        // this same method's existing no-op-on-missing-precondition behavior (the session/tariff
+        // checks just above): return false and never open a trip with a made-up coordinate. A
+        // driver whose GPS hasn't locked yet must wait the moment it takes for a fix to arrive
+        // before Start Meter will work, rather than the app recording a silently wrong position.
+        val fix = AppContainer.speedSource.locationFix.value ?: return false
         SessionHolder.setPendingTrip(
             TripContext(
                 clientUuid = UUID.randomUUID().toString(),
                 tariff = tariff,
-                // TODO(location sibling agent): real GPS fix at hire start — pre-existing gap,
-                // not introduced by this pass (see old IdleViewModel.startHire).
-                startLat = 0.0,
-                startLng = 0.0,
+                startLat = fix.lat,
+                startLng = fix.lng,
                 driverId = session.driverId,
-                vehicleId = session.vehicleId,
+                // See AvailableTripOfferViewModel.beginHiredHandoff's doc for the full rationale
+                // (2026-09-04 network-call audit): sending the rego here instead of the real
+                // fleet-vehicle UUID silently breaks vehicle compliance-expiry checks, the
+                // dashboard's Trips vehicle filter/label, and the PtP compliance export's
+                // vehicle-rego join, all of which key off Trip.vehicle_id == Vehicle.id.
+                vehicleId = session.vehicleUuid ?: session.vehicleId,
                 shiftId = session.shiftId,
                 // "Set Price" entry point (2026-08-10 meter-polish pass) — see
                 // TripContext.negotiatedTotal's doc. Null (the default) for every ordinary
                 // metered Start Meter tap, exactly as before this pass.
                 negotiatedTotal = negotiatedTotal,
+                // Point to Point Transport (Fares) Order 2026 UI-wiring pass — see this method's
+                // own param docs and TripContext's matching field docs. Every default here matches
+                // this method's pre-existing behavior for a caller that never sets them.
+                passengerCount = passengerCount,
+                isMaxiVehicle = isMaxiVehicle,
+                wheelchairHiring = wheelchairHiring,
+                airportRankRequestedMaxi = airportRankRequestedMaxi,
             ),
         )
         return true
@@ -199,15 +286,35 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
 
     // --- Status strip polling ---
 
+    /**
+     * Real bug fixed (2026-09-02, Home-dashboard redesign pass): [gpsOk][DashboardStatusStrip.gpsOk]
+     * used to mean only "location permission granted AND the GPS provider is switched on" — true
+     * the instant a driver grants the permission, even with zero actual fixes yet. Now derived from
+     * [AppContainer.speedSource]'s real last fix (already collected elsewhere on this same screen,
+     * e.g. [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent]'s distance
+     * calc) through the same [GpsQualityClassifier] tiers
+     * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]'s diagnostics card
+     * already used — one shared threshold, not two copies. Network: [DeviceTelemetry.readNetworkType]
+     * (already shipped for the live-position/device heartbeats) replaces the old
+     * `NET_CAPABILITY_INTERNET`-only boolean with the real wifi/4g/offline transport category, so the
+     * header can show what it actually is instead of a hardcoded "4G" label.
+     */
     private fun pollStatus(): DashboardStatusStrip {
         val context = getApplication<Application>()
         val batteryPercent = readBatteryPercent(context)
+        val gpsQuality = GpsQualityClassifier.classify(
+            permissionGranted = hasFineLocationPermission(context),
+            accuracyM = AppContainer.speedSource.locationFix.value?.accuracyM,
+        )
+        val networkType = DeviceTelemetry.readNetworkType(context)
         return DashboardStatusStrip(
-            gpsOk = hasFineLocationPermission(context) && isLocationEnabled(context),
-            networkOk = hasActiveInternet(context),
+            gpsOk = GpsQualityClassifier.isOk(gpsQuality),
+            networkOk = networkType != null && networkType != "offline",
             printerOk = AppContainer.receiptPrinterGateway.pairedDevice != null,
             batteryOk = batteryPercent == null || batteryPercent > 15,
             batteryPercent = batteryPercent,
+            gpsQuality = gpsQuality,
+            networkType = networkType,
         )
     }
 
@@ -215,22 +322,16 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
-    private fun isLocationEnabled(context: Context): Boolean {
-        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-        return runCatching {
-            locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
-        }.getOrDefault(false)
-    }
-
-    private fun hasActiveInternet(context: Context): Boolean {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val caps = connectivityManager?.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        return caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-    }
-
     private fun readBatteryPercent(context: Context): Int? {
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
         val pct = runCatching { batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }.getOrNull()
         return pct?.takeIf { it in 0..100 }
+    }
+
+    private companion object {
+        /** See [init]'s auto-available block — a companion-object (class-lifetime, not
+         * instance-lifetime) guard so recreating this ViewModel never re-fires the auto-available
+         * for a shift it already ran for. */
+        var autoAvailableAppliedForShiftId: String? = null
     }
 }

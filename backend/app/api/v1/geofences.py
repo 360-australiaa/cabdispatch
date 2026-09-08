@@ -14,6 +14,16 @@ the Fares Order row.
 Every query filters by tenant_id (or explicitly allows tenant_id IS NULL) via
 `get_current_tenant_id` — the sole multi-tenancy enforcement mechanism in
 this system.
+
+Toll pricing is platform-admin-only (product decision, 2026 — same rule as
+`app/api/v1/tariffs.py`): a `kind="toll"` row carries `toll_amount`, which is
+pricing the dashboard's Tariff Studio "Toll Zones" tab manages, so writing
+one (create with `kind="toll"`, or update/delete of an existing toll row)
+requires `require_platform_owner` (`app/api/v1/platform.py`), not just
+owner/admin. `kind="region"` rows are NOT pricing — reserved for future
+tariff-zone auto-selection and not yet consumed by any service (see
+`app/models/geofence.py`) — so they stay tenant owner/admin-writable, same as
+before this pass.
 """
 from __future__ import annotations
 
@@ -21,16 +31,34 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, require_role
-from app.models.geofence import GEOFENCE_KINDS, Geofence
+from app.models.geofence import GEOFENCE_KIND_TOLL, GEOFENCE_KINDS, Geofence
+from app.models.user import User
 from app.schemas.geofence import GeofenceCreate, GeofenceRead, GeofenceUpdate, Page
 
 router = APIRouter(prefix="/v1/geofences", tags=["geofences"])
 
 # Admin-only dependency reused across the write endpoints below, same pattern
-# as app.api.v1.fleet._require_admin.
+# as app.api.v1.fleet._require_admin. Toll-kind writes additionally require
+# platform-owner — see _require_platform_owner_for_toll below.
 _require_admin = require_role("owner", "admin")
+
+# Same two-step composition app/api/v1/platform.py itself uses for every
+# /v1/platform/... route (`_require_owner = require_role("owner")`, then
+# `require_platform_owner(user=Depends(_require_owner))`) — reused here
+# programmatically (not via Depends()) because whether a given write needs
+# it depends on the row's/payload's `kind`, which isn't known until the
+# request body (create) or the existing row (update/delete) has been read.
+_require_owner_role = require_role("owner")
+
+
+async def _require_platform_owner_for_toll(user: User) -> None:
+    """Toll geofences carry pricing (`toll_amount`) — same platform-owner-only
+    write rule as tariffs (see module docstring)."""
+    await _require_owner_role(user=user)
+    await require_platform_owner(user=user)
 
 
 async def _get_visible_geofence(session: AsyncSession, geofence_id: str, tenant_id: str) -> Geofence:
@@ -91,8 +119,13 @@ async def create_geofence(
     payload: GeofenceCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    user: User = Depends(_require_admin),
 ):
+    # Toll pricing is platform-admin-only (module docstring); a plain tenant
+    # owner/admin may still create a region-kind geofence.
+    if payload.kind == GEOFENCE_KIND_TOLL:
+        await _require_platform_owner_for_toll(user)
+
     row = Geofence(tenant_id=tenant_id, **payload.model_dump())
     session.add(row)
     await session.commit()
@@ -115,7 +148,7 @@ async def update_geofence(
     payload: GeofenceUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    user: User = Depends(_require_admin),
 ):
     row = await _get_owned_geofence(session, geofence_id, tenant_id)
 
@@ -127,6 +160,13 @@ async def update_geofence(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="toll_amount is required when kind='toll'",
         )
+
+    # Toll pricing is platform-admin-only (module docstring). Gate on EITHER
+    # side of the change so a tenant admin can't dodge it by converting an
+    # existing toll row to "region" (or a region row into a new toll row) --
+    # either direction touches pricing.
+    if row.kind == GEOFENCE_KIND_TOLL or new_kind == GEOFENCE_KIND_TOLL:
+        await _require_platform_owner_for_toll(user)
 
     for field, value in updates.items():
         setattr(row, field, value)
@@ -141,8 +181,10 @@ async def delete_geofence(
     geofence_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    user: User = Depends(_require_admin),
 ):
     row = await _get_owned_geofence(session, geofence_id, tenant_id)
+    if row.kind == GEOFENCE_KIND_TOLL:
+        await _require_platform_owner_for_toll(user)
     await session.delete(row)
     await session.commit()

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Input } from "@/components/ui";
+import { circlePolygon } from "@/lib/geoCircle";
 
 // Same public/publishable Mapbox token pattern as the Live Map (see
 // src/pages/live-map/FleetMapCanvas.tsx) — falls back to plain lat/lng
@@ -12,31 +13,15 @@ const SYDNEY_CENTER: [number, number] = [151.2093, -33.8688];
 const DEFAULT_ZOOM = 10.5;
 const PICKED_ZOOM = 13;
 
+/** The literal `--brand-accent` gold from `index.css`. Mapbox paint properties
+ * cannot read CSS custom properties -- passing `var(--brand-accent)` makes
+ * `addLayer` reject the layer with `color expected` and return, so the zone
+ * circle silently never drew. Same fix as live-map/FleetMapCanvas.tsx. */
+const ZONE_COLOR = "#f4c300";
+
 const CIRCLE_SOURCE_ID = "toll-zone-radius";
 const CIRCLE_FILL_LAYER_ID = "toll-zone-radius-fill";
 const CIRCLE_LINE_LAYER_ID = "toll-zone-radius-line";
-
-/** Builds an approximate circle polygon (GeoJSON, 64 points) for a center +
- * radius in meters — good enough for a visual radius preview, not for
- * geodesic-accurate analysis (the backend owns the real crossing math). */
-function circlePolygon(centerLat: number, centerLng: number, radiusM: number) {
-  const points = 64;
-  const coords: [number, number][] = [];
-  const latRad = (centerLat * Math.PI) / 180;
-  const metersPerDegLat = 111_320;
-  const metersPerDegLng = 111_320 * Math.cos(latRad);
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * 2 * Math.PI;
-    const dLat = ((radiusM * Math.sin(angle)) / metersPerDegLat);
-    const dLng = metersPerDegLng === 0 ? 0 : (radiusM * Math.cos(angle)) / metersPerDegLng;
-    coords.push([centerLng + dLng, centerLat + dLat]);
-  }
-  return {
-    type: "Feature" as const,
-    geometry: { type: "Polygon" as const, coordinates: [coords] },
-    properties: {},
-  };
-}
 
 interface TollZoneMapPickerProps {
   lat: number | null;
@@ -90,13 +75,13 @@ function MapboxCenterPicker({ lat, lng, radiusM, onPick }: TollZoneMapPickerProp
         id: CIRCLE_FILL_LAYER_ID,
         type: "fill",
         source: CIRCLE_SOURCE_ID,
-        paint: { "fill-color": "var(--brand-accent)", "fill-opacity": 0.2 },
+        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.2 },
       });
       map.addLayer({
         id: CIRCLE_LINE_LAYER_ID,
         type: "line",
         source: CIRCLE_SOURCE_ID,
-        paint: { "line-color": "var(--brand-accent)", "line-width": 2 },
+        paint: { "line-color": ZONE_COLOR, "line-width": 2 },
       });
     });
 

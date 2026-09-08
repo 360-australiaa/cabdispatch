@@ -42,6 +42,7 @@ class TenantRead(BaseModel):
     bsp_number: str | None
     theme_json: TenantTheme | None
     plan: str
+    status: str
 
 
 class TenantThemeUpdate(BaseModel):

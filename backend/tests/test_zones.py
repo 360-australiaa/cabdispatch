@@ -11,7 +11,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
+from app.core import security
+from app.core.security import PLATFORM_TENANT_ID
 from app.models import Tenant
 from app.models.fleet import Vehicle
 from app.models.jobs import Job
@@ -56,6 +59,54 @@ def _zone_payload(**overrides) -> dict:
     return payload
 
 
+# --- platform-owner write helpers ------------------------------------------------
+#
+# POST/PUT/DELETE /v1/zones are platform-owner-only since this pass (see
+# app/api/v1/zones.py's module docstring) -- "as an admin, we are setting up
+# the plotting, not the network". Existing tests below still authenticate as
+# a tenant "admin" for reads and for identifying which tenant a write should
+# land on, but every actual write goes through the platform owner acting
+# cross-tenant via the `?tenant_id=` override
+# (app.core.security.get_current_tenant_id's docstring) onto that tenant.
+# POST /{id}/plot and POST /unplot are untouched -- those stay any
+# authenticated tenant user (a driver's own operational action, not zone
+# configuration) and are called directly against client.post below, same as
+# before this pass.
+
+
+async def _platform_owner_headers(client, session):
+    """Duplicated per-test-file rather than cross-imported, matching the
+    existing tests/test_platform.py / tests/test_app_releases.py convention."""
+    result = await session.execute(select(Tenant).where(Tenant.id == PLATFORM_TENANT_ID))
+    if result.scalar_one_or_none() is None:
+        session.add(Tenant(id=PLATFORM_TENANT_ID, name="TCT", plan="platform"))
+        await session.commit()
+    return await auth_headers(client, session, role="owner", tenant_id=PLATFORM_TENANT_ID)
+
+
+def _tenant_id_of(headers: dict) -> str:
+    token = headers["Authorization"].removeprefix("Bearer ")
+    return security.decode_token(token)["tenant_id"]
+
+
+async def _create_zone(client, session, tenant_headers, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.post(f"/v1/zones?tenant_id={tenant_id}", json=payload, headers=owner_headers)
+
+
+async def _update_zone(client, session, tenant_headers, zone_id, payload):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.put(f"/v1/zones/{zone_id}?tenant_id={tenant_id}", json=payload, headers=owner_headers)
+
+
+async def _delete_zone(client, session, tenant_headers, zone_id):
+    tenant_id = _tenant_id_of(tenant_headers)
+    owner_headers = await _platform_owner_headers(client, session)
+    return await client.delete(f"/v1/zones/{zone_id}?tenant_id={tenant_id}", headers=owner_headers)
+
+
 async def _make_driver(session, *, tenant_id, name="Driver One"):
     driver = User(
         tenant_id=tenant_id, role=ROLE_DRIVER, name=name, email=f"{uuid.uuid4()}@example.com", status="active"
@@ -90,7 +141,7 @@ async def _make_open_shift(session, *, tenant_id, driver_id, vehicle_id):
 async def test_create_and_get_zone(client, session):
     _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
 
-    resp = await client.post("/v1/zones", json=_zone_payload(), headers=headers)
+    resp = await _create_zone(client, session, headers, _zone_payload())
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["name"] == "Sydney City"
@@ -103,19 +154,32 @@ async def test_create_and_get_zone(client, session):
 
 
 async def test_create_zone_requires_admin_role(client, session):
+    # Direct call (not through the _create_zone platform-owner helper): a
+    # driver is refused before ever reaching the platform-owner check --
+    # require_platform_owner still 403s a non-owner/admin role first.
     _tenant_id, headers = await _tenant_and_headers(client, session, role="driver")
     resp = await client.post("/v1/zones", json=_zone_payload(), headers=headers)
     assert resp.status_code == 403
 
 
+async def test_create_zone_requires_platform_owner_not_just_tenant_admin(client, session):
+    """The product decision this pass implements: an ordinary tenant
+    owner/admin can no longer create a zone at all -- only the platform
+    owner can (see app/api/v1/zones.py's module docstring)."""
+    _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
+    resp = await client.post("/v1/zones", json=_zone_payload(), headers=headers)
+    assert resp.status_code == 403
+
+    owner_resp = await _create_zone(client, session, headers, _zone_payload())
+    assert owner_resp.status_code == 201, owner_resp.text
+
+
 async def test_create_zone_duplicate_number_conflicts(client, session):
     _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
-    resp1 = await client.post("/v1/zones", json=_zone_payload(number="17"), headers=headers)
+    resp1 = await _create_zone(client, session, headers, _zone_payload(number="17"))
     assert resp1.status_code == 201
 
-    resp2 = await client.post(
-        "/v1/zones", json=_zone_payload(number="17", name="Airport"), headers=headers
-    )
+    resp2 = await _create_zone(client, session, headers, _zone_payload(number="17", name="Airport"))
     assert resp2.status_code == 409
 
 
@@ -123,8 +187,8 @@ async def test_same_number_allowed_across_different_tenants(client, session):
     _t1, headers1 = await _tenant_and_headers(client, session, role="admin", tenant_name="T1")
     _t2, headers2 = await _tenant_and_headers(client, session, role="admin", tenant_name="T2")
 
-    resp1 = await client.post("/v1/zones", json=_zone_payload(number="1"), headers=headers1)
-    resp2 = await client.post("/v1/zones", json=_zone_payload(number="1"), headers=headers2)
+    resp1 = await _create_zone(client, session, headers1, _zone_payload(number="1"))
+    resp2 = await _create_zone(client, session, headers2, _zone_payload(number="1"))
     assert resp1.status_code == 201
     assert resp2.status_code == 201
 
@@ -133,9 +197,9 @@ async def test_list_zones_scoped_to_tenant(client, session):
     t1, headers1 = await _tenant_and_headers(client, session, role="admin", tenant_name="ListT1")
     _t2, headers2 = await _tenant_and_headers(client, session, role="admin", tenant_name="ListT2")
 
-    await client.post("/v1/zones", json=_zone_payload(number="1"), headers=headers1)
-    await client.post("/v1/zones", json=_zone_payload(number="2"), headers=headers1)
-    await client.post("/v1/zones", json=_zone_payload(number="1"), headers=headers2)
+    await _create_zone(client, session, headers1, _zone_payload(number="1"))
+    await _create_zone(client, session, headers1, _zone_payload(number="2"))
+    await _create_zone(client, session, headers2, _zone_payload(number="1"))
 
     resp = await client.get("/v1/zones", headers=headers1)
     assert resp.status_code == 200
@@ -146,14 +210,10 @@ async def test_list_zones_scoped_to_tenant(client, session):
 
 async def test_update_zone_full_replace(client, session):
     _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
-    create_resp = await client.post("/v1/zones", json=_zone_payload(), headers=headers)
+    create_resp = await _create_zone(client, session, headers, _zone_payload())
     zone_id = create_resp.json()["id"]
 
-    put_resp = await client.put(
-        f"/v1/zones/{zone_id}",
-        json=_zone_payload(name="Airport", number="23", radius_m=1000),
-        headers=headers,
-    )
+    put_resp = await _update_zone(client, session, headers, zone_id, _zone_payload(name="Airport", number="23", radius_m=1000))
     assert put_resp.status_code == 200, put_resp.text
     body = put_resp.json()
     assert body["name"] == "Airport"
@@ -163,10 +223,10 @@ async def test_update_zone_full_replace(client, session):
 
 async def test_delete_zone(client, session):
     _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
-    create_resp = await client.post("/v1/zones", json=_zone_payload(), headers=headers)
+    create_resp = await _create_zone(client, session, headers, _zone_payload())
     zone_id = create_resp.json()["id"]
 
-    del_resp = await client.delete(f"/v1/zones/{zone_id}", headers=headers)
+    del_resp = await _delete_zone(client, session, headers, zone_id)
     assert del_resp.status_code == 204
 
     get_resp = await client.get(f"/v1/zones/{zone_id}", headers=headers)
@@ -179,6 +239,60 @@ async def test_get_zone_not_found(client, session):
     assert resp.status_code == 404
 
 
+# --- Platform-owner write gate (product decision, 2026) --------------------------
+#
+# "As an admin, we are setting up the plotting, not the network." Only
+# require_platform_owner may create/update/delete a zone; a tenant
+# owner/admin keeps read access (list/get/stats) and drivers keep plotting.
+
+
+async def test_tenant_admin_gets_403_updating_and_deleting_zone(client, session):
+    _tenant_id, headers = await _tenant_and_headers(client, session, role="admin")
+    create_resp = await _create_zone(client, session, headers, _zone_payload())
+    zone_id = create_resp.json()["id"]
+
+    put_resp = await client.put(
+        f"/v1/zones/{zone_id}", json=_zone_payload(name="Airport"), headers=headers
+    )
+    assert put_resp.status_code == 403
+
+    del_resp = await client.delete(f"/v1/zones/{zone_id}", headers=headers)
+    assert del_resp.status_code == 403
+
+    # neither write was actually applied
+    get_resp = await client.get(f"/v1/zones/{zone_id}", headers=headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["name"] == "Sydney City"
+
+
+async def test_tenant_reads_and_driver_plotting_stay_open_after_platform_owner_gate(
+    client, session
+):
+    """Read paths (list/get/stats) and the driver plot/unplot action must
+    keep working unchanged for ordinary tenant roles even though zone CRUD
+    now 403s a tenant owner/admin."""
+    tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
+    zone_id = zone_resp.json()["id"]
+
+    assert (await client.get("/v1/zones", headers=admin_headers)).status_code == 200
+    assert (await client.get(f"/v1/zones/{zone_id}", headers=admin_headers)).status_code == 200
+    assert (await client.get("/v1/zones/stats", headers=admin_headers)).status_code == 200
+
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id)
+    await _make_open_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id)
+    from app.core.security import create_access_token
+
+    driver_headers = {
+        "Authorization": f"Bearer {create_access_token(user_id=driver.id, tenant_id=tenant_id, role='driver')}"
+    }
+    plot_resp = await client.post(f"/v1/zones/{zone_id}/plot", headers=driver_headers)
+    assert plot_resp.status_code == 200, plot_resp.text
+    unplot_resp = await client.post("/v1/zones/unplot", headers=driver_headers)
+    assert unplot_resp.status_code == 200
+
+
 # ==================================================================================
 # Plot / unplot
 # ==================================================================================
@@ -186,7 +300,7 @@ async def test_get_zone_not_found(client, session):
 
 async def test_plot_without_active_shift_returns_409(client, session):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone_resp = await client.post("/v1/zones", json=_zone_payload(), headers=admin_headers)
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
     zone_id = zone_resp.json()["id"]
 
     driver_headers = await auth_headers(client, session, role="driver", tenant_id=tenant_id)
@@ -196,7 +310,7 @@ async def test_plot_without_active_shift_returns_409(client, session):
 
 async def test_plot_and_unplot_roundtrip(client, session):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone_resp = await client.post("/v1/zones", json=_zone_payload(), headers=admin_headers)
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
     zone_id = zone_resp.json()["id"]
 
     driver = await _make_driver(session, tenant_id=tenant_id)
@@ -223,10 +337,8 @@ async def test_plot_and_unplot_roundtrip(client, session):
 
 async def test_plotting_into_new_zone_clears_old_zone(client, session):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone1_resp = await client.post("/v1/zones", json=_zone_payload(number="1"), headers=admin_headers)
-    zone2_resp = await client.post(
-        "/v1/zones", json=_zone_payload(number="2", name="Airport"), headers=admin_headers
-    )
+    zone1_resp = await _create_zone(client, session, admin_headers, _zone_payload(number="1"))
+    zone2_resp = await _create_zone(client, session, admin_headers, _zone_payload(number="2", name="Airport"))
     zone1_id = zone1_resp.json()["id"]
     zone2_id = zone2_resp.json()["id"]
 
@@ -272,7 +384,7 @@ async def test_zone_stats_plotted_vehicles(client, session):
     from app.core.security import create_access_token
 
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone_resp = await client.post("/v1/zones", json=_zone_payload(), headers=admin_headers)
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
     zone_id = zone_resp.json()["id"]
 
     driver = await _make_driver(session, tenant_id=tenant_id)
@@ -293,7 +405,7 @@ async def test_zone_stats_plotted_vehicles(client, session):
 
 async def test_zone_stats_vacant_and_busy_vehicles_from_live_positions(client, session):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone_resp = await client.post("/v1/zones", json=_zone_payload(), headers=admin_headers)
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
     zone_id = zone_resp.json()["id"]
 
     vacant_vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-VACANT")
@@ -340,7 +452,7 @@ async def test_zone_stats_vacant_and_busy_vehicles_from_live_positions(client, s
 
 async def test_zone_stats_jobs_holding_and_trip_counts(client, session):
     tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
-    zone_resp = await client.post("/v1/zones", json=_zone_payload(), headers=admin_headers)
+    zone_resp = await _create_zone(client, session, admin_headers, _zone_payload())
     zone_id = zone_resp.json()["id"]
 
     # A queued job with a pickup inside the zone counts toward jobs_holding;

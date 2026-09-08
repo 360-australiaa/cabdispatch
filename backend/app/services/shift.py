@@ -29,8 +29,10 @@ from fpdf import FPDF
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import Device
 from app.models.shift import Shift
 from app.schemas.shift import ShiftReport
+from app.services.audit_log import record_audit
 from app.services.fare_engine import round_half_up
 
 logger = logging.getLogger("cab_dispatch.shift")
@@ -39,6 +41,41 @@ logger = logging.getLogger("cab_dispatch.shift")
 # Everything else observed on a trip (tap_to_pay, link, cabcharge, ttss, ...) is
 # counted into card_total. Mirrors the `payments.method` enum in the product spec.
 _CASH_METHOD = "cash"
+
+
+class ShiftConflictError(Exception):
+    """Raised by start_shift() when the target vehicle already has an open
+    shift under a DIFFERENT driver and the caller didn't pass
+    force_handover=True. Carries the conflicting shift so the API layer can
+    build a helpful 409 message (which driver, since when) rather than a bare
+    refusal — a dispatcher needs to know who to actually call."""
+
+    def __init__(self, conflicting_shift: Shift):
+        self.conflicting_shift = conflicting_shift
+        super().__init__(
+            f"Vehicle {conflicting_shift.vehicle_id} already has an open shift "
+            f"({conflicting_shift.id}) for driver {conflicting_shift.driver_id}"
+        )
+
+
+async def _find_open_shift(
+    session: AsyncSession, *, tenant_id: str, driver_id: str | None = None, vehicle_id: str | None = None
+) -> Shift | None:
+    """The most recently started open (end_at IS NULL) shift matching the
+    given filters, or None. This IS the "who is currently driving this
+    vehicle" / "is this driver already on shift somewhere" query — the
+    system has no separate denormalized "current driver" field anywhere;
+    it is always derived live from the shifts table, so it can never drift
+    out of sync with reality the way a cached pointer could."""
+    filters = [Shift.tenant_id == tenant_id, Shift.end_at.is_(None)]
+    if driver_id is not None:
+        filters.append(Shift.driver_id == driver_id)
+    if vehicle_id is not None:
+        filters.append(Shift.vehicle_id == vehicle_id)
+    result = await session.execute(
+        select(Shift).where(*filters).order_by(Shift.start_at.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def _recompute_trip_aggregates(
@@ -93,6 +130,69 @@ async def _recompute_trip_aggregates(
     )
 
 
+async def _check_device_vehicle_mismatch(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    actor_user_id: str | None,
+    vehicle_id: str,
+    device_android_id: str,
+    shift_id: str,
+) -> str | None:
+    """Non-blocking cross-check: does the calling tablet's paired vehicle
+    (`fleet.Device.vehicle_id`, set via QR pairing — see app.services.fleet
+    module docstring) agree with the vehicle the driver is starting THIS
+    shift on? These two records are entirely decoupled (a Device is bound
+    only to a Vehicle; a Shift is opened by driver_id/vehicle_id with no
+    reference to any Device row at all) and nothing else in the system ever
+    compares them, so they can silently drift apart forever — e.g. a tablet
+    physically moved to a different car without re-pairing. This is purely
+    advisory: it never blocks or alters the shift being started, it only
+    writes an audit-log breadcrumb and returns a human-readable warning
+    string for the API layer to surface, or None if there's nothing to warn
+    about (no device row found, or its vehicle matches).
+
+    `actor_user_id` is the AUTHENTICATED caller (the user hitting the API,
+    per `get_current_user`), not `driver_id` from the request body — the
+    latter is only a loosely-typed, cross-domain-unconstrained field on
+    `Shift` (see app/models/shift.py's own DEVIATION note) that need not
+    correspond to a real `users` row, whereas `AuditLog.actor_user_id` has a
+    real ForeignKey to `users.id`.
+
+    Queried directly here (not via a `fleet` service/module helper) per the
+    task brief, to keep this self-contained in the shift domain while a
+    parallel workstream is actively changing `app/models/fleet.py` /
+    `app/services/fleet.py` / their API and schema counterparts.
+    """
+    result = await session.execute(
+        select(Device).where(Device.tenant_id == tenant_id, Device.android_id == device_android_id)
+    )
+    device = result.scalar_one_or_none()
+    if device is None or device.vehicle_id is None or device.vehicle_id == vehicle_id:
+        return None
+
+    warning = (
+        f"This tablet (android_id={device_android_id}) is paired to vehicle "
+        f"{device.vehicle_id}, but this shift was started on vehicle {vehicle_id}. "
+        "Double-check the tablet is installed in the right car."
+    )
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        action="shift_device_vehicle_mismatch",
+        entity_type="shift",
+        entity_id=shift_id,
+        after={
+            "device_id": device.id,
+            "device_android_id": device_android_id,
+            "device_vehicle_id": device.vehicle_id,
+            "shift_vehicle_id": vehicle_id,
+        },
+    )
+    return warning
+
+
 async def start_shift(
     session: AsyncSession,
     *,
@@ -101,17 +201,117 @@ async def start_shift(
     vehicle_id: str,
     start_at: datetime | None,
     inspection_json: dict | None,
+    force_handover: bool = False,
+    device_android_id: str | None = None,
+    device_check_actor_user_id: str | None = None,
 ) -> Shift:
+    """Opens a new shift, guarding against the two ways "who is currently
+    driving this vehicle" can otherwise go ambiguous on a real fleet where
+    one vehicle runs back-to-back 12-hour shifts across two+ drivers:
+
+    1. The SAME driver already has a dangling open shift (they forgot to tap
+       "End Shift" last time, or the app crashed). This is common and
+       harmless to auto-recover from — a person cannot literally be driving
+       two shifts at once, so a fresh start unambiguously means their old
+       session is over. Auto-closed at this shift's start_at, aggregates
+       recomputed normally via end_shift(), no data lost.
+
+    2. The vehicle already has an open shift under a DIFFERENT driver — e.g.
+       driver A's 12-hour shift is still showing open (they forgot to end
+       it, or the handover call didn't happen yet) when driver B tries to
+       start theirs on the same car. This is NOT auto-resolved: it raises
+       ShiftConflictError so the caller sees exactly who the vehicle is
+       currently assigned to, unless the caller explicitly passes
+       force_handover=True (the real "shift changeover" action — a
+       dispatcher confirming the handover, or the outgoing driver having
+       just ended their own shift moments before). This is the guard that
+       stops two drivers from ever simultaneously "having" the same vehicle
+       on paper, which would otherwise make trip attribution and incident
+       liability ambiguous.
+
+    If `device_android_id` is given, also runs a non-blocking cross-check
+    against `fleet.Device.vehicle_id` (see `_check_device_vehicle_mismatch`)
+    — the tablet's paired vehicle and the shift's vehicle_id are entirely
+    independent facts recorded in different tables, so nothing else in the
+    system ever notices if they disagree. A mismatch never blocks or alters
+    this shift; it only writes an audit-log row and sets the returned
+    Shift's transient `device_mismatch_warning` attribute (also exposed on
+    `ShiftRead`) for the API layer to surface to the driver.
+    """
+    effective_start_at = start_at or datetime.now(UTC)
+
+    own_dangling_shift = await _find_open_shift(session, tenant_id=tenant_id, driver_id=driver_id)
+    if own_dangling_shift is not None:
+        logger.info(
+            "start_shift: driver %s had a dangling open shift %s (vehicle %s) — "
+            "auto-closing it at this shift's start_at before opening the new one.",
+            driver_id,
+            own_dangling_shift.id,
+            own_dangling_shift.vehicle_id,
+        )
+        await end_shift(
+            session,
+            own_dangling_shift,
+            end_at=effective_start_at,
+            psl_owed=Decimal(0),
+            reconciled=False,
+        )
+
+    vehicle_conflict = await _find_open_shift(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    if vehicle_conflict is not None and vehicle_conflict.driver_id != driver_id:
+        if not force_handover:
+            raise ShiftConflictError(vehicle_conflict)
+        logger.info(
+            "start_shift: vehicle %s handed over from driver %s (shift %s) to driver %s "
+            "via force_handover.",
+            vehicle_id,
+            vehicle_conflict.driver_id,
+            vehicle_conflict.id,
+            driver_id,
+        )
+        await end_shift(
+            session,
+            vehicle_conflict,
+            end_at=effective_start_at,
+            psl_owed=Decimal(0),
+            reconciled=False,
+        )
+
     shift = Shift(
         tenant_id=tenant_id,
         driver_id=driver_id,
         vehicle_id=vehicle_id,
-        start_at=start_at or datetime.now(UTC),
+        start_at=effective_start_at,
         inspection_json=inspection_json,
     )
     session.add(shift)
+    # Flush (not commit) so shift.id is populated before the device mismatch
+    # check needs it as the audit entry's entity_id, while keeping the audit
+    # row (if any) in the SAME transaction as the shift creation — see
+    # app.services.audit_log.record_audit's own docstring on why it flushes
+    # rather than commits.
+    await session.flush()
+
+    device_mismatch_warning: str | None = None
+    if device_android_id is not None:
+        device_mismatch_warning = await _check_device_vehicle_mismatch(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=device_check_actor_user_id,
+            vehicle_id=vehicle_id,
+            device_android_id=device_android_id,
+            shift_id=shift.id,
+        )
+
     await session.commit()
     await session.refresh(shift)
+    # Transient (non-mapped) attribute — never persisted, just a way to hand
+    # the API layer this advisory warning without changing start_shift's
+    # return type. ShiftRead declares a matching optional field so pydantic
+    # picks it up via getattr when present, and defaults to None (same as
+    # every other caller of start_shift/ShiftRead, which never sets this)
+    # when absent — see app.schemas.shift.ShiftRead.device_mismatch_warning.
+    shift.device_mismatch_warning = device_mismatch_warning
     return shift
 
 
@@ -166,6 +366,91 @@ async def end_break(session: AsyncSession, shift: Shift) -> Shift:
     await session.commit()
     await session.refresh(shift)
     return shift
+
+
+async def close_open_shifts_for_vehicle_deletion(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, actor_user_id: str | None
+) -> list[Shift]:
+    """Closes every currently-open shift on a vehicle that is about to be
+    deleted, instead of leaving it open forever, pointing at a `vehicle_id`
+    that no longer exists in the fleet register (the real production bug this
+    fixes: `DELETE /v1/fleet/vehicles/{id}` used to leave dangling open
+    shifts, which then rendered as raw UUIDs on the dashboard's drivers list
+    where a rego should be — see `DriversPanel.tsx` / `format.ts`).
+
+    DECISION (two defensible options existed — CLOSE vs REFUSE the vehicle
+    delete; this is the one chosen, called from `DELETE
+    /v1/fleet/vehicles/{id}` in `app/api/v1/fleet.py`): an open shift is live
+    OPERATIONAL STATE — "who is currently driving this vehicle right now" —
+    not historical EVIDENCE the way a PSL ledger entry or an uploaded
+    compliance document is (contrast `app.services.user
+    .assert_user_deletable`, which correctly REFUSES those: "each of these
+    rows is evidence THAT SOMETHING HAPPENED", independent of whether the
+    vehicle/driver is later deleted). A driver cannot literally keep driving
+    a vehicle that has just been removed from the fleet register, so an open
+    shift surviving the vehicle's deletion is already the LESS truthful
+    record of the two — it goes on silently claiming a live session against
+    a vehicle_id nothing else in the system can resolve. Closing it produces
+    the more truthful record for a fare-regulated operator: "this shift
+    ended when its vehicle was deleted", not "this shift is still open"
+    (false) or a delete that's refused forever until a dispatcher notices and
+    manually ends the shift first (needlessly blocks a legitimate fleet
+    change for what is, after all, still just live state, not evidence).
+
+    This also mirrors a precedent already established in this exact module:
+    `start_shift` auto-closes a driver's OWN dangling open shift rather than
+    refusing to let them start a new one, using the identical
+    `end_shift(..., psl_owed=Decimal(0), reconciled=False)` call below.
+
+    `psl_owed=Decimal(0)` / `reconciled=False`: the four trip-derived
+    aggregates (trips_count/km_total/cash_total/card_total) are recomputed
+    HONESTLY from the shift's own real trips inside `end_shift()` — nothing
+    here fabricates those. But `psl_owed`/`reconciled` are ordinarily figures
+    the DRIVER supplies at end-of-shift (their physical cash count vs the
+    system total); this is an involuntary, admin-triggered closure with no
+    driver present to supply them, so `psl_owed` stays at zero and
+    `reconciled` is explicitly False — honestly flagging "nobody reconciled
+    this shift" for a dispatcher/owner to follow up on, rather than
+    pretending a reconciliation happened that didn't.
+
+    Every closure is also recorded to the tamper-evident audit log
+    (`action="shift_force_closed_vehicle_deleted"`) so there is a permanent,
+    hash-chained record of WHY this shift ended when it did, distinct from an
+    ordinary driver-initiated `POST /v1/shifts/{id}/end` — "recording why",
+    per the task brief. Returns the list of shifts that were closed (empty if
+    none were open) purely for the caller's own logging/response purposes.
+    """
+    result = await session.execute(
+        select(Shift).where(
+            Shift.tenant_id == tenant_id, Shift.vehicle_id == vehicle_id, Shift.end_at.is_(None)
+        )
+    )
+    open_shifts = result.scalars().all()
+    for shift in open_shifts:
+        logger.info(
+            "delete_vehicle: vehicle %s has open shift %s (driver %s) — force-closing it as "
+            "unreconciled before the vehicle row is removed.",
+            vehicle_id,
+            shift.id,
+            shift.driver_id,
+        )
+        await end_shift(session, shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+        await record_audit(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            action="shift_force_closed_vehicle_deleted",
+            entity_type="shift",
+            entity_id=shift.id,
+            before={"end_at": None, "reconciled": False},
+            after={
+                "end_at": shift.end_at.isoformat() if shift.end_at else None,
+                "reconciled": False,
+                "reason": "vehicle_deleted",
+                "vehicle_id": vehicle_id,
+            },
+        )
+    return list(open_shifts)
 
 
 def build_report(shift: Shift) -> dict:

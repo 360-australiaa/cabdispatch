@@ -11,11 +11,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.awaitFirstDown
-import androidx.compose.ui.input.pointer.awaitPointerEventScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
@@ -81,15 +80,28 @@ class WheelController internal constructor(
         return Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
     }
 
-    internal suspend fun handleDragStart(pointerLocal: Offset) {
+    /** Non-suspend on purpose: called from inside [PointerInputScope.awaitPointerEventScope]'s
+     * `@RestrictsSuspension` block (see [wheelPointerLoop]), which may only invoke member/extension
+     * suspend functions of that restricted scope — so state bookkeeping here is synchronous, and
+     * [rotationAnimatable]'s `snapTo` (an unrelated suspend call) is dispatched on [scope] instead
+     * of being awaited inline. */
+    internal fun handleDragStart(pointerLocal: Offset) {
         if (!enabled) return
         state = state.onDragStart(angleFromCenter(pointerLocal))
     }
 
-    internal suspend fun handleDrag(pointerLocal: Offset) {
+    /** See [handleDragStart] — same restriction applies here. */
+    internal fun handleDrag(pointerLocal: Offset) {
         if (!enabled || !state.dragging) return
         state = state.onDrag(angleFromCenter(pointerLocal))
-        rotationAnimatable.snapTo(state.rotation) // no animation while dragging, per spec §3
+        // no animation while dragging, per spec §3 — snapTo is a plain suspend fun (not a member/
+        // extension of AwaitPointerEventScope), so it can't be awaited inline from the restricted
+        // pointer loop; dispatching on `scope` mirrors animateToSnap's existing pattern below.
+        // Animatable's internal MutatorMutex serializes these, so the latest drag position always
+        // wins even if a prior snapTo from this same drag is still being scheduled.
+        scope.launch {
+            rotationAnimatable.snapTo(state.rotation)
+        }
     }
 
     internal fun handleRelease(onSettled: (Int) -> Unit) {

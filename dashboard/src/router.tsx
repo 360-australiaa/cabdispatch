@@ -3,10 +3,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PlatformOwnerRoute } from "@/components/PlatformOwnerRoute";
 import LoginPage from "@/pages/login";
+import GettingStartedPage from "@/pages/getting-started";
 import LiveMapPage from "@/pages/live-map";
 import DispatchPage from "@/pages/dispatch";
 import MessagesPage from "@/pages/messages";
 import DuressPage from "@/pages/duress";
+import AuditLogPage from "@/pages/audit-log";
 import TripsPage from "@/pages/trips";
 import ShiftsPage from "@/pages/shifts";
 import TariffsPage from "@/pages/tariffs";
@@ -15,6 +17,11 @@ import PslPage from "@/pages/psl";
 import FleetPage from "@/pages/fleet";
 import CompliancePage from "@/pages/compliance";
 import BillingPage from "@/pages/billing";
+import VouchersPage from "@/pages/vouchers";
+import AnnouncementsPage from "@/pages/driver-engagement/AnnouncementsPage";
+import IncentivesPage from "@/pages/driver-engagement/IncentivesPage";
+import WalletPage from "@/pages/driver-engagement/WalletPage";
+import RatingsPage from "@/pages/driver-engagement/RatingsPage";
 import WhiteLabelPage from "@/pages/settings/white-label";
 import SecuritySettingsPage from "@/pages/settings/security";
 import PlatformConsolePage from "@/pages/platform";
@@ -41,6 +48,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Navigate to="/live-map" replace /> },
+      { path: "getting-started", element: <GettingStartedPage /> },
       { path: "live-map", element: <LiveMapPage /> },
       { path: "dispatch", element: <DispatchPage /> },
       { path: "messages", element: <MessagesPage /> },
@@ -54,6 +62,11 @@ export const router = createBrowserRouter([
       { path: "compliance", element: <CompliancePage /> },
       { path: "billing", element: <BillingPage /> },
       { path: "payment-recon", element: <PaymentReconciliationPage /> },
+      { path: "vouchers", element: <VouchersPage /> },
+      { path: "announcements", element: <AnnouncementsPage /> },
+      { path: "incentives", element: <IncentivesPage /> },
+      { path: "wallet", element: <WalletPage /> },
+      { path: "ratings", element: <RatingsPage /> },
       { path: "audit-log", element: <AuditLogPage /> },
       { path: "settings/white-label", element: <WhiteLabelPage /> },
       { path: "settings/security", element: <SecuritySettingsPage /> },

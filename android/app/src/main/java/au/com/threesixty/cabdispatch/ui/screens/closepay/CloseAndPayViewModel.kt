@@ -2,17 +2,20 @@ package au.com.threesixty.cabdispatch.ui.screens.closepay
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
+import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import au.com.threesixty.cabdispatch.domain.fare.Tariff
 import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
 import au.com.threesixty.cabdispatch.hardware.receipt.ReceiptLine
+import au.com.threesixty.cabdispatch.sync.SyncWorker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +24,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * S4 — Close & Pay (spec B5). Reads the single active trip straight from
@@ -111,6 +117,15 @@ sealed interface CloseAndPayUiState {
         val paymentMethod: PaymentMethodOption,
         val surchargePct: BigDecimal,
         val cleaningFee: BigDecimal,
+        /**
+         * The Passenger Service Levy is a mandatory Fares Order pass-through, not a driver
+         * choice (2026-09-05 fix — this used to be a driver-facing `Switch` in
+         * `CloseAndPayScreen.kt` wired to a since-removed `setIncludePsl()`). Always `true` here;
+         * [loadTariffAndInit] is the only place that sets it and there is no remaining mutator.
+         * The Sydney Airport Fixed Fare path still correctly bills zero PSL regardless of this
+         * value — [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]'s `fixedFare`
+         * branch never reads it at all — so that one real exemption is unaffected.
+         */
         val includePsl: Boolean,
         val cashTendered: String,
         val docketNumber: String,
@@ -129,14 +144,46 @@ sealed interface CloseAndPayUiState {
         val splitLegBMethod: SplitLegMethod,
         val splitLegBAmount: String,
         val breakdown: FareBreakdown,
+        /**
+         * Driver tip (Close & Pay "tips" pass) — a voluntary, non-fare amount, deliberately kept
+         * OFF [breakdown]/[FareBreakdown.grandTotal] (mirrors the backend's `Trip.tip_amount`,
+         * see that column's doc). Defaults to [BigDecimal.ZERO] (no tip), same "signum() > 0 means
+         * show it" convention this state already uses for [cleaningFee]/extras. Set via
+         * [CloseAndPayViewModel.setTip].
+         */
+        val tip: BigDecimal = BigDecimal.ZERO,
+        /**
+         * Real "N Available" count for the VOUCHER button (`GET /v1/vouchers?redeemed=false`,
+         * see [CloseAndPayViewModel.loadPaymentGridCounts]). `null` means "unknown" — still
+         * loading, or the call failed — and MUST render as no badge/a neutral state, never a
+         * fabricated number (this app's zero-fake-affordance rule).
+         */
+        val voucherAvailableCount: Int? = null,
+        /** Real active-count for the ACCOUNT button (`GET /v1/corporate-accounts?active=true`).
+         * Same "`null` = unknown, never fabricated" rule as [voucherAvailableCount]. */
+        val corporateAccountActiveCount: Int? = null,
         val paymentInFlight: Boolean,
         val paymentError: String?,
         val paymentLinkUrl: String?,
     ) : CloseAndPayUiState {
+        /**
+         * The amount actually collected from the passenger for cash/card-family payments —
+         * [FareBreakdown.grandTotal] (the regulated fare) plus [tip] on top. Deliberately NOT used
+         * for [PaymentMethodOption.SPLIT_FARE] (the backend's `SplitPaymentMismatchError` check
+         * sums split legs against the fare-only `grand_total`, see
+         * `app.services.trips.close_trip`/`sync_trips` — splitting a tip across legs isn't
+         * supported in this v1, see [SplitFareEntryScreen]'s own tip caption) or for
+         * [PaymentMethodOption.VOUCHER]/[PaymentMethodOption.ACCOUNT] (those rails settle the fare
+         * amount specifically; a tip alongside them is still recorded, just not part of "the
+         * amount charged to that rail").
+         */
+        val totalDue: BigDecimal
+            get() = breakdown.grandTotal + tip
+
         val changeDue: BigDecimal?
             get() {
                 val tendered = cashTendered.toBigDecimalOrNull() ?: return null
-                val change = tendered - breakdown.grandTotal
+                val change = tendered - totalDue
                 return if (change >= BigDecimal.ZERO) change else null
             }
 
@@ -145,7 +192,8 @@ sealed interface CloseAndPayUiState {
          * unallocated (zero once the two legs exactly sum to [FareBreakdown.grandTotal] — the
          * reading [SplitFareEntryScreen][au.com.threesixty.cabdispatch.ui.screens.closepay] shows
          * the driver, mirroring [changeDue]'s pattern for the Cash sub-screen). Can be negative
-         * (over-allocated).
+         * (over-allocated). Deliberately against [FareBreakdown.grandTotal], NOT [totalDue] — see
+         * that property's own doc for why a tip isn't split across legs in this v1.
          */
         val splitRemaining: BigDecimal?
             get() {
@@ -157,7 +205,7 @@ sealed interface CloseAndPayUiState {
         val canConfirm: Boolean
             get() = when (paymentMethod) {
                 PaymentMethodOption.CASH ->
-                    (cashTendered.toBigDecimalOrNull() ?: BigDecimal.ZERO) >= breakdown.grandTotal
+                    (cashTendered.toBigDecimalOrNull() ?: BigDecimal.ZERO) >= totalDue
                 PaymentMethodOption.CABCHARGE -> docketNumber.isNotBlank()
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> true
                 PaymentMethodOption.VOUCHER -> voucherCode.isNotBlank()
@@ -189,6 +237,12 @@ sealed interface CloseAndPayUiState {
 private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(this) }.getOrNull()
 
 /** Formats a fare-engine [BigDecimal] money value for display — never use Float/Double, see ApiService.kt header. */
+/** Receipt date/time: "Mon 7 Sep 2026, 9:15 pm" — a NSW passenger reading a paper docket, not a
+ * machine parsing a log. Locale.ENGLISH pins the month/day names so the printed invoice does not
+ * change language with the tablet's locale setting. */
+private val RECEIPT_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE d MMM yyyy, h:mm a", Locale.ENGLISH)
+
 fun BigDecimal.money(): String = "$" + this.setScale(2, RoundingMode.HALF_UP).toPlainString()
 
 class CloseAndPayViewModel : ViewModel() {
@@ -244,14 +298,21 @@ class CloseAndPayViewModel : ViewModel() {
         }
         val tariff = tariffDto.toDomainTariff()
         val method = PaymentMethodOption.CASH
-        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = false)
+        // The Passenger Service Levy is a mandatory regulated pass-through (Point to Point
+        // Transport (Fares) Order 2026), not a driver-optional toggle (2026-09-05 fix — this used
+        // to be overridable via a UI Switch/setIncludePsl(); both are gone now, so this is
+        // unconditionally true with no remaining code path to disable it). Structurally a no-op on
+        // the Sydney Airport Fixed Fare path either way — the one real, already-coded exemption:
+        // FareEngine.close()'s fixedFare branch never reads includePsl at all, see that method's doc.
+        val includePsl = true
+        val breakdown = recompute(trip, tariff, method, BigDecimal.ZERO, BigDecimal.ZERO, includePsl = includePsl)
         _uiState.value = CloseAndPayUiState.ReadyToClose(
             trip = trip,
             tariff = tariff,
             paymentMethod = method,
             surchargePct = BigDecimal.ZERO,
             cleaningFee = BigDecimal.ZERO,
-            includePsl = false,
+            includePsl = includePsl,
             cashTendered = "",
             docketNumber = "",
             docketNotes = "",
@@ -262,10 +323,33 @@ class CloseAndPayViewModel : ViewModel() {
             splitLegBMethod = SplitLegMethod.CARD,
             splitLegBAmount = "",
             breakdown = breakdown,
+            tip = BigDecimal.ZERO,
+            voucherAvailableCount = null,
+            corporateAccountActiveCount = null,
             paymentInFlight = false,
             paymentError = null,
             paymentLinkUrl = null,
         )
+        loadPaymentGridCounts()
+    }
+
+    /**
+     * Real "N Available"/active-count for the VOUCHER/ACCOUNT payment-grid buttons — backed by
+     * the now-real `GET /v1/vouchers`/`GET /v1/corporate-accounts` endpoints (SaaS-platform
+     * Phase 3 voucher ledger, commit 1f93840). Each call is independent and never fabricates a
+     * count on failure: a thrown exception (offline, 5xx, etc.) leaves the corresponding
+     * `ReadyToClose` field `null` ("unknown"), which the screen must render as no badge/a neutral
+     * state — see [CloseAndPayUiState.ReadyToClose.voucherAvailableCount]'s doc.
+     */
+    private fun loadPaymentGridCounts() {
+        viewModelScope.launch {
+            val count = runCatching { AppContainer.apiService.listVouchers(redeemed = false, limit = 1).total }.getOrNull()
+            updateReady { it.copy(voucherAvailableCount = count) }
+        }
+        viewModelScope.launch {
+            val count = runCatching { AppContainer.apiService.listCorporateAccounts(active = true, limit = 1).total }.getOrNull()
+            updateReady { it.copy(corporateAccountActiveCount = count) }
+        }
     }
 
     private fun recompute(
@@ -337,11 +421,23 @@ class CloseAndPayViewModel : ViewModel() {
         recomputed(state.copy(surchargePct = pct.coerceIn(BigDecimal.ZERO, state.tariff.surchargePctCap)))
     }
 
+    /** Report vehicle soiling — clamped here (not just inside [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]'s
+     * own defensive clamp) so the *persisted* [CloseAndPayUiState.ReadyToClose.cleaningFee] value this screen later sends
+     * to the backend on close (`finalizeClose`'s `cleaningFee = state.cleaningFee...`) can never itself exceed
+     * [Tariff.cleaningFeeCap] — previously only the computed [FareBreakdown.cleaningFee] used in the on-screen total was
+     * capped, while the raw driver-entered figure would have round-tripped to the server uncapped. */
     fun setCleaningFee(fee: BigDecimal) = updateReady { state ->
-        recomputed(state.copy(cleaningFee = fee.coerceAtLeast(BigDecimal.ZERO)))
+        recomputed(state.copy(cleaningFee = fee.coerceIn(BigDecimal.ZERO, state.tariff.cleaningFeeCap)))
     }
 
-    fun setIncludePsl(include: Boolean) = updateReady { state -> recomputed(state.copy(includePsl = include)) }
+    /**
+     * Sets (or clears, with [BigDecimal.ZERO]) the driver tip — see
+     * [CloseAndPayUiState.ReadyToClose.tip]'s doc. Deliberately does NOT call [recomputed]:
+     * unlike [setCleaningFee]/[setSurchargePct] above, a tip never re-derives
+     * [FareBreakdown] (it never reaches [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]
+     * at all) — only [CloseAndPayUiState.ReadyToClose.totalDue] (a plain addition) changes.
+     */
+    fun setTip(amount: BigDecimal) = updateReady { state -> state.copy(tip = amount.coerceAtLeast(BigDecimal.ZERO)) }
 
     fun setCashTendered(value: String) = updateReady { it.copy(cashTendered = value) }
 
@@ -374,8 +470,11 @@ class CloseAndPayViewModel : ViewModel() {
         }
     }
 
-    private fun amountCents(breakdown: FareBreakdown): Long =
-        breakdown.grandTotal.movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
+    /** [state.totalDue][CloseAndPayUiState.ReadyToClose.totalDue] (fare + tip) — the tap-to-pay/
+     * payment-link mock gateway charges the tip along with the fare, same as a real card terminal
+     * tip prompt would. */
+    private fun amountCents(state: CloseAndPayUiState.ReadyToClose): Long =
+        state.totalDue.movePointRight(2).setScale(0, RoundingMode.HALF_UP).toLong()
 
     /**
      * Ensures [block] appears to take at least [PROCESSING_MIN_MS] — spec §7 step 2: "Selecting a
@@ -397,7 +496,7 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val result = withMinimumProcessingDelay {
-                AppContainer.cardPaymentGateway.collectPayment(amountCents(state.breakdown))
+                AppContainer.cardPaymentGateway.collectPayment(amountCents(state))
             }
             result.onSuccess {
                 finalizeClose(state)
@@ -411,7 +510,7 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val result = withMinimumProcessingDelay {
-                AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state.breakdown))
+                AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state))
             }
             result.onSuccess { link ->
                 updateReady { it.copy(paymentInFlight = false, paymentLinkUrl = link.url) }
@@ -444,14 +543,18 @@ class CloseAndPayViewModel : ViewModel() {
         updateReady { it.copy(paymentInFlight = true, paymentError = null) }
         viewModelScope.launch {
             val receiptRef = "RCPT-${state.trip.clientUuid.take(8).uppercase()}"
+            // The real GPS fix at the moment the fare ended — "where the vehicle physically
+            // was", per TripRepository.closeTrip's doc. Deliberately NOT state.trip.startLat/Lng
+            // (that silently clobbered the drop-off with the pick-up point on every closed trip)
+            // and not the navigator's chosen destination either: if there's no live fix right
+            // now, closeTrip(endLat = null, endLng = null) leaves whatever MeterNavViewModel's
+            // selectDestination()/TripRepository.updateDropoff already wrote in place, rather
+            // than us fabricating a value here.
+            val liveFix = AppContainer.speedSource.locationFix.value
             val closed = tripRepository.closeTrip(
                 clientUuid = state.trip.clientUuid,
-                // TODO: reconcile with S3/GPS sibling — S4 has no live
-                // location fix of its own; ideally S3 hands off the trip's
-                // last known fix (e.g. via SessionHolder.pendingTrip-style
-                // hand-off) instead of this falling back to the start point.
-                endLat = state.trip.startLat,
-                endLng = state.trip.startLng,
+                endLat = liveFix?.lat,
+                endLng = liveFix?.lng,
                 deviceTotal = state.breakdown.grandTotal.setScale(2, RoundingMode.HALF_UP).toPlainString(),
                 paymentMethod = state.paymentMethod.persistedValue,
                 surchargePct = state.surchargePct.toPlainString(),
@@ -472,23 +575,95 @@ class CloseAndPayViewModel : ViewModel() {
                 } else {
                     null
                 },
+                tip = state.tip.takeIf { it.signum() > 0 }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString(),
             )
             _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
+            fillPickupAddressBestEffort(closed)
+            // Real bug found live, 2026-09-05: closing a trip never itself triggered a sync —
+            // TripRepository.closeTrip only marks the outbox row ready, and nothing actually
+            // enqueues SyncWorker until either a connectivity *change* fires
+            // (ConnectivitySyncTrigger, which a device that's been online the whole time never
+            // sees) or the ~15 min periodic backstop. That left a just-closed trip's serverId
+            // null for however long it took one of those to fire, which is exactly why
+            // RatePassengerViewModel.load() kept surfacing NotSynced immediately after Close &
+            // Pay's own receipt step claimed "Trip synced". Same enqueueOneTime call
+            // ConnectivitySyncTrigger already makes on reconnect — not a new sync path.
+            SyncWorker.enqueueOneTime(WorkManager.getInstance(AppContainer.appContext))
+        }
+    }
+
+    /**
+     * Real pickup/drop-off addresses pass (2026-09-05): a one-time, best-effort reverse-geocode
+     * of the just-closed trip's real [TripEntity.startLat]/[TripEntity.startLng] into
+     * [TripEntity.pickupAddress], for a trip that opened with no dispatch-offer address to carry
+     * (see that column's own doc). Fired AFTER the [CloseAndPayUiState.ReceiptStep] transition
+     * above already committed — this is metadata for the trip *record* (History/Trip Detail), not
+     * something the close flow or the fare total waits on, and it never touches
+     * [state.breakdown]/[TripRepository.closeTrip]'s already-persisted fare fields.
+     *
+     * Skips the network call entirely when [TripEntity.pickupAddress] is already real (a booked
+     * job's dispatch-offer address) — [TripRepository.fillPickupAddressIfMissing] would no-op
+     * anyway, but checking here avoids burning a Mapbox request for nothing. A failed/offline
+     * lookup, or a coordinate with no address on record, leaves the column exactly as it was — the
+     * honest "—" History already renders for a `null` value — never a fabricated address.
+     */
+    private fun fillPickupAddressBestEffort(trip: TripEntity) {
+        if (!trip.pickupAddress.isNullOrBlank()) return
+        viewModelScope.launch {
+            val address = AppContainer.mapboxReverseGeocoding
+                .reverseGeocode(trip.startLat, trip.startLng)
+                .getOrNull()
+            if (!address.isNullOrBlank()) {
+                runCatching { tripRepository.fillPickupAddressIfMissing(trip.clientUuid, address) }
+            }
         }
     }
 
     private fun buildReceipt(trip: TripEntity, state: CloseAndPayUiState.ReadyToClose): Receipt {
         val b = state.breakdown
+        // Negotiated ("Set Price") or Sydney Airport Fixed — the two FareEngine.close() branches
+        // that absorb tolls/PSL/extras/the non-cash surcharge into one agreed price rather than
+        // billing them on top (2026-09 product ruling for the surcharge specifically). Mirrors
+        // isAbsorbedFare in CloseAndPayScreen.kt's TotalCol / TripDetailScreen.kt's FareCard — the
+        // printed passenger-copy receipt must disclose the same way, not read like these are
+        // additive charges on top of the agreed price.
+        val isAirportFixed = trip.type == "airport_fixed"
+        val isAbsorbedFare = isAirportFixed || b.negotiatedTotal != null
         val lines = buildList {
-            add(ReceiptLine("Hiring charge", b.flagFall.money()))
-            if (b.peakCharge.signum() > 0) add(ReceiptLine("Peak time charge", b.peakCharge.money()))
-            add(ReceiptLine("Distance", b.distanceCharge.money()))
-            add(ReceiptLine("Waiting", b.waitingCharge.money()))
-            if (b.tolls.signum() > 0) add(ReceiptLine("Tolls", b.tolls.money()))
-            if (b.psl.signum() > 0) add(ReceiptLine("Point to Point Transport Levy", b.psl.money()))
+            if (b.negotiatedTotal != null) {
+                add(ReceiptLine("Agreed price (Set Price, all-inclusive)", b.negotiatedTotal.money()))
+            } else if (isAirportFixed) {
+                add(ReceiptLine("Fixed fare (all-inclusive)", b.fareTotal.money()))
+            } else {
+                add(ReceiptLine("Hiring charge", b.flagFall.money()))
+                if (b.peakCharge.signum() > 0) add(ReceiptLine("Peak time charge", b.peakCharge.money()))
+                add(ReceiptLine("Distance", b.distanceCharge.money()))
+                add(ReceiptLine("Waiting", b.waitingCharge.money()))
+                // The maxi uplift. The four lines above are stored PRE-multiplier (see
+                // FareBreakdown.maxiUplift), so without this row a 5+ passenger trip printed a
+                // TAX INVOICE whose items came to two thirds of its own total — the on-screen
+                // Close & Pay breakdown has always shown this row, only the printed passenger
+                // copy was missing it.
+                if (b.maxiRateApplied) {
+                    val multiplier = state.tariff.maxiMultiplier.stripTrailingZeros().toPlainString()
+                    add(ReceiptLine("Maxi-cab rate (×$multiplier, 5+ passengers)", b.maxiUplift.money()))
+                }
+            }
+            if (b.tolls.signum() > 0) {
+                add(ReceiptLine(if (isAbsorbedFare) "Tolls — included, not charged" else "Tolls", b.tolls.money()))
+            }
+            if (b.psl.signum() > 0) {
+                val label = if (isAbsorbedFare) "Point to Point Transport Levy — included, not charged" else "Point to Point Transport Levy"
+                add(ReceiptLine(label, b.psl.money()))
+            }
             if (b.cleaningFee.signum() > 0) add(ReceiptLine("Cleaning fee", b.cleaningFee.money()))
-            if (b.extras.signum() > 0) add(ReceiptLine("Extras", b.extras.money()))
-            if (b.surcharge.signum() > 0) add(ReceiptLine("Non-cash payment surcharge", b.surcharge.money()))
+            if (b.extras.signum() > 0) {
+                add(ReceiptLine(if (isAbsorbedFare) "Extras — included, not charged" else "Extras", b.extras.money()))
+            }
+            if (b.surcharge.signum() > 0) {
+                val label = if (isAbsorbedFare) "Non-cash surcharge — absorbed, not charged" else "Non-cash payment surcharge"
+                add(ReceiptLine(label, b.surcharge.money()))
+            }
             when (state.paymentMethod) {
                 PaymentMethodOption.CASH -> {
                     state.cashTendered.toBigDecimalOrNull()?.let { tendered ->
@@ -508,21 +683,47 @@ class CloseAndPayViewModel : ViewModel() {
                 }
                 PaymentMethodOption.TAP_TO_PAY, PaymentMethodOption.PAYMENT_LINK -> Unit
             }
+            // Tip (Close & Pay "tips" pass) — shown as its own line, added at the receipt level
+            // only (see [total] below and Trip.tip_amount's backend doc, deviation #6): never
+            // folded into fareTotal/gstComponent, which stay exactly the regulated-fare figures.
+            if (state.tip.signum() > 0) add(ReceiptLine("Tip", state.tip.money()))
         }
         return Receipt(
             tripId = trip.clientUuid,
             vehicleId = trip.vehicleId,
             driverId = trip.driverId,
-            startedAt = trip.startAt,
-            closedAt = trip.endAt ?: "",
+            startedAt = receiptTime(trip.startAt),
+            closedAt = receiptTime(trip.endAt),
             fareLines = lines,
             subtotal = b.fareTotal.money(),
             surcharge = b.surcharge.money(),
-            total = b.grandTotal.money(),
+            // Includes the tip — this is the actual amount the passenger paid overall, unlike
+            // b.grandTotal (the regulated fare alone). See the Tip ReceiptLine added above.
+            total = state.totalDue.money(),
             gstComponent = b.gstComponent.money(),
             paymentMethod = state.paymentMethod.label,
             receiptRef = trip.receiptRef,
         )
+    }
+
+    /**
+     * A trip timestamp as it should appear on a passenger's tax invoice: NSW local, readable.
+     *
+     * Trips store `startAt`/`endAt` as ISO-8601 instants (UTC), and the receipt printed them
+     * verbatim -- a live one read "2026-09-07T19:15:55.762Z -> 2026-09-07T19:20:...". That is
+     * machine text, it is not the time of day the passenger was in the taxi, and on a tablet whose
+     * timezone is wrong it is not even close. NSW_FARE_ZONE for the same reason the fare itself
+     * uses it: the trip happened on the NSW clock, and the receipt is a NSW tax invoice.
+     *
+     * Falls back to the raw string if it will not parse, rather than printing an empty line or
+     * throwing while the passenger is waiting -- an odd-looking timestamp on a receipt beats no
+     * receipt. A null/blank end time (the trip is still closing) renders as an em dash.
+     */
+    private fun receiptTime(iso: String?): String {
+        if (iso.isNullOrBlank()) return "—"
+        return runCatching {
+            Instant.parse(iso).atZone(NSW_FARE_ZONE).format(RECEIPT_TIME_FORMAT)
+        }.getOrDefault(iso)
     }
 
     fun setReceiptPhoneNumber(value: String) = updateReceipt { it.copy(phoneNumber = value, smsError = null) }

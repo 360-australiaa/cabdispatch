@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { History, MapPinned, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
+import { History, MapPinned, Pencil, Plus, Receipt, Route, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -12,6 +12,8 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
   useDeleteTariffMutation,
   useTariffsQuery,
@@ -19,6 +21,7 @@ import {
   type Tariff,
 } from "@/hooks/useTariffStudio";
 import { ChangeLogModal } from "./ChangeLogModal";
+import { NswTollRoadsPanel } from "./NswTollRoadsPanel";
 import { TariffFormModal } from "./TariffFormModal";
 import { TariffSuggestPanel } from "./TariffSuggestPanel";
 import { TollZonesPanel } from "./TollZonesPanel";
@@ -33,14 +36,24 @@ const BOOKED_FILTER_OPTIONS = [
   { value: "false", label: "Rank / hail only" },
 ];
 
-type TariffStudioTab = "tariffs" | "toll-zones";
+type TariffStudioTab = "tariffs" | "toll-roads" | "toll-zones";
 
 const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
   { key: "tariffs", label: "Rate cards", icon: Receipt },
+  { key: "toll-roads", label: "NSW Toll Roads", icon: Route },
   { key: "toll-zones", label: "Toll Zones", icon: MapPinned },
 ];
 
 export default function TariffsPage() {
+  // Pricing is platform-admin-only (product decision, 2026): create/edit/
+  // delete a rate card is gated server-side to require_platform_owner
+  // (backend/app/api/v1/tariffs.py), the same gate the Platform Admin
+  // console itself uses (src/lib/platformAdmin.ts) — an ordinary tenant
+  // owner/admin can no longer write tariffs at all, only read them.
+  // Change-log (read-only) stays visible to every role.
+  const { user } = useAuth();
+  const canWrite = isPlatformOwner(user);
+
   const [tab, setTab] = useState<TariffStudioTab>("tariffs");
   const [regionFilter, setRegionFilter] = useState<Region | "">("");
   const [bookedFilter, setBookedFilter] = useState<"" | "true" | "false">("");
@@ -104,20 +117,24 @@ export default function TariffsPage() {
           <Button variant="ghost" size="icon" title="Change log" onClick={() => setLogTariff(row)}>
             <History className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingTariff(row)}>
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Delete"
-            onClick={() => {
-              setDeleteError(null);
-              setDeletingTariff(row);
-            }}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          {canWrite && (
+            <>
+              <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditingTariff(row)}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete"
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeletingTariff(row);
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </>
+          )}
         </div>
       ),
     },
@@ -129,7 +146,7 @@ export default function TariffsPage() {
         title="Tariff Studio"
         description="Effective-dated rate cards and toll zones. Rank/hail urban & country tariffs are validated against the NSW Fares Order reference on save."
         actions={
-          tab === "tariffs" ? (
+          tab === "tariffs" && canWrite ? (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" /> New tariff
             </Button>
@@ -155,6 +172,8 @@ export default function TariffsPage() {
           </button>
         ))}
       </div>
+
+      {tab === "toll-roads" && <NswTollRoadsPanel />}
 
       {tab === "toll-zones" && <TollZonesPanel />}
 

@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id
+from app.core.security import get_current_tenant_id, require_role
 from app.models.billing import STATUS_CANCELED, Subscription
 from app.schemas.billing import (
     ConnectOnboardResponse,
@@ -37,6 +37,14 @@ from app.schemas.billing import (
 from app.services import billing as billing_service
 
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
+
+# This router had no role gate at all until this pass -- any authenticated
+# tenant user (including a driver-role account) could create/change/cancel a
+# subscription or generate a Stripe Connect onboarding link. The dashboard's
+# own `canManage` client-side check (owner/admin/dispatcher) was purely
+# decorative without this. Read endpoints (list/get subscriptions, invoices)
+# stay open to any authenticated tenant user, same as every other domain.
+_require_billing_admin = require_role("owner", "admin", "dispatcher")
 
 
 async def _get_owned_subscription(session: AsyncSession, tenant_id: str, subscription_id: str) -> Subscription:
@@ -101,6 +109,7 @@ async def create_subscription(
     body: SubscriptionCreate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_billing_admin),
 ) -> Subscription:
     result = billing_service.create_subscription(plan=body.plan, vehicle_id=body.vehicle_id)
 
@@ -124,6 +133,7 @@ async def update_subscription(
     body: SubscriptionUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_billing_admin),
 ) -> Subscription:
     subscription = await _get_owned_subscription(session, tenant_id, subscription_id)
 
@@ -147,6 +157,7 @@ async def cancel_subscription(
     subscription_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
+    _admin=Depends(_require_billing_admin),
 ) -> Subscription:
     """Cancels rather than hard-deletes: DELETE transitions status to
     "canceled" (and best-effort cancels the Stripe-side subscription) so the
@@ -199,6 +210,7 @@ async def list_invoices(
 @router.post("/connect/onboard", response_model=ConnectOnboardResponse, status_code=status.HTTP_201_CREATED)
 async def connect_onboard(
     tenant_id: str = Depends(get_current_tenant_id),
+    _admin=Depends(_require_billing_admin),
 ) -> ConnectOnboardResponse:
     result = billing_service.create_connect_onboarding_link(
         tenant_id=tenant_id,

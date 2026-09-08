@@ -41,8 +41,52 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // 11 / 0.6.2 (2026-09-08): the app-level banners no longer land across the headline of the
+        // three header-less onboarding screens (readiness gate, permissions, disclaimer). Seen on a
+        // clean install: "TABLET NOT REGISTERED" printed straight through the word "Permissions".
+        // Only the gate suppressed them before.
+        //
+        // 10 / 0.6.1 (2026-09-08): the tablet recovers its vehicle binding instead of publishing
+        // to a uuid that no longer exists. A fleet wipe gives every car a new uuid under the same
+        // rego, and a session bound to the old one 404'd every 5s for the rest of the shift --
+        // silently, so the driver saw a working meter while the dispatcher saw a car that never
+        // appeared on the Live Map. A bind made with no signal had the same effect. This build
+        // should reach every tablet whose depot has ever re-seeded its fleet.
+        //
+        // 9 / 0.6.0 (2026-09-08): the meter dial animates on the TARIFF's own bands -- waiting time
+        // under 26 km/h, distance above it, energetic past 60 -- and the speed-reactive ember it
+        // already had is fixed (it captured speed once at composition, so it had been static).
+        //
+        // 8 / 0.5.2 (2026-09-08): the commissioning checklist now covers what a technician has to
+        // configure -- every runtime permission (including the two that broke its own Scan QR and
+        // Install update buttons), battery-optimisation exemption, kiosk pinning, map token,
+        // tariff signing key, and the maxi declaration that sets the rate charged.
+        //
+        // 7 / 0.5.1 (2026-09-08): technician commissioning checklist on first install; remote
+        // locate answered on the device route (it used to publish a vehicle position, which 404'd
+        // on a tablet whose vehicle had been deleted -- the "Location request failed to send"
+        // report); remote restart of the meter app actually implemented and acknowledged, so
+        // Locate and Restart stop reading "Pending" forever. Needs the matching backend.
+        //
+        // 6 / 0.5.0 (2026-09-08): a tablet must be REGISTERED with the depot before anyone can log
+        // into the meter -- see domain/DeviceReadiness.kt. Requires the matching backend
+        // (device_secret + code-authenticated POST /v1/fleet/devices/register): against an older
+        // server the readiness gate still appears but cannot be cleared, so DEPLOY THE BACKEND
+        // FIRST and only then push this build to tablets.
+        //
+        // 5 / 0.4.1 (2026-09-08): fare-time and toll-time classification pinned to NSW local time
+        // (Australia/Sydney) instead of the tablet's own zone -- see domain.fare.NSW_FARE_ZONE.
+        // A meter on the wrong timezone billed the night rate at the wrong hours and every such
+        // trip auto-flagged on sync against the server's recomputation, so this build should
+        // reach every tablet in the fleet.
+        //
+        // 4 / 0.4.0 (2026-09-07): automatic NSW toll detection with the corrected per-toll-point
+        // registry, the card-surcharge absorption ruling, and the GPS simulator. versionCode is
+        // what AppUpdateChecker compares against a published release, so it MUST increase for a
+        // build to reach a tablet over the air -- a build shipped at the same code is silently
+        // skipped as "already up to date".
+        versionCode = 11
+        versionName = "0.6.2"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
@@ -104,6 +148,10 @@ dependencies {
     // detectTapGestures directly — see ui/screens/hired/HiredScreen.kt.
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    // Extended icon set (Icons.Rounded.*, Icons.AutoMirrored.Rounded.*, etc.) — most icons used
+    // across the app's screens (DeckHomeScreen and this pass's CaptainPalette reskins alike) live
+    // here, not in the small "core" set material3 ships by default.
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -113,6 +161,11 @@ dependencies {
     // -- Lifecycle --
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    // ProcessLifecycleOwner — used by domain/duress/DuressCameraCapture.kt to bind CameraX's
+    // ImageCapture use case to the app-process lifecycle (this app is always single-activity/
+    // foreground-kiosk, so "process lifecycle" and "the driver can see the screen" coincide;
+    // there is no separate Activity/Fragment lifecycle worth binding to instead here).
+    implementation("androidx.lifecycle:lifecycle-process:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     // Explicit for `viewModelScope` (used throughout ui/screens/*/ ViewModels).
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4")
@@ -144,6 +197,23 @@ dependencies {
 
     // -- Location (fare engine GPS fusion, sibling agent) --
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // -- CameraX (duress cabin-camera still-frame capture, blueprint 4.3/8.3's camera-during-
+    // active-duress-only feature — see domain/duress/DuressCameraCapture.kt). camera-core +
+    // camera-camera2 (the real Camera2-backed implementation) + camera-lifecycle (binds the
+    // ImageCapture use case to a LifecycleOwner) — no camera-view, this never shows a
+    // PreviewView/viewfinder to the driver, it's a silent background capture only. --
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+
+    // -- QR vehicle pairing (2026-08-28, real implementation replacing the StubQrScanner —
+    // domain/QrScanner.kt) — the ML Kit "Google code scanner" module (Play Services on-device
+    // model, not the full bundled ML Kit SDK): a ready-made full-screen scan UI + camera
+    // permission handling launched via GmsBarcodeScanning.getClient(activity).startScan(), no
+    // custom CameraX PreviewView/analyzer needed. Public Google Maven artifact, no secret token
+    // (unlike Mapbox's downloads repo) — resolves from the already-declared google() repo. --
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     // -- Image loading — Coil, used by MapboxStaticImage.kt's fallback path (kept as the
     // loading/error-state and no-secret-token fallback, see WheelDashboardScreen.kt's

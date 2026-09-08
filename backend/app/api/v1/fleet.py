@@ -7,26 +7,35 @@ this system (see app.core.security / app.core.database docstrings).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.core.security import (
+    get_current_tenant_id,
+    get_current_user,
+    get_optional_tenant_id,
+    require_role,
+)
 from app.models.fleet import Device, Vehicle
 from app.models.user import User
 from app.schemas.fleet import (
+    CommandAckRequest,
     ComplianceExpiryItem,
     DeviceCreate,
     DeviceHeartbeatRequest,
     DeviceRead,
     DeviceRegisterRequest,
     DeviceUpdate,
+    FleetForceWipeRequest,
+    FleetForceWipeResult,
     ForceUpdateRequest,
     KioskLockRequest,
     LocateRequest,
+    LocateResponseRequest,
     Page,
     PairingCodeRead,
     RebootRequest,
@@ -34,14 +43,17 @@ from app.schemas.fleet import (
     VehicleLifetimeTotals,
     VehiclePilotReport,
     VehicleRead,
+    VehicleShiftHistoryItem,
     VehicleUpdate,
     VerifyAdminPinRequest,
     VerifyAdminPinResponse,
 )
+from app.services import app_releases as app_releases_service
 from app.services import compliance_expiry as compliance_expiry_service
 from app.services import evidence_pack as evidence_pack_service
 from app.services import fleet as fleet_service
 from app.services import fleet_reports as fleet_reports_service
+from app.services import fleet_wipe as fleet_wipe_service
 from app.services import tenant as tenant_service
 from app.services.reports import InvalidDateRangeError
 
@@ -49,6 +61,11 @@ router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
 
 # Admin-only dependency reused across the write/admin endpoints in this file.
 _require_admin = require_role("owner", "admin")
+# Owner-only: reserved for the single most destructive action in this file
+# (force wipe, see the bottom of this router) -- same "highest-privilege
+# action reserved for owner" precedent as POST /v1/tenants/{id}/admin-pin in
+# app/api/v1/tenants.py.
+_require_owner = require_role("owner")
 
 
 def _fleet_error_to_http(exc: fleet_service.FleetError) -> HTTPException:
@@ -162,16 +179,38 @@ async def delete_vehicle(
     vehicle_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    admin: User = Depends(_require_admin),
 ):
     try:
         vehicle = await fleet_service.get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
         # Devices survive vehicle deletion, just unbound — a device isn't
-        # deleted just because its car was retired/sold.
-        await fleet_service.unlink_devices_from_vehicle(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+        # deleted just because its car was retired/sold. Any currently-OPEN
+        # shift on this vehicle is also closed here (unreconciled,
+        # audit-logged) rather than left dangling — see
+        # fleet_service.prepare_vehicle_for_deletion's own docstring for the
+        # full "close vs refuse" design decision (a real production bug: a
+        # deleted vehicle's id was surviving forever on an open Shift row,
+        # rendering as a raw UUID on the dashboard's drivers list). Must
+        # flush before the DELETE below: SQLAlchemy's flush always runs
+        # every pending UPDATE ahead of every pending DELETE within one
+        # commit regardless of statement order or ORM relationships
+        # (verified empirically for this exact unrelated-mapped-classes case
+        # — there is no `relationship()` anywhere in this codebase's models,
+        # see app.core.database's docstring), so this is safe even against
+        # postgres's now-enforced FK.
+        await fleet_service.prepare_vehicle_for_deletion(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, actor_user_id=admin.id
+        )
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # Position history, pairing codes (and, via delete_device below, version
+    # history) cascade away at the DB layer -- see app.models.fleet's
+    # ondelete= comments and app.services.fleet's module docstring for the
+    # real production bug this fixes and the "cascade derived data" design
+    # decision. No extra code needed here: it's the same single DELETE
+    # statement as before, postgres/sqlite (PRAGMA foreign_keys=ON, see
+    # app.core.database) do the rest.
     await session.delete(vehicle)
     await session.commit()
 
@@ -277,6 +316,36 @@ async def get_vehicle_pilot_report(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found") from exc
     except InvalidDateRangeError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get("/vehicles/{vehicle_id}/shift-history", response_model=Page[VehicleShiftHistoryItem])
+async def get_vehicle_shift_history(
+    vehicle_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Which drivers has this vehicle had -- past shifts (and the currently-
+    open one, if any), newest-first. A real operational question: one vehicle
+    often runs back-to-back 12-hour shifts across two+ drivers per day, and
+    `current_driver_id`/`current_driver_name` on `GET /v1/vehicles` (the live
+    ops domain) only ever answers "right now". See
+    app.services.fleet.list_vehicle_shift_history.
+
+    Any authenticated tenant user may fetch this -- same convention as
+    GET /vehicles/{vehicle_id}/evidence-pack above (dispatchers/owners/admins
+    all need this, not just admins)."""
+    try:
+        items, total = await fleet_service.list_vehicle_shift_history(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, skip=skip, limit=limit
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    return Page[VehicleShiftHistoryItem](
+        items=[VehicleShiftHistoryItem(**i) for i in items], total=total, skip=skip, limit=limit
+    )
 
 
 # ==================================================================================
@@ -414,6 +483,14 @@ async def update_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # `revoked` is a boolean on the wire and a timestamp in the column -- the row
+    # is an audit record, so it keeps WHEN a tablet was retired, not merely that
+    # it was. Popped before the generic setattr loop below, which would otherwise
+    # try to assign a bool to `Device.revoked`, a field that does not exist.
+    if "revoked" in updates:
+        revoked = updates.pop("revoked")
+        device.revoked_at = datetime.now(UTC) if revoked else None
+
     for field, value in updates.items():
         setattr(device, field, value)
 
@@ -434,6 +511,11 @@ async def delete_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # Version history cascades away and any device_pairing_codes row that
+    # once recorded this device as its `used_by_device_id` has that
+    # dangling back-reference nulled -- both at the DB layer, same
+    # ondelete= mechanism (and same real production bug fix) as
+    # delete_vehicle above. See app.models.fleet's ondelete= comments.
     await session.delete(device)
     await session.commit()
 
@@ -441,18 +523,27 @@ async def delete_device(
 @router.post("/devices/register", response_model=DeviceRead)
 async def register_device(
     payload: DeviceRegisterRequest,
-    tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    """QR-pairing: the device presents its `android_id` plus the pairing code
-    shown/scanned from `POST /vehicles/{id}/pairing-code`, and is bound to that
-    code's vehicle. Requires auth like every endpoint here (the person setting
-    up the kiosk is logged into the app) — see the domain summary for why this
-    doesn't use a separate device-credential scheme."""
+    """Pairing: the device presents its `android_id` plus the pairing code shown
+    by `POST /vehicles/{id}/pairing-code`, and is bound to that code's vehicle.
+    Responds with the device row plus, once and only here, its `device_secret`.
+
+    **This is the one route in this file with no bearer requirement, and that is
+    the point.** Registration became the gate a tablet must pass before anyone
+    can log into the meter, so by definition there is nobody logged in when it
+    is called and no token to take a tenant from. The pairing code IS the
+    credential: admin-minted, tenant-scoped (the tenant is read off the code
+    row, so a code from tenant A can only enrol into tenant A), single-use, and
+    valid for `fleet_service.PAIRING_CODE_TTL_MINUTES` minutes. Eight characters
+    of a 32-symbol alphabet is ~40 bits, which -- single-use and expiring in 15
+    minutes -- is not a brute-force target worth defending beyond what the code
+    itself provides. This backend has no rate limiting anywhere today; if that
+    changes, this route should be among the first to get it.
+    """
     try:
-        return await fleet_service.register_device(
+        device, secret = await fleet_service.register_device(
             session,
-            tenant_id=tenant_id,
             android_id=payload.android_id,
             pairing_code=payload.pairing_code,
             model=payload.model,
@@ -461,30 +552,101 @@ async def register_device(
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
+    # The single moment the plaintext secret exists outside the tablet. Set on
+    # the response object rather than the ORM row -- DeviceRead.device_secret is
+    # not a column, and every other read of this model leaves it None.
+    response = DeviceRead.model_validate(device)
+    response.device_secret = secret
+    return response
+
+
+async def _authenticate_device_or_bearer(
+    session: AsyncSession,
+    *,
+    device_id: str,
+    secret: str | None,
+    tenant_id: str | None,
+) -> Device:
+    """The device row for `device_id`, authenticated by its own secret or by a
+    human bearer token — the shared front door for every route a TABLET calls.
+
+    The secret is the one that matters: it lets a tablet with nobody logged into
+    it heartbeat, answer a locate, and acknowledge a command. The bearer path
+    stays because every tablet paired before device secrets existed has none,
+    and would otherwise go silent the moment this deployed; those pick up a
+    secret the next time they re-pair.
+
+    `get_optional_tenant_id` authorises nothing by itself, so the final branch
+    here is what actually keeps these routes closed.
+    """
+    if secret:
+        try:
+            return await fleet_service.authenticate_device(session, device_id=device_id, secret=secret)
+        except fleet_service.DeviceAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+            ) from exc
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    if tenant_id is not None:
+        try:
+            return await fleet_service.get_device_or_404(
+                session, tenant_id=tenant_id, device_id=device_id
+            )
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="This endpoint requires an X-Device-Secret header or a bearer token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 
 @router.post("/devices/{device_id}/heartbeat", response_model=DeviceRead)
 async def device_heartbeat(
     device_id: str,
     payload: DeviceHeartbeatRequest,
-    tenant_id: str = Depends(get_current_tenant_id),
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Updates last_seen_at/battery/network and returns the current device row —
     including `kiosk_locked` / `force_update_pending` / `locate_requested` /
     `reboot_requested`, which is how the device learns an admin has flagged it
-    for kiosk-lock, a forced app update, a locate request, or a reboot request."""
-    try:
-        device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
-    except fleet_service.FleetError as exc:
-        raise _fleet_error_to_http(exc) from exc
+    for kiosk-lock, a forced app update, a locate request, or a reboot request.
 
-    return await fleet_service.record_heartbeat(
+    Also stamps `latest_version_code` from the current
+    `GET /v1/app-releases/latest` answer (None if no active release has ever
+    been published) — a low-cost hint riding this existing 60s poll so a
+    device can learn about an OTA update without a second network round-trip.
+    The dedicated `GET /v1/app-releases/latest` endpoint still exists
+    independently for a manual "check for updates" pull.
+
+    **Authenticates on EITHER an `X-Device-Secret` header or a human bearer
+    token.** The secret is the one that matters: it lets a tablet with nobody
+    logged into it poll for commands, which is the whole reason a parked or
+    logged-off tablet could not be located, kiosk-locked or told to update
+    before. The bearer path is kept because every tablet paired before device
+    secrets existed has none, and would otherwise stop reporting the moment this
+    deployed; those acquire a secret the next time they re-pair. A device
+    presenting a secret needs no tenant from a token -- its own row carries one.
+    """
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
+
+    device = await fleet_service.record_heartbeat(
         session,
         device,
         battery=payload.battery,
         network=payload.network,
         app_version=payload.app_version,
     )
+
+    latest_release = await app_releases_service.get_latest_active_release(session)
+    response = DeviceRead.model_validate(device)
+    response.latest_version_code = latest_release.version_code if latest_release is not None else None
+    return response
 
 
 @router.post("/devices/{device_id}/kiosk-lock", response_model=DeviceRead)
@@ -532,15 +694,66 @@ async def set_device_locate(
     _admin=Depends(_require_admin),
 ):
     """Admin-only. Sets/clears the locate_requested flag the device reads back
-    on its next heartbeat — the on-device app is expected to respond to a set
-    flag by reporting a fresh location fix out of band; building that
-    reporting path is the mobile app's responsibility, not this endpoint's."""
+    on its next heartbeat; the device answers on `/locate-response` below, and
+    answering is what clears the flag again."""
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
         raise _fleet_error_to_http(exc) from exc
 
     return await fleet_service.set_locate_requested(session, device, enabled=payload.enabled)
+
+
+@router.post("/devices/{device_id}/locate-response", response_model=DeviceRead)
+async def device_locate_response(
+    device_id: str,
+    payload: LocateResponseRequest,
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """A device answering the locate request above with its real fix, which also
+    clears `locate_requested`.
+
+    This route is the half that never existed. The flag had no clear path at
+    all, so the dashboard read "Pending" forever whether or not the tablet had
+    responded; and the tablet's answer went to `POST /v1/fleet/positions`, a
+    VEHICLE endpoint needing a live driver session and a current vehicle
+    binding. A parked, logged-off tablet has neither -- and that is the tablet
+    someone reaching for "locate" is trying to find. One holding a binding to a
+    since-deleted vehicle got a 404 instead, surfaced on the tablet as
+    "Location request failed to send - HTTP 404 not found".
+
+    Authenticates the same way the heartbeat does (device secret, or a bearer
+    token for a tablet paired before secrets existed) so it works with nobody
+    signed in.
+    """
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
+    return await fleet_service.record_locate_response(
+        session, device, lat=payload.lat, lng=payload.lng, accuracy_m=payload.accuracy_m
+    )
+
+
+@router.post("/devices/{device_id}/command-ack", response_model=DeviceRead)
+async def device_command_ack(
+    device_id: str,
+    payload: CommandAckRequest,
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """A device reporting that it acted on a queued command, clearing its flag.
+
+    Same reason as `/locate-response`: without it an admin queues a restart and
+    watches it say "Pending" for the life of the row, with no way to tell a
+    tablet that restarted from one that never saw the request.
+    """
+    device = await _authenticate_device_or_bearer(
+        session, device_id=device_id, secret=x_device_secret, tenant_id=tenant_id
+    )
+    return await fleet_service.record_command_ack(session, device, command=payload.command)
 
 
 @router.post("/devices/{device_id}/reboot", response_model=DeviceRead)
@@ -551,16 +764,18 @@ async def set_device_reboot(
     session: AsyncSession = Depends(get_session),
     _admin=Depends(_require_admin),
 ):
-    """Admin-only. Sets/clears the reboot_requested flag the device reads back
-    on its next heartbeat.
+    """Admin-only. Queues a RESTART OF THE METER APP, which the device reads back
+    on its next heartbeat and now actually carries out.
 
-    HONESTY NOTE (blueprint 4.1.3/6.2.1): this is a real command QUEUE, not a
-    claim that the device actually reboots. See `Device.reboot_requested`'s
-    doc comment — actually rebooting the OS needs device-owner-level Android
-    permissions this codebase does not provision, so nothing currently acts
-    on this flag on the device side. It is still useful as-is: an admin can
-    queue the request and see it pending, ready for a future device-owner-
-    aware app build to consume."""
+    HONESTY NOTE (blueprint 4.1.3/6.2.1), revised 2026-09-08: this still does
+    not reboot the OS, and cannot -- that needs Device-Owner provisioning this
+    fleet does not have (see `Device.reboot_requested`). What changed is that
+    the flag is no longer inert: the app restarts its own process on seeing it
+    and acknowledges via `POST /devices/{id}/command-ack`, which clears the flag.
+    That covers the operational need this button exists for ("the meter is
+    stuck, restart it") without claiming the thing it cannot do. The dashboard
+    labels it "Restart app" for the same reason.
+    """
     try:
         device = await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
     except fleet_service.FleetError as exc:
@@ -602,3 +817,51 @@ async def verify_device_admin_pin(
 
     configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
     return VerifyAdminPinResponse(valid=valid, configured=configured)
+
+
+# ==================================================================================
+# TEMPORARY force-wipe (see app.services.fleet_wipe's module docstring for full
+# context, exactly what is/isn't destroyed, and the removal plan). This is
+# deliberately a SEPARATE endpoint from DELETE /v1/fleet/vehicles/{id} etc, not
+# a flag on them -- the ordinary per-row deletes must never gain a backdoor
+# around app.services.user.assert_user_deletable's evidence-blocking.
+# ==================================================================================
+
+
+@router.post("/wipe-test-data/force", response_model=FleetForceWipeResult)
+async def force_wipe_test_data(
+    payload: FleetForceWipeRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    owner: User = Depends(_require_owner),
+):
+    """Owner-only. Deletes every vehicle, device, and driver on this tenant,
+    additionally purging (for every driver about to be deleted) the exact
+    evidence categories that would otherwise correctly block their deletion:
+    PSL ledger entries + top-ups, wallet transactions, trip ratings,
+    compliance documents, and tariff change-log entries. IRREVERSIBLE.
+
+    Never deletes `AuditLog` rows, under any circumstance -- see
+    app.services.fleet_wipe's module docstring for why the tamper-evident
+    hash chain is left intact even here. A driver who has ever been recorded
+    as an audit-log actor is reported in `failures` instead of being deleted
+    or silently skipped.
+
+    `confirm: true` is required on every call (see `FleetForceWipeRequest`) --
+    this is the explicit, separately-chosen opt-in path the task brief calls
+    for, distinct from (and never the default of) the ordinary per-row-loop
+    wipe the dashboard already does client-side for the non-destructive-
+    evidence case."""
+    result = await fleet_wipe_service.force_wipe_tenant_fleet_data(
+        session, tenant_id=tenant_id, actor_user_id=owner.id
+    )
+    await session.commit()
+    return FleetForceWipeResult(
+        vehicles_deleted=result.vehicles_deleted,
+        devices_deleted=result.devices_deleted,
+        drivers_deleted=result.drivers_deleted,
+        evidence_rows_destroyed=result.evidence_rows_destroyed,
+        failures=[
+            {"kind": f.kind, "id": f.id, "reason": f.reason} for f in result.failures
+        ],
+    )

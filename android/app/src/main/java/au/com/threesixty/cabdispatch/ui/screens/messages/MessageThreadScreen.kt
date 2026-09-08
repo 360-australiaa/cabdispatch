@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.ui.screens.messages
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,22 +9,23 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -36,7 +38,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,21 +50,23 @@ import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
 import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 
 /**
- * S14 — Message detail/quick-reply, spec TCT-DRIVER-APP-01.md §8 row 13-14 ("Messages: ... message
- * detail/quick-reply" — flagged **not yet designed**, designed inline here per the task brief).
- * No Figma/HTML reference exists for this screen; it deliberately reuses the same [WheelColors]
- * token system and `.list-row`-adjacent visual language as [MessagesWheelContent] (the one
- * reference the list side of this feature does have) rather than inventing a new look.
+ * 24 · Message Thread — Captain Taxis purple redesign (moved off the yellow/black `Deck` palette
+ * onto [CaptainPalette] to match the rest of this dispatch-journey group: trip detail, incoming
+ * trip offer, offline sync). Presentation-only: [MessagesViewModel] and every call on it
+ * (markUnreadAsRead, sendTemplate/updateOtherNoteText, sendReply/updateComposerText) are unchanged.
  *
- * One thread per driver (see [MessagesViewModel] doc), so this is a single always-open thread
- * view + a bottom quick-reply composer — not a multi-thread inbox.
- *
- * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]'s
- * Messages wheel-slot content ([MessagesWheelContent]) `onOpenThread` affordance targets this same
- * route ([CabDispatchRoutes.MESSAGES_THREAD]) — see that screen's `MessagesSlotContent`.
+ * Layout: a wide thread pane (bubbles + composer) on the left, the quick-tap template column on
+ * the right — both rendered as [CaptainPanel] cards under one shared back+title header, matching
+ * the [au.com.threesixty.cabdispatch.ui.theme.PaneShell] header used elsewhere in this group. The
+ * header keeps a small settings shortcut (S6, reachable from anywhere per spec) as a real
+ * [Icons.Rounded.Settings] glyph instead of the previous "⚙" emoji character.
  */
 @Composable
 fun MessageThreadScreen(
@@ -74,104 +81,114 @@ fun MessageThreadScreen(
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(WheelColors.bg),
-    ) {
-        ThreadTopBar(navController)
-
-        Box(modifier = Modifier.weight(1f)) {
-            when {
-                state.loading -> CenteredThreadMessage("Loading messages…")
-                state.messages.isEmpty() -> CenteredThreadMessage("No messages yet — dispatch will reach you here.")
-                else -> LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(state.messages, key = { it.id }) { message -> MessageBubble(message) }
-                }
+    Column(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg).padding(24.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(CircleShape).background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+                    .clickable { navController.popBackStack() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("←", fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            }
+            Text(
+                "Messages",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 28.sp,
+                color = CaptainPalette.textPrimary,
+                modifier = Modifier.padding(start = 16.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            // S6 (settings) reachable from anywhere, per spec — kept from the previous version,
+            // now a real Material icon rather than an emoji glyph.
+            Box(
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, CircleShape)
+                    .clickable { navController.navigate(CabDispatchRoutes.SETTINGS) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Settings,
+                    contentDescription = "Settings",
+                    tint = CaptainPalette.textSecondary,
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
 
-        if (state.error != null) {
-            Text(
-                state.error,
-                color = WheelColors.duress,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        if (state.sendError != null) {
-            Text(
-                state.sendError,
-                color = WheelColors.duress,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        if (state.templateSendError != null) {
-            Text(
-                state.templateSendError,
-                color = WheelColors.duress,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
+        Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            // Left — thread pane + composer.
+            CaptainPanel(modifier = Modifier.weight(1.7f).fillMaxHeight()) {
+                Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        when {
+                            state.loading -> CenteredThreadMessage("Loading messages…")
+                            state.messages.isEmpty() -> CenteredThreadMessage("No messages yet — dispatch will reach you here.")
+                            else -> LazyColumn(
+                                state = listState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                items(state.messages, key = { it.id }) { message -> MessageBubble(message) }
+                            }
+                        }
+                    }
 
-        TemplateQuickTapRow(
-            templates = state.templates,
-            sendingCode = state.sendingTemplateCode,
-            otherNoteText = state.otherNoteText,
-            onOtherNoteChange = viewModel::updateOtherNoteText,
-            onTap = viewModel::sendTemplate,
-        )
+                    listOfNotNull(state.error, state.sendError, state.templateSendError).forEach { err ->
+                        Text(
+                            err,
+                            fontFamily = InterFamily,
+                            fontSize = 13.sp,
+                            color = CaptainPalette.danger,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
 
-        ReplyComposer(
-            text = state.composerText,
-            sending = state.sending,
-            onTextChange = viewModel::updateComposerText,
-            onSend = viewModel::sendReply,
-        )
-    }
-}
+                    Spacer(Modifier.height(12.dp))
 
-@Composable
-private fun ThreadTopBar(navController: NavHostController) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "‹",
-                color = WheelColors.textPrimary,
-                fontSize = 24.sp,
-                modifier = Modifier
-                    .clickable { navController.popBackStack() }
-                    .padding(end = 12.dp),
-            )
-            Text(
-                "Messages",
-                color = WheelColors.textPrimary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
+                    // Composer row: 64dp field + 140dp SEND, elderly-friendly touch targets.
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CaptainTextField(
+                            value = state.composerText,
+                            onValueChange = viewModel::updateComposerText,
+                            placeholder = "Type a message…",
+                            modifier = Modifier.weight(1f).height(64.dp),
+                        )
+                        if (state.sending) {
+                            Box(
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .height(64.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(CaptainPalette.primary),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = CaptainPalette.onAccent)
+                            }
+                        } else {
+                            CaptainButton(
+                                text = "Send",
+                                widthDp = 140,
+                                enabled = state.composerText.isNotBlank(),
+                                onClick = viewModel::sendReply,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Right — quick-tap column.
+            QuickTapColumn(
+                templates = state.templates,
+                sendingCode = state.sendingTemplateCode,
+                otherNoteText = state.otherNoteText,
+                onOtherNoteChange = viewModel::updateOtherNoteText,
+                onTap = viewModel::sendTemplate,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
             )
         }
-        // S6 (settings) reachable from anywhere, per spec.
-        Text(
-            "⚙",
-            color = WheelColors.textSecondary,
-            fontSize = 18.sp,
-            modifier = Modifier
-                .clickable { navController.navigate(CabDispatchRoutes.SETTINGS) }
-                .padding(4.dp),
-        )
     }
 }
 
@@ -182,241 +199,186 @@ private fun CenteredThreadMessage(text: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(text, color = WheelColors.textSecondary, style = MaterialTheme.typography.bodyMedium)
+        Text(text, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textMuted)
     }
 }
 
+/** Dispatch bubbles left on [CaptainPalette.raised], the driver's own messages right on
+ * [CaptainPalette.primary], radius 14, with a Roboto Mono "Dispatch · 4:02 PM" / "You · 4:04 PM"
+ * timestamp underneath — same structure as before, repainted onto the purple palette. */
 @Composable
 private fun MessageBubble(message: MessageDto) {
     val fromDriver = message.senderType != "dispatch"
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (fromDriver) Arrangement.End else Arrangement.Start,
+        horizontalAlignment = if (fromDriver) Alignment.End else Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(
-            modifier = Modifier.widthIn(max = 320.dp),
-            horizontalAlignment = if (fromDriver) Alignment.End else Alignment.Start,
+        Box(
+            modifier = Modifier
+                .widthIn(max = 460.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (fromDriver) CaptainPalette.primary else CaptainPalette.raised)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
         ) {
-            if (!fromDriver) {
-                Text(
-                    "Dispatch",
-                    color = WheelColors.textMuted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(bottom = 2.dp, start = 4.dp),
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .background(
-                        color = if (fromDriver) WheelColors.gold else WheelColors.surfaceRaised,
-                        shape = RoundedCornerShape(
-                            topStart = 14.dp,
-                            topEnd = 14.dp,
-                            bottomStart = if (fromDriver) 14.dp else 4.dp,
-                            bottomEnd = if (fromDriver) 4.dp else 14.dp,
-                        ),
-                    )
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            ) {
-                Text(
-                    text = message.body,
-                    color = if (fromDriver) CabDispatchIndigoText else WheelColors.textPrimary,
-                    fontSize = 14.sp,
-                )
-            }
-            Text(
-                text = formatMessageClockTime(message.sentAt),
-                color = WheelColors.textMuted,
-                fontSize = 10.sp,
-                modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp),
-            )
+            // Driver bubbles sit on the solid `primary` fill -> onAccent (fixed white), not
+            // textPrimary (see that token's doc); dispatch bubbles sit on the neutral `raised`
+            // surface -> textPrimary is correct there.
+            Text(message.body, fontFamily = InterFamily, fontSize = 16.sp, color = if (fromDriver) CaptainPalette.onAccent else CaptainPalette.textPrimary)
         }
+        Text(
+            text = "${if (fromDriver) "You" else "Dispatch"} · ${formatMessageClockTime(message.sentAt)}",
+            fontFamily = RobotoMonoFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 12.sp,
+            color = CaptainPalette.textMuted,
+        )
     }
 }
 
-/** #2A1C58 — matches `.pay-btn-primary{ color:#2A1C58 }` in the reference prototype: text color
- * on top of a gold bubble/button, kept as its own constant rather than reusing [WheelColors.surfaceRaised]
- * since the coincidence (same hex) is about the prototype's specific gold-button text color choice,
- * not a semantic link to the "raised surface" token. */
-private val CabDispatchIndigoText = Color(0xFF2A1C58)
+/** Matches the backend's `app.services.messages.MESSAGE_TEMPLATES` "other" code exactly — see
+ * [MessagesViewModel]'s own private copy of this same constant (kept separate deliberately). */
+private const val OTHER_TEMPLATE_CODE = "other"
 
 /**
- * Quick-tap canned-message menu, spec brief "matching a real competitor taxi meter's 'No Job /
- * Recall / Job Query / Other' quick-request menu" — large tap targets, no multi-step flow,
- * so a driver can fire one off without taking real attention off the road. Every driver-side
- * template except "other" sends immediately on tap; "other" expands a small optional note field
- * instead of sending straight away (see `TemplateMessageCreate.note` on the backend — it's
- * accepted on any code but only meaningful for this one, per
- * `app.schemas.messages.TemplateMessageCreate`'s doc).
+ * The quick-tap column: caption, one [CaptainPanel] card per template (accent label on a raised
+ * surface), and the distracted-driving footnote. Every template except "other" sends immediately
+ * on tap; "other" expands an optional-note field + SEND instead (real backend behavior — see
+ * `TemplateMessageCreate.note`).
  */
 @Composable
-private fun TemplateQuickTapRow(
+private fun QuickTapColumn(
     templates: List<MessageTemplateDto>,
     sendingCode: String?,
     otherNoteText: String,
     onOtherNoteChange: (String) -> Unit,
     onTap: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    if (templates.isEmpty()) return
     var otherExpanded by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(WheelColors.surface)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Text(
-            "QUICK MESSAGE",
-            color = WheelColors.textMuted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.sp,
-            modifier = Modifier.padding(bottom = 6.dp, start = 2.dp),
-        )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(templates, key = { it.code }) { template ->
+    CaptainPanel(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "QUICK-TAP — ONE TAP SENDS",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = CaptainPalette.textMuted,
+            )
+            if (templates.isEmpty()) {
+                Text(
+                    "No quick messages available yet.",
+                    fontFamily = InterFamily,
+                    fontSize = 14.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            }
+            templates.forEach { template ->
                 val isOther = template.code == OTHER_TEMPLATE_CODE
                 val busy = sendingCode == template.code
-                val highlighted = isOther && otherExpanded
-                Button(
-                    onClick = {
-                        if (isOther) {
-                            otherExpanded = !otherExpanded
-                        } else {
-                            onTap(template.code)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(CaptainPalette.raised)
+                        .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
+                        .alpha(if (sendingCode != null && !busy) 0.5f else 1f)
+                        .clickable(enabled = sendingCode == null) {
+                            if (isOther) otherExpanded = !otherExpanded else onTap(template.code)
                         }
-                    },
-                    enabled = sendingCode == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (highlighted) WheelColors.gold else WheelColors.surfaceRaised,
-                        contentColor = if (highlighted) CabDispatchIndigoText else WheelColors.textPrimary,
-                        disabledContainerColor = WheelColors.surfaceRaised,
-                        disabledContentColor = WheelColors.textMuted,
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.heightIn(min = 48.dp),
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    if (busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.height(16.dp).width(16.dp),
-                            color = WheelColors.textPrimary,
-                            strokeWidth = 2.dp,
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = template.label.uppercase() + if (isOther) "…" else "",
+                            fontFamily = InterFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = CaptainPalette.accent,
                         )
-                    } else {
-                        Text(template.label.uppercase(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        if (busy) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = CaptainPalette.accent)
+                        }
+                    }
+                    if (isOther) {
+                        Text(
+                            "Free text — optional note, sent with the template",
+                            fontFamily = InterFamily,
+                            fontSize = 13.sp,
+                            color = CaptainPalette.textMuted,
+                        )
+                    }
+                }
+                if (isOther && otherExpanded) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CaptainTextField(
+                            value = otherNoteText,
+                            onValueChange = onOtherNoteChange,
+                            placeholder = "Optional note…",
+                            modifier = Modifier.weight(1f).height(64.dp),
+                        )
+                        CaptainButton(
+                            text = "Send",
+                            fontSize = 16.sp,
+                            heightDp = 64,
+                            enabled = sendingCode == null,
+                            modifier = Modifier.width(100.dp),
+                        ) {
+                            onTap(OTHER_TEMPLATE_CODE)
+                            otherExpanded = false
+                        }
                     }
                 }
             }
-        }
-
-        if (otherExpanded) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextField(
-                    value = otherNoteText,
-                    onValueChange = onOtherNoteChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Optional note…", color = WheelColors.textMuted) },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = WheelColors.surfaceRaised,
-                        unfocusedContainerColor = WheelColors.surfaceRaised,
-                        disabledContainerColor = WheelColors.surfaceRaised,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                        focusedTextColor = WheelColors.textPrimary,
-                        unfocusedTextColor = WheelColors.textPrimary,
-                        cursorColor = WheelColors.gold,
-                    ),
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        onTap(OTHER_TEMPLATE_CODE)
-                        otherExpanded = false
-                    },
-                    enabled = sendingCode == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = WheelColors.gold,
-                        contentColor = CabDispatchIndigoText,
-                        disabledContainerColor = WheelColors.surfaceRaised,
-                        disabledContentColor = WheelColors.textMuted,
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text("SEND", fontWeight = FontWeight.Bold)
-                }
-            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                "Safe at the wheel — templates meet NSW distracted-driving rules.",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                color = CaptainPalette.textMuted,
+            )
         }
     }
 }
 
-/** Matches the backend's `app.services.messages.MESSAGE_TEMPLATES` "other" code exactly —
- * see [MessagesViewModel]'s own private copy of this same constant; kept separate rather than
- * shared since one is a UI-layer literal and the other is the ViewModel's request-composition
- * literal, and neither module exposes the other's private constant. */
-private const val OTHER_TEMPLATE_CODE = "other"
-
-
+/** Captain-palette single-line text field (inset fill, panel-border stroke, radius 14) shared by
+ * the composer and the OTHER note input. */
 @Composable
-private fun ReplyComposer(
-    text: String,
-    sending: Boolean,
-    onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
+private fun CaptainTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(WheelColors.surface)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Reply to dispatch…", color = WheelColors.textMuted) },
-            shape = RoundedCornerShape(14.dp),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = WheelColors.surfaceRaised,
-                unfocusedContainerColor = WheelColors.surfaceRaised,
-                disabledContainerColor = WheelColors.surfaceRaised,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-                focusedTextColor = WheelColors.textPrimary,
-                unfocusedTextColor = WheelColors.textPrimary,
-                cursorColor = WheelColors.gold,
-            ),
-        )
-        Spacer(Modifier.width(10.dp))
-        Button(
-            onClick = onSend,
-            enabled = !sending && text.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = WheelColors.gold,
-                contentColor = CabDispatchIndigoText,
-                disabledContainerColor = WheelColors.surfaceRaised,
-                disabledContentColor = WheelColors.textMuted,
-            ),
-            shape = RoundedCornerShape(14.dp),
-        ) {
-            if (sending) {
-                CircularProgressIndicator(
-                    modifier = Modifier.height(16.dp).width(16.dp),
-                    color = CabDispatchIndigoText,
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Text("SEND", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp)),
+        placeholder = {
+            Text(placeholder, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textMuted)
+        },
+        textStyle = TextStyle(fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary),
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = CaptainPalette.inset,
+            unfocusedContainerColor = CaptainPalette.inset,
+            disabledContainerColor = CaptainPalette.inset,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+            focusedTextColor = CaptainPalette.textPrimary,
+            unfocusedTextColor = CaptainPalette.textPrimary,
+            cursorColor = CaptainPalette.accent,
+        ),
+    )
 }

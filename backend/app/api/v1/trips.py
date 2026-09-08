@@ -3,14 +3,18 @@
 Full CRUD (list/get/create/update/delete) plus domain-specific endpoints:
 PATCH .../tick (telemetry batch -> running totals), POST .../close (finalize
 via the fare engine), POST /sync (bulk offline-replay upload with per-item
-idempotency + server-side fare verification), and PATCH .../flag (blueprint
-5.2.5 "Dispute" button — flag/clear a closed trip for operator review).
+idempotency + server-side fare verification), PATCH .../flag (blueprint
+5.2.5 "Dispute" button — flag/clear a closed trip for operator review), and
+GET .../gps-trace (dedicated fetch for the durable GPS trace persisted by
+/sync — see app.models.trips.TripGpsTrace — deliberately kept out of the
+list/detail payload above).
 
 EVERY query in this file filters by tenant_id via `get_current_tenant_id` —
 the sole multi-tenancy enforcement mechanism in this system.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -22,16 +26,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import Vehicle
-from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip, TripGpsTrace
 from app.models.user import User
 from app.schemas.trips import (
+    DriverEarningsTodayRead,
     ReceiptEmailRequest,
     ReceiptEmailResponse,
     ReceiptSmsRequest,
     ReceiptSmsResponse,
+    TelemetryPoint,
     TripCloseRequest,
     TripCreate,
     TripFlagRequest,
+    TripGpsTraceRead,
     TripListResponse,
     TripRead,
     TripSyncItem,
@@ -41,10 +48,11 @@ from app.schemas.trips import (
     TripUpdate,
 )
 from app.services import compliance_expiry as compliance_expiry_service
+from app.services import driver_engagement as driver_engagement_service
 from app.services import fatigue as fatigue_service
-from app.services import receipts as receipts_service
 from app.services import payments as payments_service
-from app.services.fare_engine import round_half_up
+from app.services import receipts as receipts_service
+from app.services.fare_engine import URBAN_TARIFF, resolve_time_class_and_peak, round_half_up
 from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
 from app.services.trips import (
     CloseParams,
@@ -53,10 +61,14 @@ from app.services.trips import (
     TripNotClosedError,
     UnknownTariffError,
     apply_tick,
+    build_gps_trace_row,
     close_trip,
     compute_variance_pct,
+    driver_earnings_today,
     flag_trip_for_review,
     recompute_from_trace,
+    resolve_is_maxi_vehicle,
+    resolve_tariff,
 )
 
 router = APIRouter(prefix="/v1/trips", tags=["trips"])
@@ -88,6 +100,32 @@ async def create_trip(
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
+    # Authoritative: resolved server-side from the vehicle's real
+    # vehicle_class, never taken from payload.maxi (accepted but ignored for
+    # billing — see TripCreate.maxi's doc comment).
+    is_maxi_vehicle = await resolve_is_maxi_vehicle(
+        session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id
+    )
+    start_at = payload.start_at or datetime.now(UTC)
+    # Authoritative: resolved server-side from the tariff's own night/peak-
+    # window + public-holiday-calendar definitions and the trip's real
+    # start_at, never taken from payload.time_class/payload.is_peak (accepted
+    # but ignored for billing — see TripCreate.time_class/is_peak's doc
+    # comment, same pattern as payload.maxi above).
+    #
+    # An unknown/foreign tariff_id isn't this endpoint's concern to reject —
+    # exactly like resolve_is_maxi_vehicle's unknown-vehicle fallback above,
+    # trip creation itself never 422s on a bad tariff_id today (only the
+    # later tick/close calls do, via UnknownTariffError — see
+    # test_tick_unknown_tariff_is_422), so fall back to URBAN_TARIFF purely
+    # so classification never raises here. Whatever gets stored below in that
+    # edge case is moot: the trip's real bill fails regardless the moment a
+    # genuine fare recompute is attempted against that same bad tariff_id.
+    try:
+        tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=payload.tariff_id)
+    except UnknownTariffError:
+        tariff = URBAN_TARIFF
+    time_class, is_peak = resolve_time_class_and_peak(tariff=tariff, occurred_at=start_at)
     trip = Trip(
         tenant_id=tenant_id,
         client_uuid=payload.client_uuid,
@@ -97,10 +135,13 @@ async def create_trip(
         tariff_id=payload.tariff_id,
         type=payload.type,
         status=TRIP_STATUS_OPEN,
-        time_class=payload.time_class,
-        is_peak=payload.is_peak,
-        maxi=payload.maxi,
-        start_at=payload.start_at or datetime.now(UTC),
+        time_class=time_class.value,
+        is_peak=is_peak,
+        maxi=is_maxi_vehicle,
+        passenger_count=payload.passenger_count,
+        wheelchair_hiring=payload.wheelchair_hiring,
+        airport_rank_requested_maxi=payload.airport_rank_requested_maxi,
+        start_at=start_at,
         start_lat=payload.start_lat,
         start_lng=payload.start_lng,
         payment_method=payload.payment_method,
@@ -147,15 +188,24 @@ async def sync_trips(
             results.append(TripSyncResultItem(client_uuid=item.client_uuid, duplicate=True, trip=trip))
             continue
 
+        is_maxi_vehicle = await resolve_is_maxi_vehicle(
+            session, tenant_id=tenant_id, vehicle_id=item.vehicle_id
+        )
         try:
-            breakdown, distance_m, moving_s, waiting_s = await recompute_from_trace(
+            # time_class/is_peak deliberately NOT passed through from
+            # item.time_class/item.is_peak here — see recompute_from_trace's
+            # own doc comment; it resolves both authoritatively itself, from
+            # the tariff it looks up and item.start_at, and hands the
+            # resolved values back below for the Trip row.
+            breakdown, distance_m, moving_s, waiting_s, time_class, is_peak = await recompute_from_trace(
                 session,
                 tenant_id=tenant_id,
                 tariff_id=item.tariff_id,
                 trip_type=item.type,
-                time_class=item.time_class,
-                is_peak=item.is_peak,
-                maxi=item.maxi,
+                is_maxi_vehicle=is_maxi_vehicle,
+                passenger_count=item.passenger_count,
+                wheelchair_hiring=item.wheelchair_hiring,
+                airport_rank_requested_maxi=item.airport_rank_requested_maxi,
                 tolls=item.tolls,
                 extras=item.extras,
                 cleaning_fee=item.cleaning_fee,
@@ -199,15 +249,23 @@ async def sync_trips(
         # closes the real gap the sync-item schema had until now: voucher_code/account_reference/
         # split_payments used to round-trip through TripSyncItemDto on the Android side but were
         # silently dropped here since this schema didn't declare them.
+        # Generated up front (rather than left to Trip's default factory) so a
+        # voucher redemption below can record the real id of the row that's
+        # about to be inserted on Voucher.redeemed_by_trip_id.
+        new_trip_id = str(uuid.uuid4())
         split_payments_to_store: list[dict] | None = None
         if item.payment_method == "voucher":
             try:
-                payments_service.redeem_voucher(voucher_code=item.voucher_code or "")
+                await payments_service.redeem_voucher(
+                    session, tenant_id=tenant_id, voucher_code=item.voucher_code or "", trip_id=new_trip_id
+                )
             except InvalidVoucherCodeError as exc:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         elif item.payment_method == "account":
             try:
-                payments_service.validate_account_reference(account_reference=item.account_reference or "")
+                await payments_service.validate_account_reference(
+                    session, tenant_id=tenant_id, account_reference=item.account_reference or ""
+                )
             except InvalidAccountReferenceError as exc:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         elif item.payment_method == "split_fare":
@@ -222,6 +280,7 @@ async def sync_trips(
             split_payments_to_store = [{"method": leg.method, "amount": str(leg.amount)} for leg in item.split_payments]
 
         trip = Trip(
+            id=new_trip_id,
             tenant_id=tenant_id,
             client_uuid=item.client_uuid,
             vehicle_id=item.vehicle_id,
@@ -229,10 +288,18 @@ async def sync_trips(
             shift_id=item.shift_id,
             tariff_id=item.tariff_id,
             type=item.type,
+            # Carried straight through from the device -- see Trip.simulated. The
+            # server cannot detect a simulated trip on its own (the trace replays
+            # cleanly, which is the whole problem), so the honest flag is the one
+            # the device that fabricated the fixes sends.
+            simulated=item.simulated,
             status=TRIP_STATUS_CLOSED,
-            time_class=item.time_class,
-            is_peak=item.is_peak,
-            maxi=item.maxi,
+            time_class=time_class.value,
+            is_peak=is_peak,
+            maxi=is_maxi_vehicle,
+            passenger_count=item.passenger_count,
+            wheelchair_hiring=item.wheelchair_hiring,
+            airport_rank_requested_maxi=item.airport_rank_requested_maxi,
             start_at=item.start_at,
             end_at=item.end_at,
             start_lat=item.start_lat,
@@ -264,8 +331,32 @@ async def sync_trips(
             review_notes=auto_flag_reason,
             receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
             negotiated_total=item.negotiated_total,
+            # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (deviation #6).
+            # This is the ONLY network path this app's offline-first close flow actually makes
+            # (see TripSyncItemDto's own doc comment, ApiService.kt), so a tip entered on-device
+            # must round-trip here, not only through the direct (no real call site) /close
+            # endpoint above — never folded into breakdown/device_total either side.
+            tip_amount=item.tip_amount,
         )
         session.add(trip)
+
+        # Durable GPS-trace persistence (see app.models.trips.TripGpsTrace's
+        # module docstring for the full design rationale) — added to the SAME
+        # flush as `trip` above, not a separate one, so a racing duplicate
+        # client_uuid (the IntegrityError branch below) rolls the trace back
+        # together with the trip it belongs to rather than orphaning it.
+        # `build_gps_trace_row` itself returns None (no row at all) for an
+        # empty gps_trace — see that function's own doc comment for why this
+        # must never create a junk "recorded but empty" row.
+        trace_row = build_gps_trace_row(
+            tenant_id=tenant_id,
+            trip_id=new_trip_id,
+            gps_trace=item.gps_trace,
+            recorded_at=item.end_at,
+        )
+        if trace_row is not None:
+            session.add(trace_row)
+
         try:
             await session.flush()
         except IntegrityError:
@@ -336,6 +427,39 @@ async def list_trips(
     return TripListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
+# --- Earnings today (dashboard tiles) ------------------------------------
+
+
+@router.get("/earnings/today", response_model=DriverEarningsTodayRead)
+async def earnings_today(
+    tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DriverEarningsTodayRead:
+    """`/earnings/today` is two path segments, so it can never collide with
+    `GET /{trip_id}` below (a single segment) regardless of registration
+    order — kept above it anyway, next to `list_trips`, since both are
+    collection-level reads.
+
+    Caller-scoped, matching `app.api.v1.me`'s convention: always the
+    authenticated caller's own driver id
+    (`app.services.driver_engagement.resolve_driver_id`), never a query
+    param — a driver cannot read another driver's earnings through this
+    route. See `app.services.trips.driver_earnings_today` for the real
+    aggregate this returns and its "today" convention.
+    """
+    driver_id = driver_engagement_service.resolve_driver_id(current_user)
+    result = await driver_earnings_today(session, tenant_id=tenant_id, driver_id=driver_id)
+    return DriverEarningsTodayRead(
+        driver_id=result.driver_id,
+        date=result.today.isoformat(),
+        today_total=result.today_total,
+        yesterday_total=result.yesterday_total,
+        pct_change=result.pct_change,
+        trips_completed_today=result.trips_completed_today,
+    )
+
+
 # --- Get by id ----------------------------------------------------------
 
 
@@ -346,6 +470,57 @@ async def get_trip(
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
     return await _get_trip_or_404(trip_id, tenant_id, session)
+
+
+# --- GPS trace (dashboard trip-detail route map) -----------------------------
+
+
+@router.get("/{trip_id}/gps-trace", response_model=TripGpsTraceRead)
+async def get_trip_gps_trace(
+    trip_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+) -> TripGpsTraceRead:
+    """Dedicated fetch for the durable trace `app.models.trips.TripGpsTrace`
+    stores — deliberately NOT part of `GET /v1/trips`/`GET /v1/trips/{id}`
+    (see that model's own docstring for why a paged list response must never
+    carry one of these). The dashboard's trip-detail modal calls this only
+    when it actually opens (see `dashboard/src/hooks/useTrips.ts`'s
+    `useTripGpsTraceQuery`), not for every row in the trips table.
+
+    `/{trip_id}/gps-trace` is two path segments, so it can never collide with
+    the single-segment `GET /{trip_id}` above regardless of registration
+    order — same reasoning as `earnings_today`'s own doc comment.
+
+    Two distinct "nothing here" outcomes, deliberately not conflated:
+      * 404 — `trip_id` doesn't resolve to a trip owned by this tenant at all
+        (via `_get_trip_or_404`, same tenant-scoping as every other endpoint
+        in this file — a trip belonging to a different tenant 404s exactly
+        like one that doesn't exist, never leaking whether it belongs to
+        someone else).
+      * 200 with `points: []`/`point_count: 0` — the trip is real, but no
+        trace was ever stored for it: either it was opened+closed through the
+        online create/tick/close flow (which never carries a raw trace to
+        persist in the first place), or it was synced with an empty
+        `gps_trace` (today's Android-bug reality — see
+        `app.schemas.trips.TripSyncItem.gps_trace`'s doc comment). This is the
+        honest "no route recorded" state `TripRouteMap` already degrades to
+        (A/B pins + labelled straight-line stand-in) — never a fabricated
+        route.
+    """
+    await _get_trip_or_404(trip_id, tenant_id, session)
+
+    result = await session.execute(
+        select(TripGpsTrace).where(
+            TripGpsTrace.tenant_id == tenant_id, TripGpsTrace.trip_id == trip_id
+        )
+    )
+    trace = result.scalar_one_or_none()
+    if trace is None:
+        return TripGpsTraceRead(trip_id=trip_id, points=[], point_count=0)
+
+    points = [TelemetryPoint(**point) for point in trace.points]
+    return TripGpsTraceRead(trip_id=trip_id, points=points, point_count=len(points))
 
 
 # --- Update (partial; pre-close mutable fields) --------------------------
@@ -423,7 +598,14 @@ async def tick_trip(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is not open")
 
     try:
-        await apply_tick(session, tenant_id=tenant_id, trip=trip, points=payload.points)
+        await apply_tick(
+            session,
+            tenant_id=tenant_id,
+            trip=trip,
+            points=payload.points,
+            dest_lat=payload.dest_lat,
+            dest_lng=payload.dest_lng,
+        )
     except UnknownTariffError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
@@ -490,6 +672,7 @@ async def close_trip_endpoint(
         split_payments=(
             [item.model_dump() for item in payload.split_payments] if payload.split_payments else None
         ),
+        tip_amount=payload.tip_amount,
     )
     try:
         await close_trip(session, tenant_id=tenant_id, trip=trip, params=params)

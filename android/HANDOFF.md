@@ -176,9 +176,9 @@ not the Figma v2 design.
 | 02 Terms | `ui/screens/terms/TermsDisclaimerScreen.kt` | Built, v1-styled |
 | 03 Permissions | `ui/screens/permissions/PermissionsChecklistScreen.kt` | Built, v1-styled |
 | 04 Driver Login | `ui/screens/login/LoginVehicleBindScreen.kt` | Built -- combined with Vehicle Bind (06) into one screen/flow, not two |
-| 05 MFA | -- | **NOT BUILT.** No Android screen exists. Backend supports MFA (`app.core.security` TOTP); nothing on this side implements it |
+| 05 MFA | `ui/screens/login/LoginVehicleBindScreen.kt` (`MfaStep`) + `LoginVehicleBindViewModel.kt`/`domain/DriverAuthRepository.kt` | **STALE — now BUILT** (2026-09-04 audit pass corrected this row; see the log entry near line 1766). Real two-step TOTP exchange (`mfa_required`/`mfa_token` -> `POST /v1/auth/mfa/login`), inline on the driver-login card, real backend call only |
 | 06 Vehicle Bind | `ui/screens/login/LoginVehicleBindScreen.kt` | Built (see 04) |
-| 07 Pre-Shift Inspection | -- | **NOT BUILT.** No checklist screen found anywhere in the codebase |
+| 07 Pre-Shift Inspection | `ui/screens/login/LoginVehicleBindScreen.kt` (`InspectionStep`) + `LoginVehicleBindViewModel.kt` | **STALE — now BUILT** (2026-09-04 audit pass corrected this row). Real 9-item, 3x3-grid checklist matching Figma v2 node `10:111` (`PRE_SHIFT_CHECKLIST_ITEMS`), gates shift start (`allChecklistItemsChecked`), posts `inspection_json` on `POST /v1/shifts/start` |
 | 08 Shift Start Confirm | `ui/screens/shiftstart/ShiftStartScreen.kt` | Built, v1-styled |
 | Home (expanded/collapsed) | `ui/screens/dashboard/WheelDashboardScreen.kt` | **Built, but a DIFFERENT design entirely** -- this is the old rotating 6-slot wheel-navigation paradigm, not the Figma v2 map-first + collapsible bottom-dock design. This is the single biggest visual gap between Figma and the real app. Reskinning this to match Figma v2 is real UI-architecture work, not a token/color pass |
 | My Trips (menu) | `ui/screens/trips/TripsWheelViewModel.kt` + `TripsWheelContent.kt` | Built as a wheel-slot, not the Figma v2 dock-menu layout |
@@ -187,7 +187,7 @@ not the Figma v2 design.
 | Statistics (menu) | `ui/screens/zones/ZoneStatisticsScreen.kt` + ViewModel | Built |
 | Messages (menu) | `ui/screens/messages/MessagesWheelContent.kt` + `MessageThreadScreen.kt` | Built |
 | Trip History (menu) | -- | Not found as a distinct screen -- may be folded into Trips/TripDetail, needs verification |
-| Navigate (menu) | -- | **NOT BUILT.** No turn-by-turn / full-bleed nav screen exists |
+| Navigate (menu) | `ui/screens/navigate/NavigatePlaceholderScreen.kt` (dead/unreachable placeholder) vs. `ui/screens/hired/MeterNavViewModel.kt` (real) | **PARTIALLY STALE** (2026-09-04 audit pass). The dock-menu "Navigate" tile/placeholder screen is unchanged and still fake illustrative data — but it's also confirmed dead code: nothing in the live app (`DeckHomeScreen`) navigates to it any more. Separately, a REAL turn-by-turn feature (Mapbox search/route/live ETA/voice/reroute, `MeterNavViewModel`) shipped 2026-09-04 and is wired into the meter screen (`HiredScreen`) for in-trip navigation to a drop-off — real, reachable, no product decision needed there. Whether a *standalone* pre-trip "navigate to pickup" or trip-independent nav tool should also exist is still an open product question (see `NavigatePlaceholderScreen.kt`'s doc) |
 | 16 Start Meter Confirm | Overlay inside `WheelDashboardScreen.kt` | Built as an in-file overlay, not a separate screen (matches Figma's intent, different implementation shape) |
 | 17 Set Price | `SetPriceEntryScreen` overlay inside `WheelDashboardScreen.kt` | Built, real end-to-end wire to `TripSyncItem.negotiated_total` |
 | 18 Meter -- Hired | `ui/screens/hired/HiredScreen.kt` + `HiredViewModel.kt` | Built, v1-styled |
@@ -200,16 +200,23 @@ not the Figma v2 design.
 | 26 Shift Submitted | `ui/screens/shiftsubmitted/ShiftSubmittedScreen.kt` | Built |
 | 27 Profile | `ui/screens/profile/ProfileScreen.kt` + ViewModel | Built |
 | 28 Settings & Diagnostics | `ui/screens/settings/SettingsScreen.kt` + ViewModel | Built |
-| 29 Admin PIN Gate | -- | **NOT BUILT.** Backend endpoint exists (`verify-admin-pin`); no Android UI calls it |
+| 29 Admin PIN Gate | `ui/screens/adminpin/AdminPinGateScreen.kt` + `ui/screens/settings/SettingsViewModel.kt` (`attemptFactoryReset`) | **STALE — now BUILT** (2026-09-04 audit pass corrected this row; see the log entry near line 1324). Real server-verified PIN screen (`POST /v1/fleet/devices/{id}/verify-admin-pin`), reached inline from Settings' factory-reset flow — matches `shared/API_SUMMARY.md`'s spec of the admin PIN gating "destructive on-device actions, e.g. the Android app's factory-reset flow"; no other admin-gated action exists in this app that would need a second gate |
 | 30 Duress Triggered / 31 Duress Stealth | `domain/DuressController.kt`'s `DuressUiState`, rendered as contextual overlays inside Hired/Dashboard/TripDetail/CloseAndPay/ShiftSubmitted/ShiftStart/Settings screens | Built, **different shape than Figma** -- an overlay system, not the two dedicated full-screen designs Figma shows. Functionally should be equivalent; visually will not match Figma 1:1 without deliberate work |
-| 32 Offline & Sync | -- | **NOT BUILT.** No dedicated sync-status screen; the outbox/`SyncWorker` machinery is real and running, just not surfaced to the driver visually |
+| 32 Offline & Sync | `ui/screens/offlinesync/OfflineSyncScreen.kt` + `OfflineSyncViewModel.kt` | **STALE — now BUILT.** Real screen surfacing the real outbox count (`SyncOutboxDao.observeOutboxSize`), real cached-tariff read, real `SyncWorker.enqueueOneTime` force-sync, and real `ConnectivityManager` network status; honestly labels the two rows with no backing feature ("driver login cache", "duress SMS fallback") as not-on-this-build rather than fabricating them. Reached from Settings (`onOpenOfflineSync`) |
 | 33 Log Off | Not confirmed as a distinct screen | Needs verification -- likely a menu action/dialog, not checked in this pass |
 
 **Bottom line:** roughly two-thirds of the Figma v2 screens have SOME Android equivalent, but almost
 all of them are still the OLD v1 wheel-navigation visual language, not reskinned to Figma v2 yet.
-Five screens (MFA, Pre-Shift Inspection, Navigate, Admin PIN Gate, Offline & Sync) do not exist in
-Android at all. The Home dashboard itself is a fundamentally different navigation paradigm (wheel vs.
-map+dock) -- that is the biggest single piece of work if the goal is to match Figma v2 visually.
+~~Five screens (MFA, Pre-Shift Inspection, Navigate, Admin PIN Gate, Offline & Sync) do not exist in
+Android at all.~~ **STALE as of 2026-09-04 (see the corrected rows above).** Of those five, four are
+now genuinely built and reachable through real navigation: MFA (05), Pre-Shift Inspection (07),
+Admin PIN Gate (29), and Offline & Sync (32) — each backed by a real API call, not fabricated. Only
+"Navigate" remains a real gap, and even that is narrower than this line implies: real in-trip
+turn-by-turn navigation (search/route/ETA/voice) exists and is reachable via the meter screen; what's
+still missing is a standalone/pre-trip navigate tool, which is a product-scope decision (see the
+"Navigate (menu)" row above), not a straightforward build. The Home dashboard itself is a
+fundamentally different navigation paradigm (wheel vs. map+dock) -- that is the biggest single piece
+of work if the goal is to match Figma v2 visually.
 
 ### API readiness -- what is actually proven to work against THIS live server
 
@@ -267,9 +274,12 @@ to close, one item at a time, with real evidence each time (logcat, screenshots)
    offline map download -> a real trip synced) -- do not skip ahead of this.
 2. Only once all five are confirmed working: begin reskinning `WheelDashboardScreen.kt` toward the
    Figma v2 map-first design -- this is the biggest visual gap and the highest-value next step.
-3. Flag (do not silently skip) any of the five NOT BUILT screens above if a real product decision
+3. ~~Flag (do not silently skip) any of the five NOT BUILT screens above if a real product decision
    is needed on them (Navigate, Admin PIN Gate, Offline & Sync, MFA, Pre-Shift Inspection) -- these
-   are real product gaps, not implementation details you should invent alone.
+   are real product gaps, not implementation details you should invent alone.~~ **STALE as of
+   2026-09-04**: only "Navigate" (a standalone/pre-trip nav tool, as opposed to the real in-trip
+   turn-by-turn that already exists) is still an open product-decision gap — see the corrected rows
+   above. The other four are built.
 
 
 You (Claude Code, running via the JetBrains plugin inside Android Studio) have **no memory of

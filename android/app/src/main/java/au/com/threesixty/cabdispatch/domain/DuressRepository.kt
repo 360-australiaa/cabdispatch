@@ -4,10 +4,12 @@ import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.DuressCancelRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DuressEventDto
 import au.com.threesixty.cabdispatch.data.remote.DuressGpsPointDto
+import au.com.threesixty.cabdispatch.data.remote.DuressSnapshotDto
 import au.com.threesixty.cabdispatch.data.remote.DuressTriggerRequestDto
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 /**
@@ -31,6 +33,14 @@ interface DuressRepository {
      * [DuressController.stopAndUploadAudio] — best-effort, a failure here is swallowed by that
      * caller exactly like every other call in this interface. */
     suspend fun uploadAudio(eventId: String, file: File): Result<DuressEventDto>
+
+    /** Uploads one captured cabin-camera JPEG frame (`POST /v1/duress/{eventId}/snapshot`,
+     * multipart `file` field — see `backend/app/api/v1/duress.py`, same driver-callable role
+     * policy as [uploadAudio]). Called from
+     * [DuressController]'s active-phase loop for every frame [au.com.threesixty.cabdispatch.domain.duress.DuressCameraCapture]
+     * emits — best-effort/fire-and-forget, a single dropped frame is never worth surfacing an
+     * error for (there will be another one in ~3s). */
+    suspend fun uploadSnapshot(eventId: String, jpegBytes: ByteArray): Result<Unit>
 }
 
 class RemoteBackedDuressRepository(private val apiService: ApiService) : DuressRepository {
@@ -75,5 +85,12 @@ class RemoteBackedDuressRepository(private val apiService: ApiService) : DuressR
         val body = file.asRequestBody("audio/mp4".toMediaType())
         val part = MultipartBody.Part.createFormData("file", file.name, body)
         apiService.uploadDuressAudio(eventId, part)
+    }
+
+    override suspend fun uploadSnapshot(eventId: String, jpegBytes: ByteArray): Result<Unit> = runCatching {
+        val body = jpegBytes.toRequestBody("image/jpeg".toMediaType())
+        val part = MultipartBody.Part.createFormData("file", "frame.jpg", body)
+        apiService.uploadDuressSnapshot(eventId, part)
+        Unit
     }
 }

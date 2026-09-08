@@ -33,7 +33,14 @@ export function AppShell() {
   useApplyTenantTheme();
 
   return (
-    <div className="flex h-screen bg-brand-lavender">
+    // bg-background (not bg-brand-lavender): --brand-lavender is a fixed light-only token,
+    // never redefined under either dark selector in index.css, and in dark mode it happens to
+    // equal --foreground's dark value exactly (#efeaf8) -- so every PageHeader title rendered
+    // straight onto this shell background (the vast majority of pages) was 100% invisible in
+    // dark mode, not just low-contrast. --background is the token that's actually maintained
+    // for both themes (same one Card/Modal/Input already use), so this makes the shell consistent
+    // with the rest of the app instead of a special case.
+    <div className="flex h-screen bg-background">
       <Sidebar />
       <main className="flex-1 overflow-y-auto p-6">
         <Outlet />

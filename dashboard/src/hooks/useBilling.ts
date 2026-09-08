@@ -67,6 +67,12 @@ interface VehicleListResponse {
   limit: number;
 }
 
+export interface ConnectOnboardResponse {
+  mock: boolean;
+  url: string;
+  stripe_account_id: string | null;
+}
+
 /** ---- Formatting ---- */
 
 /** Money fields come back as decimal strings; format explicitly for display only. */
@@ -146,6 +152,17 @@ export function useCancelSubscription() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["billing", "subscriptions"] });
+    },
+  });
+}
+
+/** ---- Stripe Connect onboarding ---- */
+
+export function useConnectOnboard() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<ConnectOnboardResponse>("/v1/billing/connect/onboard");
+      return data;
     },
   });
 }

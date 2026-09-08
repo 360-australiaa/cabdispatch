@@ -27,6 +27,34 @@
     <!-- Sync/duress/shift-report notifications (Android 13+ runtime permission) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Real OTA self-update (2026-09-06, domain/AppUpdateChecker.kt) — lets this app launch the
+         system "install this app?" flow for an APK it downloaded itself. This app is NOT Device
+         Owner, so this permission only arms the standard human-confirmed install prompt, never a
+         silent install — see AppUpdateChecker's class doc. Also see docs/OTA_UPDATE_ROLLOUT.md:
+         on a real Knox Manage-enrolled tablet, Knox's own unknown-sources policy
+         (docs/KNOX_LOCKDOWN_RUNBOOK.md §3.2) still blocks this permission's effect fleet-wide until
+         a Knox Manage admin adds a per-app allowlist exception for this app's package name. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Battery-optimisation (Doze) exemption. REQUIRED for the permissions checklist's
+         "Disable battery optimisation" item to do anything at all: Android silently ignores
+         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS unless the caller holds this
+         permission, and PermissionsChecklistScreen.openBatteryOptimisation()'s runCatching
+         swallows the failure — so without this line the driver taps the tile, nothing happens,
+         and nothing anywhere says why. Found 2026-09-07 driving a genuine first-run onboarding
+         on a wiped tablet: the tile stayed "Not exempt", `dumpsys deviceidle whitelist` confirmed
+         the app was never whitelisted, and no activity was ever launched.
+
+         This matters operationally, not just cosmetically: this is an all-day in-vehicle meter
+         whose heartbeat, GPS trace and dispatch polling must keep running with the screen off.
+         Doze throttling those is exactly the failure this exemption exists to prevent.
+
+         Play Store note: Google restricts this permission to apps whose core function genuinely
+         requires exemption. That is not a distribution concern here — this app ships by fleet OTA
+         / Knox Manage to dedicated kiosk tablets (see REQUEST_INSTALL_PACKAGES above and
+         docs/OTA_UPDATE_ROLLOUT.md), not through the Play Store. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:name=".CabDispatchApp"
         android:allowBackup="false"
@@ -36,11 +64,21 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- windowSoftInputMode=adjustResize: the soft keyboard must SHRINK the window, not sit
+             on top of it. Two screens take a device pairing code on the tablet's own keyboard (the
+             readiness gate in front of login, and Settings > Pair Meter); with the default
+             behaviour the keyboard overlaid the Pair button, on a gate a driver cannot leave.
+             Compose's imePadding() reports nothing while decorFitsSystemWindows stays true (the
+             default here), so this attribute is what actually makes the room. Nothing else in this
+             app raises the IME - every other text entry is a hand-rolled on-screen keypad - so the
+             blast radius is those two screens. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.CabDispatch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -52,6 +90,24 @@
              sync worker's provider here if a custom Configuration.Provider is
              needed, or rely on default WorkManager init since CabDispatchApp
              does not implement Configuration.Provider yet. -->
+
+        <!-- Real OTA self-update (2026-09-06, domain/AppUpdateChecker.kt): exposes the
+             downloaded-APK subdirectory (res/xml/file_paths.xml) to the system Package
+             Installer as a content:// Uri, per Android's standard "share a file with another
+             app" pattern, required because a plain file:// Uri is rejected by
+             Intent.ACTION_VIEW/android.permission.REQUEST_INSTALL_PACKAGES on API 24+.
+             android:exported="false" + grantUriPermissions="true": no other app can query this
+             provider generally, only the specific Uri this app explicitly grants via
+             FLAG_GRANT_READ_URI_PERMISSION on the install Intent (see AppUpdateChecker.promptInstall). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

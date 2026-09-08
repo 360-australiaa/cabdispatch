@@ -10,7 +10,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services import compliance_expiry as compliance_expiry_service
 
 UserRole = Literal["owner", "admin", "dispatcher", "driver"]
 UserStatus = Literal["active", "inactive", "suspended"]
@@ -87,3 +89,19 @@ class UserRead(UserBase):
     photo_url: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Real, derived compliance signal (2026-09-05 API-audit pass closing a
+    # real gap: Android's UserDto already declared/read this field, but no
+    # backend field ever backed it). Always computed here from this same
+    # response's own driver_license_expiry/driver_authority_expiry — never a
+    # stored column, never independently settable via UserCreate/UserUpdate —
+    # see app.services.compliance_expiry.suitability_status_for's doc for the
+    # exact derivation and its "never assumed clear/expired on missing data"
+    # rule.
+    suitability_status: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_suitability_status(self) -> "UserRead":
+        self.suitability_status = compliance_expiry_service.suitability_status_for(
+            self.driver_license_expiry, self.driver_authority_expiry
+        )
+        return self

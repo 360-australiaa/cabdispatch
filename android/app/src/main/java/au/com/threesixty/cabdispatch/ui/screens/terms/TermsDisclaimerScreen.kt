@@ -2,111 +2,159 @@ package au.com.threesixty.cabdispatch.ui.screens.terms
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
+
+private const val DISCLAIMER_PARA_1 =
+    "Cab Dispatch does not warrant that any information provided by the product is accurate or " +
+        "complete. It is your responsibility to observe safe driving practices. Do not operate " +
+        "this product while driving and only use it when safe to do so. You should use this " +
+        "product as a driving aid only and use your own judgement while driving, taking into " +
+        "account prevailing road conditions and the characteristics of the vehicle you are driving."
+
+private const val DISCLAIMER_PARA_2 =
+    "To the extent permitted by law, you accept full responsibility for any loss, liability or " +
+        "damage arising out of, or in connection with, the use of this product. Your continued " +
+        "use of this product will mean that you have accepted these terms."
 
 /**
- * Boot-time Terms & Conditions / Privacy Policy disclaimer (2026-08-10 meter-polish pass,
- * matching a real competitor taxi-meter app's own boot-time disclaimer screen). Registered ahead
- * of S1 (Login/Vehicle bind) in [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchNavHost] --
- * see [au.com.threesixty.cabdispatch.ui.screens.splash.SplashScreen]'s doc for the gate that
- * decides whether this screen is shown at all. Gated per app-version, not per-install -- see
- * [TermsAcceptance]'s own doc for why.
+ * 02 · Terms & Disclaimer — reskinned onto the [CaptainPalette] purple design system (2026-08-29
+ * pass). Behavior unchanged from the previous version: [onAccept] records acceptance via
+ * [TermsAcceptance.markAccepted] (gated per app-version) and continues to wherever Splash would
+ * have sent the driver; Cancel finishes the hosting [ComponentActivity] — there is no meaningful
+ * "use it without accepting" state.
  *
- * [onAccept] records acceptance (via [TermsAcceptance.markAccepted]) and continues to wherever
- * Splash would otherwise have sent the driver (S1 or S2). Declining -- genuinely untested, since
- * this whole module has never run on a real device (see HANDOFF.md's standing caveat) -- finishes
- * the hosting [ComponentActivity] outright: this app has no meaningful "use it without accepting"
- * state to fall back to (every screen past this one assumes a session/tariff/etc the driver
- * cannot reach without accepting), so declining exits rather than looping back to this same
- * screen or silently letting the driver in anyway.
+ * Layout unchanged from the previous port: left column (H1 "Disclaimer" · subtitle · mono context
+ * chip) + right terms card (panel surface, 600dp text column), Cancel outline bottom-left, 360×72
+ * primary Accept bottom-right. Zero scroll — the body copy fits the card at 17sp/1.52 line height.
+ * The context chip shows the real session ("Driver GL2HY · Vehicle S5517") when one exists; at
+ * boot time there is usually no session yet, so this renders the app version stamp instead —
+ * never fabricated IDs.
  */
 @Composable
 fun TermsDisclaimerScreen(onAccept: () -> Unit) {
     val context = LocalContext.current
+    val session by SessionHolder.session.collectAsState()
 
-    Column(
+    // No header on this screen, so the app-level banners fall back to their last measured
+    // clearance -- on a fresh install, nothing has ever measured one -- and land across this
+    // screen's own headline. They are redundant here too: TABLET NOT REGISTERED says less than the
+    // screen already says, with no fix attached. Stand them down while this screen is up.
+    DisposableEffect(Unit) {
+        CaptainChromeMetrics.setFullScreenGateVisible(true)
+        onDispose { CaptainChromeMetrics.setFullScreenGateVisible(false) }
+    }
+
+    Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(WheelColors.bg)
-            .padding(24.dp),
+            .background(CaptainPalette.bg)
+            .padding(start = 72.dp, end = 72.dp, top = 96.dp, bottom = 44.dp),
     ) {
-        Text(
-            "Terms & Conditions",
-            color = WheelColors.textPrimary,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 22.sp,
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            // Reference-screenshot tone, matched per the task brief -- not real legal text (no
-            // legal-reviewed Terms & Conditions/Privacy Policy document exists in this repo to
-            // source from; see HANDOFF.md for this honestly-flagged gap).
+        // Left column — headline, subtitle, context chip, Cancel pinned to the bottom.
+        Column(modifier = Modifier.width(392.dp)) {
+            Text("Disclaimer", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp, color = CaptainPalette.textPrimary)
+            Spacer(Modifier.weight(0.06f))
             Text(
-                "Please read and accept our Terms and Conditions and Privacy Policy before " +
-                    "continuing. Your continued use of this app will mean you have accepted " +
-                    "these terms.",
-                color = WheelColors.textSecondary,
-                fontSize = 15.sp,
+                "Please read and accept the disclaimer to continue. Accepting is recorded against your driver ID and this vehicle.",
+                fontFamily = InterFamily,
+                fontSize = 17.sp,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.width(380.dp),
             )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "This app records trip fares, GPS location while a trip is in progress, and " +
-                    "shift and compliance data required under the NSW Point to Point Transport " +
-                    "regulations. Data is transmitted to Cab Dispatch servers when the device " +
-                    "has connectivity and is otherwise queued securely on-device.",
-                color = WheelColors.textMuted,
-                fontSize = 13.sp,
-            )
+            Spacer(Modifier.padding(top = 16.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(CaptainPalette.raised)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                val chipText = session?.let { "Driver ${it.driverName} · Vehicle ${it.vehicleId}" }
+                    ?: "v${BuildConfig.VERSION_NAME} · first run on this tablet"
+                Text(chipText, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textSecondary)
+            }
+            Spacer(Modifier.weight(1f))
+            CaptainButton(
+                text = "Cancel",
+                outline = true,
+                modifier = Modifier.width(220.dp),
+                heightDp = 64,
+            ) {
+                (context as? ComponentActivity)?.finishAffinity()
+            }
         }
-
-        Spacer(Modifier.height(20.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            OutlinedButton(
-                onClick = { (context as? ComponentActivity)?.finishAffinity() },
-                modifier = Modifier.weight(1f),
-            ) { Text("Cancel") }
-
-            Button(
-                onClick = {
+        Spacer(Modifier.width(72.dp))
+        // Right column — the terms card, Accept pinned bottom-right beneath it.
+        Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
+                    .padding(horizontal = 36.dp, vertical = 32.dp),
+            ) {
+                Text(
+                    DISCLAIMER_PARA_1,
+                    fontFamily = InterFamily,
+                    fontSize = 17.sp,
+                    lineHeight = 26.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+                Spacer(Modifier.padding(top = 18.dp))
+                Text(
+                    DISCLAIMER_PARA_2,
+                    fontFamily = InterFamily,
+                    fontSize = 17.sp,
+                    lineHeight = 26.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Row {
+                Spacer(Modifier.weight(1f))
+                CaptainButton(
+                    text = "Accept",
+                    heightDp = 72,
+                    modifier = Modifier.width(360.dp),
+                ) {
                     TermsAcceptance.markAccepted(context, BuildConfig.VERSION_CODE)
                     onAccept()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = WheelColors.gold),
-                modifier = Modifier.weight(1f),
-            ) { Text("Accept", color = Color.Black, fontWeight = FontWeight.Bold) }
+                }
+            }
         }
     }
+}
+
+/** Kept for callers/tests referencing the copy; also documents that this is real product copy. */
+object TermsCopy {
+    const val paragraph1 = DISCLAIMER_PARA_1
+    const val paragraph2 = DISCLAIMER_PARA_2
 }

@@ -16,7 +16,14 @@ import apiClient from "@/lib/apiClient";
 export type TripType = "rank_hail" | "booked" | "airport_fixed" | "multi_hire";
 export type TripStatus = "open" | "closed";
 export type TimeClass = "day" | "night" | "holiday";
-export type PaymentMethod = "cash" | "card";
+export type PaymentMethod = "cash" | "card" | "voucher" | "account" | "split_fare";
+
+/** One leg of a split-fare trip — `PATCH .../close` and `POST /v1/trips/sync`
+ * both require these to sum, to the cent, to the trip's grand total. */
+export interface SplitPaymentItem {
+  method: string;
+  amount: string;
+}
 
 export interface Trip {
   id: string;
@@ -27,10 +34,27 @@ export interface Trip {
   shift_id: string | null;
   tariff_id: string;
   type: TripType;
+  /** True when the meter drove this trip on FABRICATED GPS from its built-in test
+   * simulator, not a real road. A simulated trip's trace replays cleanly and passes
+   * the server's fare-variance check exactly like a real fare, so this flag is the
+   * only thing distinguishing a test drive from real revenue — surface it wherever a
+   * trip is shown as money. See backend `app/models/trips.py::Trip.simulated`. */
+  simulated: boolean;
   status: TripStatus;
   time_class: TimeClass;
   is_peak: boolean;
+  /** Resolved server-side from the vehicle's real fleet-domain vehicle_class
+   * at creation time — advisory only if sent on create/update, never trusted
+   * for billing (see backend/app/services/trips.py::resolve_is_maxi_vehicle).
+   * The real maxi-rate triggers are passenger_count/wheelchair_hiring/
+   * airport_rank_requested_maxi below. */
   maxi: boolean;
+  passenger_count: number;
+  wheelchair_hiring: boolean;
+  airport_rank_requested_maxi: boolean;
+  voucher_code: string | null;
+  account_reference: string | null;
+  split_payments: SplitPaymentItem[] | null;
   start_at: string;
   end_at: string | null;
   start_lat: number;
@@ -92,7 +116,15 @@ export interface TripCreateInput {
   payment_method?: PaymentMethod;
   time_class?: TimeClass;
   is_peak?: boolean;
+  /** Advisory only — see Trip.maxi's doc comment. Kept purely for backward
+   * wire compatibility; the dashboard form no longer surfaces this as if it
+   * controlled billing. */
   maxi?: boolean;
+  passenger_count?: number;
+  wheelchair_hiring?: boolean;
+  airport_rank_requested_maxi?: boolean;
+  voucher_code?: string | null;
+  account_reference?: string | null;
   tolls?: string | number;
   extras?: string | number;
   gps_trace_ref?: string | null;
@@ -104,6 +136,9 @@ export interface TripUpdateInput {
   shift_id?: string | null;
   tariff_id?: string | null;
   payment_method?: PaymentMethod | null;
+  voucher_code?: string | null;
+  account_reference?: string | null;
+  split_payments?: SplitPaymentItem[] | null;
   tolls?: string | number | null;
   extras?: string | number | null;
   gps_trace_ref?: string | null;
@@ -117,6 +152,9 @@ export interface TripCloseInput {
   end_lat?: number | null;
   end_lng?: number | null;
   payment_method?: PaymentMethod | null;
+  voucher_code?: string | null;
+  account_reference?: string | null;
+  split_payments?: SplitPaymentItem[] | null;
   surcharge_pct?: string | number | null;
   cleaning_fee?: string | number;
   include_psl?: boolean;
@@ -268,5 +306,46 @@ export function useFlagTripMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [TRIPS_KEY] });
     },
+  });
+}
+
+// --- GPS trace (trip-detail route map) --------------------------------------
+// `GET /v1/trips/{id}/gps-trace` -- a DEDICATED endpoint, deliberately not a
+// field on `Trip` above: the backend keeps the (potentially ~100-300KB, one
+// point per second recorded) trace out of TripRead/TripListResponse entirely
+// so a page of trips never balloons — see backend/app/models/trips.py's
+// TripGpsTrace docstring. Fetched only by useTripGpsTraceQuery below, called
+// from TripDetailModal only while it's actually open (its `enabled` flag),
+// never from the trips list/table.
+
+export interface TripGpsTracePoint {
+  lat: number;
+  lng: number;
+  speed_kmh: number;
+  ts: string;
+}
+
+export interface TripGpsTraceResponse {
+  trip_id: string;
+  points: TripGpsTracePoint[];
+  point_count: number;
+}
+
+/**
+ * `points: []` is this endpoint's own honest "no trace stored for this trip"
+ * answer (a trip opened+closed online never carries one; a synced trip may
+ * have been uploaded with an empty `gps_trace` — today's Android-bug
+ * reality) — never treated as an error. `TripRouteMap` already degrades
+ * correctly on an empty/short trace (falls back to the labelled straight-line
+ * stand-in), so callers can pass `data?.points` straight through unchanged.
+ */
+export function useTripGpsTraceQuery(tripId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: [TRIPS_KEY, tripId, "gps-trace"],
+    queryFn: async () => {
+      const res = await apiClient.get<TripGpsTraceResponse>(`/v1/trips/${tripId}/gps-trace`);
+      return res.data;
+    },
+    enabled: enabled && tripId != null,
   });
 }

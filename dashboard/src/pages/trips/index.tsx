@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Flag, Plus, Search } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { AlertTriangle, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
 import {
   Badge,
   Button,
@@ -54,6 +55,13 @@ const FLAGGED_OPTIONS = [
 ];
 
 export default function TripsPage() {
+  // A trip id/receipt/vehicle/driver deep link (e.g. from the new Ratings
+  // page's "View trip" link) lands here as /trips?search=<value> -- read it
+  // once on mount so the link actually pre-filters instead of dumping the
+  // dispatcher on the unfiltered list. Same query-param-on-mount convention
+  // as the Duress Desk's `?event=` link.
+  const [searchParams] = useSearchParams();
+
   const [statusFilter, setStatusFilter] = useState<TripStatus | "">("");
   const [typeFilter, setTypeFilter] = useState<TripType | "">("");
   const [vehicleFilter, setVehicleFilter] = useState("");
@@ -61,7 +69,7 @@ export default function TripsPage() {
   const [flaggedFilter, setFlaggedFilter] = useState<"" | "true" | "false">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingTrip, setEditingTrip] = useState<Trip | null>(null);
@@ -156,7 +164,15 @@ export default function TripsPage() {
     {
       key: "type",
       header: "Type",
-      render: (row) => TRIP_TYPE_LABELS[row.type],
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          {TRIP_TYPE_LABELS[row.type]}
+          {/* A simulated trip passes every validity check a real one does (see the
+              `simulated` field's own doc), so nothing else on this row distinguishes
+              it from real revenue. The badge is the only signal. */}
+          {row.simulated && <Badge variant="destructive">Simulated</Badge>}
+        </div>
+      ),
     },
     {
       key: "status",
@@ -221,9 +237,16 @@ export default function TripsPage() {
         title="Trips"
         description="Searchable ledger of meter runs across the fleet. Open a row for the full fare breakdown and max-fare-check result."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New trip
-          </Button>
+          <>
+            <Link to="/compliance?tab=reports">
+              <Button variant="outline">
+                <FileSpreadsheet className="h-4 w-4" /> NSW PtP export
+              </Button>
+            </Link>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> New trip
+            </Button>
+          </>
         }
       />
 

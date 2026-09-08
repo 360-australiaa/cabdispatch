@@ -14,11 +14,23 @@ the same "integration step wires it up" reason.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
+from sqlalchemy import func, select
 
-from app.models.fleet import Device, DevicePairingCode, Vehicle  # noqa: F401
+from app.models.audit_log import AuditLog
+from app.models.fleet import (  # noqa: F401
+    Device,
+    DevicePairingCode,
+    DeviceVersionHistory,
+    Vehicle,
+    VehiclePositionHistory,
+)
+from app.models.shift import Shift
+from app.models.user import ROLE_DRIVER, User
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -53,6 +65,23 @@ async def test_create_and_get_vehicle(client, session):
     resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["id"] == vehicle_id
+
+
+async def test_create_vehicle_make_model_round_trips(client, session):
+    headers = await auth_headers(client, session, role="admin")
+
+    resp = await _create_vehicle(client, headers, rego="tx-002", make="Toyota", model="Camry")
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["make"] == "Toyota"
+    assert body["model"] == "Camry"
+    vehicle_id = body["id"]
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["make"] == "Toyota"
+    assert body["model"] == "Camry"
 
 
 async def test_create_vehicle_requires_admin_role(client, session):
@@ -163,6 +192,178 @@ async def test_delete_vehicle_unbinds_devices(client, session):
     assert resp.json()["vehicle_id"] is None
 
 
+async def test_delete_vehicle_closes_open_shift_instead_of_leaving_it_dangling(client, session):
+    """Real production bug regression test: deleting a vehicle with a driver
+    still on an OPEN shift used to leave that shift open forever, pointing at
+    a vehicle_id that no longer resolves to anything (Shift.vehicle_id has no
+    FK — see app/models/shift.py's own DEVIATION note) — surfacing on the
+    dashboard's drivers list as a raw UUID where a rego should be. The chosen
+    fix CLOSES the open shift as part of the vehicle delete (see
+    app.services.shift.close_open_shifts_for_vehicle_deletion's own
+    docstring for why "close" was chosen over "refuse the delete") — marking
+    it unreconciled with a zero psl_owed (honest: nobody actually reconciled
+    it) and recording a tamper-evident audit-log entry explaining why."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-OPENSHIFT")
+    vehicle_id = resp.json()["id"]
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+    assert resp.json()["end_at"] is None
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    # The vehicle is gone...
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # ...but the shift that was open on it is now CLOSED, not dangling.
+    resp = await client.get(f"/v1/shifts/{shift_id}", headers=headers)
+    assert resp.status_code == 200
+    shift_body = resp.json()
+    assert shift_body["end_at"] is not None
+    assert shift_body["reconciled"] is False
+    assert Decimal(str(shift_body["psl_owed"])) == Decimal("0.00")
+    # vehicle_id is left as-is on the now-closed historical shift row (same
+    # "unconstrained cross-domain id, unaffected by the referent's deletion"
+    # convention already documented on Trip/Shift) -- it's the OPEN-ness that
+    # was the bug, not the stored id itself.
+    assert shift_body["vehicle_id"] == vehicle_id
+
+    # A tamper-evident audit-log entry explains why this shift closed when it did.
+    result = await session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_type == "shift",
+            AuditLog.entity_id == shift_id,
+            AuditLog.action == "shift_force_closed_vehicle_deleted",
+        )
+    )
+    audit_rows = result.scalars().all()
+    assert len(audit_rows) == 1
+    assert audit_rows[0].after_json["reason"] == "vehicle_deleted"
+    assert audit_rows[0].after_json["vehicle_id"] == vehicle_id
+
+
+async def test_delete_vehicle_does_not_touch_already_closed_shifts(client, session):
+    """Sanity check on the fix above: a shift that was already ended before
+    the vehicle delete must be left completely alone (no re-closing, no
+    audit-log noise) -- only genuinely OPEN shifts are in scope."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-CLOSEDSHIFT")
+    vehicle_id = resp.json()["id"]
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start", json={"driver_id": driver_id, "vehicle_id": vehicle_id}, headers=headers
+    )
+    shift_id = resp.json()["id"]
+    resp = await client.post(
+        f"/v1/shifts/{shift_id}/end",
+        json={"psl_owed": "12.50", "reconciled": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    original_end_at = resp.json()["end_at"]
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/v1/shifts/{shift_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["end_at"] == original_end_at
+    assert body["reconciled"] is True
+    assert Decimal(str(body["psl_owed"])) == Decimal("12.50")
+
+    result = await session.execute(
+        select(func.count())
+        .select_from(AuditLog)
+        .where(AuditLog.entity_type == "shift", AuditLog.entity_id == shift_id)
+    )
+    assert result.scalar_one() == 0
+
+
+async def test_delete_vehicle_with_position_history_and_pairing_codes_succeeds(client, session):
+    """Real-production bug regression test (see app.services.fleet's module
+    docstring): postgres enforces the NOT NULL FKs from
+    vehicle_position_history/device_pairing_codes to vehicles.id, and every
+    real vehicle accumulates position-history rows from routine heartbeats —
+    so this delete failed 100% of the time in production before the
+    ondelete="CASCADE" fix (app/models/fleet.py). This only proves anything
+    because tests/conftest.py's sqlite engine now enforces PRAGMA
+    foreign_keys=ON (app.core.database) -- before that pass this exact test
+    would have silently passed even with no ondelete= at all, the same way
+    the 649-test suite already did in production."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-CASCADE")
+    vehicle_id = resp.json()["id"]
+
+    # Position history: a couple of heartbeat-style publishes.
+    for lat in (-33.86, -33.87):
+        resp = await client.post(
+            "/v1/fleet/positions",
+            json={"vehicle_id": vehicle_id, "lat": lat, "lng": 151.2, "status": "available"},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+    # A used pairing code: device_pairing_codes.vehicle_id (CASCADE) and
+    # .used_by_device_id (SET NULL, exercised by the device-delete test
+    # below -- here the device is left alive so this row also carries a
+    # live used_by_device_id right up until the vehicle delete).
+    resp = await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    code = resp.json()["code"]
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-cascade-1", "pairing_code": code},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    device_id = resp.json()["id"]
+
+    result = await session.execute(
+        select(func.count()).select_from(VehiclePositionHistory).where(
+            VehiclePositionHistory.vehicle_id == vehicle_id
+        )
+    )
+    assert result.scalar_one() == 2
+    result = await session.execute(
+        select(func.count()).select_from(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    assert result.scalar_one() == 1
+
+    resp = await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # Dependents didn't leak: cascaded away along with the vehicle.
+    result = await session.execute(
+        select(func.count()).select_from(VehiclePositionHistory).where(
+            VehiclePositionHistory.vehicle_id == vehicle_id
+        )
+    )
+    assert result.scalar_one() == 0
+    result = await session.execute(
+        select(func.count()).select_from(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    assert result.scalar_one() == 0
+
+    # The device that redeemed the pairing code is untouched (only unbound
+    # from the now-deleted vehicle, per the pre-existing unlink behaviour).
+    resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["vehicle_id"] is None
+
+
 # --- devices: CRUD --------------------------------------------------------------
 
 
@@ -190,6 +391,77 @@ async def test_create_get_update_delete_device(client, session):
 
     resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
     assert resp.status_code == 404
+
+
+async def test_delete_device_with_version_history_succeeds_and_unlinks_pairing_code(client, session):
+    """Real-production bug regression test (see app.services.fleet's module
+    docstring): postgres enforces device_version_history.device_id's NOT
+    NULL FK, and every real device accumulates version-history rows from
+    routine heartbeats -- so this delete failed 100% of the time in
+    production before the ondelete="CASCADE" fix. Also covers
+    device_pairing_codes.used_by_device_id's ondelete="SET NULL": deleting
+    the device that redeemed a code must not delete the code row itself
+    (the vehicle's pairing history is worth keeping), just null the
+    now-dangling back-reference."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_vehicle(client, headers, rego="TX-DEVCASCADE")
+    vehicle_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    code = resp.json()["code"]
+    # Registering with an app_version stamps Device.app_version directly
+    # (app.services.fleet.register_device) -- it does NOT itself append a
+    # DeviceVersionHistory row; only a heartbeat with a *changed* app_version
+    # does that (app.services.fleet.record_heartbeat). So the two heartbeats
+    # below (None -> "1.0.0", then "1.0.0" -> "1.1.0") are what create the
+    # two history rows asserted below, not the registration call.
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-devcascade-1", "pairing_code": code},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    device_id = resp.json()["id"]
+
+    for app_version in ("1.0.0", "1.1.0"):
+        resp = await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"app_version": app_version},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+    result = await session.execute(
+        select(func.count()).select_from(DeviceVersionHistory).where(
+            DeviceVersionHistory.device_id == device_id
+        )
+    )
+    assert result.scalar_one() == 2
+    result = await session.execute(
+        select(DevicePairingCode).where(DevicePairingCode.vehicle_id == vehicle_id)
+    )
+    pairing_row = result.scalar_one()
+    assert pairing_row.used_by_device_id == device_id
+
+    resp = await client.delete(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert resp.status_code == 404
+
+    # Version history didn't leak: cascaded away along with the device.
+    result = await session.execute(
+        select(func.count()).select_from(DeviceVersionHistory).where(
+            DeviceVersionHistory.device_id == device_id
+        )
+    )
+    assert result.scalar_one() == 0
+
+    # The pairing code row survives (it's the vehicle's history, not the
+    # device's) -- only its dangling used_by_device_id is nulled.
+    await session.refresh(pairing_row)
+    assert pairing_row.used_by_device_id is None
+    assert pairing_row.vehicle_id == vehicle_id
 
 
 async def test_list_devices_filter_by_vehicle_and_lock_state(client, session):
@@ -298,7 +570,19 @@ async def test_expired_pairing_code_rejected(client, session):
     assert resp.status_code == 400
 
 
-async def test_pairing_code_is_tenant_scoped(client, session):
+async def test_a_pairing_code_can_only_ever_enrol_into_its_own_tenant(client, session):
+    """The tenant comes from the CODE, never from whoever presents it.
+
+    This used to assert a 400 when tenant B's admin presented tenant A's code,
+    back when registration read the tenant off the caller's token. It no longer
+    can: registration is the gate a tablet passes BEFORE anyone logs into the
+    meter, so there is usually no token at all, and the code is the credential.
+
+    What must still hold -- and is the property that actually protects a tenant
+    -- is that a code cannot move a device into the presenter's tenant. Holding
+    tenant A's secret code enrols into tenant A, which is what the code is for;
+    it can never be turned into a device inside tenant B.
+    """
     headers_a = await auth_headers(client, session, role="admin", tenant_name="Pairing Tenant A")
     headers_b = await auth_headers(client, session, role="admin", tenant_name="Pairing Tenant B")
 
@@ -313,7 +597,233 @@ async def test_pairing_code_is_tenant_scoped(client, session):
         json={"android_id": "android-scope-1", "pairing_code": code},
         headers=headers_b,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    device = resp.json()
+
+    # Tenant A's vehicle, tenant A's device -- not tenant B's, despite tenant B
+    # being the caller.
+    assert device["vehicle_id"] == vehicle_id
+    tenant_a_devices = (await client.get("/v1/fleet/devices", headers=headers_a)).json()["items"]
+    tenant_b_devices = (await client.get("/v1/fleet/devices", headers=headers_b)).json()["items"]
+    assert device["id"] in {d["id"] for d in tenant_a_devices}
+    assert device["id"] not in {d["id"] for d in tenant_b_devices}
+
+
+async def test_registration_needs_no_login_at_all(client, session):
+    """The whole point of the change: a tablet that has never been paired has
+    nobody logged into it, so registration cannot require a bearer token.
+
+    Note there are no `headers=` on the register call. If this ever starts
+    needing auth again, the readiness gate in the meter app becomes unclearable
+    in the field -- a driver would be told to pair before logging in, on a
+    screen whose pair button cannot work until they log in.
+    """
+    headers = await auth_headers(client, session, role="admin", tenant_name="No Login Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-NOAUTH")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+
+    resp = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-noauth-1", "pairing_code": code, "model": "SM-T575"},
+    )
+
+    assert resp.status_code == 200
+    device = resp.json()
+    assert device["vehicle_id"] == vehicle_id
+    assert device["paired_at"] is not None
+    assert device["revoked_at"] is None
+    # And it comes back with the credential it will use from now on.
+    assert device["device_secret"]
+
+
+async def test_the_device_secret_is_returned_on_registration_and_never_again(client, session):
+    """A device credential must not be readable by anything that merely reads
+    the fleet -- a dashboard user listing devices, or the device's own
+    heartbeat."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Secret Once Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-ONCE")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-once-1", "pairing_code": code},
+        )
+    ).json()
+    device_id = registered["id"]
+    secret = registered["device_secret"]
+    assert secret
+
+    read = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+    assert read["device_secret"] is None
+
+    listed = (await client.get("/v1/fleet/devices", headers=headers)).json()["items"]
+    assert all(d["device_secret"] is None for d in listed)
+
+    beat = (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 80},
+            headers={"X-Device-Secret": secret},
+        )
+    ).json()
+    assert beat["device_secret"] is None
+
+
+async def test_a_device_secret_authenticates_a_heartbeat_with_nobody_logged_in(client, session):
+    """The reason the secret exists: a parked or logged-off tablet must still be
+    able to collect its kiosk-lock / locate / force-update flags. It could not
+    before, because the heartbeat rode the driver's bearer token."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Beat Secret Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-BEAT")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-beat-1", "pairing_code": code},
+        )
+    ).json()
+    device_id, secret = registered["id"], registered["device_secret"]
+
+    await client.post(
+        f"/v1/fleet/devices/{device_id}/kiosk-lock", json={"enabled": True}, headers=headers
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 55, "network": "4g"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["kiosk_locked"] is True
+    assert resp.json()["battery"] == 55
+
+
+async def test_a_wrong_or_missing_device_secret_does_not_get_in(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Bad Secret Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-BADSEC")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    device_id = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-badsec-1", "pairing_code": code},
+        )
+    ).json()["id"]
+
+    wrong = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 10},
+        headers={"X-Device-Secret": "not-the-secret"},
+    )
+    assert wrong.status_code == 401
+
+    # No credential of either kind. get_optional_tenant_id authorises nothing on
+    # its own, so the route itself has to refuse -- this is the test that proves
+    # making the bearer optional did not open the heartbeat to everyone.
+    none_at_all = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 10}
+    )
+    assert none_at_all.status_code == 401
+
+
+async def test_a_revoked_device_is_a_404_so_the_tablet_knows_it_is_out(client, session):
+    """Revocation has to look like "no such device" to the meter app, because
+    that is the one signal it already acts on: DeviceCommandHeartbeat turns a
+    heartbeat 404 into a sticky `deviceRejected`, which fails the readiness gate
+    on the next cold start."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Revoke Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-REVOKE")).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-revoke-1", "pairing_code": code},
+        )
+    ).json()
+    device_id, secret = registered["id"], registered["device_secret"]
+
+    patched = await client.patch(
+        f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=headers
+    )
+    assert patched.status_code == 200
+    assert patched.json()["revoked_at"] is not None
+
+    beat = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat",
+        json={"battery": 90},
+        headers={"X-Device-Secret": secret},
+    )
+    assert beat.status_code == 404
+
+
+async def test_re_pairing_a_revoked_device_puts_it_back_in_service(client, session):
+    """An operator handing out a fresh code for a tablet they retired is
+    un-retiring it. Leaving revoked_at set would silently 404 every heartbeat
+    after a pairing the driver just watched succeed."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Unrevoke Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="TX-UNREV")).json()["id"]
+
+    async def new_code():
+        resp = await client.post(
+            f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers
+        )
+        return resp.json()["code"]
+
+    first = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": "android-unrev-1", "pairing_code": await new_code()},
+        )
+    ).json()
+    await client.patch(f"/v1/fleet/devices/{first['id']}", json={"revoked": True}, headers=headers)
+
+    second = await client.post(
+        "/v1/fleet/devices/register",
+        json={"android_id": "android-unrev-1", "pairing_code": await new_code()},
+    )
+
+    assert second.status_code == 200
+    assert second.json()["id"] == first["id"]  # same physical tablet, same row
+    assert second.json()["revoked_at"] is None
+    # ...and re-pairing minted a NEW secret, so the old one no longer works.
+    assert second.json()["device_secret"] != first["device_secret"]
+    stale = await client.post(
+        f"/v1/fleet/devices/{first['id']}/heartbeat",
+        json={"battery": 5},
+        headers={"X-Device-Secret": first["device_secret"]},
+    )
+    assert stale.status_code == 401
+
+
+async def test_a_device_paired_before_secrets_existed_can_still_heartbeat(client, session):
+    """Rollout safety. Every tablet in the field today has no device_secret_hash.
+    If the heartbeat demanded a secret, the whole fleet would stop reporting the
+    moment this deployed -- so the bearer path stays until they re-pair."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Legacy Tenant")
+    device_id = (
+        await client.post(
+            "/v1/fleet/devices", json={"android_id": "android-legacy-1"}, headers=headers
+        )
+    ).json()["id"]
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 42}, headers=headers
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["battery"] == 42
+    assert resp.json()["paired_at"] is None  # provisioned by hand, never enrolled
 
 
 async def test_pairing_code_requires_admin_role(client, session):
@@ -475,6 +985,48 @@ async def test_reboot_is_admin_only_and_visible_on_heartbeat(client, session):
     assert resp.json()["reboot_requested"] is False
 
 
+async def test_heartbeat_carries_latest_version_code_hint(client, session):
+    """POST .../heartbeat stamps `latest_version_code` from the current
+    GET /v1/app-releases/latest answer (see app/api/v1/fleet.py's
+    device_heartbeat) -- a low-cost hint riding the existing 60s poll.
+
+    App releases are platform-wide, not tenant-scoped (see
+    app.models.app_release.AppRelease's docstring), and this suite shares one
+    DB across every test file in the session -- tests/test_app_releases.py may
+    already have published releases by the time this runs, so this asserts
+    the hint tracks a NEW highest version_code this test itself publishes,
+    rather than assuming a None starting point no other test file's state can
+    guarantee."""
+    from app.core.security import PLATFORM_TENANT_ID
+    from app.models.tenant import Tenant
+
+    headers = await auth_headers(client, session, role="admin", tenant_name="OTA Hint Tenant")
+    resp = await client.post(
+        "/v1/fleet/devices", json={"android_id": "android-ota-hint-1"}, headers=headers
+    )
+    device_id = resp.json()["id"]
+
+    result = await session.execute(select(Tenant).where(Tenant.id == PLATFORM_TENANT_ID))
+    if result.scalar_one_or_none() is None:
+        session.add(Tenant(id=PLATFORM_TENANT_ID, name="TCT", plan="platform"))
+        await session.commit()
+    platform_headers = await auth_headers(client, session, role="owner", tenant_id=PLATFORM_TENANT_ID)
+    # A very high version_code -- guaranteed higher than any other release any
+    # sibling test file in this session publishes -- so this deterministically
+    # becomes (and stays) the platform-wide "latest" for the rest of the run.
+    resp = await client.post(
+        "/v1/platform/app-releases",
+        data={"version_code": "999999", "version_name": "99.99.99"},
+        files={"file": ("r.apk", b"bytes", "application/vnd.android.package-archive")},
+        headers=platform_headers,
+    )
+    assert resp.status_code == 201
+
+    resp = await client.post(f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["latest_version_code"] == 999999
+
+
 async def test_locate_and_reboot_flags_are_independent(client, session):
     """Setting one MDM-lite command flag must not disturb the other, or the
     pre-existing kiosk_locked/force_update_pending flags."""
@@ -492,3 +1044,300 @@ async def test_locate_and_reboot_flags_are_independent(client, session):
     assert body["reboot_requested"] is False
     assert body["kiosk_locked"] is False
     assert body["force_update_pending"] is False
+
+
+# --- shift history: "which drivers has this vehicle had" -------------------------
+
+
+async def _make_driver(session, *, tenant_id, name="Driver One"):
+    driver = User(
+        tenant_id=tenant_id, role=ROLE_DRIVER, name=name, email=f"{uuid.uuid4()}@example.com", status="active"
+    )
+    session.add(driver)
+    await session.commit()
+    await session.refresh(driver)
+    return driver
+
+
+async def _make_shift(
+    session, *, tenant_id, driver_id, vehicle_id, start_at, end_at=None, km_total=Decimal("0"),
+    cash_total=Decimal("0"), card_total=Decimal("0"),
+):
+    shift = Shift(
+        tenant_id=tenant_id,
+        driver_id=driver_id,
+        vehicle_id=vehicle_id,
+        start_at=start_at,
+        end_at=end_at,
+        km_total=km_total,
+        cash_total=cash_total,
+        card_total=card_total,
+    )
+    session.add(shift)
+    await session.commit()
+    await session.refresh(shift)
+    return shift
+
+
+async def test_vehicle_shift_history_returns_past_shifts_newest_first_with_driver_names(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant")
+    resp = await _create_vehicle(client, headers, rego="TX-HIST")
+    vehicle_id = resp.json()["id"]
+
+    # Resolve the tenant_id backing `headers` via a fresh vehicle lookup isn't
+    # available directly, so pull it off the created vehicle's own response.
+    tenant_id = resp.json()["tenant_id"]
+
+    driver_a = await _make_driver(session, tenant_id=tenant_id, name="Alice Morning")
+    driver_b = await _make_driver(session, tenant_id=tenant_id, name="Bob Evening")
+
+    now = datetime.now(UTC)
+    older_shift = await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver_a.id,
+        vehicle_id=vehicle_id,
+        start_at=now - timedelta(hours=24),
+        end_at=now - timedelta(hours=12),
+        km_total=Decimal("120.500"),
+        cash_total=Decimal("80.00"),
+        card_total=Decimal("40.00"),
+    )
+    newer_shift = await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver_b.id,
+        vehicle_id=vehicle_id,
+        start_at=now - timedelta(hours=11),
+        end_at=now - timedelta(hours=1),
+        km_total=Decimal("95.250"),
+        cash_total=Decimal("50.00"),
+        card_total=Decimal("60.00"),
+    )
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert body["skip"] == 0
+    assert body["limit"] == 20
+
+    items = body["items"]
+    assert len(items) == 2
+    # Newest-first: driver B's more-recent shift comes before driver A's.
+    assert items[0]["shift_id"] == newer_shift.id
+    assert items[0]["driver_id"] == driver_b.id
+    assert items[0]["driver_name"] == "Bob Evening"
+    assert Decimal(str(items[0]["distance_km"])) == Decimal("95.250")
+    assert Decimal(str(items[0]["fare_total"])) == Decimal("110.00")
+
+    assert items[1]["shift_id"] == older_shift.id
+    assert items[1]["driver_id"] == driver_a.id
+    assert items[1]["driver_name"] == "Alice Morning"
+    assert Decimal(str(items[1]["distance_km"])) == Decimal("120.500")
+    assert Decimal(str(items[1]["fare_total"])) == Decimal("120.00")
+
+
+async def test_vehicle_shift_history_paginates(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Shift History Paging Tenant")
+    resp = await _create_vehicle(client, headers, rego="TX-HISTPAGE")
+    vehicle_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
+
+    driver = await _make_driver(session, tenant_id=tenant_id, name="Solo Driver")
+    now = datetime.now(UTC)
+    for i in range(3):
+        await _make_shift(
+            session,
+            tenant_id=tenant_id,
+            driver_id=driver.id,
+            vehicle_id=vehicle_id,
+            start_at=now - timedelta(hours=i),
+            end_at=now - timedelta(hours=i) + timedelta(minutes=30),
+        )
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history?limit=2&skip=0", headers=headers)
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 2
+
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history?limit=2&skip=2", headers=headers)
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 1
+
+
+async def test_vehicle_shift_history_unknown_vehicle_404s(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.get("/v1/fleet/vehicles/does-not-exist/shift-history", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_vehicle_shift_history_is_tenant_isolated(client, session):
+    headers_a = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant A")
+    headers_b = await auth_headers(client, session, role="admin", tenant_name="Shift History Tenant B")
+
+    resp = await _create_vehicle(client, headers_a, rego="TX-HISTISO")
+    vehicle_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
+
+    driver = await _make_driver(session, tenant_id=tenant_id, name="Isolated Driver")
+    await _make_shift(
+        session,
+        tenant_id=tenant_id,
+        driver_id=driver.id,
+        vehicle_id=vehicle_id,
+        start_at=datetime.now(UTC) - timedelta(hours=2),
+        end_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+
+    # Tenant B's dispatcher must never see tenant A's vehicle or its shifts.
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers_b)
+    assert resp.status_code == 404
+
+    # Tenant A itself still sees its own shift.
+    resp = await client.get(f"/v1/fleet/vehicles/{vehicle_id}/shift-history", headers=headers_a)
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
+# --- remote locate: the answer path, and the flag actually clearing -------------
+
+
+async def _paired_device(client, session, *, tenant_name: str, rego: str, android_id: str):
+    """A really-enrolled device plus its secret and its tenant's admin headers."""
+    headers = await auth_headers(client, session, role="admin", tenant_name=tenant_name)
+    vehicle_id = (await _create_vehicle(client, headers, rego=rego)).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": android_id, "pairing_code": code},
+        )
+    ).json()
+    return headers, registered["id"], registered["device_secret"]
+
+
+async def test_answering_a_locate_clears_the_flag_and_records_where_it_is(client, session):
+    """The bug reported from the field: "when I try to locate it's showing
+    pending, but nothing is working".
+
+    `locate_requested` was set by an admin and read by the tablet, but NOTHING
+    anywhere ever set it back to false -- no route, no service call, not the
+    heartbeat -- so the badge said Pending for the life of the row whether or not
+    the device had answered. There was also nowhere for an answer to go.
+    """
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Locate Tenant", rego="TX-LOC", android_id="android-loc-1"
+    )
+
+    requested = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate", json={"enabled": True}, headers=headers
+    )
+    assert requested.json()["locate_requested"] is True
+
+    answered = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.8688, "lng": 151.2093, "accuracy_m": 12.5},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert answered.status_code == 200
+    body = answered.json()
+    assert body["locate_requested"] is False  # the whole point
+    assert body["last_locate_lat"] == -33.8688
+    assert body["last_locate_lng"] == 151.2093
+    assert body["last_locate_accuracy_m"] == 12.5
+    assert body["last_locate_at"] is not None
+
+    # And it stays cleared on the next read -- an admin refreshing the page sees
+    # the answer, not a stale Pending.
+    reread = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+    assert reread["locate_requested"] is False
+    assert reread["last_locate_lat"] == -33.8688
+
+
+async def test_a_locate_can_be_answered_with_nobody_logged_in(client, session):
+    """The reason this route is device-authenticated and lives on the DEVICE.
+
+    The old answer path published a vehicle position, which needs a live driver
+    session and a current vehicle binding. A parked, logged-off tablet has
+    neither -- and that is exactly the tablet someone reaching for "locate" is
+    trying to find. Note the absence of any bearer token here.
+    """
+    _, device_id, secret = await _paired_device(
+        client, session, tenant_name="Parked Tenant", rego="TX-PARK", android_id="android-park-1"
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.9, "lng": 151.1},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["last_locate_at"] is not None
+    # Accuracy is optional and never invented -- a device that cannot say how
+    # good its fix is sends nothing rather than a guess.
+    assert resp.json()["last_locate_accuracy_m"] is None
+
+
+async def test_a_locate_answer_needs_a_real_credential(client, session):
+    _, device_id, _secret = await _paired_device(
+        client, session, tenant_name="Loc Auth Tenant", rego="TX-LOCA", android_id="android-loca-1"
+    )
+
+    wrong = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response",
+        json={"lat": -33.9, "lng": 151.1},
+        headers={"X-Device-Secret": "nope"},
+    )
+    assert wrong.status_code == 401
+
+    none_at_all = await client.post(
+        f"/v1/fleet/devices/{device_id}/locate-response", json={"lat": -33.9, "lng": 151.1}
+    )
+    assert none_at_all.status_code == 401
+
+
+async def test_a_restart_ack_clears_the_reboot_flag(client, session):
+    """Same missing-clear problem as locate. The app now restarts its own
+    process on this flag (it cannot reboot the OS without Device Owner) and says
+    so here, which is what turns a permanent "Pending" into a carried-out
+    command."""
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Restart Tenant", rego="TX-RST", android_id="android-rst-1"
+    )
+
+    queued = await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": True}, headers=headers
+    )
+    assert queued.json()["reboot_requested"] is True
+
+    acked = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "restart"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    assert acked.status_code == 200
+    assert acked.json()["reboot_requested"] is False
+    assert acked.json()["command_acked_at"] is not None
+
+
+async def test_an_unknown_command_is_rejected_rather_than_silently_accepted(client, session):
+    _, device_id, secret = await _paired_device(
+        client, session, tenant_name="Bad Cmd Tenant", rego="TX-BADC", android_id="android-badc-1"
+    )
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "self-destruct"},
+        headers={"X-Device-Secret": secret},
+    )
+
+    # A device claiming to have carried out something this server has no concept
+    # of must not be recorded as having carried anything out.
+    assert resp.status_code == 422

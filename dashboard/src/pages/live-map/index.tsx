@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Radio, RadioTower, WifiOff } from "lucide-react";
 import apiClient from "@/lib/apiClient";
@@ -19,13 +19,31 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { useFleetLiveSocket } from "@/hooks/useLiveMap";
-import { FleetMapCanvas } from "./FleetMapCanvas";
+// Cross-page import, same established convention as `pages/fleet/api.ts`
+// importing live-map's own types -- reuses the Fleet & Drivers compliance-
+// expiry rollup and banner rather than duplicating the fetch/rendering
+// logic. Live Map is the app's actual landing page (`router.tsx`'s
+// `index: true` redirect), so this is where a dispatcher who never opens
+// Fleet & Drivers will otherwise never see an expiring licence/rego/
+// insurance date at all.
+import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
+import { useDevices } from "@/pages/fleet/api";
+import { FleetLocateList, type UnpairedTablet } from "./FleetLocateList";
+import { TrailControls } from "./TrailControls";
+import { usePositionHistoryQuery } from "./useVehiclePositionHistory";
+import { FleetMapCanvas, ROUTE_LINE_COLOR, type DevicePoint, type TrailPoint, type VehicleMapState } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
+import { ResolveDuressModal } from "./ResolveDuressModal";
+import { TabletDetailSheet } from "./TabletDetailSheet";
+import { VehicleDetailModal } from "./VehicleDetailModal";
+import { useLiveMapGeofencesQuery } from "./useGeofences";
+import { usePositionHistory } from "./usePositionHistory";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
 import {
   batteryColor,
   formatLatLng,
   formatRelativeTime,
+  geofencesContaining,
   isStale,
   mergeLivePosition,
   networkBadgeVariant,
@@ -59,6 +77,64 @@ export default function LiveMapPage() {
   const { positions, connectionState } = useFleetLiveSocket();
 
   const [publishOpen, setPublishOpen] = useState(false);
+  // Selection lives in the URL so it can be linked to -- Fleet > Devices' Locate
+  // cell deep-links straight here, which is the whole reason that cell stopped
+  // pointing at Google Maps. Same `?key=id` shape the duress markers already use.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedVehicleId = searchParams.get("vehicle");
+  const setSelectedVehicleId = useCallback(
+    (id: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("vehicle", id);
+          else next.delete("vehicle");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  /** Camera-follows-the-vehicle mode. Turned on by picking a vehicle (that is
+   * what picking one is FOR), off by dragging the map. */
+  const [follow, setFollow] = useState(Boolean(searchParams.get("vehicle")));
+  /** Hours of history to draw, or null for "no trail". Off by default: a trail is
+   * something you ask for, and drawing one for every selection would bury the
+   * live fleet under lines. */
+  const [trailHours, setTrailHours] = useState<number | null>(null);
+  /** Where the scrubber is parked, or null for "live". */
+  const [trailCursor, setTrailCursor] = useState<number | null>(null);
+
+  const trailSince = useMemo(
+    () => (trailHours == null ? undefined : new Date(Date.now() - trailHours * 3600_000).toISOString()),
+    [trailHours],
+  );
+  const trailQuery = usePositionHistoryQuery(
+    trailHours == null ? null : selectedVehicleId,
+    trailSince,
+  );
+  const trail: TrailPoint[] = useMemo(
+    () =>
+      (trailQuery.data?.items ?? []).map((p) => ({
+        lat: p.lat,
+        lng: p.lng,
+        speedKmh: p.speed_kmh,
+        recordedAt: p.recorded_at,
+      })),
+    [trailQuery.data],
+  );
+
+  // A new selection or window starts live, not parked wherever the last scrubber
+  // happened to sit -- an index into a different vehicle's drive is meaningless.
+  useEffect(() => {
+    setTrailCursor(null);
+  }, [selectedVehicleId, trailHours]);
+  /** A tablet selected instead of a vehicle. Mutually exclusive with
+   * [selectedVehicleId]: the map flies to one thing at a time, and the sheet
+   * describes one thing at a time. */
+  const [selectedTabletId, setSelectedTabletId] = useState<string | null>(null);
+  const [resolvingEvent, setResolvingEvent] = useState<DuressEventRead | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
   const [regoInput, setRegoInput] = useState("");
@@ -87,6 +163,25 @@ export default function LiveMapPage() {
     refetchInterval: 20000,
   });
 
+  // The socket sends no snapshot on connect: it only forwards publishes made while
+  // you are listening. So everything that happened during a drop is simply missing,
+  // and the `positions` cache still holds whatever each vehicle was doing when the
+  // connection died -- merged over the REST rows, that is a fleet of ghosts frozen
+  // at the moment of the drop. `GET /v1/vehicles` carries every vehicle's real
+  // last-known position, so refetching it the moment the socket RE-opens closes the
+  // gap immediately instead of waiting out the 20s poll. Only on a re-open: the
+  // first connect already has a fetch of its own in flight.
+  const refetchVehicles = vehiclesMapQuery.refetch;
+  const socketHasDropped = useRef(false);
+  useEffect(() => {
+    if (connectionState !== "open") {
+      socketHasDropped.current = true;
+    } else if (socketHasDropped.current) {
+      socketHasDropped.current = false;
+      void refetchVehicles();
+    }
+  }, [connectionState, refetchVehicles]);
+
   // --- data: filtered/paginated vehicle list for the table ----------------
   const vehiclesTableQuery = useQuery({
     queryKey: ["live-map", "vehicles", "table", { rego, liveStatus, page }],
@@ -104,6 +199,44 @@ export default function LiveMapPage() {
     placeholderData: keepPreviousData,
   });
 
+  // Every tablet in the tenant, so the ones bound to no vehicle can be listed and
+  // located too -- see FleetLocateList's own section comment. Same cached query the
+  // Fleet > Devices page uses, so arriving from that page's Locate link costs
+  // nothing, and the vehicle sheet's remote controls read the same rows.
+  const devicesQuery = useDevices(0, {}, 100);
+
+  const unpairedTablets: UnpairedTablet[] = useMemo(() => {
+    const vehicleIds = new Set((vehiclesMapQuery.data?.items ?? []).map((v) => v.id));
+    return (devicesQuery.data?.items ?? [])
+      // Retired tablets are not "unpaired", they are gone -- listing them would put
+      // permanent dead rows under every operator's search.
+      .filter((d) => !d.revoked_at)
+      .filter((d) => !d.vehicle_id || !vehicleIds.has(d.vehicle_id))
+      .map((d) => ({
+        id: d.id,
+        androidId: d.android_id,
+        model: d.model,
+        lastSeenAt: d.last_seen_at,
+        lat: d.last_locate_lat,
+        lng: d.last_locate_lng,
+        locatedAt: d.last_locate_at,
+      }));
+  }, [devicesQuery.data, vehiclesMapQuery.data]);
+
+  const devicePoints: DevicePoint[] = useMemo(
+    () =>
+      unpairedTablets
+        .filter((t): t is UnpairedTablet & { lat: number; lng: number } => t.lat != null && t.lng != null)
+        .map((t) => ({
+          id: t.id,
+          label: t.model ?? t.androidId.slice(0, 8),
+          lat: t.lat,
+          lng: t.lng,
+          locatedAt: t.locatedAt,
+        })),
+    [unpairedTablets],
+  );
+
   // --- data: open duress events, polled --------------------------------
   const duressQuery = useQuery({
     queryKey: ["live-map", "duress"],
@@ -116,9 +249,40 @@ export default function LiveMapPage() {
     refetchInterval: 5000,
   });
 
+  // --- data: geofences (rarely change -- see useGeofences.ts's staleTime) --
+  const geofencesQuery = useLiveMapGeofencesQuery();
+  const geofences = useMemo(() => geofencesQuery.data ?? [], [geofencesQuery.data]);
+
   const mapVehicles = useMemo(
     () => (vehiclesMapQuery.data?.items ?? []).map((v) => mergeLivePosition(v, positions)),
     [vehiclesMapQuery.data, positions],
+  );
+
+  // Idle detection needs a short position-history buffer this hook owns (see
+  // its own doc) -- fed from `mapVehicles` since that's the up-to-100-vehicle
+  // snapshot that's actually kept live via the WS merge above, unlike the
+  // filtered/paginated table query.
+  const getIdleInfo = usePositionHistory(mapVehicles);
+
+  // The map + vehicle detail panel's own enriched view of each vehicle --
+  // idle status and geofence containment computed once here (the only place
+  // that owns both the position-history buffer and the fetched geofence
+  // list) and threaded down, so FleetMapCanvas, its hover card and
+  // VehicleDetailModal can never disagree about a vehicle's idle/geofence
+  // state (see FleetMapCanvas.VehicleMapState's own doc).
+  const mapVehicleStates: VehicleMapState[] = useMemo(
+    () =>
+      mapVehicles.map((v) => ({
+        ...v,
+        idleInfo: getIdleInfo(v),
+        insideGeofences: v.lat != null && v.lng != null ? geofencesContaining(v.lat, v.lng, geofences) : [],
+      })),
+    [mapVehicles, getIdleInfo, geofences],
+  );
+
+  const selectedVehicleMapState = useMemo(
+    () => (selectedVehicleId ? (mapVehicleStates.find((v) => v.id === selectedVehicleId) ?? null) : null),
+    [mapVehicleStates, selectedVehicleId],
   );
 
   const tableVehicles = useMemo(
@@ -130,6 +294,20 @@ export default function LiveMapPage() {
 
   const duressVehicleIds = useMemo(() => new Set(duressEvents.map((e) => e.vehicle_id)), [duressEvents]);
 
+  // A locked camera must never be the reason nobody saw an alarm. Following one
+  // vehicle holds the map on it, while a duress event elsewhere in the fleet draws
+  // its marker oversized in red somewhere off screen. Following the vehicle that
+  // RAISED the duress is the one case worth keeping -- that is the car everyone now
+  // wants the camera on.
+  //
+  // Deliberately a boolean, not the event list: this fires once on the edge, so an
+  // operator who turns Follow back on with an alarm still open keeps it, rather
+  // than having it switched off under them every 5s poll.
+  const otherVehicleInDuress = duressEvents.some((e) => e.vehicle_id !== selectedVehicleId);
+  useEffect(() => {
+    if (otherVehicleInDuress) setFollow(false);
+  }, [otherVehicleInDuress]);
+
   const vehicleRegoById = useMemo(() => {
     const map = new Map<string, string>();
     for (const v of mapVehicles) map.set(v.id, v.rego);
@@ -138,6 +316,28 @@ export default function LiveMapPage() {
 
   const total = vehiclesTableQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / TABLE_PAGE_SIZE));
+
+  // Fleet-health rollup computed from the same up-to-100-vehicle snapshot
+  // already fetched for the map (mapVehicles), not the filtered/paginated
+  // table -- this is the "how many are actually online right now" answer
+  // that used to be missing (the page only ever said "N vehicles in fleet",
+  // a raw roster size with no live-status breakdown at all).
+  const fleetHealth = useMemo(() => {
+    let onlineNow = 0;
+    let available = 0;
+    let onTrip = 0;
+    let onBreak = 0;
+    let offline = 0;
+    for (const v of mapVehicles) {
+      if (v.position_updated_at && !isStale(v.position_updated_at)) onlineNow++;
+      const status = v.live_status.toLowerCase();
+      if (status === "available") available++;
+      else if (status === "break") onBreak++;
+      else if (status === "offline") offline++;
+      else onTrip++; // on_trip/hired/busy/trip -- anything else counts as actively working
+    }
+    return { fleetTotal: mapVehicles.length, onlineNow, available, onTrip, onBreak, offline };
+  }, [mapVehicles]);
 
   const columns: TableColumn<VehicleLiveRead>[] = [
     {
@@ -175,7 +375,7 @@ export default function LiveMapPage() {
       render: (v) => (
         <span
           className={isStale(v.position_updated_at) ? "font-medium text-destructive" : "text-muted-foreground"}
-          title={isStale(v.position_updated_at) ? "No update in over 90s -- may have lost connectivity" : undefined}
+          title={isStale(v.position_updated_at) ? "No update in over 15s -- may have lost connectivity" : undefined}
         >
           {formatRelativeTime(v.position_updated_at)}
         </span>
@@ -230,11 +430,18 @@ export default function LiveMapPage() {
       key: "actions",
       header: "",
       render: (e) => (
-        <Link to={`/duress?event=${e.id}`}>
-          <Button size="sm" variant="destructive">
-            View
-          </Button>
-        </Link>
+        <div className="flex justify-end gap-2">
+          {user && CAN_PUBLISH_ROLES.has(user.role) && (
+            <Button size="sm" variant="secondary" onClick={() => setResolvingEvent(e)}>
+              Resolve
+            </Button>
+          )}
+          <Link to={`/duress?event=${e.id}`}>
+            <Button size="sm" variant="destructive">
+              View
+            </Button>
+          </Link>
+        </div>
       ),
     },
   ];
@@ -263,7 +470,15 @@ export default function LiveMapPage() {
   })();
 
   return (
-    <div>
+    // While the vehicle sheet is open the page gives up its right-hand 27rem so
+    // the sheet sits BESIDE the map instead of on top of it. The map picks the
+    // new width up through FleetMapCanvas's ResizeObserver. Below `lg` there is
+    // no room to share, so the sheet covers the page as a dialog would.
+    <div
+      className={
+        selectedVehicleId || selectedTabletId ? "transition-[padding] lg:pr-[27rem]" : "transition-[padding]"
+      }
+    >
       <PageHeader
         title="Live Map"
         description="Real-time vehicle positions and active duress events across the fleet."
@@ -277,12 +492,36 @@ export default function LiveMapPage() {
         }
       />
 
+      <ComplianceExpiryBanner />
+
+      {/* At-a-glance fleet health -- previously the only rollup on this page
+          was the "N vehicles in fleet" line in the Vehicles card below,
+          a raw roster size with no live-status breakdown. This answers the
+          question a dispatcher actually opens Live Map to ask: how many
+          vehicles are on right now, and doing what. */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <FleetStatTile label="In fleet" value={fleetHealth.fleetTotal} />
+        <FleetStatTile
+          label="Reporting now"
+          value={fleetHealth.onlineNow}
+          hint="Sent a position update in the last 15s"
+          tone="success"
+        />
+        <FleetStatTile label="Available" value={fleetHealth.available} tone="success" />
+        <FleetStatTile label="On trip / break" value={fleetHealth.onTrip + fleetHealth.onBreak} tone="accent" />
+        <FleetStatTile
+          label="Marked offline"
+          value={fleetHealth.offline}
+          tone={fleetHealth.offline > 0 ? "destructive" : undefined}
+        />
+      </div>
+
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>Fleet map</CardTitle>
           <CardDescription>
-            Vehicles plotted by last-known lat/lng, colored by status. Vehicles with an active duress
-            event are shown oversized in red — click one to open its event.
+            Search a rego, driver or tablet on the left and click it to fly there. Vehicles with an
+            active duress event are shown oversized in red — click one to open its event.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -295,7 +534,82 @@ export default function LiveMapPage() {
               Failed to load vehicle positions.
             </div>
           ) : (
-            <FleetMapCanvas vehicles={mapVehicles} duressEvents={duressEvents} />
+            // Map and list side by side, not stacked. Locating a vehicle is a
+            // two-handed job -- find it in a list, see it on a map -- and the
+            // previous layout put a paginated table below the fold where
+            // filtering it left the map untouched.
+            <div className="flex flex-col gap-4 lg:flex-row">
+              <FleetLocateList
+                vehicles={mapVehicleStates}
+                selectedVehicleId={selectedVehicleId}
+                onSelect={(id) => {
+                  setSelectedTabletId(null);
+                  setSelectedVehicleId(id);
+                  setFollow(true);
+                }}
+                unpairedTablets={unpairedTablets}
+                selectedTabletId={selectedTabletId}
+                onSelectTablet={(id) => {
+                  // A tablet has no live feed to follow, so picking one drops
+                  // follow rather than leaving the camera locked to a vehicle the
+                  // operator has just navigated away from.
+                  setSelectedVehicleId(null);
+                  setFollow(false);
+                  setSelectedTabletId(id);
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <FleetMapCanvas
+                  vehicles={mapVehicleStates}
+                  duressEvents={duressEvents}
+                  geofences={geofences}
+                  onSelectVehicle={(id) => {
+                    setSelectedVehicleId(id);
+                    setFollow(true);
+                  }}
+                  selectedVehicleId={selectedVehicleId}
+                  follow={follow}
+                  onFollowInterrupted={() => setFollow(false)}
+                  trail={trail}
+                  trailCursor={trailCursor}
+                  devicePoints={devicePoints}
+                  selectedDeviceId={selectedTabletId}
+                  onSelectDevice={(id) => {
+                    setSelectedVehicleId(null);
+                    setFollow(false);
+                    setSelectedTabletId(id);
+                  }}
+                />
+                {selectedVehicleId && (
+                  <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+                    <Button
+                      variant={follow ? "primary" : "outline"}
+                      size="sm"
+                      onClick={() => setFollow((f) => !f)}
+                    >
+                      {follow ? "Following" : "Follow"}
+                    </Button>
+                    <span>
+                      {follow
+                        ? "The camera stays on this vehicle. Drag the map to take it back."
+                        : "The camera is yours. Turn Follow on to track this vehicle."}
+                    </span>
+                  </div>
+                )}
+                {selectedVehicleId && (
+                  <TrailControls
+                    hours={trailHours}
+                    onHoursChange={setTrailHours}
+                    trail={trail}
+                    cursor={trailCursor}
+                    onCursorChange={setTrailCursor}
+                    loading={trailQuery.isLoading}
+                    harshBrakes={trailQuery.data?.harsh_brake_events ?? 0}
+                    rapidAccels={trailQuery.data?.rapid_accel_events ?? 0}
+                  />
+                )}
+              </div>
+            </div>
           )}
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
@@ -311,6 +625,10 @@ export default function LiveMapPage() {
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--destructive)" }} /> Duress
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full" style={{ background: ROUTE_LINE_COLOR }} /> Route to
+              destination
             </span>
           </div>
         </CardContent>
@@ -360,6 +678,7 @@ export default function LiveMapPage() {
             rowKey={(v) => v.id}
             isLoading={vehiclesTableQuery.isLoading}
             emptyState={vehiclesTableQuery.isError ? "Failed to load vehicles." : "No vehicles match these filters."}
+            onRowClick={(v) => setSelectedVehicleId(v.id)}
           />
 
           {pageCount > 1 && (
@@ -386,6 +705,45 @@ export default function LiveMapPage() {
       </Card>
 
       <PublishPositionModal open={publishOpen} onClose={() => setPublishOpen(false)} vehicles={mapVehicles} />
+      <VehicleDetailModal
+        vehicleId={selectedVehicleId}
+        open={selectedVehicleId != null}
+        onClose={() => setSelectedVehicleId(null)}
+        mapState={selectedVehicleMapState}
+      />
+      <TabletDetailSheet deviceId={selectedTabletId} onClose={() => setSelectedTabletId(null)} />
+      <ResolveDuressModal event={resolvingEvent} onClose={() => setResolvingEvent(null)} />
     </div>
+  );
+}
+
+/** One tile in the fleet-health strip at the top of the page. */
+function FleetStatTile({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+  tone?: "success" | "accent" | "destructive";
+}) {
+  const toneClass =
+    tone === "success"
+      ? "text-success"
+      : tone === "accent"
+        ? "text-brand-accent"
+        : tone === "destructive"
+          ? "text-destructive"
+          : "text-foreground";
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>{value}</p>
+        {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+      </CardContent>
+    </Card>
   );
 }

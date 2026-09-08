@@ -9,7 +9,12 @@ import java.util.UUID
 /** Opens a shift, per spec B5 S1 ("pre-shift inspection checklist ... ends
  * in a call to open a shift"). */
 interface ShiftRepository {
-    suspend fun startShift(driverId: String, vehicleId: String, inspection: Map<String, String>): Result<ShiftDto>
+    suspend fun startShift(
+        driverId: String,
+        vehicleId: String,
+        inspection: Map<String, String>,
+        deviceAndroidId: String? = null,
+    ): Result<ShiftDto>
 
     /** Plain re-read of one shift by id — added for the Plot Zone screen's "currently plotted
      * in" indicator ([au.com.threesixty.cabdispatch.ui.screens.zones.PlotZoneViewModel]), which
@@ -36,6 +41,7 @@ class RemoteBackedShiftRepository(private val apiService: ApiService) : ShiftRep
         driverId: String,
         vehicleId: String,
         inspection: Map<String, String>,
+        deviceAndroidId: String?,
     ): Result<ShiftDto> {
         val result = runCatching {
             apiService.startShift(
@@ -43,6 +49,7 @@ class RemoteBackedShiftRepository(private val apiService: ApiService) : ShiftRep
                     driverId = driverId,
                     vehicleId = vehicleId,
                     inspectionJson = inspection,
+                    deviceAndroidId = deviceAndroidId,
                 ),
             )
         }

@@ -22,63 +22,79 @@ point, tariff rows needed as fixtures here are inserted directly via the
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import Trip  # noqa: F401 — see module docstring
-from app.services.fare_engine import round_half_up
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip, TripGpsTrace
+from app.models.vouchers import CorporateAccount, Voucher
+from app.services import fare_engine as fe
+from app.services.fare_engine import NSW_FARE_ZONE, round_down, round_half_up
 from app.services.trips import compute_variance_pct, haversine_km
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
+
+# A fixed, deterministic ordinary-Wednesday-daytime timestamp (2026-07-15 is a
+# Wednesday, comfortably clear of the 22:00-06:00 night window, of Fri/Sat/
+# Sunday, and of every date in fare_engine.NSW_PUBLIC_HOLIDAYS or the day
+# before one) — used as the default `start_at` below instead of
+# `datetime.now(UTC)` so tests that assert an exact day-rate dollar figure
+# (e.g. "urban day dist_rate_1") can never flake depending on the real
+# wall-clock time a test happens to run at, now that time_class/is_peak are
+# resolved server-side from the trip's real start_at (see
+# app.services.fare_engine.resolve_time_class_and_peak) rather than trusted
+# verbatim from the request body.
+#
+# NSW local, not UTC. It was written as 14:00 UTC, which is 00:00 Sydney — so
+# once resolve_time_class_and_peak started (correctly) classifying in NSW local
+# time, this "ordinary Wednesday daytime" constant became Thursday midnight and
+# four tests here started billing the night rate. The instant that matters to
+# every assertion below is the NSW wall clock, so that is what it now names.
+_FIXED_DAY_START_AT = datetime(2026, 7, 15, 14, 0, 0, tzinfo=NSW_FARE_ZONE)
 
 
 # --- fixtures / helpers ---------------------------------------------------
 
 
 async def _seed_tariff(session: AsyncSession, *, tenant_id: str, region: str = "urban") -> TariffRow:
-    """Inserts a real tariffs-domain row with exactly the Fares Order 2025
-    (no.2) rates, mirroring app.services.fare_engine.URBAN_TARIFF/COUNTRY_TARIFF."""
-    if region == "urban":
-        row = TariffRow(
-            tenant_id=tenant_id,
-            name="Standard Urban",
-            region="urban",
-            effective_from=datetime(2025, 11, 3, tzinfo=UTC),
-            booked=False,
-            flag_fall=Decimal("5.00"),
-            peak_charge=Decimal("2.56"),
-            dist_rate_1=Decimal("2.52"),
-            dist_rate_2=Decimal("2.29"),
-            night_rate_1=Decimal("3.00"),
-            night_rate_2=Decimal("2.73"),
-            holiday_rate_1=Decimal(0),
-            holiday_rate_2=Decimal(0),
-            waiting_rate_per_min=Decimal("1.092"),
-        )
-    else:
-        row = TariffRow(
-            tenant_id=tenant_id,
-            name="Standard Country",
-            region="country",
-            effective_from=datetime(2025, 11, 3, tzinfo=UTC),
-            booked=False,
-            flag_fall=Decimal("5.11"),
-            peak_charge=Decimal(0),
-            dist_rate_1=Decimal("2.41"),
-            dist_rate_2=Decimal("3.30"),
-            night_rate_1=Decimal("2.87"),
-            night_rate_2=Decimal("3.93"),
-            holiday_rate_1=Decimal("2.87"),
-            holiday_rate_2=Decimal("3.93"),
-            waiting_rate_per_min=Decimal("1.045"),
-        )
+    """Inserts a real tariffs-domain row with exactly the current Point to
+    Point Transport (Fares) Order rates — DERIVED from
+    app.services.fare_engine.URBAN_TARIFF/COUNTRY_TARIFF (never a second,
+    independently-hardcoded copy of the numbers) so this helper can never
+    silently drift out of sync with the engine the next time the rate card
+    changes, the way it did across the 2025->2026 Order update."""
+    engine_tariff = fe.URBAN_TARIFF if region == "urban" else fe.COUNTRY_TARIFF
+    row = TariffRow(
+        tenant_id=tenant_id,
+        name="Standard Urban" if region == "urban" else "Standard Country",
+        region=region,
+        effective_from=datetime(2026, 6, 1, tzinfo=UTC),
+        booked=False,
+        flag_fall=engine_tariff.flag_fall,
+        peak_charge=engine_tariff.peak_charge,
+        dist_rate_1=engine_tariff.dist_rate_1,
+        dist_rate_2=engine_tariff.dist_rate_2,
+        night_rate_1=engine_tariff.night_rate_1,
+        night_rate_2=engine_tariff.night_rate_2,
+        holiday_rate_1=engine_tariff.holiday_rate_1,
+        holiday_rate_2=engine_tariff.holiday_rate_2,
+        waiting_rate_per_min=engine_tariff.waiting_rate_per_min,
+        dist_km_threshold=engine_tariff.dist_km_threshold,
+        speed_threshold_kmh=engine_tariff.speed_threshold_kmh,
+        maxi_multiplier=engine_tariff.maxi_multiplier,
+        multi_hire_pct=engine_tariff.multi_hire_pct,
+        psl_amount=engine_tariff.psl_amount,
+        surcharge_pct_cap=engine_tariff.surcharge_pct_cap,
+        cleaning_fee_cap=engine_tariff.cleaning_fee_cap,
+    )
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -94,7 +110,7 @@ def _trip_payload(*, tariff_id: str, **overrides) -> dict:
         "type": "rank_hail",
         "start_lat": -33.8688,
         "start_lng": 151.2093,
-        "start_at": datetime.now(UTC).isoformat(),
+        "start_at": _FIXED_DAY_START_AT.isoformat(),
     }
     payload.update(overrides)
     return payload
@@ -123,6 +139,63 @@ async def test_create_trip_opens_it(client: AsyncClient, session: AsyncSession):
     assert body["distance_m"] == 0
     assert body["total"] == "0.00"
     assert body["client_uuid"]
+
+
+async def test_create_trip_ignores_client_time_class_and_is_peak_claims(
+    client: AsyncClient, session: AsyncSession
+):
+    """The same class of bug as resolve_is_maxi_vehicle's: a device claiming
+    `time_class="night"`/`is_peak=true` for a start_at that is provably
+    ordinary Wednesday daytime must not get either -- the server
+    deterministically re-derives both from the tariff + the trip's real
+    start_at (app.services.fare_engine.resolve_time_class_and_peak), ignoring
+    whatever a device sends in the request body."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    body = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        start_at=_FIXED_DAY_START_AT.isoformat(),  # ordinary Wednesday 14:00 -- see this constant's doc
+        # Lies: this instant is neither night nor a peak window.
+        time_class="night",
+        is_peak=True,
+    )
+
+    assert body["time_class"] == "day"
+    assert body["is_peak"] is False
+
+
+async def test_sync_ignores_client_time_class_and_is_peak_claims(client: AsyncClient, session: AsyncSession):
+    """Same client-override behaviour as the create-trip test above, but for
+    the offline-replay sync path (app.services.trips.recompute_from_trace) --
+    a synced item claiming a bogus time_class/is_peak for its real start_at
+    must be persisted with the server-derived values, not the device's
+    claim."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = _FIXED_DAY_START_AT  # ordinary Wednesday 14:00 -- see this constant's doc
+    trace = [{"lat": -33.8688, "lng": 151.2093, "speed_kmh": 0, "ts": now.isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="5.17",
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+        # Lies: this instant is neither night nor a peak window.
+        time_class="night",
+        is_peak=True,
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["time_class"] == "day"
+    assert trip["is_peak"] is False
 
 
 async def _tenant_of(client: AsyncClient, headers: dict) -> str:
@@ -285,7 +358,7 @@ async def test_tick_distance_mode_accrues_distance_charge(client: AsyncClient, s
 
     expected_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
     expected_m = round(expected_km * 1000)
-    expected_dist_amount = round_half_up(expected_km * Decimal("2.52"))
+    expected_dist_amount = round_half_up(expected_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
 
     assert abs(body["distance_m"] - expected_m) <= 2
     assert Decimal(body["dist_amount"]) == expected_dist_amount
@@ -317,7 +390,7 @@ async def test_tick_waiting_mode_accrues_waiting_charge(client: AsyncClient, ses
     assert resp.status_code == 200
     body = resp.json()
 
-    expected_wait_amount = round_half_up(Decimal(2) * Decimal("1.092"))  # 2 minutes
+    expected_wait_amount = round_half_up(Decimal(2) * Decimal("1.130"))  # 2 minutes, 2026 Order waiting rate
     assert Decimal(body["wait_amount"]) == expected_wait_amount
     assert body["dist_amount"] == "0.00"
     assert body["waiting_s"] == 120
@@ -476,6 +549,119 @@ async def test_tick_unknown_tariff_is_422(client: AsyncClient, session: AsyncSes
     assert resp.status_code == 422
 
 
+async def test_tick_with_dest_persists_planned_destination(client: AsyncClient, session: AsyncSession):
+    """A driver-picked mid-trip destination sent on a tick is written onto
+    Trip.planned_dest_lat/lng (module docstring deviation #7) -- verified
+    against the ORM row directly since TripRead doesn't (and needn't) echo
+    it back; the read-only surface for it is GET /v1/vehicles instead (see
+    test_live_ops.py)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    dest_lat, dest_lng = -33.8568, 151.2153  # Sydney Opera House, arbitrary real destination
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [{"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": datetime.now(UTC).isoformat()}],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    row = await session.get(Trip, trip["id"])
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
+async def test_tick_omitting_dest_does_not_clear_previously_set_value(
+    client: AsyncClient, session: AsyncSession
+):
+    """A later tick that carries no dest_lat/dest_lng at all must leave a
+    previously-picked destination alone -- a driver isn't required to keep
+    resending it on every subsequent tick (see apply_tick's own docstring)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    dest_lat, dest_lng = -33.8568, 151.2153
+    first = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=10)).isoformat()}
+            ],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+    assert first.status_code == 200
+
+    second = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {"lat": -33.859, "lng": 151.211, "speed_kmh": 20, "ts": (t0 + timedelta(seconds=20)).isoformat()}
+            ]
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200
+
+    row = await session.get(Trip, trip["id"])
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
+async def test_close_trip_only_writes_end_lat_lng_not_planned_dest(
+    client: AsyncClient, session: AsyncSession
+):
+    """close_trip is unaffected by this pass: it still only ever writes the
+    REAL end_lat/end_lng, and never touches planned_dest_lat/lng even when a
+    destination was picked mid-trip via tick (see Trip's module docstring
+    deviation #7 for the end_lat/end_lng vs planned_dest_lat/lng
+    distinction)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    dest_lat, dest_lng = -33.8568, 151.2153
+    await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [{"lat": -33.86, "lng": 151.21, "speed_kmh": 20, "ts": datetime.now(UTC).isoformat()}],
+            "dest_lat": dest_lat,
+            "dest_lng": dest_lng,
+        },
+        headers=headers,
+    )
+
+    real_end_lat, real_end_lng = -33.80, 151.05  # deliberately NOT the planned destination above
+    close_resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"end_lat": real_end_lat, "end_lng": real_end_lng},
+        headers=headers,
+    )
+    assert close_resp.status_code == 200
+    assert close_resp.json()["end_lat"] == real_end_lat
+    assert close_resp.json()["end_lng"] == real_end_lng
+
+    row = await session.get(Trip, trip["id"])
+    assert row.end_lat == real_end_lat
+    assert row.end_lng == real_end_lng
+    # planned_dest_lat/lng survive, untouched by close -- they describe the
+    # driver's mid-trip intent, not the (possibly different) real outcome.
+    assert row.planned_dest_lat == dest_lat
+    assert row.planned_dest_lng == dest_lng
+
+
 # --- close -----------------------------------------------------------------
 
 
@@ -490,7 +676,7 @@ async def test_close_trip_computes_breakdown(client: AsyncClient, session: Async
     body = resp.json()
 
     assert body["status"] == "closed"
-    assert body["flag_fall"] == "5.00"
+    assert body["flag_fall"] == "5.17"
     assert Decimal(body["total"]) == Decimal(body["subtotal"]) + Decimal(body["surcharge"])
     assert Decimal(body["gst_component"]) == round_half_up(Decimal(body["total"]) / Decimal(11))
     assert body["receipt_ref"]
@@ -510,10 +696,31 @@ async def test_close_already_closed_trip_is_409(client: AsyncClient, session: As
 
 
 async def test_close_airport_fixed_trip_ignores_metered_charges(client: AsyncClient, session: AsyncSession):
+    """The $80 maxi airport fixed fare requires the vehicle to genuinely be a
+    maxi-cab (resolved server-side from Vehicle.vehicle_class) AND 5+
+    passengers — a raw client-supplied `maxi=True` claim on its own (with no
+    real maxi vehicle behind it) is advisory-only and must NOT unlock it, per
+    app.services.trips.resolve_is_maxi_vehicle."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
-    trip = await _create_trip(client, headers, tariff.id, type="airport_fixed", maxi=True)
+
+    maxi_vehicle = Vehicle(rego="MAXI-01", tenant_id=tenant_id, vehicle_class=VEHICLE_CLASS_MAXI)
+    session.add(maxi_vehicle)
+    await session.commit()
+
+    trip = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        type="airport_fixed",
+        vehicle_id=maxi_vehicle.id,
+        passenger_count=5,
+        # This raw flag is advisory-only now and deliberately left False here
+        # to prove the $80 fare comes from the real vehicle_class + passenger
+        # count, not from trusting this field.
+        maxi=False,
+    )
 
     resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
     assert resp.status_code == 200
@@ -522,10 +729,37 @@ async def test_close_airport_fixed_trip_ignores_metered_charges(client: AsyncCli
     assert body["flag_fall"] == "0.00"
 
 
+async def test_close_airport_fixed_trip_ignores_raw_maxi_claim_without_a_real_maxi_vehicle(
+    client: AsyncClient, session: AsyncSession
+):
+    """The inverse of the test above: a device claiming maxi=True for a
+    vehicle_id that isn't a registered maxi-cab (or doesn't exist at all)
+    must still be billed the standard $60 fixed fare."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, type="airport_fixed", maxi=True)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == "60.00"
+
+
 # --- sync (offline replay) --------------------------------------------------
 
 
 def _sync_item(*, tariff_id: str, gps_trace: list[dict], device_total: str, **overrides) -> dict:
+    # Deliberately real `datetime.now(UTC)`, NOT `_FIXED_DAY_START_AT` — every
+    # other sync test below anchors its own gps_trace timestamps off this same
+    # "now" (via its own local `now = datetime.now(UTC)`, matching this
+    # default almost exactly since both calls happen within the same test),
+    # so switching this default to a fixed past date would blow out
+    # elapsed-time-based waiting/distance charges for every test that doesn't
+    # explicitly override start_at/end_at. The one test that needs a
+    # deterministic day-rate dollar figure
+    # (test_sync_creates_trip_and_flags_variance_within_tolerance) passes
+    # explicit start_at/end_at overrides instead of relying on this default.
     now = datetime.now(UTC)
     item = {
         "client_uuid": str(uuid.uuid4()),
@@ -553,12 +787,12 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
 
     start_lat, start_lng = -33.8688, 151.2093
     end_lat, end_lng = -33.8600, 151.2093
-    now = datetime.now(UTC)
+    now = _FIXED_DAY_START_AT  # see this constant's own doc — keeps the day dist_rate_1 assertion below deterministic
     trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
 
     distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
-    expected_dist_amount = round_half_up(distance_km * Decimal("2.52"))
-    expected_fare_total = round_half_up(Decimal("5.00") + expected_dist_amount)  # cash, no surcharge
+    expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
+    expected_fare_total = round_down(Decimal("5.17") + expected_dist_amount)  # cash, no surcharge; server rounds fare_total DOWN, never up
 
     item = _sync_item(
         tariff_id=tariff.id,
@@ -566,6 +800,12 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
         device_total=str(expected_fare_total),
         start_lat=start_lat,
         start_lng=start_lng,
+        # Explicit, deterministic day-time start_at/end_at (overriding
+        # _sync_item's own real-`now` default) so the day dist_rate_1
+        # assertion above can never flake depending on the real wall-clock
+        # time this test happens to run at — see _FIXED_DAY_START_AT's doc.
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
     )
 
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
@@ -578,6 +818,54 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     assert trip["max_fare_check_passed"] is True
     assert Decimal(trip["variance_pct"]) <= Decimal("1.0")
     assert Decimal(trip["total"]) == expected_fare_total
+
+
+async def test_sync_records_a_simulated_trip_as_simulated(client: AsyncClient, session: AsyncSession):
+    """A trip driven on the meter's GPS simulator must arrive flagged.
+
+    This is the integrity property the flag exists for: a simulated trace is
+    internally consistent, so it replays cleanly and passes the variance check
+    exactly like a real fare. Both are asserted together here deliberately --
+    the trip is simultaneously "valid" and "not real", and an implementation
+    that achieved the flag by making simulated trips fail validation would be
+    wrong in a way a flag-only assertion would not catch.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00", simulated=True)
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["simulated"] is True
+    assert trip["status"] == "closed"
+
+
+async def test_sync_defaults_to_real_when_the_device_says_nothing(
+    client: AsyncClient, session: AsyncSession
+):
+    """A device predating the simulator sends no `simulated` field at all. The
+    absence of the flag must mean "real", never "unknown" -- an unflagged trip
+    is counted as revenue, so defaulting any other way would either silently
+    exclude real fares or require a migration of every existing row."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+    assert "simulated" not in item  # the point of the test
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["trip"]["simulated"] is False
 
 
 def test_compute_variance_pct_clamps_to_column_precision():
@@ -698,6 +986,10 @@ async def test_sync_voucher_payment_persists_voucher_code(client: AsyncClient, s
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real voucher ledger (app.services.payments.redeem_voucher) now requires
+    # an actual tenant-owned Voucher row to redeem against.
+    session.add(Voucher(tenant_id=tenant_id, code="SAVE10", value_aud=Decimal("10.00")))
+    await session.commit()
 
     now = datetime.now(UTC)
     trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
@@ -737,25 +1029,34 @@ async def test_sync_split_fare_matching_sum_persists_split_payments(
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     start_lat, start_lng = -33.8688, 151.2093
-    now = datetime.now(UTC)
+    # Fixed day-time (not a real "now") -- unlike the other sync tests in this
+    # section, this one asserts an EXACT total (no distance/waiting accrued,
+    # so total == flag_fall alone) and must not pick up an extra peak_charge
+    # if the real wall clock this test runs at happens to land in the
+    # Friday/Saturday/pre-holiday 10pm-6am peak window. See
+    # _FIXED_DAY_START_AT's own doc.
+    now = _FIXED_DAY_START_AT
     trace = [{"lat": start_lat, "lng": start_lng, "speed_kmh": 0, "ts": now.isoformat()}]
-    # No distance travelled -> total is just flag_fall ($5.00) for this tariff, matching
-    # test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no surcharge" note.
+    # No distance travelled -> total is just flag_fall ($5.17, 2026 Order) for this tariff,
+    # matching test_sync_creates_trip_and_flags_variance_within_tolerance's own "cash, no
+    # surcharge" note.
     item = _sync_item(
         tariff_id=tariff.id,
         gps_trace=trace,
-        device_total="5.00",
+        device_total="5.17",
         start_lat=start_lat,
         start_lng=start_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
         payment_method="split_fare",
-        split_payments=[{"method": "cash", "amount": "2.00"}, {"method": "card", "amount": "3.00"}],
+        split_payments=[{"method": "cash", "amount": "2.17"}, {"method": "card", "amount": "3.00"}],
     )
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
     assert resp.status_code == 200, resp.text
     trip = resp.json()["results"][0]["trip"]
     assert trip["payment_method"] == "split_fare"
     assert trip["split_payments"] == [
-        {"method": "cash", "amount": "2.00"},
+        {"method": "cash", "amount": "2.17"},
         {"method": "card", "amount": "3.00"},
     ]
 
@@ -950,6 +1251,10 @@ async def test_close_trip_with_voucher_payment_method_redeems_and_stores_code(
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real voucher ledger (app.services.payments.redeem_voucher) now requires
+    # an actual tenant-owned Voucher row to redeem against.
+    session.add(Voucher(tenant_id=tenant_id, code="PROMO-2026-XYZ", value_aud=Decimal("20.00")))
+    await session.commit()
 
     trip = await _create_trip(
         client,
@@ -993,6 +1298,12 @@ async def test_close_trip_with_account_payment_method_stores_reference(
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    # Real corporate-account ledger (app.services.payments.validate_account_reference)
+    # now requires an actual tenant-owned, active CorporateAccount row.
+    session.add(
+        CorporateAccount(tenant_id=tenant_id, reference="ACME-CORP-0042", company_name="Acme Corp")
+    )
+    await session.commit()
 
     trip = await _create_trip(
         client,
@@ -1156,13 +1467,17 @@ async def test_create_trip_with_negotiated_total_persists_it(client: AsyncClient
     assert trip["total"] == "0.00"
 
 
-async def test_close_negotiated_total_trip_charges_negotiated_plus_tolls_and_psl(
+async def test_close_negotiated_total_trip_records_tolls_and_psl_but_bills_only_the_agreed_amount(
     client: AsyncClient, session: AsyncSession
 ):
-    """The important nuance from the competitor's own on-screen disclaimer
-    ("this price doesn't include levies and/or tolls"): PSL and tolls still
-    accrue and add ON TOP of negotiated_total — unlike the pre-existing
-    airport_fixed trip type, which excludes them entirely."""
+    """2026-09 product correction: a negotiated ("Set Price") trip is now
+    ALL-INCLUSIVE — PSL and tolls are still recorded on the trip (`tolls`/
+    `psl` below), same as the pre-existing airport_fixed trip type, but unlike
+    airport_fixed they are not zeroed out: they remain real, owed amounts for
+    PSL-ledger remittance / toll-audit purposes. What changed is that they no
+    longer add ON TOP of `negotiated_total` — `total` is exactly the agreed
+    amount, full stop (this test used to assert the opposite; see git
+    history)."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -1215,15 +1530,16 @@ async def test_close_negotiated_total_trip_charges_negotiated_plus_tolls_and_psl
     assert body["wait_amount"] == "0.00"
     assert body["peak_amount"] == "0.00"
 
+    # Still recorded — real amounts still owed for PSL-ledger remittance /
+    # toll-audit purposes — even though absorbed into the agreed price below.
     assert Decimal(body["tolls"]) == Decimal("4.82")
     assert Decimal(body["psl"]) == Decimal("1.32")
     assert Decimal(body["negotiated_total"]) == Decimal("45.00")
 
-    expected_subtotal = Decimal("45.00") + Decimal("4.82") + Decimal("1.32")
-    assert Decimal(body["subtotal"]) == expected_subtotal
-    assert Decimal(body["total"]) == expected_subtotal + Decimal(body["surcharge"])
-    # Not negotiated_total alone.
-    assert Decimal(body["total"]) != Decimal("45.00")
+    # But NOT billed on top: subtotal/total are exactly the agreed amount.
+    assert Decimal(body["subtotal"]) == Decimal("45.00")
+    assert Decimal(body["total"]) == Decimal("45.00") + Decimal(body["surcharge"])
+    assert Decimal(body["total"]) == Decimal("45.00")
 
 
 async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_negotiated(
@@ -1239,3 +1555,674 @@ async def test_close_negotiated_total_trip_without_tolls_or_psl_charges_exactly_
     body = resp.json()
     assert body["total"] == "45.00"
     assert body["subtotal"] == "45.00"
+
+
+async def test_sync_negotiated_total_trip_device_and_server_totals_agree_exactly(
+    client: AsyncClient, session: AsyncSession
+):
+    """Device/server agreement proof for a negotiated fare (2026-09 product
+    correction). The on-device engine (android's `domain/fare/FareEngine.kt`
+    `close()`) and this server's `recompute_from_trace` -> `FareEngine.close`
+    must compute the SAME total for a negotiated trip, or every fixed-price
+    trip gets auto-flagged for review by the 1%-tolerance check below (see
+    sync_trips' own `fare_check_passed = variance_pct <= 1.0`).
+
+    For a negotiated trip with a toll and PSL both present, the on-device
+    engine now computes total = negotiated_total exactly (tolls/PSL recorded
+    but not billed — see FareEngine.kt's close() negotiated-fare branch) —
+    exactly mirrored here by setting device_total to the bare negotiated
+    amount. Asserts variance_pct == 0.00 (not merely <= 1.0) — the two engines
+    must agree byte-for-byte on a negotiated trip, not just within tolerance.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        # What the on-device FareEngine.close() computes for this exact input:
+        # negotiated_total, full stop — no toll/PSL added on top.
+        device_total="50.00",
+        negotiated_total="50.00",
+        tolls="4.30",
+        include_psl=True,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["status"] == "closed"
+    assert Decimal(trip["total"]) == Decimal("50.00")
+    assert Decimal(trip["variance_pct"]) == Decimal("0.00")
+    assert trip["max_fare_check_passed"] is True
+    assert trip["flagged_for_review"] is False
+    # Still recorded on the closed trip — real amounts still owed for
+    # PSL-ledger remittance / toll-audit purposes — even though absorbed into
+    # the $50 the passenger was actually charged.
+    assert Decimal(trip["tolls"]) == Decimal("4.30")
+    assert Decimal(trip["psl"]) == Decimal("1.32")
+
+
+# --- negotiated total: card surcharge absorption (2026-09 product ruling) --
+#
+# "yes card surcharge will be absorbed into a fixed price, but not cleaning
+# fee" (owner, verbatim) -- a negotiated fare now absorbs the non-cash
+# surcharge exactly like tolls/PSL/extras, while a cleaning fee stays
+# additive on top since it's only ever discovered after the price was agreed.
+
+
+async def test_close_negotiated_total_card_payment_bills_exactly_the_agreed_amount(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Billed: exactly the agreed amount -- card, same as cash.
+    assert Decimal(body["subtotal"]) == Decimal("50.00")
+    assert Decimal(body["total"]) == Decimal("50.00")
+    # Recorded (not billed): the operator can see what card fee it absorbed.
+    assert Decimal(body["surcharge"]) == Decimal("2.50")
+
+
+async def test_close_negotiated_total_card_payment_with_cleaning_fee_bills_agreed_plus_cleaning_fee_only(
+    client: AsyncClient, session: AsyncSession
+):
+    """Cleaning fee is the one component that is never absorbed, even on a
+    negotiated fare. total = negotiated_total + cleaning_fee exactly, with
+    the card surcharge still absorbed (never a third addend)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0", "cleaning_fee": "30.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert Decimal(body["total"]) == Decimal("80.00")  # 50.00 + 30.00, surcharge absorbed
+    assert Decimal(body["surcharge"]) == Decimal("2.50")  # still recorded
+
+
+async def test_close_metered_trip_card_payment_still_bills_the_surcharge_on_top(
+    client: AsyncClient, session: AsyncSession
+):
+    """Regression guard: an ordinary (non-negotiated) trip must keep billing
+    the non-cash surcharge on top exactly as before the 2026-09 absorption
+    ruling, which applies only to negotiated/fixed fares."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    tick_resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.87,
+                    "lng": 151.21,
+                    "speed_kmh": 40,
+                    "ts": (_FIXED_DAY_START_AT + timedelta(seconds=270)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert tick_resp.status_code == 200, tick_resp.text
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "card", "surcharge_pct": "5.0"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert Decimal(body["surcharge"]) > 0
+    assert Decimal(body["total"]) == Decimal(body["subtotal"]) + Decimal(body["surcharge"])
+
+
+async def test_sync_negotiated_total_card_trip_device_and_server_totals_agree_exactly(
+    client: AsyncClient, session: AsyncSession
+):
+    """Device/server agreement for a negotiated, CARD-paid trip specifically
+    (the cash case is already covered above) -- the on-device FareEngine.kt
+    and this server's FareEngine.close() must both absorb the surcharge and
+    agree on the SAME total, or the trip gets auto-flagged for review by the
+    1%-tolerance check. Asserts variance_pct == 0.00, not merely <= 1.0."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        # What the on-device FareEngine.close() computes: negotiated_total
+        # exactly -- the card surcharge is absorbed, never added.
+        device_total="50.00",
+        negotiated_total="50.00",
+        payment_method="card",
+        surcharge_pct="5.0",
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["status"] == "closed"
+    assert Decimal(trip["total"]) == Decimal("50.00")
+    assert Decimal(trip["variance_pct"]) == Decimal("0.00")
+    assert trip["max_fare_check_passed"] is True
+    assert trip["flagged_for_review"] is False
+    # Absorbed surcharge is still recorded on the closed trip.
+    assert Decimal(trip["surcharge"]) == Decimal("2.50")
+
+
+async def test_close_negotiated_total_cleaning_fee_not_folded_into_extras(
+    client: AsyncClient, session: AsyncSession
+):
+    """A negotiated trip's genuine `extras` (set at creation) must stay
+    absorbed/unbilled, distinct from a cleaning fee applied at close time --
+    the two must never be blended into a single bucket, or one of them
+    silently stops being billed/absorbed correctly."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, negotiated_total="50.00", extras="7.00")
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"cleaning_fee": "15.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # The genuine $7 extra stays recorded but absorbed (not billed) -- same as
+    # tolls/PSL for a negotiated fare.
+    assert Decimal(body["extras"]) == Decimal("7.00")
+    # The $15 cleaning fee IS billed, on top of the agreed $50 -- not silently
+    # dropped, and not blended into the (absorbed) extras figure above.
+    assert Decimal(body["total"]) == Decimal("65.00")
+
+
+# --- tips (Close & Pay "tips" pass) -----------------------------------------
+
+
+async def test_close_trip_persists_tip_amount(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={"tip_amount": "5.00"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(body["tip_amount"]) == Decimal("5.00")
+
+
+async def test_close_trip_without_tip_leaves_tip_amount_null(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["tip_amount"] is None
+
+
+async def test_close_trip_negative_tip_amount_is_422(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.post(f"/v1/trips/{trip['id']}/close", json={"tip_amount": "-1.00"}, headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_close_trip_tip_amount_is_never_folded_into_fare_total_or_gst(
+    client: AsyncClient, session: AsyncSession
+):
+    """The whole point of keeping tip_amount off the fare engine: closing the
+    SAME trip shape with and without a tip must produce an IDENTICAL
+    subtotal/surcharge/total/gst_component — only tip_amount itself differs."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    trip_no_tip = await _create_trip(client, headers, tariff.id)
+    trip_with_tip = await _create_trip(client, headers, tariff.id)
+
+    resp_no_tip = await client.post(f"/v1/trips/{trip_no_tip['id']}/close", json={}, headers=headers)
+    resp_with_tip = await client.post(
+        f"/v1/trips/{trip_with_tip['id']}/close", json={"tip_amount": "20.00"}, headers=headers
+    )
+    assert resp_no_tip.status_code == 200
+    assert resp_with_tip.status_code == 200
+    no_tip = resp_no_tip.json()
+    with_tip = resp_with_tip.json()
+
+    assert no_tip["tip_amount"] is None
+    assert Decimal(with_tip["tip_amount"]) == Decimal("20.00")
+
+    for field in ("flag_fall", "dist_amount", "wait_amount", "peak_amount", "subtotal", "surcharge", "total", "gst_component"):
+        assert with_tip[field] == no_tip[field], f"{field} differs between tipped/untipped close ({with_tip[field]} vs {no_tip[field]})"
+
+
+async def test_sync_persists_tip_amount_without_affecting_device_total_variance(
+    client: AsyncClient, session: AsyncSession
+):
+    """The real Android call path (see ApiService.kt's TripSyncItemDto doc) —
+    a tip entered on-device must round-trip through /v1/trips/sync, and must
+    not be counted as part of device_total for the max-fare variance check."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    end_lat, end_lng = -33.8600, 151.2093
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+
+    distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
+    expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
+    expected_fare_total = round_down(Decimal("5.17") + expected_dist_amount)  # cash, no surcharge
+
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total=str(expected_fare_total),  # device_total deliberately excludes the tip below
+        start_lat=start_lat,
+        start_lng=start_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+        tip_amount="10.00",
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert Decimal(trip["tip_amount"]) == Decimal("10.00")
+    assert trip["max_fare_check_passed"] is True
+    assert Decimal(trip["variance_pct"]) <= Decimal("1.0")
+    assert Decimal(trip["total"]) == expected_fare_total
+
+
+async def test_tip_amount_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Tenant A Tips")
+    tenant_a = await _tenant_of(client, headers_a)
+    tariff_a = await _seed_tariff(session, tenant_id=tenant_a)
+    trip = await _create_trip(client, headers_a, tariff_a.id)
+
+    close_resp = await client.post(
+        f"/v1/trips/{trip['id']}/close", json={"tip_amount": "7.50"}, headers=headers_a
+    )
+    assert close_resp.status_code == 200
+    assert Decimal(close_resp.json()["tip_amount"]) == Decimal("7.50")
+
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Tenant B Tips")
+    resp = await client.get(f"/v1/trips/{trip['id']}", headers=headers_b)
+    assert resp.status_code == 404
+
+
+# --- earnings today (dashboard tiles, GET /v1/trips/earnings/today) ---------
+
+
+def _seed_closed_trip(
+    *, tenant_id: str, driver_id: str, start_at: datetime, total: Decimal, status: str = TRIP_STATUS_CLOSED
+) -> Trip:
+    """Inserts a trip row directly (bypassing the fare engine/create+close
+    API) — only the columns `driver_earnings_today` reads matter here, same
+    "seed the aggregate's own inputs directly" approach test_reports.py's
+    `_make_trip` and test_driver_engagement.py's `_trip` already use for
+    testing a SQL aggregate rather than the fare engine itself."""
+    return Trip(
+        tenant_id=tenant_id,
+        client_uuid=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        driver_id=driver_id,
+        tariff_id=str(uuid.uuid4()),
+        type="rank_hail",
+        status=status,
+        start_at=start_at,
+        end_at=start_at if status == TRIP_STATUS_CLOSED else None,
+        start_lat=-33.8688,
+        start_lng=151.2093,
+        total=total,
+    )
+
+
+async def test_earnings_today_requires_auth(client: AsyncClient):
+    resp = await client.get("/v1/trips/earnings/today")
+    assert resp.status_code in (401, 403)
+
+
+async def test_earnings_today_sums_only_the_callers_own_closed_trips_started_today(
+    client: AsyncClient, session: AsyncSession
+):
+    """Real, honest aggregate: sums `total` for CLOSED trips whose `start_at`
+    falls in today's UTC calendar day for the CALLING driver only — an open
+    trip today, a closed trip today for a different driver, and a closed
+    trip from yesterday must all be excluded from `today_total`."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today = datetime.now(UTC).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
+    today_evening = datetime.combine(today, time(18, 0), tzinfo=UTC)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+
+    other_driver_id = str(uuid.uuid4())
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("25.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_evening, total=Decimal("40.50")),
+            # Excluded: still open (no final total yet).
+            _seed_closed_trip(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                start_at=today_morning,
+                total=Decimal("999.00"),
+                status=TRIP_STATUS_OPEN,
+            ),
+            # Excluded: a different driver's closed trip, same tenant, same day.
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=other_driver_id, start_at=today_morning, total=Decimal("500.00")),
+            # Excluded from today_total (but feeds yesterday_total below): started yesterday.
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=yesterday_morning, total=Decimal("30.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert body["date"] == today.isoformat()
+    assert Decimal(body["today_total"]) == Decimal("65.50")
+    assert body["trips_completed_today"] == 2
+    assert Decimal(body["yesterday_total"]) == Decimal("30.00")
+
+
+async def test_earnings_today_pct_change_is_null_without_a_yesterday_baseline(
+    client: AsyncClient, session: AsyncSession
+):
+    """No yesterday trips at all -- and separately, a yesterday total of
+    exactly zero -- must both render as "no comparison available" (`null`),
+    never a fabricated 0% or 100%."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    session.add(_seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("20.00")))
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert Decimal(body["yesterday_total"]) == Decimal("0.00")
+    assert body["pct_change"] is None
+
+
+async def test_earnings_today_pct_change_is_computed_against_yesterday(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today = datetime.now(UTC).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("150.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=yesterday_morning, total=Decimal("100.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert Decimal(body["today_total"]) == Decimal("150.00")
+    assert Decimal(body["yesterday_total"]) == Decimal("100.00")
+    assert body["pct_change"] == pytest.approx(50.0)
+
+
+async def test_earnings_today_never_reads_another_drivers_trips_even_via_query_param(
+    client: AsyncClient, session: AsyncSession
+):
+    """Caller-scoped like app.api.v1.me: the endpoint must resolve `driver_id`
+    from the authenticated caller, never trust a client-supplied one — the
+    real-world motivation being Android's `ApiService.earningsToday` call
+    sends `?driver_id=...` as a query param (its own driver's id, in
+    practice) that this route must NOT treat as authoritative, exactly the
+    way `app.api.v1.me`'s routes never take a driver id from the caller."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    other_driver_id = str(uuid.uuid4())
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("10.00")),
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=other_driver_id, start_at=today_morning, total=Decimal("999.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get(
+        "/v1/trips/earnings/today", params={"driver_id": other_driver_id}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["driver_id"] == driver_id
+    assert Decimal(body["today_total"]) == Decimal("10.00")
+
+
+async def test_earnings_today_only_counts_closed_trips_status_and_tenant(client: AsyncClient, session: AsyncSession):
+    """A closed trip belonging to a different tenant (even with the same
+    driver_id string, which is possible since ids are unconstrained
+    cross-domain refs — see app.models.trips.Trip's module docstring) must
+    never bleed into this tenant's total."""
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Earnings Tenant A")
+    tenant_a = await _tenant_of(client, headers_a)
+    driver_id = _user_id_of(headers_a)
+
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Earnings Tenant B")
+    tenant_b = await _tenant_of(client, headers_b)
+
+    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_a, driver_id=driver_id, start_at=today_morning, total=Decimal("15.00")),
+            # Same driver_id string, but a different tenant -- must not be counted.
+            _seed_closed_trip(tenant_id=tenant_b, driver_id=driver_id, start_at=today_morning, total=Decimal("777.00")),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers_a)
+    assert resp.status_code == 200
+    assert Decimal(resp.json()["today_total"]) == Decimal("15.00")
+
+
+# --- GPS trace persistence (GET /v1/trips/{id}/gps-trace) -------------------
+# app.models.trips.TripGpsTrace: the real, raw GPS/speed trace synced with a
+# trip, persisted durably alongside (never instead of) the existing
+# transient fare-verification use of the same payload
+# (app.services.trips.recompute_from_trace). Kept OUT of TripRead/
+# TripListResponse entirely -- see that model's own docstring -- so these
+# tests hit the dedicated GET .../gps-trace endpoint instead.
+
+
+async def test_sync_persists_gps_trace_fetchable_via_dedicated_endpoint(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8688, "lng": 151.2093, "speed_kmh": 0, "ts": now.isoformat()},
+        {"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()},
+    ]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip_id = resp.json()["results"][0]["trip"]["id"]
+
+    # Not part of the trip payload itself -- the list/detail read stays cheap.
+    assert "gps_trace" not in resp.json()["results"][0]["trip"]
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200, trace_resp.text
+    body = trace_resp.json()
+    assert body["trip_id"] == trip_id
+    assert body["point_count"] == 2
+    assert len(body["points"]) == 2
+    # Chronological order preserved, exact values round-trip.
+    assert body["points"][0]["lat"] == -33.8688
+    assert body["points"][1]["speed_kmh"] == 40
+
+
+async def test_sync_resync_of_same_client_uuid_does_not_duplicate_trace(
+    client: AsyncClient, session: AsyncSession
+):
+    """Idempotency: POST /v1/trips/sync is idempotent on client_uuid -- a
+    duplicate submission of the same item (same client_uuid) must not
+    duplicate, corrupt, or otherwise touch the trace already stored for the
+    trip created on the first sync."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+
+    first = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert first.status_code == 200
+    trip_id = first.json()["results"][0]["trip"]["id"]
+
+    second = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert second.status_code == 200
+    assert second.json()["results"][0]["duplicate"] is True
+    assert second.json()["results"][0]["trip"]["id"] == trip_id
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200
+    # Still exactly the one point from the first sync -- not duplicated.
+    assert trace_resp.json()["point_count"] == 1
+
+
+async def test_sync_with_empty_gps_trace_stores_no_trace_row(client: AsyncClient, session: AsyncSession):
+    """Today's Android-bug reality: every synced trip currently arrives with
+    gps_trace: [] . This must not create a junk row or a misleading "route
+    recorded" state -- the dedicated endpoint must answer with the same
+    honest empty state as a trip that was never synced with a trace at all."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    item = _sync_item(tariff_id=tariff.id, gps_trace=[], device_total="0.00")
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip_id = resp.json()["results"][0]["trip"]["id"]
+
+    row = (
+        await session.execute(
+            select(TripGpsTrace).where(TripGpsTrace.trip_id == trip_id)
+        )
+    ).scalar_one_or_none()
+    assert row is None
+
+    trace_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers)
+    assert trace_resp.status_code == 200
+    assert trace_resp.json() == {"trip_id": trip_id, "points": [], "point_count": 0}
+
+
+async def test_gps_trace_for_trip_with_no_stored_trace_is_honest_empty(
+    client: AsyncClient, session: AsyncSession
+):
+    """A trip opened+closed through the online create/tick/close flow never
+    carries a raw trace at all (only POST /v1/trips/sync ever receives one) --
+    the endpoint must answer 200 with an honest empty trace, not fabricate
+    one and not 404 (the trip itself is real)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    resp = await client.get(f"/v1/trips/{trip['id']}/gps-trace", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"trip_id": trip["id"], "points": [], "point_count": 0}
+
+
+async def test_gps_trace_unknown_trip_id_is_404(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="driver")
+    resp = await client.get(f"/v1/trips/{uuid.uuid4()}/gps-trace", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_gps_trace_is_tenant_isolated(client: AsyncClient, session: AsyncSession):
+    """A trip's GPS trace must never be readable by a different tenant, even
+    with the correct trip id -- tenant scoping is the sole multi-tenancy
+    enforcement mechanism in this system (app.core.database.TenantScopedMixin)."""
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Trace Tenant A")
+    tenant_a = await _tenant_of(client, headers_a)
+    tariff_a = await _seed_tariff(session, tenant_id=tenant_a)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff_a.id, gps_trace=trace, device_total="10.00")
+    sync_resp = await client.post("/v1/trips/sync", json=[item], headers=headers_a)
+    assert sync_resp.status_code == 200
+    trip_id = sync_resp.json()["results"][0]["trip"]["id"]
+
+    # Tenant A can read its own trip's trace.
+    own_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers_a)
+    assert own_resp.status_code == 200
+    assert own_resp.json()["point_count"] == 1
+
+    # Tenant B must get a 404 for the same trip id -- never the tenant A trace,
+    # and never a distinguishable "exists but forbidden" response either.
+    headers_b = await auth_headers(client, session, role="driver", tenant_name="Trace Tenant B")
+    other_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers_b)
+    assert other_resp.status_code == 404

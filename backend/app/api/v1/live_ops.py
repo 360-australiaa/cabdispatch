@@ -39,6 +39,8 @@ system (see `app.core.security` / `app.core.database` docstrings).
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +59,7 @@ from app.schemas.live_ops import (
     PositionPublishResponse,
     PositionRead,
     VehicleLiveRead,
+    VehiclePositionHistoryRead,
 )
 from app.services import live_ops as live_ops_service
 
@@ -108,6 +111,38 @@ async def get_vehicle(
 ):
     try:
         return await live_ops_service.get_vehicle_live(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+    except live_ops_service.LiveOpsError as exc:
+        raise _live_ops_error_to_http(exc) from exc
+
+
+@router.get("/v1/vehicles/{vehicle_id}/position-history", response_model=VehiclePositionHistoryRead)
+async def get_vehicle_position_history(
+    vehicle_id: str,
+    since: datetime | None = Query(
+        default=None,
+        description="ISO datetime -- only return points recorded at/after this time. Omit for the "
+        "vehicle's full remaining retention window (see "
+        "app.services.live_ops.POSITION_HISTORY_RETENTION_HOURS).",
+    ),
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Durable position history for one vehicle -- the dispatcher "scrub back
+    through the last few hours" replay feature. Backed by the new
+    `app.models.fleet.VehiclePositionHistory` table (see its own docstring
+    and `app.services.live_ops`'s module docstring), NOT the ephemeral
+    in-memory `_FleetBroadcaster` cache that every other endpoint in this
+    file reads from -- this is durable history, not "what's the latest".
+    404s if `vehicle_id` doesn't belong to the caller's tenant, same
+    `get_vehicle_or_404` pattern as every other vehicle-scoped endpoint here.
+
+    Also returns `harsh_brake_events`/`rapid_accel_events` -- see
+    `VehiclePositionHistoryRead`'s own docstring for why these are
+    informational telematics signals, not a certified/legal safety score."""
+    try:
+        return await live_ops_service.get_position_history(
+            session, tenant_id=tenant_id, vehicle_id=vehicle_id, since=since
+        )
     except live_ops_service.LiveOpsError as exc:
         raise _live_ops_error_to_http(exc) from exc
 
@@ -174,6 +209,8 @@ async def publish_position(
             status=payload.status,
             battery=payload.battery,
             network=payload.network,
+            speed_kmh=payload.speed_kmh,
+            heading=payload.heading,
         )
     except live_ops_service.LiveOpsError as exc:
         raise _live_ops_error_to_http(exc) from exc

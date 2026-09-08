@@ -9,16 +9,17 @@ endpoints and the offline sync recompute path.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fleet import Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL
 from app.models.tariffs import Tariff as TariffRow
-from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip
+from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, TripGpsTrace
 from app.schemas.trips import TelemetryPoint
 from app.services import payments as payments_service
 from app.services.fare_engine import (
@@ -28,10 +29,12 @@ from app.services.fare_engine import (
     Tariff,
     TimeClass,
     airport_fixed_fare,
+    resolve_time_class_and_peak,
     round_half_up,
 )
 from app.services.geofence import detect_geofences
 from app.services.tariffs import to_fare_engine_tariff
+from app.services.tolls import apply_toll_detection
 
 engine = FareEngine()
 
@@ -78,6 +81,23 @@ async def resolve_tariff(session: AsyncSession, *, tenant_id: str, tariff_id: st
         raise UnknownTariffError(str(exc)) from exc
 
 
+async def resolve_is_maxi_vehicle(session: AsyncSession, *, tenant_id: str, vehicle_id: str) -> bool:
+    """The authoritative source of "is this vehicle a maxi-cab" — the real
+    `Vehicle.vehicle_class` row, scoped to the requesting tenant. Deliberately
+    never derived from a client-supplied boolean: a device claiming
+    `maxi=true` must not be able to unlock the 150% rate on its own say-so,
+    since that field feeds directly into FareState.is_maxi_vehicle and,
+    combined with passenger_count, whether the maxi rate legally applies. An
+    unknown/foreign vehicle_id resolves to False (not a maxi) rather than
+    raising — trip creation's own vehicle_id validation (if any) is a
+    separate concern from fare classification."""
+    result = await session.execute(
+        select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.tenant_id == tenant_id)
+    )
+    vehicle = result.scalar_one_or_none()
+    return vehicle is not None and vehicle.vehicle_class == "maxi"
+
+
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
     """Great-circle distance between two lat/lng points, in kilometres."""
     phi1, phi2 = radians(lat1), radians(lat2)
@@ -93,29 +113,76 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
     trip row's currently-persisted running totals. Safe to call repeatedly —
     does not mutate `trip`."""
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=trip.tariff_id)
-    fixed_fare = airport_fixed_fare(trip.maxi) if trip.type == TRIP_TYPE_AIRPORT_FIXED else None
-    return FareState(
+    state = FareState(
         tariff=tariff,
+        # trip.time_class/trip.is_peak: read back VERBATIM as persisted, never
+        # re-derived here via resolve_time_class_and_peak — for two
+        # independent reasons, either one alone would be sufficient:
+        #   1. Legal: fare_engine's own module docstring is explicit that
+        #      time_class/is_peak "are fixed at journey commencement and do
+        #      not change mid-trip even if the clock crosses a boundary".
+        #      build_fare_state is called on every apply_tick (an open,
+        #      in-progress trip) and every close_trip call — re-deriving from
+        #      "now" (or from trip.start_at, hours after the fact) on each of
+        #      those calls would silently reclassify an in-flight trip's
+        #      rate mid-journey, which the Fares Order itself forbids.
+        #   2. Trust: these columns were already resolved authoritatively,
+        #      server-side, at trip-creation time (see create_trip/sync_trips
+        #      in app.api.v1.trips, both of which call
+        #      resolve_time_class_and_peak against the trip's real start_at
+        #      before ever constructing the Trip row) — exactly the same
+        #      "safe to read back as-is, never taken from a raw
+        #      client-supplied flag" contract trip.maxi already has below.
         time_class=TimeClass(trip.time_class),
         is_peak=trip.is_peak,
-        maxi=trip.maxi,
+        # trip.maxi was resolved authoritatively from the vehicle's real
+        # vehicle_class at trip-creation time (see create_trip/sync_trips in
+        # app.api.v1.trips) — safe to read back as-is here, it was never
+        # taken from a raw client-supplied flag.
+        is_maxi_vehicle=trip.maxi,
+        passenger_count=trip.passenger_count,
+        wheelchair_hiring=trip.wheelchair_hiring,
+        airport_rank_requested_maxi=trip.airport_rank_requested_maxi,
         hired=True,
         cumulative_distance_km=Decimal(trip.distance_m) / Decimal(1000),
         accrued_distance_charge=trip.dist_amount,
         accrued_waiting_charge=trip.wait_amount,
         tolls=trip.tolls,
         extras=trip.extras,
-        fixed_fare=fixed_fare,
         negotiated_total=trip.negotiated_total,
     )
+    if trip.type == TRIP_TYPE_AIRPORT_FIXED:
+        state.fixed_fare = airport_fixed_fare(state.maxi_applied)
+    return state
 
 
 async def apply_tick(
-    session: AsyncSession, *, tenant_id: str, trip: Trip, points: list[TelemetryPoint]
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    trip: Trip,
+    points: list[TelemetryPoint],
+    dest_lat: float | None = None,
+    dest_lng: float | None = None,
 ) -> Trip:
     """Feeds a batch of telemetry points through the fare engine sequentially,
     mutating `trip`'s running totals + tick-continuity anchor in place.
-    Does NOT commit — caller owns the session/transaction."""
+    Does NOT commit — caller owns the session/transaction.
+
+    `dest_lat`/`dest_lng` (Live Map route-line pass, see
+    `app.models.trips.Trip.planned_dest_lat`/`planned_dest_lng`'s doc
+    comment, module docstring deviation #7) are a driver-picked mid-trip
+    destination, not a telemetry point — written onto the trip row only
+    when BOTH are not None. When either is None (a tick that carries no
+    destination update, the common case), the trip's existing
+    planned_dest_lat/lng are left exactly as they are: a driver who already
+    picked a destination does not need to keep resending it on every
+    subsequent tick, and this must never silently clear a value some
+    earlier tick already set."""
+    if dest_lat is not None and dest_lng is not None:
+        trip.planned_dest_lat = dest_lat
+        trip.planned_dest_lng = dest_lng
+
     state = await build_fare_state(session, tenant_id=tenant_id, trip=trip)
 
     prev_lat = trip.last_lat if trip.last_lat is not None else trip.start_lat
@@ -131,6 +198,12 @@ async def apply_tick(
     applied_toll_geofence_ids: set[str] = set(trip.auto_tolls_applied or [])
 
     for point in points:
+        # Captured before prev_lat/prev_lng are advanced below -- this is the
+        # position the vehicle was travelling FROM, needed by the NSW
+        # toll-registry detection's bearing classifier (app.services.tolls)
+        # to tell which way a directional road was crossed.
+        bearing_prev_lat, bearing_prev_lng = prev_lat, prev_lng
+
         distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
         elapsed_seconds = Decimal(0)
         if prev_ts is not None:
@@ -161,6 +234,22 @@ async def apply_tick(
                 continue
             trip.tolls = (trip.tolls or Decimal(0)) + geofence.toll_amount
             applied_toll_geofence_ids.add(geofence.id)
+
+        # --- NSW toll-registry auto-detection (app.services.tolls) --------
+        # Additive to, and independent of, the ad hoc-geofence block above:
+        # this is the real 13-road/141-gantry registry, charged ONCE PER ROAD
+        # (never per gantry), direction-aware, and covering flat/zone_flat/
+        # distance/time_of_day pricing -- see that module's docstring.
+        await apply_toll_detection(
+            session,
+            trip=trip,
+            prev_lat=bearing_prev_lat,
+            prev_lng=bearing_prev_lng,
+            lat=point.lat,
+            lng=point.lng,
+            ts=point.ts,
+            cumulative_distance_km=state.cumulative_distance_km,
+        )
 
     trip.distance_m = round(state.cumulative_distance_km * Decimal(1000))
     trip.dist_amount = round_half_up(state.accrued_distance_charge)
@@ -193,6 +282,10 @@ class CloseParams:
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[dict] | None = None
+    # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (module docstring
+    # deviation #6). Deliberately NOT passed to engine.close() below; assigned straight onto
+    # the trip row so it can never influence fare_total/surcharge/total/gst_component.
+    tip_amount: Decimal | None = None
 
 
 async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, params: CloseParams) -> FareBreakdown:
@@ -200,9 +293,23 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     Does NOT commit — caller owns the session/transaction. Returns the
     breakdown for the caller to surface if desired."""
     # cleaning_fee has no dedicated column on Trip (not in the domain's field
-    # list) — fold it into `extras` before building state so it flows through
-    # engine.close() as a genuine dollar amount rather than being dropped.
-    if params.cleaning_fee:
+    # list). For an ORDINARY metered trip it is folded into `extras` before
+    # building state so it flows through engine.close() as a genuine dollar
+    # amount rather than being dropped — `extras` is fully additive on that
+    # branch, so the sum is identical either way.
+    #
+    # A negotiated ("Set Price") or Sydney Airport Fixed fare is different:
+    # engine.close()'s negotiated_total/fixed_fare branches deliberately
+    # EXCLUDE `extras` from what's billed (tolls/PSL/extras are absorbed into
+    # the agreed price — see that module's docstrings), so folding
+    # cleaning_fee into the SAME bucket would silently absorb it too — and a
+    # cleaning fee must never be absorbed, even on a fixed/negotiated fare
+    # (2026-09 product ruling: soiling is discovered after the price was
+    # agreed). So for those two fare types, cleaning_fee is left out of
+    # `extras` and passed straight through to engine.close()'s own
+    # `cleaning_fee` parameter instead, which both branches always add on top.
+    is_all_inclusive_fare = trip.type == TRIP_TYPE_AIRPORT_FIXED or trip.negotiated_total is not None
+    if params.cleaning_fee and not is_all_inclusive_fare:
         trip.extras = (trip.extras or Decimal(0)) + params.cleaning_fee
 
     state = await build_fare_state(session, tenant_id=tenant_id, trip=trip)
@@ -210,7 +317,7 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
         state,
         payment_method=params.payment_method,
         surcharge_pct=params.surcharge_pct,
-        cleaning_fee=Decimal(0),
+        cleaning_fee=params.cleaning_fee if is_all_inclusive_fare else Decimal(0),
         include_psl=params.include_psl,
     )
 
@@ -228,9 +335,13 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     )
     split_payments_to_store: list[dict] | None = None
     if params.payment_method == "voucher":
-        payments_service.redeem_voucher(voucher_code=resolved_voucher_code or "")
+        await payments_service.redeem_voucher(
+            session, tenant_id=tenant_id, voucher_code=resolved_voucher_code or "", trip_id=trip.id
+        )
     elif params.payment_method == "account":
-        payments_service.validate_account_reference(account_reference=resolved_account_reference or "")
+        await payments_service.validate_account_reference(
+            session, tenant_id=tenant_id, account_reference=resolved_account_reference or ""
+        )
     elif params.payment_method == "split_fare":
         if not params.split_payments:
             raise SplitPaymentMismatchError("split_fare requires at least one sub-payment in split_payments")
@@ -264,6 +375,9 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     trip.end_lng = params.end_lng
     trip.max_fare_check_passed = True  # no device_total to compare for online closes
     trip.receipt_ref = params.receipt_ref or f"RCPT-{trip.id[:8].upper()}"
+    # Assigned straight from params, never derived from `breakdown` — a tip is not part of
+    # the fare-engine's output (see Trip.tip_amount's doc, deviation #6 above).
+    trip.tip_amount = params.tip_amount
 
     return breakdown
 
@@ -274,9 +388,10 @@ async def recompute_from_trace(
     tenant_id: str,
     tariff_id: str,
     trip_type: str,
-    time_class: str,
-    is_peak: bool,
-    maxi: bool,
+    is_maxi_vehicle: bool,
+    passenger_count: int,
+    wheelchair_hiring: bool,
+    airport_rank_requested_maxi: bool,
     tolls: Decimal,
     extras: Decimal,
     cleaning_fee: Decimal,
@@ -288,24 +403,46 @@ async def recompute_from_trace(
     surcharge_pct: Decimal | None,
     include_psl: bool,
     negotiated_total: Decimal | None = None,
-) -> tuple[FareBreakdown, int, int, int]:
+) -> tuple[FareBreakdown, int, int, int, TimeClass, bool]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
-    Returns (breakdown, distance_m, moving_s, waiting_s)."""
+    Returns (breakdown, distance_m, moving_s, waiting_s, time_class, is_peak).
+
+    No `time_class`/`is_peak` parameters here (unlike the trip-type/passenger/
+    maxi ones) — deliberately: this is the offline-sync path's own version of
+    `resolve_is_maxi_vehicle` never trusting `payload.maxi`. A synced item's
+    `time_class`/`is_peak` are advisory-only (see
+    app.schemas.trips.TripSyncItem's doc comment) and are always resolved
+    HERE, deterministically, from the tariff just looked up above and the
+    trip's own real `start_at` — see `resolve_time_class_and_peak`. The
+    resolved values are returned so the caller (app.api.v1.trips.sync_trips)
+    persists the same authoritative values onto the Trip row that were
+    actually used to compute `breakdown` below, rather than the client's
+    claim."""
     tariff = await resolve_tariff(session, tenant_id=tenant_id, tariff_id=tariff_id)
-    fixed_fare = airport_fixed_fare(maxi) if trip_type == TRIP_TYPE_AIRPORT_FIXED else None
+    time_class, is_peak = resolve_time_class_and_peak(tariff=tariff, occurred_at=start_at)
+
+    # See close_trip's identical comment: a negotiated/airport-fixed fare
+    # excludes `extras` from what's billed, so cleaning_fee must NOT be
+    # folded into it here (that would silently absorb it) — it goes straight
+    # to engine.close()'s own cleaning_fee parameter instead, below.
+    is_all_inclusive_fare = trip_type == TRIP_TYPE_AIRPORT_FIXED or negotiated_total is not None
 
     state = FareState(
         tariff=tariff,
-        time_class=TimeClass(time_class),
+        time_class=time_class,
         is_peak=is_peak,
-        maxi=maxi,
+        is_maxi_vehicle=is_maxi_vehicle,
+        passenger_count=passenger_count,
+        wheelchair_hiring=wheelchair_hiring,
+        airport_rank_requested_maxi=airport_rank_requested_maxi,
         hired=True,
         tolls=tolls,
-        extras=extras + cleaning_fee,
-        fixed_fare=fixed_fare,
+        extras=extras if is_all_inclusive_fare else extras + cleaning_fee,
         negotiated_total=negotiated_total,
     )
+    if trip_type == TRIP_TYPE_AIRPORT_FIXED:
+        state.fixed_fare = airport_fixed_fare(state.maxi_applied)
 
     prev_lat, prev_lng, prev_ts = start_lat, start_lng, start_at
     moving_s = 0
@@ -334,11 +471,49 @@ async def recompute_from_trace(
         state,
         payment_method=payment_method,
         surcharge_pct=surcharge_pct,
-        cleaning_fee=Decimal(0),
+        cleaning_fee=cleaning_fee if is_all_inclusive_fare else Decimal(0),
         include_psl=include_psl,
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))
-    return breakdown, distance_m, moving_s, waiting_s
+    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak
+
+
+def build_gps_trace_row(
+    *, tenant_id: str, trip_id: str, gps_trace: list[TelemetryPoint], recorded_at: datetime
+) -> TripGpsTrace | None:
+    """Builds the durable `TripGpsTrace` row for a just-synced trip's raw
+    telemetry, or `None` when `gps_trace` is empty.
+
+    Returning `None` (rather than a row with `points: []`) for an empty trace
+    is deliberate -- see `TripGpsTrace`'s own "EMPTY TRACE" doc section: every
+    synced trip arrives with `gps_trace: []` today (a parallel workstream is
+    fixing the on-device bug that causes this), and a junk all-empty row per
+    trip would both waste a row and give `GET /v1/trips/{id}/gps-trace` a
+    false "recorded, but empty" state to report instead of the honest
+    "nothing stored" one.
+
+    Does NOT add the row to any session or commit -- caller (`sync_trips`)
+    owns adding/flushing it in the same transaction as the `Trip` row it
+    belongs to, so a failed insert (e.g. a racing duplicate client_uuid) rolls
+    both back together and never orphans a trace for a trip that itself
+    didn't get created (see `TripGpsTrace`'s own "IDEMPOTENCY" doc section).
+
+    `points` are serialized via each `TelemetryPoint`'s own
+    `.model_dump(mode="json")` -- JSON has no native datetime type, so `ts` is
+    written out as an ISO-8601 string; `get_trip_gps_trace`
+    (`app/api/v1/trips.py`) reconstructs `TelemetryPoint` instances straight
+    back from these dicts on read, which pydantic parses just as happily from
+    the ISO string as from a real `datetime`.
+    """
+    if not gps_trace:
+        return None
+    return TripGpsTrace(
+        tenant_id=tenant_id,
+        trip_id=trip_id,
+        points=[point.model_dump(mode="json") for point in gps_trace],
+        point_count=len(gps_trace),
+        recorded_at=recorded_at,
+    )
 
 
 # Trip.variance_pct is Numeric(6, 2) -- max representable value 9999.99. Real bug
@@ -389,3 +564,84 @@ def flag_trip_for_review(*, trip: Trip, flagged: bool, reason: str | None) -> Tr
     else:
         trip.flagged_for_review = False
     return trip
+
+
+# --- Driver earnings today (dashboard tiles, GET /v1/trips/earnings/today) --
+
+
+@dataclass
+class DriverEarningsToday:
+    driver_id: str
+    today: date
+    today_total: Decimal
+    yesterday_total: Decimal
+    trips_completed_today: int
+
+    @property
+    def pct_change(self) -> float | None:
+        """`None` whenever there's no non-zero yesterday baseline to compare
+        against — callers must render "no comparison available", never a
+        fabricated 0%/100%."""
+        if self.yesterday_total == 0:
+            return None
+        return round(float((self.today_total - self.yesterday_total) / self.yesterday_total) * 100, 1)
+
+
+async def driver_earnings_today(
+    session: AsyncSession, *, tenant_id: str, driver_id: str, now: datetime | None = None
+) -> DriverEarningsToday:
+    """The calling driver's real completed-trip earnings for "today".
+
+    "Today" is the UTC calendar day — this codebase's one existing "today"
+    convention (see app.services.platform.get_platform_health's own
+    `start_of_today = datetime.now(UTC).replace(hour=0, ...)`, docstringed
+    there as "UTC calendar day"), not a Sydney-local day: there is no
+    Sydney-timezone helper anywhere in this codebase to reuse, and inventing
+    one for a single dashboard tile would be exactly the kind of
+    unreviewed new convention this pass was told not to introduce.
+
+    Bucketed by `Trip.start_at`, like every other date-bucketed money
+    aggregate in this codebase (app.services.reports.revenue_report,
+    app.services.platform.get_platform_health) — deliberately NOT
+    `Trip.end_at`. Only `status == "closed"` trips are counted (an open
+    trip has no final `total` yet, same rule `revenue_report` already
+    applies). All aggregation (SUM/COUNT) runs in SQL, never summed
+    Python-side over a fetched trip list, matching app.services.reports'
+    own "no float for money" rule; `today_total`/`yesterday_total` stay
+    `Decimal` all the way out.
+    """
+    now = now or datetime.now(UTC)
+    today = now.date()
+    start_of_today = datetime.combine(today, time.min, tzinfo=UTC)
+    start_of_tomorrow = start_of_today + timedelta(days=1)
+    start_of_yesterday = start_of_today - timedelta(days=1)
+
+    base_filters = (
+        Trip.tenant_id == tenant_id,
+        Trip.driver_id == driver_id,
+        Trip.status == TRIP_STATUS_CLOSED,
+    )
+
+    today_total, trips_completed_today = (
+        await session.execute(
+            select(func.sum(Trip.total), func.count(Trip.id)).where(
+                *base_filters, Trip.start_at >= start_of_today, Trip.start_at < start_of_tomorrow
+            )
+        )
+    ).one()
+
+    (yesterday_total,) = (
+        await session.execute(
+            select(func.sum(Trip.total)).where(
+                *base_filters, Trip.start_at >= start_of_yesterday, Trip.start_at < start_of_today
+            )
+        )
+    ).one()
+
+    return DriverEarningsToday(
+        driver_id=driver_id,
+        today=today,
+        today_total=today_total or Decimal("0.00"),
+        yesterday_total=yesterday_total or Decimal("0.00"),
+        trips_completed_today=trips_completed_today or 0,
+    )

@@ -10,6 +10,11 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
+from app.models.compliance import ComplianceDocument
+from app.models.driver_engagement import TripRating, WalletTransaction
+from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
+from app.models.tariffs import TariffChangeLog
 from app.models.user import User
 
 # Backend root: app/services/user.py -> parents[0]=services, [1]=app,
@@ -57,6 +62,15 @@ class InvalidPhotoUploadError(UserError):
     pass
 
 
+class UserHasDependentRecordsError(UserError):
+    """Raised by `assert_user_deletable` when the user is still referenced by
+    a NOT-NULL foreign key this codebase treats as audit/financial evidence
+    (see that function's docstring for the full "cascade vs refuse" design
+    rationale). `str(exc)` is already a complete, human-readable sentence
+    safe to surface verbatim as an HTTP `detail` — see
+    `app/api/v1/users.py::_user_error_to_http`."""
+
+
 async def assert_email_available(
     session: AsyncSession, *, email: str, exclude_user_id: str | None = None
 ) -> None:
@@ -79,6 +93,111 @@ async def get_user_or_404(session: AsyncSession, *, tenant_id: str, user_id: str
     if user is None:
         raise UserNotFoundError(user_id)
     return user
+
+
+async def assert_user_deletable(session: AsyncSession, *, user_id: str) -> None:
+    """Raises `UserHasDependentRecordsError` if `user_id` is still referenced
+    by a row this codebase treats as audit/financial EVIDENCE, rather than
+    letting the delete reach the database and blow up as a raw, opaque
+    IntegrityError.
+
+    DESIGN (same real-production-bug root cause as the fleet vehicle/device
+    delete fix — see app.services.fleet's module docstring, and
+    app.models.fleet's ondelete= comments for the mirror-image "cascade
+    derived data" half of this same design pass): postgres enforces every
+    NOT NULL foreign key to `users.id`; sqlite silently didn't until this
+    same pass turned on `PRAGMA foreign_keys=ON` for it (see
+    app.core.database). Every table below carries a real, currently-enforced
+    NOT NULL FK to `users.id` (audited directly from app/models/*.py — see
+    each entry's own comment), so deleting a user referenced by any of them
+    ALREADY fails at the database layer today; this function only turns that
+    into a clean, specific, actionable HTTP error instead of an opaque
+    500/503 the caller can't act on.
+
+    Every one of these is refused (not cascaded/nulled) ON PURPOSE: unlike
+    the fleet domain's derived/ephemeral heartbeat telemetry, each of these
+    rows is evidence THAT SOMETHING HAPPENED — a document was uploaded, a
+    levy was charged or collected, a wallet was credited/debited, a
+    passenger rated a trip, a fare was changed — independent of whether the
+    referenced person is later deleted. Silently destroying or anonymizing
+    that evidence just to let an admin's delete-row click succeed is exactly
+    the wrong trade for a legally fare-regulated taxi system; refusing with a
+    clear reason and requiring an explicit decision (reassign the records,
+    or don't delete the account) is the safer default. Contrast
+    `WalletTransaction.created_by_user_id`, which IS nullable and DOES
+    cascade to NULL on delete (see that column's own comment) — it names the
+    staff member who *posted* a line, not the line's actual subject, so
+    losing that attribution on delete isn't destroying evidence of the
+    financial event itself.
+
+    NOT checked here because there is no real FK to police (see each
+    model's own DEVIATION note — `Trip.driver_id` / `Shift.driver_id` are
+    plain unconstrained `String` columns, a pre-existing, separately-flagged
+    gap, not something this pass introduces or can enforce retroactively):
+    a deleted driver's historical trips/shifts keep their driver_id as-is,
+    now pointing at a since-deleted user — unaffected by this function
+    either way.
+    """
+    blockers: list[str] = []
+
+    async def _count(model, column) -> int:
+        stmt = select(func.count()).select_from(model).where(column == user_id)
+        return (await session.execute(stmt)).scalar_one()
+
+    # Compliance vault: NOT NULL FK, who uploaded a vehicle's compliance
+    # document (app/models/compliance.py::ComplianceDocument.uploaded_by).
+    n = await _count(ComplianceDocument, ComplianceDocument.uploaded_by)
+    if n:
+        blockers.append(f"{n} compliance document(s) uploaded by this user")
+
+    # PSL (Passenger Service Levy) ledger + top-ups: NOT NULL FK, the driver
+    # the levy accrual/collection is FOR (app/models/psl_ledger.py).
+    n = await _count(PSLLedgerEntry, PSLLedgerEntry.driver_id)
+    if n:
+        blockers.append(f"{n} PSL ledger entr{'y' if n == 1 else 'ies'} for this driver")
+    n = await _count(PSLTopUp, PSLTopUp.driver_id)
+    if n:
+        blockers.append(f"{n} PSL top-up payment(s) recorded for this driver")
+
+    # Driver-engagement: NOT NULL FKs that name the record's actual subject
+    # (app/models/driver_engagement.py) — driver_id on both, not the
+    # nullable created_by_user_id on WalletTransaction (see that column's
+    # own comment: it cascades to NULL, it does not block).
+    n = await _count(WalletTransaction, WalletTransaction.driver_id)
+    if n:
+        blockers.append(f"{n} wallet transaction(s) for this driver")
+    n = await _count(TripRating, TripRating.driver_id)
+    if n:
+        blockers.append(f"{n} trip rating(s) for this driver")
+
+    # Tariff change log: NOT NULL FK, who made a fare-rate change
+    # (app/models/tariffs.py::TariffChangeLog.actor_user_id) — this is
+    # fare-regulation evidence (which staff member changed which rate, and
+    # when), so it blocks even for a staff/admin account, not just drivers.
+    n = await _count(TariffChangeLog, TariffChangeLog.actor_user_id)
+    if n:
+        blockers.append(f"{n} tariff change log entr{'y' if n == 1 else 'ies'} recorded by this user")
+
+    # Platform-wide tamper-evidence audit trail
+    # (app/models/audit_log.py::AuditLog.actor_user_id). This column IS
+    # nullable at the schema level (some actions are system/automated, see
+    # that model's own DEVIATION note) — but it is deliberately NOT set to
+    # ondelete="SET NULL" here, unlike the genuinely-analogous-looking
+    # WalletTransaction.created_by_user_id above: AuditLog rows are
+    # cryptographically hash-chained (`hash`/`previous_hash`, see that
+    # model's own docstring) over their full column set INCLUDING
+    # actor_user_id — an ON DELETE SET NULL cascade would silently mutate a
+    # row's content post-write, which is exactly the tamper `GET
+    # /v1/audit-log/verify` exists to detect. So this one blocks too.
+    n = await _count(AuditLog, AuditLog.actor_user_id)
+    if n:
+        blockers.append(f"{n} audit log entr{'y' if n == 1 else 'ies'} recorded by this user as actor")
+
+    if blockers:
+        raise UserHasDependentRecordsError(
+            "Cannot delete this user: " + "; ".join(blockers) + ". "
+            "Reassign or remove those records first."
+        )
 
 
 async def assert_driver_code_available(

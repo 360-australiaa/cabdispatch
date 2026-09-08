@@ -47,6 +47,20 @@ export interface ShiftStartInput {
   vehicle_id: string;
   start_at?: string | null;
   inspection_json?: Record<string, unknown> | null;
+  /** Only needed when a prior attempt came back 409 (see ShiftConflictDetail
+   * below) — confirms a real handover: end the other driver's open shift on
+   * this vehicle and proceed, instead of the request being rejected. */
+  force_handover?: boolean;
+}
+
+/** Structured `detail` on a 409 from `POST /v1/shifts/start` — the vehicle
+ * already has an open shift under a different driver. */
+export interface ShiftConflictDetail {
+  message: string;
+  conflicting_shift_id: string;
+  conflicting_driver_id: string;
+  conflicting_driver_name: string;
+  conflicting_shift_start_at: string;
 }
 
 /** Body for `POST /v1/shifts/{id}/end` — reconciliation figures only;

@@ -1,12 +1,15 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
+import au.com.threesixty.cabdispatch.domain.duress.DuressCameraCapture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 /**
@@ -73,11 +76,22 @@ sealed interface DuressUiState {
  * for the full "single capped file, not a true rolling buffer" write-up), uploading via
  * [DuressRepository.uploadAudio] either once that cap elapses or the event reaches a terminal
  * status, whichever comes first.
+ *
+ * ### Cabin-camera still frames (duress snapshot gallery, 2026-08-27 — backend/dashboard already
+ * shipped, this pass is the Android side, see `android/HANDOFF.md`)
+ * [cameraCapture] follows the exact same optional/nullable-constructor-dependency shape as
+ * [audioRecorder] (`null` in any test/preview construction with no real `Context`). Started
+ * alongside the audio recorder the moment [DuressUiState.Active] is reached with a real event id
+ * — every frame it emits is uploaded fire-and-forget via [DuressRepository.uploadSnapshot] as it
+ * arrives. Unlike audio it has NO time cap — see [DuressCameraCapture]'s own doc for why a longer
+ * capture window is the point here, not a simplification to bound — so it only ever stops on the
+ * same "event reached terminal status" trigger that also stops the GPS/audio machinery.
  */
 class DuressController(
     private val repository: DuressRepository,
     private val scope: CoroutineScope,
     private val audioRecorder: DuressAudioRecorder? = null,
+    private val cameraCapture: DuressCameraCapture? = null,
 ) {
     private val _state = MutableStateFlow<DuressUiState>(DuressUiState.Idle)
     val state: StateFlow<DuressUiState> = _state.asStateFlow()
@@ -191,6 +205,18 @@ class DuressController(
         val recordingStartedAtMillis = System.currentTimeMillis()
         var audioPending = audioRecorder?.start(eventId) == true
 
+        // Camera: same "start the moment a real event id is known" timing as audio above, but no
+        // time cap — see class doc's "Cabin-camera still frames" section. Each emitted frame is
+        // uploaded fire-and-forget in its own launch so a slow/failed upload never blocks the
+        // capture loop or this function's own GPS-relay/resolution-poll loop below.
+        var cameraStarted = false
+        cameraCapture?.start()?.let { frames ->
+            cameraStarted = true
+            frames
+                .onEach { jpegBytes -> scope.launch { repository.uploadSnapshot(eventId, jpegBytes) } }
+                .launchIn(scope)
+        }
+
         while (true) {
             locationProvider?.invoke()?.let { (lat, lng, accuracyM) ->
                 repository.postGps(eventId, lat, lng, speedKmh = null, accuracyM = accuracyM?.toDouble())
@@ -206,6 +232,7 @@ class DuressController(
             val event = repository.getEvent(eventId).getOrNull()
             if (event != null && event.status in TERMINAL_STATUSES) {
                 if (audioPending) stopAndUploadAudio(eventId)
+                if (cameraStarted) cameraCapture?.stop()
                 _state.value = DuressUiState.Idle
                 return
             }

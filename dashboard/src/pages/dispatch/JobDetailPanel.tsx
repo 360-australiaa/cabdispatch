@@ -1,10 +1,28 @@
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, X } from "lucide-react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
+// Cross-page import of the driver lookup already built for Driver
+// Engagement (same "first 100 drivers in the tenant" lookup convention as
+// `pages/messages/api.ts::listDriverOptions`) -- resolves the raw
+// driver_id/accepted_by_driver_id UUIDs this panel used to show verbatim
+// into real names, same pattern Audit Log already uses for actor_user_id.
+import { useDriverOptionsQuery } from "@/pages/driver-engagement/hooks";
 import { cancelJob, getJob, listJobOffers } from "./api";
-import { formatDateTime, formatMoney, jobStatusBadgeVariant, offerStatusBadgeVariant } from "./format";
+import {
+  formatDateTime,
+  formatMoney,
+  jobStatusBadgeVariant,
+  offerStatusBadgeVariant,
+  secondsUntil,
+} from "./format";
 import { isTerminalJobStatus } from "./types";
+
+/** Mirrors `DELETE /v1/jobs/{id}`'s `_DISPATCH_ROLES` restriction
+ * (`app/api/v1/jobs.py`) — without this, a driver-role user viewing this
+ * panel would see an enabled "Cancel job" button that always 403s. */
+const CANCEL_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 /**
  * No `WS /v1/jobs/live` equivalent exists for dispatchers — that socket is
@@ -19,6 +37,8 @@ const POLL_MS = 2000;
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canCancelRole = !!user && CANCEL_ROLES.has(user.role);
 
   const jobQuery = useQuery({
     queryKey: ["dispatch-job", jobId],
@@ -43,8 +63,31 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     },
   });
 
+  const driversQuery = useDriverOptionsQuery();
+  const driverNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of driversQuery.data ?? []) map.set(d.id, d.name);
+    return map;
+  }, [driversQuery.data]);
+
+  // Ticks once a second only while at least one offer is still pending, so
+  // the per-offer countdown below actually counts down instead of being a
+  // static snapshot of `expires_at` (this drives the previously-unused
+  // `secondsUntil` helper -- see format.ts).
+  const [now, setNow] = useState(() => Date.now());
+  const hasPendingOffer = (offersQuery.data ?? []).some((o) => o.status === "pending");
+  useEffect(() => {
+    if (!hasPendingOffer) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasPendingOffer]);
+
   const job = jobQuery.data;
   const canCancel = !!job && !isTerminalJobStatus(job.status);
+
+  function driverLabel(driverId: string): string {
+    return driverNameById.get(driverId) ?? `${driverId.slice(0, 8)}…`;
+  }
 
   return (
     <Card className="sticky top-4">
@@ -85,7 +128,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               <Field label="Fare estimate">
                 {formatMoney(job.fare_estimate_low)} – {formatMoney(job.fare_estimate_high)}
               </Field>
-              <Field label="Accepted by">{job.accepted_by_driver_id ?? "—"}</Field>
+              <Field label="Accepted by">
+                {job.accepted_by_driver_id ? driverLabel(job.accepted_by_driver_id) : "—"}
+              </Field>
               <Field label="Pickup">{job.origin_address}</Field>
               <Field label="Drop-off">{job.dest_address}</Field>
             </dl>
@@ -98,38 +143,55 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               </h3>
               {offersQuery.isLoading ? (
                 <p className="text-xs text-muted-foreground">Loading offers…</p>
+              ) : offersQuery.isError ? (
+                <p className="text-xs text-destructive">
+                  Failed to load this job's offers — check the backend connection and try again.
+                </p>
               ) : (offersQuery.data?.length ?? 0) === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   No drivers were available when this job was created.
                 </p>
               ) : (
                 <ul className="flex flex-col gap-2">
-                  {offersQuery.data!.map((offer) => (
-                    <li
-                      key={offer.id}
-                      className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs"
-                    >
-                      <span className="font-mono">{offer.driver_id.slice(0, 8)}</span>
-                      <span className="text-muted-foreground">
-                        offered {formatDateTime(offer.offered_at)}
-                      </span>
-                      <Badge variant={offerStatusBadgeVariant(offer.status)}>{offer.status}</Badge>
-                    </li>
-                  ))}
+                  {offersQuery.data!.map((offer) => {
+                    const remaining = offer.status === "pending" ? secondsUntil(offer.expires_at, now) : null;
+                    return (
+                      <li
+                        key={offer.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs"
+                      >
+                        <span className="font-medium">{driverLabel(offer.driver_id)}</span>
+                        <span className="text-muted-foreground">
+                          offered {formatDateTime(offer.offered_at)}
+                        </span>
+                        {remaining !== null && (
+                          <span
+                            className={remaining <= 5 ? "font-medium text-destructive" : "text-muted-foreground"}
+                            title="Time left before this offer auto-expires"
+                          >
+                            {remaining}s left
+                          </span>
+                        )}
+                        <Badge variant={offerStatusBadgeVariant(offer.status)}>{offer.status}</Badge>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border pt-4">
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={!canCancel || cancelMutation.isPending}
-                onClick={() => cancelMutation.mutate()}
-              >
-                {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
-              </Button>
-            </div>
+            {canCancelRole && (
+              <div className="flex justify-end gap-2 border-t border-border pt-4">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={!canCancel || cancelMutation.isPending}
+                  onClick={() => cancelMutation.mutate()}
+                >
+                  {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
+                </Button>
+              </div>
+            )}
 
             {cancelMutation.isError && (
               <p className="text-xs text-destructive">

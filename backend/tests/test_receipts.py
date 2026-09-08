@@ -25,7 +25,7 @@ from sqlalchemy import select
 from app.models.tariffs import Tariff as TariffRow
 from app.models.tenant import Tenant
 from app.models.trips import Trip  # noqa: F401 — registers the table, see test_trips.py
-from app.services.receipts import BACKEND_ROOT, _lookup_tenant_branding
+from app.services.receipts import BACKEND_ROOT, _lookup_tenant_branding, fare_line_items
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -301,3 +301,127 @@ async def test_receipt_branding_falls_back_for_unknown_tenant(session: AsyncSess
     name, abn = await _lookup_tenant_branding(session, tenant_id="does-not-exist")
     assert name == "Cab Dispatch"
     assert abn is None
+
+
+# --- fare-breakdown reconciliation (app.services.receipts.fare_line_items) ---
+#
+# A fixed-price receipt used to itemise tolls/PSL/extras as ordinary additive
+# rows even though a negotiated fare absorbs them, so the visible lines did not
+# sum to the printed Subtotal. These assert the reconciliation directly rather
+# than by eyeballing a generated PDF.
+
+
+class _FakeTrip:
+    """Minimal stand-in carrying only the columns fare_line_items reads."""
+
+    def __init__(self, **kw):
+        defaults = dict(
+            type="rank_hail",
+            flag_fall=Decimal("0"),
+            dist_amount=Decimal("0"),
+            wait_amount=Decimal("0"),
+            peak_amount=Decimal("0"),
+            tolls=Decimal("0"),
+            psl=Decimal("0"),
+            extras=Decimal("0"),
+            subtotal=Decimal("0"),
+            surcharge=Decimal("0"),
+            total=Decimal("0"),
+            payment_method="cash",
+            negotiated_total=None,
+        )
+        defaults.update(kw)
+        for k, v in defaults.items():
+            setattr(self, k, v)
+
+
+def test_metered_trip_line_items_sum_to_subtotal():
+    trip = _FakeTrip(
+        flag_fall=Decimal("5.00"),
+        dist_amount=Decimal("12.40"),
+        wait_amount=Decimal("2.18"),
+        tolls=Decimal("8.11"),
+        psl=Decimal("1.32"),
+        subtotal=Decimal("29.01"),
+    )
+    line_items, included = fare_line_items(trip)
+    assert included == []
+    assert sum(amount for _, amount in line_items) == trip.subtotal
+
+
+def test_fixed_price_line_items_sum_to_subtotal_and_disclose_absorbed_components():
+    # $50 agreed, all-inclusive: a real toll and levy were incurred and must
+    # still be disclosed, but neither may be added on top of the agreed price.
+    trip = _FakeTrip(
+        flag_fall=Decimal("5.00"),
+        dist_amount=Decimal("12.40"),
+        tolls=Decimal("8.11"),
+        psl=Decimal("1.32"),
+        negotiated_total=Decimal("50.00"),
+        subtotal=Decimal("50.00"),
+    )
+    line_items, included = fare_line_items(trip)
+
+    # The additive rows reconcile to exactly the agreed price.
+    assert sum(amount for _, amount in line_items) == Decimal("50.00")
+    assert sum(amount for _, amount in line_items) == trip.subtotal
+
+    # The absorbed components are still disclosed, just never additive.
+    disclosed = {label: amount for label, amount in included}
+    assert disclosed["Tolls"] == Decimal("8.11")
+    assert disclosed["Passenger Service Levy (PSL)"] == Decimal("1.32")
+
+
+def test_fixed_price_omits_absorbed_rows_that_are_zero():
+    trip = _FakeTrip(negotiated_total=Decimal("40.00"), subtotal=Decimal("40.00"))
+    line_items, included = fare_line_items(trip)
+    assert sum(amount for _, amount in line_items) == Decimal("40.00")
+    assert included == []
+
+
+def test_fixed_price_card_payment_discloses_absorbed_surcharge_not_additive():
+    """2026-09 product ruling: the non-cash surcharge is absorbed into a
+    negotiated fare, same as tolls/PSL/extras — it must be disclosed (the
+    operator needs its own record of what it absorbed) but never counted as
+    one of the additive rows that reconcile to trip.subtotal."""
+    trip = _FakeTrip(
+        negotiated_total=Decimal("50.00"),
+        subtotal=Decimal("50.00"),
+        total=Decimal("50.00"),  # surcharge absorbed -- total == subtotal exactly
+        payment_method="card",
+        surcharge=Decimal("2.50"),
+    )
+    line_items, included = fare_line_items(trip)
+
+    assert sum(amount for _, amount in line_items) == Decimal("50.00")
+    assert sum(amount for _, amount in line_items) == trip.subtotal
+
+    disclosed = {label: amount for label, amount in included}
+    assert disclosed["Non-cash surcharge"] == Decimal("2.50")
+
+
+def test_fixed_price_cash_payment_never_discloses_a_surcharge_row():
+    trip = _FakeTrip(negotiated_total=Decimal("50.00"), subtotal=Decimal("50.00"), payment_method="cash")
+    _, included = fare_line_items(trip)
+    assert included == []
+
+
+def test_airport_fixed_line_items_sum_to_subtotal_and_absorb_surcharge():
+    """The Sydney Airport Fixed Fare Trial has the same all-inclusive
+    character as a negotiated fare (2026-09 consistency call — see
+    fare_engine.FareEngine.close's fixed_fare branch) — the receipt must
+    treat it the same way, never itemising the flat $60/$80 as a zeroed-out
+    metered breakdown that wouldn't reconcile to trip.subtotal."""
+    trip = _FakeTrip(
+        type="airport_fixed",
+        subtotal=Decimal("60.00"),
+        total=Decimal("60.00"),
+        payment_method="card",
+        surcharge=Decimal("3.00"),
+    )
+    line_items, included = fare_line_items(trip)
+
+    assert line_items == [("Fixed fare (all-inclusive)", Decimal("60.00"))]
+    assert sum(amount for _, amount in line_items) == trip.subtotal
+    disclosed = {label: amount for label, amount in included}
+    assert disclosed["Non-cash surcharge"] == Decimal("3.00")

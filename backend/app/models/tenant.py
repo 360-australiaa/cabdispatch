@@ -8,6 +8,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
 
+# Lifecycle status for a tenant on the platform, set/read only via the
+# platform-owner console (see app.services.platform.update_tenant_status /
+# PATCH /v1/platform/tenants/{tenant_id}) — an ordinary tenant owner never
+# sets this on themselves. Plain string, same portable-enum convention as
+# app.models.billing's PLAN_*/STATUS_* constants, not a DB-level enum.
+TENANT_STATUS_ACTIVE = "active"
+TENANT_STATUS_TRIAL = "trial"
+TENANT_STATUS_SUSPENDED = "suspended"
+VALID_TENANT_STATUSES = (TENANT_STATUS_ACTIVE, TENANT_STATUS_TRIAL, TENANT_STATUS_SUSPENDED)
+
 
 class Tenant(Base, TimestampMixin):
     __tablename__ = "tenants"
@@ -19,6 +29,11 @@ class Tenant(Base, TimestampMixin):
     bsp_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     theme_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     plan: Mapped[str] = mapped_column(String(50), nullable=False, default="standard")
+    # Every pre-existing tenant row (created before this column existed)
+    # defaults to "active" via the server_default in the accompanying
+    # migration — no backfill needed, and no tenant silently becomes
+    # unusable just because this column was added.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=TENANT_STATUS_ACTIVE)
     stripe_acct_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Hashed (bcrypt via app.core.security.hash_password, same scheme as
     # User.pin_hash) admin PIN gating destructive on-device actions (e.g. the

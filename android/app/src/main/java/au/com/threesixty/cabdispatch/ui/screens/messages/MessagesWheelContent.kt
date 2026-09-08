@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.ui.screens.messages
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,24 +13,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
-import au.com.threesixty.cabdispatch.ui.theme.WheelColors
+import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
+import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
 /**
  * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES] wheel-slot content, per design spec
@@ -38,9 +42,17 @@ import au.com.threesixty.cabdispatch.ui.theme.WheelColors
  * `.list-row` markup for the Messages slot (docs/driver-dashboard-full-prototype.html lines
  * ~332-351), newest message first.
  *
- * This composable renders only the content-pane *body* (the prototype's `#detailBody` — the list
- * itself), not the pane's `eyebrow`/`hero` title chrome, which the wheel-dashboard host screen
- * owns for every slot uniformly (see spec §4's "Left content pane" intro).
+ * Phase B v2 reskin (2026-08-26 dock-menu pass, Figma fileKey `JhEhok3n9bntRNS5Y1u3Yc` node
+ * `35:2`): rows restyled as left/right chat-style bubbles (dispatch left in a neutral bubble,
+ * driver's own replies right in a filled-purple bubble) matching the Figma "Messages" screen's
+ * layout, instead of v1's flat list-row table. [MessagesViewModel]/unread-count/[onOpenThread] are
+ * unchanged — this file still renders only the content-pane *body*, not the eyebrow/hero title
+ * chrome, which the hosting screen owns uniformly for every slot (spec §4 intro).
+ *
+ * Captain Taxis purple-theme pass (2026-08-29): re-themed off the legacy glass/gold wheel-content
+ * palette onto [CaptainPalette] to match the purple `PaneShell` chrome this content is embedded in from
+ * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen] — colors/typography/shapes
+ * only, no behavior change.
  *
  * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
  * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.MESSAGES], wiring
@@ -56,93 +68,115 @@ fun MessagesWheelContent(
     val state by viewModel.uiState.collectAsState()
 
     Column(modifier = modifier.fillMaxWidth()) {
+        val error = state.error
         when {
             state.loading -> Text(
                 "Loading messages…",
-                color = WheelColors.textSecondary,
-                fontSize = 14.sp,
+                fontFamily = InterFamily,
+                color = CaptainPalette.textSecondary,
+                fontSize = 16.sp,
             )
-            state.error != null -> Text(
-                state.error,
-                color = WheelColors.duress,
-                fontSize = 14.sp,
+            error != null -> Text(
+                error,
+                fontFamily = InterFamily,
+                color = CaptainPalette.danger,
+                fontSize = 16.sp,
             )
             state.messages.isEmpty() -> Text(
                 "No messages yet.",
-                color = WheelColors.textSecondary,
-                fontSize = 14.sp,
+                fontFamily = InterFamily,
+                color = CaptainPalette.textSecondary,
+                fontSize = 16.sp,
             )
             else -> {
-                val newestFirst = state.messages.sortedByDescending { it.sentAt }
-                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-                    items(newestFirst, key = { it.id }) { message ->
-                        MessageListRow(message = message, onClick = onOpenThread)
-                        HorizontalDivider(color = WheelColors.border, thickness = 1.dp)
+                val oldestFirst = state.messages.sortedBy { it.sentAt }
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(oldestFirst, key = { it.id }) { message ->
+                        MessageBubbleRow(message = message, onClick = onOpenThread)
                     }
                 }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
-        Box(modifier = Modifier.clickable(onClick = onOpenThread)) {
-            Text(
-                text = if (state.unreadCount > 0) {
-                    "VIEW FULL THREAD & REPLY (${state.unreadCount} unread)"
-                } else {
-                    "VIEW FULL THREAD & REPLY"
-                },
-                color = WheelColors.gold,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp,
-            )
-        }
+        CaptainButton(
+            text = if (state.unreadCount > 0) {
+                "VIEW FULL THREAD & REPLY (${state.unreadCount} unread)"
+            } else {
+                "VIEW FULL THREAD & REPLY"
+            },
+            modifier = Modifier.fillMaxWidth(),
+            fontSize = 15.sp,
+            onClick = onOpenThread,
+        )
     }
 }
 
 @Composable
-private fun MessageListRow(message: MessageDto, onClick: () -> Unit) {
+private fun MessageBubbleRow(message: MessageDto, onClick: () -> Unit) {
+    val fromDispatch = message.senderType == "dispatch"
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        horizontalArrangement = if (fromDispatch) Arrangement.Start else Arrangement.End,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = senderLabel(message),
-                    color = WheelColors.textPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (message.senderType == "dispatch" && message.readAt == null) {
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(WheelColors.gold, shape = CircleShape),
-                    )
+        Column(
+            modifier = Modifier.widthIn(max = 320.dp),
+            horizontalAlignment = if (fromDispatch) Alignment.Start else Alignment.End,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(bottom = 3.dp, start = 4.dp, end = 4.dp),
+            ) {
+                if (fromDispatch && message.readAt == null) {
+                    Box(modifier = Modifier.size(8.dp).background(CaptainPalette.warning, CircleShape))
                 }
+                Text(senderLabel(message), fontFamily = InterFamily, color = CaptainPalette.textMuted, fontSize = 12.sp)
             }
-            Spacer(Modifier.height(2.dp))
+            val bubbleShape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (fromDispatch) 4.dp else 16.dp,
+                bottomEnd = if (fromDispatch) 16.dp else 4.dp,
+            )
+            Box(
+                modifier = Modifier
+                    .then(
+                        if (fromDispatch) {
+                            Modifier
+                                .background(CaptainPalette.raised, bubbleShape)
+                                .border(1.dp, CaptainPalette.panelBorder, bubbleShape)
+                        } else {
+                            Modifier.background(CaptainPalette.primary, bubbleShape)
+                        },
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    text = message.body,
+                    fontFamily = InterFamily,
+                    // Dispatch bubbles sit on CaptainPalette.raised (neutral surface) -> textPrimary
+                    // reads correctly in both themes; driver bubbles sit on the solid `primary`
+                    // fill -> need the fixed-white onAccent, not textPrimary (see that token's doc).
+                    color = if (fromDispatch) CaptainPalette.textPrimary else CaptainPalette.onAccent,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
-                text = message.body,
-                color = WheelColors.textSecondary,
+                text = formatMessageRelativeTime(message.sentAt),
+                fontFamily = InterFamily,
+                color = CaptainPalette.textMuted,
                 fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 3.dp, start = 4.dp, end = 4.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = formatMessageRelativeTime(message.sentAt),
-            color = WheelColors.textMuted,
-            fontSize = 11.sp,
-        )
     }
 }
 

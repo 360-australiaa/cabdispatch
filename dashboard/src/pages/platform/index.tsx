@@ -1,5 +1,17 @@
 import { useState } from "react";
-import { Building2, Car, Plus, Route } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  Building2,
+  Car,
+  CheckCircle2,
+  CreditCard,
+  Plus,
+  Route,
+  Siren,
+  Upload,
+  Users,
+} from "lucide-react";
 import {
   Badge,
   Button,
@@ -15,13 +27,24 @@ import {
 } from "@/components/ui";
 import {
   useCreateTenant,
+  usePlatformBillingSummary,
   usePlatformHealth,
   usePlatformTenants,
+  useTenantBilling,
+  useTenantSummary,
+  useUpdateTenantStatus,
   PLATFORM_PAGE_LIMIT,
   type CreateTenantValues,
   type PlatformTenant,
+  type TenantStatus,
 } from "@/hooks/usePlatformConsole";
-import { errorMessage, formatDateTime } from "./format";
+import {
+  useAppReleases,
+  usePublishAppRelease,
+  useSetAppReleaseActive,
+  type AppRelease,
+} from "@/hooks/useAppReleases";
+import { errorMessage, formatAud, formatDateTime, tenantStatusBadgeVariant } from "./format";
 
 const EMPTY_FORM: CreateTenantValues = {
   name: "",
@@ -47,7 +70,392 @@ function HealthSummary() {
         <CardTitle>Platform health</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {healthQuery.isError ? (
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load platform health. Check the backend connection and try again.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {tiles.map(({ label, value, icon: Icon }) => (
+              <div
+                key={label}
+                className="flex items-center gap-3 rounded-md border border-border p-4"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="text-lg font-semibold text-foreground">
+                    {healthQuery.isLoading ? "..." : (value ?? "-")}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** MRR headline + per-plan subscription counts, server-computed via
+ * GET /v1/platform/billing/summary — never trusts anything client-supplied. */
+function BillingSummary() {
+  const billingQuery = usePlatformBillingSummary();
+  const billing = billingQuery.data;
+  const planEntries = Object.entries(billing?.plan_counts ?? {});
+
+  return (
+    <Card className="mb-6">
+      <CardHeader>
+        <CardTitle>Billing</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {billingQuery.isError ? (
+          <p className="flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load platform billing. Check the backend connection and try again.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="flex items-center gap-3 rounded-md border border-border p-4">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+                <CreditCard className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">MRR</p>
+                <p className="text-lg font-semibold text-foreground">
+                  {billingQuery.isLoading ? "..." : formatAud(billing?.mrr_aud)}
+                </p>
+              </div>
+            </div>
+            <div className="rounded-md border border-border p-4 sm:col-span-2">
+              <p className="mb-2 text-xs text-muted-foreground">Active subscriptions by plan</p>
+              {billingQuery.isLoading ? (
+                <p className="text-sm text-muted-foreground">...</p>
+              ) : planEntries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active subscriptions yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {planEntries.map(([plan, count]) => (
+                    <Badge key={plan} variant="outline">
+                      {plan}: {count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const EMPTY_RELEASE_FORM = { version_code: "", version_name: "", release_notes: "" };
+
+/** Publish a new Android build + browse release history — the dashboard side
+ * of the OTA self-update pipeline (`domain/AppUpdateChecker.kt` on the
+ * device, `app/api/v1/app_releases.py` on the backend). Replaces the earlier
+ * "publish via a raw curl call, no UI" gap: this is the only place a real
+ * APK ever reaches a tablet, so it lives on the platform-owner console next
+ * to the tenant list, not inside any one tenant's fleet page. */
+function AppReleasesSection() {
+  const [skip, setSkip] = useState(0);
+  const releasesQuery = useAppReleases(skip);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const publishRelease = usePublishAppRelease(setUploadProgress);
+  const setActive = useSetAppReleaseActive();
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState(EMPTY_RELEASE_FORM);
+  const [file, setFile] = useState<File | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function openPublish() {
+    setForm(EMPTY_RELEASE_FORM);
+    setFile(null);
+    setFormError(null);
+    setUploadProgress(null);
+    setFormOpen(true);
+  }
+
+  async function submitPublish() {
+    setFormError(null);
+    const versionCode = Number(form.version_code);
+    if (!Number.isInteger(versionCode) || versionCode <= 0) {
+      setFormError("Version code must be a positive whole number (Android's own versionCode).");
+      return;
+    }
+    if (!form.version_name.trim()) {
+      setFormError("Version name is required (e.g. \"1.2.0\").");
+      return;
+    }
+    if (!file) {
+      setFormError("Choose the built .apk file to upload.");
+      return;
+    }
+    setUploadProgress(0);
+    try {
+      await publishRelease.mutateAsync({
+        version_code: versionCode,
+        version_name: form.version_name,
+        release_notes: form.release_notes,
+        file,
+      });
+      setFormOpen(false);
+    } catch (err) {
+      // A session that expired mid-upload now retries once against a freshly
+      // refreshed token (see apiClient.ts) instead of losing the upload
+      // outright — this branch is a real remaining failure (network drop,
+      // duplicate version_code, refresh token itself expired), not that.
+      setFormError(errorMessage(err));
+    } finally {
+      setUploadProgress(null);
+    }
+  }
+
+  const columns: TableColumn<AppRelease>[] = [
+    { key: "version_name", header: "Version", render: (r) => <span className="font-medium">{r.version_name}</span> },
+    { key: "version_code", header: "Version code", render: (r) => r.version_code },
+    {
+      key: "is_active",
+      header: "Status",
+      render: (r) => <Badge variant={r.is_active ? "success" : "outline"}>{r.is_active ? "Active" : "Unpublished"}</Badge>,
+    },
+    { key: "created_at", header: "Published", sortable: true, sortAccessor: (r) => new Date(r.created_at), render: (r) => formatDateTime(r.created_at) },
+    { key: "sha256", header: "SHA-256", render: (r) => <span className="font-mono text-xs text-muted-foreground">{r.sha256.slice(0, 12)}…</span> },
+    {
+      key: "actions",
+      header: "",
+      render: (r) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={setActive.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActive.mutate({ id: r.id, isActive: !r.is_active });
+          }}
+        >
+          {r.is_active ? "Unpublish" : "Republish"}
+        </Button>
+      ),
+    },
+  ];
+
+  const total = releasesQuery.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PLATFORM_PAGE_LIMIT));
+  const page = Math.floor(skip / PLATFORM_PAGE_LIMIT);
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>App Releases</CardTitle>
+        <Button onClick={openPublish}>
+          <Upload className="h-4 w-4" />
+          Publish release
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Every tablet checks the highest active release here — this is the only way a real update
+          reaches a tablet; there is no Play Store involved. See a device's own update state on the
+          Fleet → Devices table.
+        </p>
+        {releasesQuery.isError && (
+          <p className="mb-3 flex items-center gap-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Failed to load releases. Check the backend connection and try again.
+          </p>
+        )}
+        <Table
+          columns={columns}
+          data={releasesQuery.data?.items ?? []}
+          rowKey={(r) => r.id}
+          isLoading={releasesQuery.isLoading}
+          emptyState={releasesQuery.isError ? "Couldn't load releases." : "No releases published yet."}
+        />
+        {pageCount > 1 && (
+          <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+              Page {page + 1} of {pageCount}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PLATFORM_PAGE_LIMIT))}>
+                Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setSkip((s) => s + PLATFORM_PAGE_LIMIT)}>
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+
+      <Modal
+        open={formOpen}
+        onClose={() => {
+          // Closing this doesn't cancel the in-flight axios request, but
+          // hiding the modal mid-upload would lose the progress readout and
+          // invite a confused second attempt — keep it open until this one
+          // actually resolves.
+          if (!publishRelease.isPending) setFormOpen(false);
+        }}
+        title="Publish release"
+        description="Uploads a real APK to our own server — nothing goes through the Play Store. Every tablet flagged for update downloads and SHA-256-verifies this exact file before installing it."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setFormOpen(false)} disabled={publishRelease.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={submitPublish} disabled={publishRelease.isPending}>
+              {publishRelease.isPending ? `Uploading… ${uploadProgress ?? 0}%` : "Publish"}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          {formError && (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{formError}</p>
+          )}
+          {publishRelease.isPending && (
+            <div className="flex flex-col gap-1">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-brand-primary transition-[width] duration-150"
+                  style={{ width: `${uploadProgress ?? 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {uploadProgress === 100
+                  ? "Upload complete — verifying on the server…"
+                  : `Uploading — ${uploadProgress ?? 0}% (large APKs can take a few minutes; don't close this).`}
+              </p>
+            </div>
+          )}
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">APK file</span>
+            <Input
+              type="file"
+              accept=".apk"
+              disabled={publishRelease.isPending}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Version code</span>
+            <Input
+              type="number"
+              value={form.version_code}
+              disabled={publishRelease.isPending}
+              onChange={(e) => setForm((v) => ({ ...v, version_code: e.target.value }))}
+              placeholder="Must be higher than every tablet's current versionCode"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Version name</span>
+            <Input
+              value={form.version_name}
+              disabled={publishRelease.isPending}
+              onChange={(e) => setForm((v) => ({ ...v, version_name: e.target.value }))}
+              placeholder="1.2.0"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">Release notes (optional)</span>
+            <Input
+              value={form.release_notes}
+              disabled={publishRelease.isPending}
+              onChange={(e) => setForm((v) => ({ ...v, release_notes: e.target.value }))}
+              placeholder="What changed in this build"
+            />
+          </label>
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
+/** This tenant's subscriptions — the platform-owner's support-triage view,
+ * so staff can review a network's billing without impersonating them via
+ * the ?tenant_id= override every other endpoint supports. */
+function TenantBillingSection({ tenantId }: { tenantId: string | null }) {
+  const billingQuery = useTenantBilling(tenantId);
+  const subscriptions = billingQuery.data ?? [];
+
+  return (
+    <div className="mt-4">
+      <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">Billing</p>
+      {billingQuery.isError && (
+        <p className="flex items-center gap-2 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Failed to load this tenant's billing. Check the backend connection and try again.
+        </p>
+      )}
+      {!billingQuery.isError && billingQuery.isLoading && (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      )}
+      {!billingQuery.isError && !billingQuery.isLoading && subscriptions.length === 0 && (
+        <p className="text-sm text-muted-foreground">No subscriptions for this tenant.</p>
+      )}
+      {subscriptions.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {subscriptions.map((sub) => (
+            <div
+              key={sub.id}
+              className="flex items-center justify-between rounded-md border border-border p-3 text-sm"
+            >
+              <span className="font-medium text-foreground">Vehicle {sub.vehicle_id}</span>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">{sub.plan}</Badge>
+                <Badge variant={tenantStatusBadgeVariant(sub.status)}>{sub.status}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Read-only health rollup for one tenant, opened from a tenants-table row click. */
+function TenantDetailModal({
+  tenantId,
+  tenantName,
+  onClose,
+}: {
+  tenantId: string | null;
+  tenantName: string | undefined;
+  onClose: () => void;
+}) {
+  const summaryQuery = useTenantSummary(tenantId);
+  const summary = summaryQuery.data;
+
+  const tiles = [
+    { label: "Vehicles", value: summary?.vehicle_count, icon: Car },
+    { label: "Drivers", value: summary?.driver_count, icon: Users },
+    { label: "Trips (last 30 days)", value: summary?.trip_count_last_30_days, icon: Route },
+    { label: "Active duress events", value: summary?.active_duress_count, icon: Siren },
+  ];
+
+  return (
+    <Modal
+      open={tenantId != null}
+      onClose={onClose}
+      title={tenantName ?? "Tenant"}
+      description="Health rollup for this tenant."
+    >
+      {summaryQuery.isError && (
+        <p className="flex items-center gap-2 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Failed to load this tenant's summary. Check the backend connection and try again.
+        </p>
+      )}
+      {!summaryQuery.isError && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {tiles.map(({ label, value, icon: Icon }) => (
             <div
               key={label}
@@ -59,14 +467,16 @@ function HealthSummary() {
               <div>
                 <p className="text-xs text-muted-foreground">{label}</p>
                 <p className="text-lg font-semibold text-foreground">
-                  {healthQuery.isLoading ? "..." : (value ?? "-")}
+                  {summaryQuery.isLoading ? "..." : (value ?? "-")}
                 </p>
               </div>
             </div>
           ))}
         </div>
-      </CardContent>
-    </Card>
+      )}
+
+      <TenantBillingSection tenantId={tenantId} />
+    </Modal>
   );
 }
 
@@ -77,10 +487,29 @@ export default function PlatformConsolePage() {
   const [skip, setSkip] = useState(0);
   const tenantsQuery = usePlatformTenants(skip);
   const createTenant = useCreateTenant();
+  const updateTenantStatus = useUpdateTenantStatus();
 
   const [formOpen, setFormOpen] = useState(false);
   const [formValues, setFormValues] = useState<CreateTenantValues>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  // Suspend/reactivate used to fire straight from the row button with no
+  // confirmation step at all -- every other destructive-ish action in this
+  // app (voucher delete, corp-account delete, MFA disable, branding reset)
+  // goes through a confirm Modal first, and this one arguably has a bigger
+  // blast radius than any of those (it locks every user at a real paying
+  // tenant out of the whole platform).
+  const [confirmingTenant, setConfirmingTenant] = useState<PlatformTenant | null>(null);
+
+  function confirmToggleTenantStatus() {
+    if (!confirmingTenant) return;
+    const nextStatus: TenantStatus = confirmingTenant.status === "suspended" ? "active" : "suspended";
+    updateTenantStatus.mutate(
+      { tenantId: confirmingTenant.id, status: nextStatus },
+      { onSuccess: () => setConfirmingTenant(null) },
+    );
+  }
 
   function openCreate() {
     setFormValues(EMPTY_FORM);
@@ -116,11 +545,44 @@ export default function PlatformConsolePage() {
       render: (t) => <Badge variant="outline">{t.plan}</Badge>,
     },
     {
+      key: "status",
+      header: "Status",
+      sortable: true,
+      render: (t) => <Badge variant={tenantStatusBadgeVariant(t.status)}>{t.status}</Badge>,
+    },
+    {
       key: "created_at",
       header: "Created",
       sortable: true,
       sortAccessor: (t) => new Date(t.created_at),
       render: (t) => formatDateTime(t.created_at),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (t) => (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={updateTenantStatus.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirmingTenant(t);
+          }}
+        >
+          {t.status === "suspended" ? (
+            <>
+              <CheckCircle2 className="h-4 w-4" />
+              Reactivate
+            </>
+          ) : (
+            <>
+              <Ban className="h-4 w-4" />
+              Suspend
+            </>
+          )}
+        </Button>
+      ),
     },
   ];
 
@@ -142,18 +604,29 @@ export default function PlatformConsolePage() {
       />
 
       <HealthSummary />
+      <BillingSummary />
+      <AppReleasesSection />
 
       <Card>
         <CardHeader>
           <CardTitle>Tenants</CardTitle>
         </CardHeader>
         <CardContent>
+          {tenantsQuery.isError && (
+            <p className="mb-3 flex items-center gap-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              Failed to load tenants. Check the backend connection and try again.
+            </p>
+          )}
           <Table
             columns={columns}
             data={tenantsQuery.data?.items ?? []}
             rowKey={(t) => t.id}
             isLoading={tenantsQuery.isLoading}
-            emptyState="No tenants yet."
+            emptyState={
+              tenantsQuery.isError ? "Couldn't load tenants." : "No tenants yet."
+            }
+            onRowClick={(t) => setSelectedTenantId(t.id)}
           />
           {pageCount > 1 && (
             <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
@@ -246,6 +719,45 @@ export default function PlatformConsolePage() {
             />
           </label>
         </div>
+      </Modal>
+
+      <TenantDetailModal
+        tenantId={selectedTenantId}
+        tenantName={tenantsQuery.data?.items.find((t) => t.id === selectedTenantId)?.name}
+        onClose={() => setSelectedTenantId(null)}
+      />
+
+      <Modal
+        open={confirmingTenant != null}
+        onClose={() => setConfirmingTenant(null)}
+        title={confirmingTenant?.status === "suspended" ? "Reactivate tenant?" : "Suspend tenant?"}
+        description={
+          confirmingTenant?.status === "suspended"
+            ? `${confirmingTenant?.name} regains access immediately.`
+            : `Every user at ${confirmingTenant?.name} loses access immediately — this is not reversible from their side, only from here.`
+        }
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setConfirmingTenant(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirmingTenant?.status === "suspended" ? "primary" : "destructive"}
+              disabled={updateTenantStatus.isPending}
+              onClick={confirmToggleTenantStatus}
+            >
+              {updateTenantStatus.isPending
+                ? "Working…"
+                : confirmingTenant?.status === "suspended"
+                  ? "Reactivate"
+                  : "Suspend"}
+            </Button>
+          </>
+        }
+      >
+        {updateTenantStatus.isError && (
+          <p className="text-sm text-destructive">This action failed. Refresh and try again.</p>
+        )}
       </Modal>
     </div>
   );

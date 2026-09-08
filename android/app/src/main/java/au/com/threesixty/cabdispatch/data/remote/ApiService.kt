@@ -7,6 +7,7 @@ import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -69,7 +70,7 @@ interface ApiService {
     suspend fun mfaLogin(@Body body: MfaLoginRequestDto): TokenResponseDto
 
     @POST("/v1/auth/refresh")
-    suspend fun refresh(@Body body: RefreshRequestDto): TokenResponseDto
+    suspend fun refresh(@Body body: RefreshRequestDto): RefreshResponseDto
 
     @GET("/v1/auth/me")
     suspend fun me(): UserDto
@@ -82,10 +83,55 @@ interface ApiService {
     @POST("/v1/fleet/devices/register")
     suspend fun registerDevice(@Body body: DeviceRegisterRequestDto): DeviceDto
 
+    /**
+     * [deviceSecret], when non-null, is sent as `X-Device-Secret` — the device-scoped credential
+     * the backend added 2026-08-29 specifically so this call can authenticate with NO driver
+     * session at all (see [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]'s "real
+     * precondition" section for why that mattered: a parked, logged-off, or freshly-rebooted
+     * tablet has no [au.com.threesixty.cabdispatch.data.AppContainer.accessToken] in memory, so
+     * every poll used to 401 until a driver signed in online). [okhttp3.Interceptor] still adds
+     * `Authorization` when a token happens to be in memory too — the backend accepts either, so
+     * sending both is harmless; it's what makes the bearer path keep working unchanged for a
+     * device paired before this field existed (no secret == this header omitted == old behaviour).
+     * `null` -> the header is omitted, not sent empty, via [retrofit2.http.Header]'s null handling.
+     */
+    /**
+     * `POST /v1/fleet/devices/{id}/locate-response` — this DEVICE answering an admin's locate
+     * request with its own real fix, which is also what clears `locate_requested` server-side.
+     *
+     * Replaces answering on [publishPosition]. That is a VEHICLE endpoint: it needs the fleet UUID
+     * of the car this tablet is currently bound to, which means a live driver session and a
+     * current binding. A parked, logged-off tablet has neither — and that is precisely the tablet
+     * an operator reaching for "locate" is trying to find. A tablet holding a binding to a
+     * since-deleted vehicle got a 404 from it instead, which surfaced in Settings ▸ About as
+     * "Location request failed to send — HTTP 404 not found".
+     *
+     * Authenticated by [deviceSecret], so it works with nobody signed in.
+     */
+    @POST("/v1/fleet/devices/{deviceId}/locate-response")
+    suspend fun deviceLocateResponse(
+        @Path("deviceId") deviceId: String,
+        @Body body: DeviceLocateResponseDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
+    ): DeviceDto
+
+    /**
+     * `POST /v1/fleet/devices/{id}/command-ack` — this device reporting that it has carried out a
+     * queued command, which clears that command's flag. Without it an admin queues a restart and
+     * watches it read "Pending" for the life of the row.
+     */
+    @POST("/v1/fleet/devices/{deviceId}/command-ack")
+    suspend fun deviceCommandAck(
+        @Path("deviceId") deviceId: String,
+        @Body body: DeviceCommandAckDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
+    ): DeviceDto
+
     @POST("/v1/fleet/devices/{deviceId}/heartbeat")
     suspend fun deviceHeartbeat(
         @Path("deviceId") deviceId: String,
         @Body body: DeviceHeartbeatRequestDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
     ): DeviceDto
 
     /**
@@ -113,6 +159,28 @@ interface ApiService {
     @POST("/v1/fleet/positions")
     suspend fun publishPosition(@Body body: PositionPublishRequestDto): PositionPublishResponseDto
 
+    /** `GET /v1/fleet/vehicles` — tenant-scoped vehicle roster (the same list a dispatcher sees
+     * on Fleet & Drivers), callable with a driver-role token too (checked live: a real driver JWT
+     * gets a real 200, tenant-filtered same as staff). Added so [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.bindVehicle]
+     * can resolve a manually-typed rego to the real vehicle UUID [publishPosition] actually
+     * requires in [PositionPublishRequestDto.vehicleId] — found live: that endpoint 404s
+     * "Vehicle not found" on a rego string, only ever accepting the real `id`. No server-side
+     * rego filter is assumed/used here; the caller fetches the page and matches client-side.
+     * Second caller since Phase H (2026-09-03): `ui/screens/profile/ProfileViewModel.kt`'s
+     * `loadVehicleDetail` fetches this same page and matches on [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]/
+     * `.vehicleId` to read [VehicleDto.make]/`.model`/`.registrationExpiry`/`.insuranceExpiry` for
+     * the Profile screen — same "no pagination loop" caveat applies to that caller too. */
+    @GET("/v1/fleet/vehicles")
+    suspend fun listVehicles(
+        @Query("skip") skip: Int = 0,
+        // Backend caps this at 100 (checked live: 200 -> real 422 "Input should be less than or
+        // equal to 100"). A tenant with a fleet bigger than one page is a real, silently-degrading
+        // gap here — this call has no pagination loop — but matches this app's existing
+        // best-effort posture elsewhere rather than adding one for a fleet-roster lookup this pass
+        // wasn't scoped to build out fully.
+        @Query("limit") limit: Int = 100,
+    ): VehiclePageDto
+
     // ---- Tariffs (B6 fare engine reads these; server is the source of truth,
     // cached + signed on-device per B7 offline behaviour) ----
 
@@ -138,21 +206,78 @@ interface ApiService {
     @GET("/v1/tariffs/signing-public-key")
     suspend fun tariffSigningPublicKey(): TariffSigningPublicKeyDto
 
+    /** Named tariff presets (MTI parity / blueprint 5.2.3) — powers the v2 Tariff Select screen
+     * (`17b`, Command Deck redesign). Mirrors `GET /v1/tariffs/presets` -> `list[TariffPresetRead]`. */
+    @GET("/v1/tariffs/presets")
+    suspend fun tariffPresets(): List<TariffPresetDto>
+
+    /** Auto-suggest the best-matching tariff for a position (blueprint 9.1) — v2 Tariff Select's
+     * "suggested" chip. Mirrors `GET /v1/tariffs/suggest`. */
+    @GET("/v1/tariffs/suggest")
+    suspend fun suggestTariff(
+        @Query("lat") lat: Double,
+        @Query("lng") lng: Double,
+        @Query("vehicle_class") vehicleClass: String? = null,
+    ): TariffSuggestionDto
+
+    // ---- Toll roads (real NSW toll registry — `backend/app/api/v1/toll_roads.py`; read-only,
+    // platform-wide reference data, same as tariffs above. See
+    // [au.com.threesixty.cabdispatch.sync.TollRegistryCache] for how the on-device auto-toll
+    // detector caches this for offline use — it never calls these two directly on the fare
+    // engine's hot path, only [au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]. ----
+
+    /** `GET /v1/toll-roads` — every road's identity + CURRENT price only (no gantries, no price
+     * history — see [TollRoadDto.currentPrice]'s doc for why the device only ever caches the
+     * in-force revision). [TollRegistryCache][au.com.threesixty.cabdispatch.sync.TollRegistryCache.refresh]
+     * follows this with one [tollRoadDetail] call per road id to also fetch gantry coordinates. */
+    @GET("/v1/toll-roads")
+    suspend fun tollRoads(): List<TollRoadDto>
+
+    /** `GET /v1/toll-roads/{road_id}` — adds this one road's real gantry coordinates
+     * ([TollRoadDetailDto.gantries]) on top of everything [tollRoads] already returns. */
+    @GET("/v1/toll-roads/{roadId}")
+    suspend fun tollRoadDetail(@Path("roadId") roadId: String): TollRoadDetailDto
+
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
 
     @POST("/v1/trips")
     suspend fun createTrip(@Body body: TripCreateDto): TripDto
 
+    /**
+     * `shift_id`/`start_at_from`/`start_at_to` (2026-08-29, Captain Taxis dashboard pass — see
+     * backend's own contract doc, Part 4.2) are additive filters on top of the existing params;
+     * `null` (the default) omits each from the query exactly as before this pass, so every
+     * existing call site is unaffected. Used by [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s
+     * shift-scoped "TRIPS — N Completed / M Active" stat: one call with `status = "closed"`, one
+     * with `status = "open"`, both scoped to the current shift via `shiftId`, reading only
+     * [TripListResponseDto.total] off each.
+     */
     @GET("/v1/trips")
     suspend fun listTrips(
         @Query("status") status: String? = null,
         @Query("type") type: String? = null,
         @Query("vehicle_id") vehicleId: String? = null,
         @Query("driver_id") driverId: String? = null,
+        @Query("shift_id") shiftId: String? = null,
+        @Query("start_at_from") startAtFrom: String? = null,
+        @Query("start_at_to") startAtTo: String? = null,
         @Query("skip") skip: Int = 0,
         @Query("limit") limit: Int = 50,
     ): TripListResponseDto
+
+    /**
+     * `GET /v1/trips/earnings/today` (new, 2026-08-29 — backend contract Part 4.3). Sydney-local
+     * calendar day, not UTC. [DriverEarningsTodayRead.pctChange] is `null` when there is no
+     * yesterday baseline to compare against — callers MUST treat `null` as "hide the comparison",
+     * never as `0`. Read only for its trend text
+     * ([DeckHomeScreen][au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen] keeps
+     * showing the existing Room-backed [au.com.threesixty.cabdispatch.domain.TodayStats.earningsTotal]
+     * as the primary $ figure — offline-safe, already the established convention — and only adds
+     * this call's `pctChange` as an annotation once it loads).
+     */
+    @GET("/v1/trips/earnings/today")
+    suspend fun earningsToday(@Query("driver_id") driverId: String): DriverEarningsTodayReadDto
 
     @GET("/v1/trips/{tripId}")
     suspend fun getTrip(@Path("tripId") tripId: String): TripDto
@@ -183,6 +308,101 @@ interface ApiService {
         @Path("tripId") tripId: String,
         @Body body: TripFlagRequestDto,
     ): TripDto
+
+    /**
+     * Post-close passenger rating (new Rate Passenger screen, 2026-09-04) — mirrors
+     * `POST /v1/trips/{trip_id}/rating` (`backend/app/api/v1/ratings.py::rate_trip`). Called
+     * *after* [closeTrip] has already returned, same "settle payment first, then hand the tablet
+     * to the passenger" sequencing the backend route's own doc describes. [tripId] is the trip's
+     * real server id ([au.com.threesixty.cabdispatch.data.local.entity.TripEntity.serverId]), not
+     * its [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.clientUuid] — same
+     * "needs a real server id" gate [flagTrip]'s own callers (`TripDetailViewModel.submitDispute`)
+     * already enforce. Response is [TripRatingDto] (backend's `TripRatingRead`), 201 on success;
+     * a 409 means either the trip isn't closed yet or (per that route's own docstring) it has
+     * *already* been rated — one rating per trip, enforced server-side.
+     */
+    @POST("/v1/trips/{tripId}/rating")
+    suspend fun rateTrip(
+        @Path("tripId") tripId: String,
+        @Body body: TripRatingCreateDto,
+    ): TripRatingDto
+
+    /** Emails the trip's PDF receipt (Command Deck v2 Receipt screen, `22`). Mirrors
+     * `POST /v1/trips/{trip_id}/receipt/email` — mock-aware response (`mock=true` when no
+     * SendGrid key is configured server-side; still generates/returns the PDF path). */
+    @POST("/v1/trips/{tripId}/receipt/email")
+    suspend fun emailReceipt(
+        @Path("tripId") tripId: String,
+        @Body body: ReceiptEmailRequestDto,
+    ): ReceiptEmailResponseDto
+
+    /** SMSes the trip's receipt link — `POST /v1/trips/{trip_id}/receipt/sms`, same mock-aware
+     * convention as [emailReceipt]. */
+    @POST("/v1/trips/{tripId}/receipt/sms")
+    suspend fun smsReceipt(
+        @Path("tripId") tripId: String,
+        @Body body: ReceiptSmsRequestDto,
+    ): ReceiptSmsResponseDto
+
+    /** Driver/vehicle accreditation-expiry feed (`GET /v1/fleet/compliance-expiry`) — the v2
+     * Profile screen's compliance-warning cards. */
+    @GET("/v1/fleet/compliance-expiry")
+    suspend fun complianceExpiry(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 50,
+    ): ComplianceExpiryPageDto
+
+    /** Fatigue alerts (`GET /v1/fatigue-alerts`) — the v2 Shift screen's fatigue strip. */
+    @GET("/v1/fatigue-alerts")
+    suspend fun fatigueAlerts(
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 20,
+    ): FatigueAlertPageDto
+
+    // ---- App releases (real Android OTA self-update, 2026-09-06 — see
+    // domain/AppUpdateChecker.kt and docs/OTA_UPDATE_ROLLOUT.md). Publishing
+    // (`POST /v1/platform/app-releases`) is platform-owner-only and has no client
+    // call site in this app — only the device-facing read below is used here. ----
+
+    /** `GET /v1/app-releases/latest` — the highest `version_code` among published, `is_active`
+     * releases. Any authenticated tenant/device bearer token (not platform-owner-gated — this is a
+     * read). Compared against `BuildConfig.VERSION_CODE` by
+     * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.checkForUpdate]; 404s (surfaced as a
+     * thrown [retrofit2.HttpException], caught by that function's `runCatching`) when no release
+     * has ever been published. */
+    @GET("/v1/app-releases/latest")
+    suspend fun latestAppRelease(): LatestAppReleaseDto
+
+    // ---- Vouchers / Corporate Accounts (Close & Pay payment-grid pass, real backend endpoints
+    // added by the SaaS-platform Phase 3 voucher-ledger workstream, commit 1f93840) ----
+
+    /**
+     * Mirrors `GET /v1/vouchers` (`backend/app/api/v1/vouchers.py`); [skip]/[limit] defaults match
+     * the backend's own. Two call sites: [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]
+     * uses `redeemed = false, limit = 1` for the Close & Pay VOUCHER button's real "N Available"
+     * count, and [au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent] (Phase G)
+     * calls it unfiltered (`redeemed = null, limit = 200`) for the real Available/Used/Expired
+     * browse screen, bucketing client-side since this endpoint has no expiry filter. A failed/
+     * loading call must never fabricate a count or a voucher list at either call site.
+     */
+    @GET("/v1/vouchers")
+    suspend fun listVouchers(
+        @Query("redeemed") redeemed: Boolean? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): VoucherPageDto
+
+    /**
+     * Backs the Close & Pay ACCOUNT button's real active-count/balance indicator — mirrors
+     * `GET /v1/corporate-accounts` (`backend/app/api/v1/corporate_accounts.py`). Same
+     * never-fabricate-on-failure rule as [listVouchers].
+     */
+    @GET("/v1/corporate-accounts")
+    suspend fun listCorporateAccounts(
+        @Query("active") active: Boolean? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): CorporateAccountPageDto
 
     // ---- Shifts (S1 open, S5 close/report) ----
 
@@ -379,6 +599,20 @@ interface ApiService {
         @Part file: MultipartBody.Part,
     ): DuressEventDto
 
+    /** Cabin-camera still-frame upload (duress snapshot gallery, 2026-08-27 — backend/dashboard
+     * already shipped, see `android/HANDOFF.md`). Mirrors
+     * `POST /v1/duress/{event_id}/snapshot` — multipart `file` field, optional `captured_at`
+     * (ISO 8601) query param; response is `{id, event_id, captured_at, created_at}`, none of
+     * which this device needs to act on — the upload firing is what matters, same as
+     * [uploadDuressAudio]. */
+    @Multipart
+    @POST("/v1/duress/{eventId}/snapshot")
+    suspend fun uploadDuressSnapshot(
+        @Path("eventId") eventId: String,
+        @Part file: MultipartBody.Part,
+        @Query("captured_at") capturedAt: String? = null,
+    ): DuressSnapshotDto
+
     // ---- Compliance Vault (read-only on-device — Profile > Compliance, spec §8 rows 20-21) ----
     //
     // Full CRUD (upload/edit/delete) is owner/admin/dispatcher-only server-side
@@ -422,6 +656,32 @@ interface ApiService {
     @Streaming
     @GET("/v1/users/{userId}/photo")
     suspend fun getUserPhoto(@Path("userId") userId: String): ResponseBody
+
+    // ---- Driver engagement (`backend/app/api/v1/me.py`, commit 58ccfcf) — the dashboard's
+    // WALLET BALANCE / RATING / ANNOUNCEMENTS / INCENTIVE PROGRESS tiles. All four are scoped to
+    // the calling driver by the bearer token (no driver_id parameter — the backend resolves it),
+    // and all four are read-only from this app: a DRIVER cannot post wallet lines (that's the
+    // owner/admin-gated `POST /v1/wallet/transactions`), so nothing here ever writes. DTOs in
+    // DriverEngagementDtos.kt; called only through
+    // [au.com.threesixty.cabdispatch.domain.DriverEngagementRepository]. ----
+
+    /** `GET /v1/me/wallet` — derived balance + the [limit] most recent ledger lines (backend
+     * default 20, max 100). */
+    @GET("/v1/me/wallet")
+    suspend fun myWallet(@Query("limit") limit: Int = 20): WalletDto
+
+    /** `GET /v1/me/rating` — average/count + the [limit] most recent ratings (backend default 10,
+     * max 100). `average_stars` is null until the first rating exists. */
+    @GET("/v1/me/rating")
+    suspend fun myRating(@Query("limit") limit: Int = 10): RatingDto
+
+    /** `GET /v1/me/announcements` — only currently-live announcements, newest first. */
+    @GET("/v1/me/announcements")
+    suspend fun myAnnouncements(): AnnouncementListDto
+
+    /** `GET /v1/me/incentives` — live incentives with this driver's derived progress. */
+    @GET("/v1/me/incentives")
+    suspend fun myIncentives(): IncentiveProgressListDto
 }
 
 // ============================================================================
@@ -477,6 +737,20 @@ data class MfaLoginRequestDto(
 @Serializable
 data class RefreshRequestDto(@SerialName("refresh_token") val refreshToken: String)
 
+/** Real bug fixed 2026-09-06: [ApiService.refresh] used to declare [TokenResponseDto] as its
+ * return type, which requires a non-null `user` field — but the backend's real
+ * `POST /v1/auth/refresh` response (`app/schemas/auth.py`'s `RefreshResponse`) never carries one.
+ * Never noticed because nothing called [ApiService.refresh] at all until
+ * [au.com.threesixty.cabdispatch.data.AppContainer]'s token authenticator started calling it — a
+ * real call against the old declared type would have thrown a deserialization error on every
+ * refresh. */
+@Serializable
+data class RefreshResponseDto(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("token_type") val tokenType: String = "bearer",
+)
+
 @Serializable
 data class TokenResponseDto(
     @SerialName("access_token") val accessToken: String,
@@ -499,6 +773,30 @@ data class UserDto(
      * `photo_url != null` check can drive "has a photo" UI state without an extra network round
      * trip. See `ui/screens/profile/ProfileViewModel.kt`. */
     @SerialName("photo_url") val photoUrl: String? = null,
+    /**
+     * The real backing field for a "VERIFIED" badge (2026-08-29, backend contract Part 2.1/10:
+     * `"suitability_status == \"clear\""` is the concept a driver-verification badge should map
+     * to — not a field literally named "verified"). Values beyond `"clear"` (e.g. pending/
+     * flagged) are real but this app has no other UI for them yet — see
+     * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s header, which shows
+     * VERIFIED only on an exact `"clear"` match and shows nothing (not a false claim) otherwise.
+     * `null` is treated the same as "not clear" — never assumed verified by omission.
+     */
+    @SerialName("suitability_status") val suitabilityStatus: String? = null,
+    /**
+     * Added for `ui/screens/profile/ProfileScreen.kt`'s Identity card (Phase H, 2026-09-03) —
+     * `backend/app/schemas/user.py`'s `UserBase`/`UserRead` already carried [phone]/[createdAt]/
+     * [driverLicenseExpiry] on every `GET /v1/auth/me` response, this DTO just wasn't reading them
+     * yet. [phone] is the driver's contact number (`null` if never set — an honest "—", not a
+     * fetch failure). [createdAt] backs the Identity card's "Member since" row. [driverLicenseExpiry]
+     * (plain `YYYY-MM-DD`, no time component — a Pydantic `date`, not `datetime`) backs the
+     * Documents tab's LICENCE row's real Verified/Expiring soon/Expired status — `null` means
+     * "unknown", the same fail-open convention `app.services.compliance_expiry`'s own doc
+     * describes, never rendered as expired.
+     */
+    val phone: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("driver_license_expiry") val driverLicenseExpiry: String? = null,
 )
 
 @Serializable
@@ -509,6 +807,20 @@ data class DeviceRegisterRequestDto(
     @SerialName("app_version") val appVersion: String? = null,
 )
 
+/** Body of [ApiService.deviceLocateResponse]. [accuracyM] is null when the fix carries no accuracy
+ * — never a guessed number, so the dashboard shows a position without a precision claim it cannot
+ * support. */
+@Serializable
+data class DeviceLocateResponseDto(
+    val lat: Double,
+    val lng: Double,
+    @SerialName("accuracy_m") val accuracyM: Double? = null,
+)
+
+/** Body of [ApiService.deviceCommandAck]. `restart` is the only command the server accepts. */
+@Serializable
+data class DeviceCommandAckDto(val command: String)
+
 @Serializable
 data class DeviceHeartbeatRequestDto(
     val battery: Int? = null,
@@ -517,17 +829,25 @@ data class DeviceHeartbeatRequestDto(
 )
 
 /**
- * [locateRequested]/[rebootRequested] mirror the backend's MDM-lite command flags (
- * `backend/app/schemas/fleet.py::DeviceRead`, see `POST /v1/fleet/devices/{id}/locate`/`/reboot`)
- * — an admin sets one via the dashboard, the device reads it back on its next [ApiService.deviceHeartbeat]
- * call. [locateRequested] is the one this app actually acts on:
- * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.loadDeviceStatus] answers a
- * set flag by publishing a fresh position (see [PositionPublishRequestDto] /
- * [ApiService.publishPosition]). [rebootRequested] is deliberately left unconsumed here — see the
- * backend's own HONESTY NOTE on `POST /v1/fleet/devices/{id}/reboot`: actually rebooting the OS
- * needs device-owner-level Android permissions this app does not hold, so this stays a
- * backend-only command queue an admin can see pending, not something this DTO's presence should
- * be mistaken for "implemented" — see HANDOFF.md.
+ * [kioskLocked]/[forceUpdatePending]/[locateRequested]/[rebootRequested] mirror the backend's
+ * MDM-lite command flags (`backend/app/schemas/fleet.py::DeviceRead`, see
+ * `POST /v1/fleet/devices/{id}/kiosk-lock`/`/force-update`/`/locate`/`/reboot`) — an admin sets one
+ * via the dashboard, the device reads it back on its next [ApiService.deviceHeartbeat] call. Those
+ * endpoints are pure flag-set columns with no push channel behind them, so this response body is
+ * the *only* way any of them ever reaches the tablet; since 2026-08-29
+ * [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat] polls this endpoint for the
+ * process lifetime and acts on the first three: [kioskLocked] drives app-wide screen pinning in
+ * [au.com.threesixty.cabdispatch.MainActivity], [forceUpdatePending] drives a persistent driver-
+ * facing banner, and [locateRequested] is answered on [ApiService.deviceLocateResponse] — the
+ * DEVICE route, which needs no vehicle and no driver session, so a parked tablet can still say
+ * where it is. It used to be answered by publishing a vehicle position; see that method's doc for
+ * the two field failures that caused.
+ *
+ * [rebootRequested] is now consumed too, as a RESTART OF THIS APP, not an OS reboot. The backend's
+ * HONESTY NOTE still holds for the OS — that needs device-owner permissions this app does not hold
+ * — but restarting the meter's own process is both possible and what the button is actually
+ * reached for, and the app acknowledges on [ApiService.deviceCommandAck] so the flag clears
+ * instead of reading "Pending" for the life of the row.
  */
 @Serializable
 data class DeviceDto(
@@ -546,27 +866,101 @@ data class DeviceDto(
     val network: String?,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /**
+     * The device-scoped heartbeat credential (backend, 2026-08-29) — present ONLY on a
+     * [ApiService.registerDevice] response, ONE TIME, right after a (re-)pair; every other
+     * response that returns a [DeviceDto] (heartbeat, locate, etc.) omits it, and the backend never
+     * returns it again after this call. [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.submitPairingCode]
+     * must persist it via [au.com.threesixty.cabdispatch.domain.DevicePairingStore.saveDeviceSecret]
+     * in the same breath as the device id — miss this one response and there is no way to fetch it
+     * again short of re-pairing. Re-pairing rotates it: a fresh secret is issued and the previous
+     * one stops authenticating immediately, mirrored client-side by simply overwriting the stored
+     * value. `null` on a device paired before this field existed — that device keeps authenticating
+     * on the driver-bearer path unmodified until it next re-pairs.
+     */
+    @SerialName("device_secret") val deviceSecret: String? = null,
+    /**
+     * Real OTA self-update hint (2026-09-06 — see [au.com.threesixty.cabdispatch.domain.AppUpdateChecker]
+     * and `docs/OTA_UPDATE_ROLLOUT.md`), stamped by the backend from its own current
+     * `GET /v1/app-releases/latest` answer on every heartbeat response (`app/api/v1/fleet.py`'s
+     * `device_heartbeat`) — a low-cost hint riding this existing 60s poll. `null` means either "no
+     * active release has ever been published" or simply that this response didn't carry the hint
+     * (older backend) — [DeviceCommandHeartbeat] treats both the same: not "you are up to date",
+     * just "no hint this tick". [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.checkForUpdate]'s
+     * own dedicated `GET /v1/app-releases/latest` call remains the source of truth used to actually
+     * drive the update flow — this field only lets [DeviceCommandState] show *that* an update is
+     * known to be pending without a second network round trip.
+     */
+    @SerialName("latest_version_code") val latestVersionCode: Int? = null,
 )
 
 /**
  * Body for [ApiService.publishPosition] (`POST /v1/fleet/positions`, backend's
  * `PositionPublishRequest`) — a device/tick handler's position report for one vehicle. Three call
  * sites, all best-effort/fire-and-forget: the MDM "locate" response
- * ([SettingsViewModel.loadDeviceStatus][au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]),
- * the ambient 30s while-on-shift heartbeat
- * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat], Taxi Meter
- * SaaS Complete Blueprint §6.2.2 "vehicle.heartbeat"), and (separately, still unwired — see
+ * ([DeviceCommandHeartbeat][au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]),
+ * the ambient while-on-shift heartbeat
+ * ([LivePositionHeartbeat][au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat] — originally
+ * the Taxi Meter SaaS Complete Blueprint's literal §6.2.2 "vehicle.heartbeat" 30s figure, now 5s;
+ * see that class's own "Interval" doc for why), and (separately, still unwired — see
  * HANDOFF.md "Availability broadcast not wired") the Idle screen's "For Hire" toggle. [status] has
  * no server-side enum constraint (backend: a plain `str`, `min_length=1, max_length=20`), just
  * documented examples ("available"/"on_trip"/"offline"/"break") — any short non-empty string
  * round-trips fine.
  */
+/** One row of `GET /v1/fleet/vehicles`. Originally only carried `id`/`rego` (the one field
+ * [ApiService.listVehicles]'s login-time caller needed) — [make]/[model]/[registrationExpiry]/
+ * [insuranceExpiry] were added for `ui/screens/profile/ProfileScreen.kt`'s Identity card
+ * ("GHP-1 · Toyota Camry Hybrid" instead of just the rego) and its Documents tab's real
+ * Registration/Insurance expiry-status rows (Phase H, 2026-09-03) — see `backend/app/schemas/fleet.py`'s
+ * `VehicleBase`, which already carried all four fields on the wire; this DTO just wasn't reading
+ * them yet. The rest of the real response (vin/vehicle_class/status/...) still has no on-device
+ * use, left off rather than guessed. All four new fields are nullable with a `null` default —
+ * `null` means genuinely unset on this vehicle's row (a real, honest "—" case, not a decode
+ * failure) and, per `data/JsonConfig.kt`'s `ignoreUnknownKeys`, also keeps this DTO safe against
+ * any older cached/mocked payload that predates them. */
+@Serializable
+data class VehicleDto(
+    val id: String,
+    val rego: String,
+    val make: String? = null,
+    val model: String? = null,
+    @SerialName("registration_expiry") val registrationExpiry: String? = null,
+    @SerialName("insurance_expiry") val insuranceExpiry: String? = null,
+)
+
+@Serializable
+data class VehiclePageDto(
+    val items: List<VehicleDto>,
+    val total: Int,
+)
+
 @Serializable
 data class PositionPublishRequestDto(
     @SerialName("vehicle_id") val vehicleId: String,
     val lat: Double,
     val lng: Double,
     val status: String,
+    /** 0-100, or `null` if unreadable (see [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat]'s
+     * read site). Optional/additive — same `POST /v1/fleet/positions` call, no new endpoint. */
+    val battery: Int? = null,
+    /** `"wifi"` / `"4g"` / `"offline"` (or similar transport-derived categories) — see this
+     * field's read site for the exact mapping. Optional/additive, same reasoning as [battery]. */
+    val network: String? = null,
+    /** Ground speed, km/h, from [au.com.threesixty.cabdispatch.domain.LocationFix.speedKmh] at
+     * the same instant as [lat]/[lng] — `null` only if
+     * [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.publishOnce] had no fix at all
+     * (it would have skipped the call entirely in that case; kept nullable here rather than
+     * non-null purely so this DTO matches the wire shape of a field the backend also treats as
+     * optional). Wire name `speed_kmh` — must byte-for-byte match the backend's
+     * `PositionPublishRequest.speed_kmh` (`app/schemas/live_ops.py`). */
+    @SerialName("speed_kmh") val speedKmh: Double? = null,
+    /** Compass bearing in degrees (0=north), from
+     * [au.com.threesixty.cabdispatch.domain.LocationFix.heading] — `null` whenever that field is
+     * (device stationary, or the platform reported no bearing for this fix); never fabricated,
+     * same honest-null posture as [battery]/[network] above. Wire name `heading` — must
+     * byte-for-byte match the backend's `PositionPublishRequest.heading` (`app/schemas/live_ops.py`). */
+    val heading: Double? = null,
 )
 
 /** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`
@@ -593,7 +987,16 @@ data class PositionPublishResponseDto(
  * share one DTO for. See `au.com.threesixty.cabdispatch.security.canonicalTariffPayload` (the
  * Kotlin port of `backend/app/services/tariff_signing.canonical_tariff_payload`, the exact
  * byte-format this signs) and [au.com.threesixty.cabdispatch.sync.TariffCache.refresh] (where the
- * signature is actually checked before this DTO is trusted/cached).
+ * signature is actually checked, then run through [au.com.threesixty.cabdispatch.domain.fare.validateAgainstFaresOrder]
+ * — Point to Point Transport (Fares) Order 2026, effective 1 June 2026 — before this DTO is
+ * trusted/cached).
+ *
+ * None of this DTO's own field defaults below hardcode a stale rate figure from the superseded
+ * Fares Order 2025 (no.2) — every actual rate field (`flag_fall`/`dist_rate_1`/`dist_rate_2`/
+ * `night_rate_1`/`night_rate_2`/`waiting_rate_per_min`) is mandatory on the wire, with no
+ * client-side default to go stale; only the non-rate structural defaults below (thresholds,
+ * multipliers, the PSL flat amount) have literal defaults, and none of those changed in the 2026
+ * Order.
  */
 @Serializable
 data class TariffDto(
@@ -619,9 +1022,173 @@ data class TariffDto(
     @SerialName("multi_hire_pct") val multiHirePct: String = "0.75",
     @SerialName("psl_amount") val pslAmount: String = "1.32",
     @SerialName("surcharge_pct_cap") val surchargePctCap: String = "5.0",
+    // Point to Point Transport (Fares) Order 2026 cl 2(f): up to $124.14 — added server-side
+    // alongside the 2026 rate-card pass. Defaults to that same figure so a tariff signed by an
+    // older backend build (pre-field) still deserializes to the correct current cap rather than
+    // "0".
+    @SerialName("cleaning_fee_cap") val cleaningFeeCap: String = "124.14",
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
     val signature: String? = null,
+)
+
+// ---- Toll roads (real NSW toll registry — mirrors `backend/app/schemas/toll.py` field-for-field,
+// same decimal-as-string convention as every other money field in this file: see that file's
+// header note. [TollRoadPriceRevisionDto.timeOfDayRatesClassA]'s own `price` field is the ONE
+// exception — see [TollTimeOfDayRateDto]'s doc for why.) ----
+
+/** Mirrors `TollRoadRead`. [currentPrice] is the ONLY pricing this app ever caches/uses on-device
+ * (see [au.com.threesixty.cabdispatch.sync.TollRegistryCache]'s doc) — unlike the backend's own
+ * `TollRoadPriceRevision` table, the device has no use for historical revisions (a live meter only
+ * ever needs "the price in force right now"; a disputed-trip audit against a past revision is a
+ * dashboard/backend-side concern, per `app.models.toll`'s own module doc). */
+@Serializable
+data class TollRoadDto(
+    val id: String,
+    @SerialName("api_code") val apiCode: String? = null,
+    val name: String,
+    val operator: String? = null,
+    @SerialName("pricing_model") val pricingModel: String,
+    /** How gantry crossings become a charge (`once_per_road` /
+     * `cumulative_per_point` / `distance_metered`) — see
+     * [au.com.threesixty.cabdispatch.domain.fare.TollRoadRef.chargingPolicy]. Defaulted rather
+     * than required so a response from a backend predating the 2026-09-07 correction still
+     * decodes, landing on the ordinary case. */
+    @SerialName("charging_policy") val chargingPolicy: String = "once_per_road",
+    /** Roads sharing one network-wide cap for a single trip ("WESTCONNEX" today). */
+    @SerialName("network_group") val networkGroup: String? = null,
+    val directional: String? = null,
+    val description: String? = null,
+    @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+    /** Non-empty only for a `per_point` road (M2/CCT/LCT). Such a road has no real road-level
+     * price — its `current_price` min/max is a descriptive range across these points, never
+     * what a crossing is charged — so this is where its actual prices live. Returned on the
+     * LIST endpoint too, so one call is enough to price every road. */
+    @SerialName("toll_points") val tollPoints: List<TollPointDto> = emptyList(),
+)
+
+/** Mirrors `TollPointRead` — one named toll point of a `per_point` road. */
+@Serializable
+data class TollPointDto(
+    val id: String,
+    @SerialName("toll_road_id") val tollRoadId: String,
+    val name: String,
+    val description: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollPointPriceRevisionDto? = null,
+)
+
+/** Mirrors `TollPointPriceRevisionRead`. Same decimal-as-string convention as every other money
+ * field here. A point whose `priceClassA` is null is FLAGGED for manual entry by
+ * [au.com.threesixty.cabdispatch.domain.fare.onFix], never charged a guessed figure. */
+@Serializable
+data class TollPointPriceRevisionDto(
+    val id: String,
+    @SerialName("price_class_a") val priceClassA: String? = null,
+    @SerialName("price_class_b") val priceClassB: String? = null,
+    val currency: String = "AUD",
+    @SerialName("gst_included") val gstIncluded: Boolean = true,
+    @SerialName("effective_date") val effectiveDate: String,
+    val indexation: String,
+    val confidence: String,
+    @SerialName("verify_note") val verifyNote: String? = null,
+)
+
+/**
+ * Mirrors `TollRoadPriceRevisionRead`.
+ *
+ * [ratePerKmClassA]/[flagfallClassA] (product correction, 2026-09): the `distance`/
+ * `distance_with_flagfall` pricing models' real per-km rate and flagfall component, taken directly
+ * from the registry — see [au.com.threesixty.cabdispatch.domain.fare.TollPriceRef]'s own doc for
+ * why the on-device detector no longer derives a rate from `cap_class_a / derived_corridor_km`
+ * (confirmed wrong: Westlink M7's real published rate is $0.5252/km capped at $10.50, not the
+ * geometrically-derived figure that formula produced).
+ *
+ * These field names were originally a forward-compatible GUESS made before the backend shipped
+ * them, and the guess was WRONG in one place: `rate_class_a_per_km` is really `rate_per_km_class_a`
+ * (`backend/app/schemas/toll.py`). Corrected here against the real schema — while it was wrong,
+ * every `distance`/`distance_with_flagfall` road (M7 and all of WestConnex) silently decoded a
+ * null rate and fell through to "unpriced, add manually", i.e. the meter never auto-charged
+ * Sydney's biggest toll roads. Nothing in this file may guess a field name again: mismatches here
+ * are silent, and a silently-null price is indistinguishable from an honestly-unpriced road.
+ */
+@Serializable
+data class TollRoadPriceRevisionDto(
+    val id: String,
+    @SerialName("price_class_a_min") val priceClassAMin: String? = null,
+    @SerialName("price_class_a_max") val priceClassAMax: String? = null,
+    @SerialName("price_class_b_min") val priceClassBMin: String? = null,
+    @SerialName("price_class_b_max") val priceClassBMax: String? = null,
+    @SerialName("cap_class_a") val capClassA: String? = null,
+    @SerialName("cap_class_b") val capClassB: String? = null,
+    @SerialName("rate_per_km_class_a") val ratePerKmClassA: String? = null,
+    @SerialName("flagfall_class_a") val flagfallClassA: String? = null,
+    /** The cap shared across every road in the same `network_group` for ONE trip (WestConnex:
+     * $12.74 Class A across M4/M8/M5E/M4-M8 Link), on top of each road's own `cap_class_a`. */
+    @SerialName("network_cap_class_a") val networkCapClassA: String? = null,
+    @SerialName("time_of_day_rates_class_a") val timeOfDayRatesClassA: List<TollTimeOfDayRateDto>? = null,
+    val currency: String = "AUD",
+    @SerialName("gst_included") val gstIncluded: Boolean = true,
+    @SerialName("effective_date") val effectiveDate: String,
+    val indexation: String,
+    val confidence: String,
+    @SerialName("verify_note") val verifyNote: String? = null,
+)
+
+/** One Class-A band entry of `TollRoadPriceRevision.time_of_day_rates_class_a` (SHB_SHT only,
+ * today). **Not** decimal-as-string like every other money field in this file: the backend column
+ * is a raw passthrough JSON blob (`scripts/seed_toll_roads.py` stores the source dataset's dict
+ * verbatim, never routed through a Pydantic `Decimal` field — see `app.models.toll.TollRoadPriceRevision`'s
+ * own field comment), so `price` arrives as a plain JSON number. [au.com.threesixty.cabdispatch.domain.fare.selectTimeOfDayPrice]
+ * converts it via the same `.toString()` round-trip the Python original itself uses
+ * (`Decimal(str(entry["price"]))`) rather than parsing a `Double` directly into fare math. */
+@Serializable
+data class TollTimeOfDayRateDto(
+    val band: String,
+    val price: Double? = null,
+    val windows: String? = null,
+)
+
+/** Mirrors `TollGantryRead`. */
+@Serializable
+data class TollGantryDto(
+    val id: String,
+    @SerialName("toll_road_id") val tollRoadId: String,
+    /** Non-null only on a `per_point` road — says which named toll point (and so which price)
+     * this physical gantry charges. Null on every road priced at the road level. */
+    @SerialName("toll_point_id") val tollPointId: String? = null,
+    val location: String,
+    val ramp: String? = null,
+    val direction: String? = null,
+    val latitude: Double,
+    val longitude: Double,
+)
+
+/** Mirrors `TollRoadDetailRead` — [TollRoadDto]'s fields plus this one road's real gantries.
+ * [priceHistory] is fetched (the backend always returns it) but deliberately never cached/read
+ * on-device — see [TollRoadDto.currentPrice]'s doc. */
+@Serializable
+data class TollRoadDetailDto(
+    val id: String,
+    @SerialName("api_code") val apiCode: String? = null,
+    val name: String,
+    val operator: String? = null,
+    @SerialName("pricing_model") val pricingModel: String,
+    @SerialName("charging_policy") val chargingPolicy: String = "once_per_road",
+    @SerialName("network_group") val networkGroup: String? = null,
+    val directional: String? = null,
+    val description: String? = null,
+    @SerialName("derived_corridor_km") val derivedCorridorKm: String? = null,
+    @SerialName("source_note") val sourceNote: String? = null,
+    @SerialName("gantry_count") val gantryCount: Int = 0,
+    @SerialName("current_price") val currentPrice: TollRoadPriceRevisionDto? = null,
+    @SerialName("toll_points") val tollPoints: List<TollPointDto> = emptyList(),
+    val gantries: List<TollGantryDto> = emptyList(),
+    @SerialName("price_history") val priceHistory: List<TollRoadPriceRevisionDto> = emptyList(),
 )
 
 /** Body for [ApiService.verifyAdminPin] — same PIN shape as the backend's
@@ -678,6 +1245,17 @@ data class TripCreateDto(
     @SerialName("time_class") val timeClass: String = "day", // day | night | holiday
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.passengerCount]'s
+     * doc (Point to Point Transport (Fares) Order 2026 compliance pass). Nullable-defaulted
+     * (rather than required) per this file's own convention for a field added after this DTO
+     * already had live callers. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripEntity][au.com.threesixty.cabdispatch.data.local.entity.TripEntity.airportRankRequestedMaxi]'s
+     * doc (maxi-at-airport-rank fare-integrity fix, 2026-09-05). Nullable-defaulted per this file's
+     * own convention for a field added after this DTO already had live callers. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("gps_trace_ref") val gpsTraceRef: String? = null,
@@ -697,6 +1275,13 @@ data class TripDto(
     @SerialName("time_class") val timeClass: String,
     @SerialName("is_peak") val isPeak: Boolean,
     val maxi: Boolean,
+    /** See [TripCreateDto.passengerCount]'s doc. Nullable-defaulted per this file's convention for
+     * a field added after this DTO already had live callers. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripCreateDto.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripCreateDto.airportRankRequestedMaxi]'s doc. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     @SerialName("start_at") val startAt: String,
     @SerialName("end_at") val endAt: String?,
     @SerialName("start_lat") val startLat: Double,
@@ -739,6 +1324,14 @@ data class TripDto(
      * `TripRead` schemas expose so far has been 1:1 with the model, but flagged as the one
      * unverified assumption in this DTO. */
     @SerialName("negotiated_total") val negotiatedTotal: String? = null,
+    /**
+     * Driver tip (Close & Pay "tips" pass) — mirrors the backend's `Trip.tip_amount`. Nullable-
+     * defaulted (not required) per this file's own convention for a field added after this DTO
+     * already had live callers. Deliberately NOT folded into [total]/[gstComponent] — see the
+     * backend `Trip.tip_amount` doc comment (deviation #6): a tip is a voluntary, non-fare
+     * amount, never part of the regulated fare/GST figures this DTO otherwise mirrors 1:1.
+     */
+    @SerialName("tip_amount") val tipAmount: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )
@@ -751,6 +1344,19 @@ data class TripListResponseDto(
     val limit: Int,
 )
 
+/** `GET /v1/trips/earnings/today` response (backend contract Part 4.3, 2026-08-29). Money fields
+ * are decimal-as-string per this file's header convention. [pctChange] `null` means the backend
+ * had no yesterday baseline to compare against — render "—", never a fabricated 0%. */
+@Serializable
+data class DriverEarningsTodayReadDto(
+    @SerialName("driver_id") val driverId: String,
+    val date: String,
+    @SerialName("today_total") val todayTotal: String,
+    @SerialName("yesterday_total") val yesterdayTotal: String,
+    @SerialName("pct_change") val pctChange: Double? = null,
+    @SerialName("trips_completed_today") val tripsCompletedToday: Int,
+)
+
 /** A single raw GPS/speed fix, as recorded by the in-vehicle meter. */
 @Serializable
 data class TelemetryPointDto(
@@ -760,8 +1366,42 @@ data class TelemetryPointDto(
     val ts: String,
 )
 
+/**
+ * [destLat]/[destLng] (`dest_lat`/`dest_lng` on the wire — exact backend field names, per the
+ * sibling backend-track agent's addition to `TripTickRequest`) are the driver's *picked*
+ * destination, sourced from the same [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
+ * columns [au.com.threesixty.cabdispatch.data.repository.TripRepository.updateDropoff] writes
+ * (`endLat`/`endLng`) — see that method's own doc for why those columns hold "where we're
+ * heading" while a trip is open. `Double?`, default `null`: honest "not known yet" for every tick
+ * before [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel.selectDestination] has
+ * run, exactly the same "real null, never a placeholder" convention this file's header and
+ * [PositionPublishRequestDto]'s `battery`/`network` already follow — never fabricate a coordinate
+ * to fill these in early.
+ *
+ * HONEST GAP (found during this pass, not introduced by it): as of 2026-09-05, [ApiService.tickTrip]
+ * itself has **no call site anywhere in this app** — verified by grepping every production source
+ * file, not assumed. [au.com.threesixty.cabdispatch.data.repository.TripRepository] holds no
+ * [ApiService] reference at all, and
+ * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s periodic `doPersistTick` only
+ * calls [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick] (Room-only, per that
+ * method's own doc — "this method never touches the network either way"). This app's trip flow is
+ * deliberately offline-first end to end: [ApiService.createTrip] is likewise never called, an open
+ * trip has no server-side id at all, and the only network trip write that exists today is the bulk
+ * `POST /v1/trips/sync` [SyncOutboxEntity]-driven replay [au.com.threesixty.cabdispatch.sync
+ * .OutboxDrainer] fires once a trip closes. So these two fields are added here to match the
+ * backend's wire contract byte-for-byte and are ready the moment a live per-tick call exists, but
+ * as of this pass nothing constructs or sends a [TripTickRequestDto] in production code — wiring
+ * an actual "give an open trip a server id, then PATCH it periodically" mechanism is a materially
+ * larger architecture change than threading two fields through an existing call, and is out of
+ * scope for this pass; flagging it explicitly here rather than quietly leaving these fields to look
+ * load-bearing when they are not yet wired to anything.
+ */
 @Serializable
-data class TripTickRequestDto(val points: List<TelemetryPointDto>)
+data class TripTickRequestDto(
+    val points: List<TelemetryPointDto>,
+    @SerialName("dest_lat") val destLat: Double? = null,
+    @SerialName("dest_lng") val destLng: Double? = null,
+)
 
 /** One leg of a split-fare payment — mirrors the backend's `SplitPaymentItem`
  * (`backend/app/schemas/trips.py`) exactly: [method] is one of `cash|card|voucher|account`
@@ -791,6 +1431,8 @@ data class TripCloseRequestDto(
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
     @SerialName("include_psl") val includePsl: Boolean = false,
     @SerialName("receipt_ref") val receiptRef: String? = null,
+    /** See [TripDto.tipAmount]'s doc. `null` = no tip recorded for this close. */
+    @SerialName("tip_amount") val tipAmount: String? = null,
 )
 
 /**
@@ -812,6 +1454,10 @@ data class TripCloseRequestDto(
  */
 @Serializable
 data class TripSyncItemDto(
+    /** True when this trip ran on fabricated GPS (see TripEntity.simulated). Sent so the
+     * server can keep a test trip out of real revenue and compliance reporting -- without it
+     * a simulated fare is indistinguishable from a real one. */
+    val simulated: Boolean = false,
     @SerialName("client_uuid") val clientUuid: String,
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("driver_id") val driverId: String,
@@ -842,6 +1488,17 @@ data class TripSyncItemDto(
     @SerialName("time_class") val timeClass: String = "day",
     @SerialName("is_peak") val isPeak: Boolean = false,
     val maxi: Boolean = false,
+    /** See [TripCreateDto.passengerCount]'s doc. */
+    @SerialName("passenger_count") val passengerCount: Int? = null,
+    /** See [TripCreateDto.wheelchairHiring]'s doc. */
+    @SerialName("wheelchair_hiring") val wheelchairHiring: Boolean? = null,
+    /** See [TripCreateDto.airportRankRequestedMaxi]'s doc. This is the field that actually matters
+     * for the flag to reach the server: `POST /v1/trips/sync` is the ONLY network call this app's
+     * offline-first close flow makes (see this class's own doc above) — without this, a maxi-at-
+     * airport-rank trip's [deviceTotal] (which correctly includes the surcharge on-device) could
+     * diverge from the server's independent recompute (which has no way to know the flag was set)
+     * and get rejected for exceeding the sync variance tolerance. */
+    @SerialName("airport_rank_requested_maxi") val airportRankRequestedMaxi: Boolean? = null,
     val tolls: String = "0",
     val extras: String = "0",
     @SerialName("cleaning_fee") val cleaningFee: String = "0",
@@ -852,6 +1509,13 @@ data class TripSyncItemDto(
     @SerialName("receipt_ref") val receiptRef: String? = null,
     /** The total the offline device computed on-vehicle. */
     @SerialName("device_total") val deviceTotal: String,
+    /**
+     * See [TripDto.tipAmount]'s doc. This is the field that actually matters for tips to reach
+     * the server: `POST /v1/trips/sync` is the ONLY network call this app's offline-first close
+     * flow makes (see this class's own doc above) — a tip entered on-device round-trips here, not
+     * through [ApiService.closeTrip]/[TripCloseRequestDto], which has no real call site.
+     */
+    @SerialName("tip_amount") val tipAmount: String? = null,
 )
 
 /** Body for [ApiService.flagTrip] (`PATCH /v1/trips/{id}/flag`, backend's `TripFlagRequest`) — the
@@ -875,12 +1539,59 @@ data class TripSyncResultItemDto(
 @Serializable
 data class TripSyncResponseDto(val results: List<TripSyncResultItemDto>)
 
+/** Mirrors the backend's `VoucherRead` (`backend/app/api/v1/vouchers.py`) — money/dates as
+ * decimal-as-string/ISO strings per this file's header convention. [redeemedByTripId] added for
+ * the Vouchers pane's USED tab (Phase G, `squishy-herding-iverson.md`) — the Close & Pay payment
+ * grid that first declared this DTO never needed it, only the redeemed/expiry fields. */
+@Serializable
+data class VoucherDto(
+    val id: String,
+    val code: String,
+    @SerialName("value_aud") val valueAud: String,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("redeemed_at") val redeemedAt: String? = null,
+    @SerialName("redeemed_by_trip_id") val redeemedByTripId: String? = null,
+)
+
+@Serializable
+data class VoucherPageDto(
+    val items: List<VoucherDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors the backend's `CorporateAccountRead` (`backend/app/api/v1/corporate_accounts.py`). */
+@Serializable
+data class CorporateAccountDto(
+    val id: String,
+    val reference: String,
+    @SerialName("company_name") val companyName: String,
+    val active: Boolean,
+)
+
+@Serializable
+data class CorporateAccountPageDto(
+    val items: List<CorporateAccountDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
 @Serializable
 data class ShiftStartDto(
     @SerialName("driver_id") val driverId: String,
     @SerialName("vehicle_id") val vehicleId: String,
     @SerialName("start_at") val startAt: String? = null,
     @SerialName("inspection_json") val inspectionJson: Map<String, String>? = null,
+    /** The calling tablet's `Settings.Secure.ANDROID_ID`, if known — read fresh at shift-start
+     * (same call [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.submitPairingCode]
+     * uses to register a device), not persisted anywhere on-device. Used server-side only for a
+     * non-blocking cross-check against that device's paired vehicle (`fleet.Device.vehicle_id`) —
+     * see [ShiftDto.deviceMismatchWarning]. Never blocks or alters the shift. Defaulted null so
+     * this DTO still encodes fine for callers (offline-fallback path in
+     * [au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository]) that never read one. */
+    @SerialName("device_android_id") val deviceAndroidId: String? = null,
 )
 
 @Serializable
@@ -914,6 +1625,13 @@ data class ShiftDto(
     @SerialName("plotted_at") val plottedAt: String? = null,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /** Set by the backend (`app.services.shift.start_shift`) only when the request carried
+     * [ShiftStartDto.deviceAndroidId] AND that device's paired vehicle disagreed with this
+     * shift's [vehicleId] — a purely advisory, non-blocking heads-up (the shift above already
+     * opened regardless). Null on every other shift, including one re-read later via
+     * [ApiService.getShift], which never re-runs the check. Defaulted null for the same
+     * older-payload-compat reason as [plottedZoneId] above. */
+    @SerialName("device_mismatch_warning") val deviceMismatchWarning: String? = null,
 )
 
 @Serializable
@@ -972,6 +1690,27 @@ data class JobDto(
     @SerialName("accepted_by_driver_id") val acceptedByDriverId: String?,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
+    /**
+     * 2026-09-05 API-audit pass, correcting this doc comment's own prior claims (there was never
+     * a migration `9a9364f2c706`, and the backend never had a `job_type` column or an ETA
+     * service — that earlier text described a backend contract that didn't actually exist):
+     *
+     * - [distanceKm] is now real: `app.schemas.jobs.JobRead` computes it server-side from this
+     *   same job's own origin/dest lat-lng via the exact `haversine_km` helper this codebase
+     *   already uses elsewhere (toll-geofence detection) — a straight-line, NOT routed/live-traffic,
+     *   distance, always present (never null) on any `JobRead` response.
+     * - [jobType] and [etaMin] are deliberately NOT backed by anything server-side and stay
+     *   permanently `null`: every row in the backend's `jobs` table is, by that domain's own
+     *   construction, a dispatch/broadcast job (a rank/hail job never creates one), so there is no
+     *   real per-record classification to expose as `job_type` — hardcoding a constant would add
+     *   no information. A real `eta_min` needs a routing/live-traffic service this codebase does
+     *   not have; a flat-speed guess would be a fabricated arrival-time estimate. Callers must keep
+     *   degrading on `null` (e.g. [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s
+     *   dispatch card falls back to a live-GPS straight-line distance and omits ETA entirely).
+     */
+    @SerialName("job_type") val jobType: String? = null, // "booked" | "rank_hail" -- always null, see above
+    @SerialName("distance_km") val distanceKm: String? = null,
+    @SerialName("eta_min") val etaMin: Int? = null, // always null, see above
 )
 
 @Serializable
@@ -1197,4 +1936,132 @@ data class ZoneStatsDto(
     @SerialName("jobs_holding") val jobsHolding: Int,
     @SerialName("bookings_last_hour") val bookingsLastHour: Int,
     @SerialName("street_hails_last_hour") val streetHailsLastHour: Int,
+)
+
+
+// ---- Command Deck v2 additions (2026-08-27 redesign port) ----------------------------------
+
+/** Mirrors `TariffPresetRead` (`backend/app/schemas/tariffs.py`). Only the fields the Tariff
+ * Select screen renders are declared — `ignoreUnknownKeys` drops the rest safely. */
+@Serializable
+data class TariffPresetDto(
+    val key: String,
+    val label: String,
+    val description: String,
+    val defaults: TariffPresetDefaultsDto,
+)
+
+@Serializable
+data class TariffPresetDefaultsDto(
+    val region: String,
+    val booked: Boolean,
+    @SerialName("flag_fall") val flagFall: String,
+    @SerialName("dist_rate_1") val distRate1: String,
+    @SerialName("dist_rate_2") val distRate2: String,
+    @SerialName("night_rate_1") val nightRate1: String,
+    @SerialName("night_rate_2") val nightRate2: String,
+    @SerialName("waiting_rate_per_min") val waitingRatePerMin: String,
+)
+
+/** Mirrors `TariffSuggestionRead`. */
+@Serializable
+data class TariffSuggestionDto(
+    @SerialName("tariff_id") val tariffId: String,
+    @SerialName("tariff_name") val tariffName: String,
+    @SerialName("time_class") val timeClass: String,
+    val reason: String,
+)
+
+/** Mirrors `ReceiptEmailRequest`/`ReceiptSmsRequest`. */
+@Serializable
+data class ReceiptEmailRequestDto(@SerialName("to_email") val toEmail: String)
+
+@Serializable
+data class ReceiptSmsRequestDto(@SerialName("to_phone") val toPhone: String)
+
+/** Mock-aware responses (see `ReceiptEmailResponse`'s own doc server-side): `mock=true` +
+ * `would_send_to` when no provider key is configured; real-send fields otherwise. */
+@Serializable
+data class ReceiptEmailResponseDto(
+    val mock: Boolean,
+    @SerialName("would_send_to") val wouldSendTo: String? = null,
+    @SerialName("to_email") val toEmail: String? = null,
+    @SerialName("receipt_ref") val receiptRef: String? = null,
+    @SerialName("pdf_relative_path") val pdfRelativePath: String,
+)
+
+@Serializable
+data class ReceiptSmsResponseDto(
+    val mock: Boolean,
+    @SerialName("would_send_to") val wouldSendTo: String? = null,
+    @SerialName("to_phone") val toPhone: String? = null,
+    @SerialName("receipt_ref") val receiptRef: String? = null,
+    @SerialName("pdf_relative_path") val pdfRelativePath: String,
+)
+
+/** One row of `GET /v1/fleet/compliance-expiry` — `ComplianceExpiryItem`. */
+@Serializable
+data class ComplianceExpiryItemDto(
+    @SerialName("entity_type") val entityType: String,
+    @SerialName("entity_id") val entityId: String,
+    val label: String,
+    val field: String,
+    @SerialName("expiry_date") val expiryDate: String,
+    val status: String,
+    @SerialName("days_remaining") val daysRemaining: Int,
+)
+
+@Serializable
+data class ComplianceExpiryPageDto(
+    val items: List<ComplianceExpiryItemDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors `FatigueAlertRead` (subset — the fields the Shift screen renders). */
+@Serializable
+data class FatigueAlertDto(
+    val id: String,
+    @SerialName("driver_id") val driverId: String? = null,
+    @SerialName("vehicle_id") val vehicleId: String? = null,
+    @SerialName("shift_id") val shiftId: String? = null,
+    val kind: String,
+    @SerialName("triggered_at") val triggeredAt: String,
+)
+
+@Serializable
+data class FatigueAlertPageDto(
+    val items: List<FatigueAlertDto>,
+    val total: Int,
+    val skip: Int,
+    val limit: Int,
+)
+
+/** Mirrors the backend's `LatestAppReleaseRead` (`GET /v1/app-releases/latest`,
+ * `app/schemas/app_releases.py`) — the real OTA self-update contract, see
+ * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker]. [downloadUrl] is a relative path
+ * (`/v1/app-releases/{id}/download`) resolved against `BuildConfig.API_BASE_URL` by
+ * [au.com.threesixty.cabdispatch.domain.AppUpdateChecker.downloadAndVerify], not an absolute URL —
+ * same relative-path convention as [UserDto.photoUrl]. [sha256] is always server-computed at
+ * publish time; [AppUpdateChecker] verifies the downloaded bytes against it before this app will
+ * ever consider installing them. */
+@Serializable
+data class LatestAppReleaseDto(
+    @SerialName("version_code") val versionCode: Int,
+    @SerialName("version_name") val versionName: String,
+    @SerialName("release_notes") val releaseNotes: String? = null,
+    @SerialName("download_url") val downloadUrl: String,
+    val sha256: String,
+)
+
+/** Mirrors the backend's duress-snapshot upload response (`app/schemas/duress.py`, or the
+ * equivalent inline response model — see `POST /v1/duress/{event_id}/snapshot`'s doc). Not
+ * consumed for anything today, same as [DuressEventDto] from [ApiService.uploadDuressAudio]. */
+@Serializable
+data class DuressSnapshotDto(
+    val id: String,
+    @SerialName("event_id") val eventId: String,
+    @SerialName("captured_at") val capturedAt: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )

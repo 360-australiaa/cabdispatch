@@ -5,7 +5,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.ThemeMode
 
 /**
  * Cab Dispatch brand palette — exact hex values from spec B1/CLAUDE instructions.
@@ -106,13 +111,37 @@ private val DarkColors = darkColorScheme(
  * particular needs high contrast in direct sunlight — screens that need to
  * force the high-contrast look regardless of system theme should read
  * [CabDispatchColors] directly rather than [MaterialTheme.colorScheme].
+ *
+ * ### Light/Dark theme (2026-09-04 day-mode pass)
+ * This is the ONE place [au.com.threesixty.cabdispatch.domain.ThemeMode] gets turned into an
+ * actual `isLight` boolean and pushed out to [CaptainPalette]/[Deck] — every screen in the app
+ * reads those two objects' tokens, never this composable directly, so applying the theme here once
+ * (rather than per-screen) is what makes the toggle genuinely global. Composed exactly once, at the
+ * very top of [au.com.threesixty.cabdispatch.MainActivity]'s `CabDispatchScreenRoot`.
+ *
+ * The `remember(isLight) { ... }` below (not a `LaunchedEffect`) is deliberate: [CaptainPalette]'s
+ * tokens are plain mutable snapshot state, so writing them is a synchronous, side-effect-free-enough
+ * operation that's safe to do inline during composition, and doing it in `remember` means the very
+ * first frame after a theme switch already has the new colours — a `LaunchedEffect` would apply the
+ * change one frame late (after this composable's children have already composed with the stale
+ * palette), a visible flash on every toggle.
  */
 @Composable
 fun CabDispatchTheme(
-    useDarkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (useDarkTheme) DarkColors else LightColors
+    val themeMode by AppContainer.settingsPreferencesStore.themeMode.collectAsState()
+    val systemInDarkTheme = isSystemInDarkTheme()
+    val isLight = when (themeMode) {
+        ThemeMode.LIGHT -> true
+        ThemeMode.DARK -> false
+        ThemeMode.SYSTEM -> !systemInDarkTheme
+    }
+    remember(isLight) {
+        CaptainPalette.applyTheme(isLight)
+        Deck.applyTheme(isLight)
+    }
+    val colorScheme = if (isLight) LightColors else DarkColors
     MaterialTheme(
         colorScheme = colorScheme,
         content = content,

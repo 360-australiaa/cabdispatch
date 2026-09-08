@@ -30,6 +30,8 @@ class Page(BaseModel, Generic[T]):
 class VehicleBase(BaseModel):
     rego: str = Field(min_length=1, max_length=20)
     vin: str | None = Field(default=None, max_length=32)
+    make: str | None = Field(default=None, max_length=60)
+    model: str | None = Field(default=None, max_length=60)
     vehicle_class: VehicleClass = "standard"
     camera_serial: str | None = Field(default=None, max_length=100)
     tracking_device_id: str | None = Field(default=None, max_length=100)
@@ -61,6 +63,8 @@ class VehicleUpdate(BaseModel):
 
     rego: str | None = Field(default=None, min_length=1, max_length=20)
     vin: str | None = None
+    make: str | None = None
+    model: str | None = None
     vehicle_class: VehicleClass | None = None
     camera_serial: str | None = None
     tracking_device_id: str | None = None
@@ -119,6 +123,12 @@ class DeviceUpdate(BaseModel):
     vehicle_id: str | None = None
     kiosk_locked: bool | None = None
     calibration_due: date | None = None
+    # Retire (or un-retire) a tablet without deleting its history. A revoked
+    # device's heartbeat 404s, which the meter app already reads as "this tablet
+    # is no longer registered" -- so revoking is how an operator takes a tablet
+    # out of service and puts it back behind the readiness gate. Re-pairing it
+    # with a fresh code clears the flag (see fleet_service.register_device).
+    revoked: bool | None = None
 
 
 class DeviceRead(BaseModel):
@@ -138,8 +148,40 @@ class DeviceRead(BaseModel):
     battery: int | None
     network: str | None
     calibration_due: date | None
+    # When this tablet last completed a real pairing-code enrolment, and when an
+    # operator retired it. `paired_at` is NOT interchangeable with
+    # `last_seen_at`: a manually-provisioned row has never paired, and a paired
+    # tablet switched off for a week still has. `None` on a row predating these
+    # columns means "not recorded", not "never paired".
+    paired_at: datetime | None = None
+    revoked_at: datetime | None = None
+    # The device's own last reported position, and when it last acted on a
+    # queued command. Both are how a dashboard can show that a remote command
+    # was actually carried out instead of a permanent "Pending".
+    last_locate_lat: float | None = None
+    last_locate_lng: float | None = None
+    last_locate_accuracy_m: float | None = None
+    last_locate_at: datetime | None = None
+    command_acked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Not a Device column -- populated only by POST /devices/{id}/heartbeat
+    # (see app/api/v1/fleet.py's device_heartbeat), which sets it from the
+    # current GET /v1/app-releases/latest answer so a device learns about an
+    # available update on its existing 60s poll without a second network
+    # round-trip. `None` on every other DeviceRead response (plain CRUD
+    # reads never populate it) and also `None` here if no active release has
+    # ever been published -- never treat `None` as "you are up to date",
+    # only as "no hint was computed this response".
+    latest_version_code: int | None = None
+
+    # Also not a Device column, and the one field here that is a SECRET.
+    # Populated only by POST /devices/register, which mints it and hands it over
+    # exactly once -- the server keeps a hash and can never return it again.
+    # `None` on every other response, including every heartbeat and every list
+    # read, so a device credential is never exposed to a dashboard user or to
+    # anything that merely reads the fleet.
+    device_secret: str | None = None
 
 
 # --- Device pairing / heartbeat / admin flag endpoints -----------------------------
@@ -172,6 +214,24 @@ class DeviceHeartbeatRequest(BaseModel):
     app_version: str | None = Field(default=None, max_length=30)
 
 
+class LocateResponseRequest(BaseModel):
+    """A device answering an admin's locate request with its real fix.
+
+    `accuracy_m` is optional and never invented: a device that cannot say how
+    accurate its fix is sends nothing rather than a guess, and the dashboard
+    shows the position without a precision claim."""
+
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+
+
+class CommandAckRequest(BaseModel):
+    """A device reporting that it has acted on a queued command."""
+
+    command: Literal["restart"]
+
+
 class KioskLockRequest(BaseModel):
     enabled: bool = True
 
@@ -185,9 +245,14 @@ class LocateRequest(BaseModel):
 
 
 class RebootRequest(BaseModel):
-    """See the HONESTY NOTE on `Device.reboot_requested` — setting `enabled`
-    queues a reboot request the device can read back; it does not itself
-    reboot anything."""
+    """Queues a RESTART OF THE METER APP on the device — not an OS reboot.
+
+    Rebooting Android needs Device-Owner provisioning this fleet does not have
+    (see `Device.reboot_requested`). What the app can genuinely do, and now
+    does, is restart itself, which is what the operational need behind this
+    button actually is: "the meter is stuck, restart it". The device clears the
+    flag via `POST /devices/{id}/command-ack` once it has acted, so an admin
+    sees it carried out rather than permanently pending."""
 
     enabled: bool = True
 
@@ -267,6 +332,33 @@ class VehicleLifetimeTotals(BaseModel):
     generated_at: datetime
 
 
+# --- Shift history (past-shifts-per-vehicle pass) ---------------------------
+# Response shape for `GET /v1/fleet/vehicles/{id}/shift-history` -- "which
+# drivers has this vehicle had", not just the live current one (that's
+# app.schemas.live_ops.VehicleLiveRead.current_driver_*, derived the same
+# "no cached pointer, always live off the shifts table" way). See
+# app.services.fleet.list_vehicle_shift_history.
+
+
+class VehicleShiftHistoryItem(BaseModel):
+    """One row of `GET /v1/fleet/vehicles/{id}/shift-history` -- a past (or
+    currently open) `Shift` (owned by the sibling shift domain) run on this
+    vehicle, with the driver's display name joined in so a dashboard doesn't
+    need a second lookup. Newest-first (start_at DESC)."""
+
+    shift_id: str
+    driver_id: str
+    driver_name: str | None = Field(
+        default=None, description="Display name for driver_id -- None only if the driver's User row is gone."
+    )
+    start_at: datetime
+    end_at: datetime | None = Field(default=None, description="None means this shift is still open.")
+    distance_km: Decimal = Field(description="Shift.km_total -- recomputed server-side at shift close.")
+    fare_total: Decimal = Field(
+        description="Shift.cash_total + Shift.card_total -- total takings recorded for this shift."
+    )
+
+
 # --- Pilot-report evidence pack (operations-cycle tracking pass) ------------
 # Response shape for `GET /v1/fleet/vehicles/{id}/pilot-report`. See
 # app.services.fleet_reports.vehicle_pilot_report for the exact
@@ -303,3 +395,44 @@ class VehiclePilotReport(BaseModel):
     duress_event_count_total: int
     flagged_for_review_count: int
     generated_at: datetime
+
+
+# --- TEMPORARY force-wipe (see app.services.fleet_wipe's module docstring for
+# full context; removed along with the rest of this tooling once onboarding/
+# pairing testing is done) ----------------------------------------------------
+
+
+class FleetForceWipeRequest(BaseModel):
+    confirm: Literal[True] = Field(
+        description="Must be explicitly `true` on every call. This endpoint purges audit/"
+        "financial evidence (PSL ledger, wallet transactions, trip ratings, compliance "
+        "documents, tariff change-log entries) for every driver on the tenant and is "
+        "irreversible -- there is no default/implicit form of this request."
+    )
+
+
+class FleetForceWipeFailure(BaseModel):
+    kind: Literal["vehicle", "device", "driver"]
+    id: str
+    reason: str
+
+
+class FleetForceWipeResult(BaseModel):
+    vehicles_deleted: int
+    devices_deleted: int
+    drivers_deleted: int
+    evidence_rows_destroyed: dict[str, int] = Field(
+        description="Evidence category -> row count PERMANENTLY destroyed by this call (PSL "
+        "ledger entries/top-ups, wallet transactions, trip ratings, compliance documents, "
+        "tariff change-log entries). Zero counts are included for every category this "
+        "endpoint is capable of purging, not just ones with rows this run."
+    )
+    audit_log_preserved: Literal[True] = Field(
+        default=True,
+        description="Always true: this force wipe never deletes AuditLog rows, under any "
+        "circumstance -- the tamper-evident hash chain (app.models.audit_log) is left intact "
+        "even for tenants/drivers otherwise fully wiped. See app.services.fleet_wipe's module "
+        "docstring for the full reasoning. A driver who has ever been recorded as an audit-log "
+        "actor is reported in `failures` below instead of being silently skipped.",
+    )
+    failures: list[FleetForceWipeFailure]

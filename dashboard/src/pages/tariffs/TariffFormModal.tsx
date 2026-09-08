@@ -24,6 +24,7 @@ import {
   REGION_OPTIONS,
   toDatetimeLocalValue,
 } from "./format";
+import { ExtrasSection } from "./ExtrasSection";
 
 export interface TariffFormModalProps {
   open: boolean;
@@ -62,6 +63,7 @@ function emptyForm(): FormState {
     multi_hire_pct: "0.75",
     psl_amount: "1.32",
     surcharge_pct_cap: "5.0",
+    cleaning_fee_cap: "124.14",
   };
 }
 
@@ -87,6 +89,7 @@ function formFromTariff(tariff: Tariff): FormState {
     multi_hire_pct: tariff.multi_hire_pct,
     psl_amount: tariff.psl_amount,
     surcharge_pct_cap: tariff.surcharge_pct_cap,
+    cleaning_fee_cap: tariff.cleaning_fee_cap,
   };
 }
 
@@ -411,6 +414,12 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
           <h3 className="mb-1 mt-2 text-sm font-semibold text-foreground">Other rate settings</h3>
         </div>
         {UNCAPPED_RATE_FIELDS.map((f) => renderRateField(f, false))}
+
+        {mode === "edit" && tariff && (
+          <div className="sm:col-span-2">
+            <ExtrasSection tariffId={tariff.id} />
+          </div>
+        )}
 
         {error && (
           <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive sm:col-span-2">

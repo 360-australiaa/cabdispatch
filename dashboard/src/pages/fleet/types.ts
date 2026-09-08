@@ -26,34 +26,50 @@ export interface Vehicle {
   tenant_id: string;
   rego: string;
   vin: string | null;
+  make: string | null;
+  model: string | null;
   vehicle_class: VehicleClass;
   camera_serial: string | null;
   tracking_device_id: string | null;
   meter_device_id: string | null;
   status: VehicleStatus;
+  registration_expiry: string | null;
+  insurance_expiry: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** Form state for the create/edit Vehicle modal — everything as strings for controlled inputs. */
+/** Form state for the create/edit Vehicle modal — everything as strings for
+ * controlled inputs. `registration_expiry`/`insurance_expiry` are
+ * `YYYY-MM-DD` from `<input type="date">`, matching `VehicleCreate`/
+ * `VehicleUpdate`'s `date | None` fields; blank means "unknown, not a
+ * violation" (see backend/app/schemas/fleet.py's own doc comment). */
 export interface VehicleFormValues {
   rego: string;
   vin: string;
+  make: string;
+  model: string;
   vehicle_class: VehicleClass;
   camera_serial: string;
   tracking_device_id: string;
   meter_device_id: string;
   status: VehicleStatus;
+  registration_expiry: string;
+  insurance_expiry: string;
 }
 
 export const EMPTY_VEHICLE_FORM: VehicleFormValues = {
   rego: "",
   vin: "",
+  make: "",
+  model: "",
   vehicle_class: "standard",
   camera_serial: "",
   tracking_device_id: "",
   meter_device_id: "",
   status: "active",
+  registration_expiry: "",
+  insurance_expiry: "",
 };
 
 /** `DeviceRead` */
@@ -71,6 +87,22 @@ export interface Device {
   last_seen_at: string | null;
   battery: number | null;
   network: string | null;
+  // When this tablet last completed a real pairing-code enrolment, and when an
+  // operator retired it. `paired_at` is not interchangeable with `last_seen_at`:
+  // a device row created by hand on this page has never paired, and a paired
+  // tablet switched off for a week still has. Null on rows that predate the
+  // columns means "not recorded", not "never paired".
+  paired_at: string | null;
+  revoked_at: string | null;
+  // The device's OWN last reported position, and when it last acted on a queued
+  // command. Both exist so a remote command can be shown as carried out rather
+  // than permanently "Pending" — which is what Locate and Reboot both did,
+  // because nothing anywhere ever cleared their flags.
+  last_locate_lat: number | null;
+  last_locate_lng: number | null;
+  last_locate_accuracy_m: number | null;
+  last_locate_at: string | null;
+  command_acked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -116,6 +148,38 @@ export interface Driver {
   vehicle_id: string | null;
   shift_start_at: string | null;
   current_trip_id: string | null;
+}
+
+/**
+ * Subset of `UserRead` used by `useDriverCompliance`/`useUpdateDriverCompliance`
+ * (`GET`/`PATCH /v1/users/{id}`) to read and edit a driver's compliance-expiry
+ * dates from the Drivers panel. A separate fetch from the `Driver` rollup
+ * above -- `GET /v1/drivers` (`DriverLiveRead`) doesn't carry these two
+ * fields (see its own doc comment in backend/app/schemas/live_ops.py), so
+ * editing them needs this per-user endpoint instead.
+ */
+export interface DriverComplianceRead {
+  id: string;
+  /** The driver's meter login code (`UserRead.driver_code`) — the 6-character
+   * code auto-generated at creation that the driver types into the tablet's
+   * "DRIVER #" field alongside their PIN (the meter posts
+   * `driver_code` + `pin` to `/v1/auth/driver-login`, NOT email + password).
+   * Surfaced here because it was previously returned by the API but never
+   * displayed anywhere in the dashboard — meaning an operator who created a
+   * driver had no way to find out the credential that driver needs to sign
+   * in, which silently blocked onboarding entirely (found 2026-09-07 while
+   * testing a fresh driver onboarding end to end). Null for non-driver roles. */
+  driver_code: string | null;
+  driver_license_expiry: string | null;
+  driver_authority_expiry: string | null;
+  suitability_status: string | null;
+}
+
+/** `UserUpdate`'s compliance-date subset — both nullable/optional, matching
+ * the backend's "null means unknown, not a violation" convention. */
+export interface DriverComplianceUpdate {
+  driver_license_expiry: string | null;
+  driver_authority_expiry: string | null;
 }
 
 export interface Page<T> {

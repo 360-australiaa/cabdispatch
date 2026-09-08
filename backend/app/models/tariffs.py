@@ -77,13 +77,24 @@ class Tariff(Base, TimestampMixin):
     multi_hire_pct: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("0.75"))
     psl_amount: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("1.32"))
     surcharge_pct_cap: Mapped[Decimal] = mapped_column(_RATE, nullable=False, default=Decimal("5.0"))
+    cleaning_fee_cap: Mapped[Decimal] = mapped_column(
+        _RATE, nullable=False, default=Decimal("124.14")
+    )
 
 
 class Extra(Base, TimestampMixin):
     __tablename__ = "tariff_extras"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tariff_id: Mapped[str] = mapped_column(String(36), ForeignKey("tariffs.id"), nullable=False, index=True)
+    # ondelete="CASCADE" (found auditing every NOT NULL FK in this codebase
+    # per the same task brief as the fleet vehicle/device delete fix — see
+    # app.services.fleet's module docstring): an Extra is a line item
+    # ("cleaning fee", "airport surcharge") that only exists in the context
+    # of its parent tariff — deleting the tariff should take its extras with
+    # it, same reasoning as the fleet domain's derived/ephemeral rows.
+    tariff_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tariffs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # Denormalized from the parent tariff at creation time so this table can be
     # filtered by tenant_id directly (the sole multi-tenancy mechanism) without
     # a join. Nullable for the same reason as Tariff.tenant_id above.
@@ -104,11 +115,34 @@ class TariffChangeLog(Base):
     __tablename__ = "tariff_change_log"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tariff_id: Mapped[str] = mapped_column(String(36), ForeignKey("tariffs.id"), nullable=False, index=True)
+    # ondelete="CASCADE" (a real, separate production bug -- not the one
+    # reported live, but the identical class of it, surfaced by turning on
+    # sqlite FK enforcement for this whole pass and running the existing
+    # test suite against it, see app.core.database): `write_change_log`
+    # unconditionally appends a row on every create INCLUDING the initial
+    # one — so, unlike the audit/financial evidence app.services.user.
+    # assert_user_deletable refuses to let through, every tariff structurally
+    # has one of these from the moment it exists, meaning "refuse instead"
+    # would make the delete endpoint permanently non-functional rather than
+    # just usually blocked. This row's change history is meaningful only in
+    # the context of a tariff that still exists (nothing reads change-log
+    # rows for a tariff_id that isn't there) — cascading it away with its
+    # tariff is the same "derived data, not independent evidence" reasoning
+    # as the fleet domain's history tables.
+    tariff_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tariffs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # Denormalized from the tariff for direct tenant_id filtering, as on Extra.
     tenant_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("tenants.id"), nullable=True, index=True
     )
+    # No ondelete= here (defaults to RESTRICT/NO ACTION) -- DELIBERATELY, in
+    # contrast to tariff_id right above: this is WHO changed a fare rate,
+    # not derived data -- fare-regulation accountability that must survive
+    # that staff member's own account deletion. See
+    # app.services.user.assert_user_deletable, which already refuses to
+    # delete a user referenced here with a clean 409 rather than letting the
+    # FK violation reach the database raw.
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     before_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # None on the initial create
     after_json: Mapped[dict] = mapped_column(JSON, nullable=False)

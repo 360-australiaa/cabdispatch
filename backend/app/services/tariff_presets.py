@@ -55,6 +55,7 @@ def _urban_defaults(**overrides: Any) -> dict[str, Any]:
         "multi_hire_pct": fe.URBAN_TARIFF.multi_hire_pct,
         "psl_amount": fe.URBAN_TARIFF.psl_amount,
         "surcharge_pct_cap": fe.URBAN_TARIFF.surcharge_pct_cap,
+        "cleaning_fee_cap": fe.URBAN_TARIFF.cleaning_fee_cap,
     }
     base.update(overrides)
     return base

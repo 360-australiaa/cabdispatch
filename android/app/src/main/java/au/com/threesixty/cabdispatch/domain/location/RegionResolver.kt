@@ -50,6 +50,25 @@ object RegionResolver {
     private const val URBAN_RADIUS_KM = 50.0
 
     /**
+     * Beyond this distance from the Sydney CBD reference point a fix is treated as "outside the
+     * fleet's operating footprint entirely" (e.g. an overseas field-test tablet) rather than as
+     * rural NSW, and falls back to [REGION_URBAN] instead of [REGION_COUNTRY]. Rationale
+     * (2026-08-28, found live on a Karachi field-test tablet): the urban/country split above only
+     * makes sense inside Australia — a genuine rural-NSW fix is tens-to-a-few-hundred km from the
+     * CBD, never thousands. A device ~12,000 km away resolving to `"country"` produced a meter
+     * that silently refused to start, because this tenant serves no `"country"` tariff
+     * (`GET /v1/tariffs/active?region=country` → 404), so `observeActiveTariff("country")` stayed
+     * null and `WheelDashboardViewModel.startMeter()` no-op'd ("Waiting for a signed tariff…").
+     * Every tenant always has an urban tariff, so defaulting the clearly-out-of-region case to
+     * urban is both safe and the only value that lets a meter run at all off-continent. ~2000 km
+     * comfortably contains greater Sydney + all of NSW and its neighbours (Melbourne ~713 km,
+     * Brisbane ~730 km, Adelaide ~1160 km from Sydney) so no real AU country fix is misclassified;
+     * only genuinely off-continent fixes cross it. Replace this whole heuristic with a real
+     * labelled-region geofence lookup once one exists server-side (see class doc).
+     */
+    private const val OPERATING_FOOTPRINT_RADIUS_KM = 2000.0
+
+    /**
      * @param fix the latest accepted [LocationFix] (e.g. `AppContainer.speedSource.locationFix.value`
      *   or a collected [kotlinx.coroutines.flow.StateFlow] value), or `null` when no fix is
      *   available yet (first launch, permission denied, indoors, GPS disabled) — degrades to
@@ -62,6 +81,13 @@ object RegionResolver {
     fun resolve(lat: Double?, lng: Double?): String {
         if (lat == null || lng == null) return REGION_URBAN
         val distanceKm = GeoMath.distanceKm(lat, lng, SydneyCbdFallback.LAT, SydneyCbdFallback.LNG)
-        return if (distanceKm <= URBAN_RADIUS_KM) REGION_URBAN else REGION_COUNTRY
+        return when {
+            distanceKm <= URBAN_RADIUS_KM -> REGION_URBAN
+            // Clearly outside the fleet's operating footprint (e.g. an overseas field-test tablet)
+            // — fall back to urban, the one region every tenant always has a tariff for, rather
+            // than to rural-NSW "country" which may not exist and would silently block the meter.
+            distanceKm > OPERATING_FOOTPRINT_RADIUS_KM -> REGION_URBAN
+            else -> REGION_COUNTRY
+        }
     }
 }

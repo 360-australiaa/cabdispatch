@@ -11,14 +11,16 @@ every sibling domain's models are already guaranteed to be on `Base.metadata`
 by the time this module runs.
 """
 from app.core.database import Base
+from app.models.app_release import AppRelease
 from app.models.audit_log import AuditLog
 from app.models.billing import Subscription
 from app.models.compliance import ComplianceDocument
+from app.models.driver_engagement import Announcement, Incentive, TripRating, WalletTransaction
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
 from app.models.duress_snapshot import DuressSnapshot
 from app.models.fatigue_alert import FatigueAlert
-from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
+from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle, VehiclePositionHistory
 from app.models.geofence import Geofence
 from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
@@ -27,17 +29,30 @@ from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
 from app.models.shift import Shift
 from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
-from app.models.trips import Trip
+from app.models.toll import (
+    TollGantry,
+    TollPoint,
+    TollPointPriceRevision,
+    TollRoad,
+    TollRoadPriceRevision,
+)
+from app.models.trips import Trip, TripGpsTrace
 from app.models.user import User
+from app.models.vouchers import CorporateAccount, Voucher
 from app.models.zones import Zone
 
-# live_ops owns no table of its own (see app/services/live_ops.py) — nothing
-# to import here for that domain.
+# live_ops owns no *models file* of its own (see app/services/live_ops.py's
+# module docstring), but as of the durable position-history pass it does own
+# one table, `VehiclePositionHistory` -- modeled in app/models/fleet.py
+# alongside the `Vehicle` row it references (see that file's module
+# docstring), imported above.
 
 __all__ = [
+    "Announcement",
     "AuditLog",
     "Base",
     "ComplianceDocument",
+    "CorporateAccount",
     "Device",
     "DevicePairingCode",
     "DeviceVersionHistory",
@@ -48,6 +63,7 @@ __all__ = [
     "Extra",
     "FatigueAlert",
     "Geofence",
+    "Incentive",
     "Job",
     "JobOffer",
     "Message",
@@ -59,8 +75,18 @@ __all__ = [
     "Tariff",
     "TariffChangeLog",
     "Tenant",
+    "TollGantry",
+    "TollPoint",
+    "TollPointPriceRevision",
+    "TollRoad",
+    "TollRoadPriceRevision",
     "Trip",
+    "TripGpsTrace",
+    "TripRating",
     "User",
     "Vehicle",
+    "VehiclePositionHistory",
+    "Voucher",
+    "WalletTransaction",
     "Zone",
 ]

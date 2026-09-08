@@ -58,6 +58,9 @@ export const TIME_CLASS_LABELS: Record<TimeClass, string> = {
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   cash: "Cash",
   card: "Card",
+  voucher: "Voucher",
+  account: "Account",
+  split_fare: "Split fare",
 };
 
 export function statusBadgeVariant(status: TripStatus): "accent" | "success" {

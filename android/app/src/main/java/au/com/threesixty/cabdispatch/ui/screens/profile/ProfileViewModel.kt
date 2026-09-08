@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.ComplianceDossierDto
+import au.com.threesixty.cabdispatch.data.remote.UserDto
+import au.com.threesixty.cabdispatch.data.remote.VehicleDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,11 +54,18 @@ sealed interface ProfilePhotoUiState {
  * `SettingsScreen`. Uses [AppContainer.apiService] directly (no dedicated repository, same
  * shallow-network-only shape [loadCompliance] already uses below) - a photo upload is a single
  * fire-and-forget multipart call, not something that needs Room/offline-queue treatment like a
- * trip does. Real, unverified server-side gate, flagged loudly rather than silently assumed to
- * work: `POST /v1/users/{userId}/photo` is staff-role-gated (owner/admin/dispatcher) per this
- * session's backend contract - a genuine `driver`-role account uploading their own photo is
- * expected to get a 403 from the backend today, not a bug in this call. See
- * `ApiService.uploadUserPhoto`'s own doc and this file's [uploadPhoto] for how that's surfaced.
+ * trip does.
+ *
+ * CORRECTION (Phase H, 2026-09-03, re-checked against `backend/app/api/v1/users.py`): the note
+ * this doc used to carry here - that `POST /v1/users/{userId}/photo` is staff-role-gated and a
+ * driver's own upload is expected to 403 - is no longer true of this codebase. That endpoint's
+ * gate is now "self-or-staff" (`caller.id == user_id` OR owner/admin/dispatcher), specifically so
+ * a driver can upload their own photo; see that endpoint's own doc for the fix. [uploadPhoto]
+ * below still surfaces any failure honestly (it never assumes success), it's just not expected to
+ * be a 403 for a normal driver account any more. This is also why [ProfileScreen] adds no separate
+ * "EDIT PROFILE" button/action beyond the existing photo tap: `PATCH /v1/users/{id}` (name/phone/
+ * email/etc.) stays owner/admin-only (`require_role("owner", "admin")`), so photo is the one field
+ * a driver can genuinely self-edit today, and that affordance already exists.
  */
 class ProfileViewModel : ViewModel() {
 
@@ -72,20 +81,83 @@ class ProfileViewModel : ViewModel() {
     private val _photoUploadError = MutableStateFlow<String?>(null)
     val photoUploadError: StateFlow<String?> = _photoUploadError.asStateFlow()
 
+    /**
+     * Phase H (2026-09-03) additions — the signed-in driver's own [UserDto] (`GET /v1/auth/me`,
+     * the same call [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s header
+     * already makes for the VERIFIED badge) and their bound vehicle's full [VehicleDto] row
+     * (`GET /v1/fleet/vehicles`, matched client-side — see [loadVehicleDetail]). Both back the
+     * Identity card's make/model/phone/member-since rows and the Documents tab's real
+     * Verified/Expiring soon/Expired status rows. `null` covers "not loaded yet" AND "the call
+     * failed" identically — same fallback-to-honest-omission posture as [photoState]'s [ProfilePhotoUiState.NoPhoto]
+     * above: the Identity card and Documents tab must render their existing "—"/omitted fallback
+     * for a `null` value here, never a fabricated one.
+     */
+    private val _userDetail = MutableStateFlow<UserDto?>(null)
+    val userDetail: StateFlow<UserDto?> = _userDetail.asStateFlow()
+
+    private val _vehicleDetail = MutableStateFlow<VehicleDto?>(null)
+    val vehicleDetail: StateFlow<VehicleDto?> = _vehicleDetail.asStateFlow()
+
     init {
         loadCompliance()
         loadPhoto()
+        loadUserDetail()
+        loadVehicleDetail()
     }
 
+    /** `GET /v1/auth/me` — any authenticated user may read their own record, no role gate. A
+     * network/decode failure lands on `null`, same "degrade to omission" contract [userDetail]'s
+     * own doc describes. */
+    private fun loadUserDetail() {
+        viewModelScope.launch {
+            _userDetail.value = runCatching { AppContainer.apiService.me() }.getOrNull()
+        }
+    }
+
+    /**
+     * Resolves this device's bound vehicle to its full [VehicleDto] row by fetching
+     * `GET /v1/fleet/vehicles` and matching client-side — the same page-then-match pattern
+     * [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.bindVehicle]
+     * already uses, see [au.com.threesixty.cabdispatch.data.remote.ApiService.listVehicles]'s own
+     * doc. Prefers matching on [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid]
+     * (the real fleet-vehicle id) when it's bound, falling back to a case-insensitive rego match
+     * against [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleId] for a session that
+     * predates that field (or whose UUID lookup failed at bind time) — see that field's own doc.
+     * No vehicle bound, or no match found, or the call fails: [vehicleDetail] stays `null`.
+     */
+    private fun loadVehicleDetail() {
+        val session = SessionHolder.session.value ?: return
+        viewModelScope.launch {
+            val page = runCatching { AppContainer.apiService.listVehicles() }.getOrNull()
+            val items = page?.items.orEmpty()
+            _vehicleDetail.value = items.firstOrNull { it.id == session.vehicleUuid }
+                ?: items.firstOrNull { it.rego.equals(session.vehicleId, ignoreCase = true) }
+        }
+    }
+
+    /**
+     * BUGFIX (2026-09-04, network-call audit): this used to key `GET
+     * /v1/compliance/vehicles/{vehicleId}/dossier` off [SessionHolder.session]'s
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleId] — the driver-entered/QR'd
+     * rego string — but `app.services.compliance.build_dossier` matches
+     * `ComplianceDocument.vehicle_id == vehicle_id` against the real fleet-vehicle UUID (the
+     * dashboard's compliance upload form sends `v.id`, never the rego — see
+     * `dashboard/src/pages/compliance/index.tsx`). Unlike the `POST /v1/fleet/positions` bug this
+     * doesn't 404 — `build_dossier`'s own doc says a vehicle with zero matching documents just
+     * comes back fully non-compliant — so this silently rendered every vehicle's real compliance
+     * standing as "missing everything" instead of erroring loudly. Now uses the real
+     * [au.com.threesixty.cabdispatch.domain.DriverSession.vehicleUuid], same field
+     * [loadVehicleDetail] already prefers.
+     */
     private fun loadCompliance() {
-        val vehicleId = SessionHolder.session.value?.vehicleId
-        if (vehicleId == null) {
+        val vehicleUuid = SessionHolder.session.value?.vehicleUuid
+        if (vehicleUuid == null) {
             _complianceState.value = ComplianceUiState.Error("No vehicle bound to this device yet.")
             return
         }
         _complianceState.value = ComplianceUiState.Loading
         viewModelScope.launch {
-            val result = runCatching { AppContainer.apiService.getComplianceDossier(vehicleId) }
+            val result = runCatching { AppContainer.apiService.getComplianceDossier(vehicleUuid) }
             result.onSuccess { dossier ->
                 _complianceState.value = ComplianceUiState.Loaded(dossier)
             }.onFailure { error ->
@@ -137,8 +209,8 @@ class ProfileViewModel : ViewModel() {
      * rather than re-fetching over the network - cheaper, and avoids a confusing moment where the
      * new photo doesn't show yet because a re-fetch raced/failed. On failure, [photoUploadError]
      * is set and [photoState] is left exactly as it was (never blanked/replaced by a failed
-     * upload) - see this class's own doc for the real, expected staff-role-gate 403 case this
-     * most likely surfaces for a genuine `driver`-role account.
+     * upload) - see this class's own CORRECTION doc note above: a genuine `driver`-role account
+     * uploading their own photo is a legitimate self-or-staff-gated call now, not an expected 403.
      */
     fun uploadPhoto(bytes: ByteArray) {
         val driverId = SessionHolder.session.value?.driverId

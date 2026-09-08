@@ -2,19 +2,23 @@ import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button, Card, CardContent, Modal, Table, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { isPlatformOwner } from "@/lib/platformAdmin";
 import { useDeleteZoneMutation, useZonesQuery, type Zone } from "@/hooks/useZones";
 import { extractErrorMessage, formatCoords } from "./format";
 import { ZoneFormModal } from "./ZoneFormModal";
 
 const PAGE_SIZE = 20;
 
-/** Zone list/CRUD tab -- name, number, center lat/lng, radius. Create/edit/
- * delete are owner/admin gated server-side (POST/PUT/DELETE /v1/zones); the
- * dashboard hides the write affordances for other roles rather than letting
- * them hit a 403. */
+/** Zone list/CRUD tab -- name, number, center lat/lng, radius. Plotting is
+ * platform-admin-only (product decision, 2026: "as an admin, we are setting
+ * up the plotting, not the network") -- create/edit/delete are
+ * platform-owner gated server-side (POST/PUT/DELETE /v1/zones), same gate
+ * as the Platform Admin console (`src/lib/platformAdmin.ts`); the dashboard
+ * hides the write affordances for other roles rather than letting them hit
+ * a 403. */
 export function ZonesPanel() {
   const { user } = useAuth();
-  const canWrite = user?.role === "owner" || user?.role === "admin";
+  const canWrite = isPlatformOwner(user);
 
   const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);

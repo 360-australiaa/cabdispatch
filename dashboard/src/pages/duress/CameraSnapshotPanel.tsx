@@ -3,6 +3,7 @@ import axios from "axios";
 import { Camera } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { formatTime } from "./format";
+import { SnapshotGallery } from "./SnapshotGallery";
 
 /**
  * Cabin-camera still-frame viewer for a duress event -- see
@@ -123,6 +124,8 @@ export function CameraSnapshotPanel({
           {state === "error" && "—"}
         </div>
       )}
+
+      <SnapshotGallery eventId={eventId} enabled={enabled} refreshSignal={refreshSignal} />
     </div>
   );
 }

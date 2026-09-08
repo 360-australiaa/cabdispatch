@@ -13,15 +13,22 @@ import {
 /** Detail view backed by `GET /v1/shifts/{id}/report` — the reconciliation
  * summary a dispatcher/owner checks a shift against (total takings, PSL
  * owed, whether it's marked reconciled) plus the pre-shift inspection
- * checklist if one was recorded. */
+ * checklist if one was recorded. This used to be read-only with no bridge to
+ * the separate Edit action (a different pencil icon on the row) -- fixing a
+ * mis-keyed takings figure meant closing this modal and re-finding the same
+ * row's edit button. `onEdit` closes that gap the same way
+ * `pages/trips/TripDetailModal.tsx`'s own `onEdit` footer button already
+ * does for Trips. */
 export function ShiftReportModal({
   shiftId,
   onClose,
+  onEdit,
   driverLabelById,
   vehicleLabelById,
 }: {
   shiftId: string | null;
   onClose: () => void;
+  onEdit?: () => void;
   driverLabelById: Map<string, string>;
   vehicleLabelById: Map<string, string>;
 }) {
@@ -79,6 +86,7 @@ export function ShiftReportModal({
               <Download className="h-4 w-4" />
               {downloading === "pdf" ? "Downloading…" : "Download PDF"}
             </Button>
+            {onEdit && <Button onClick={onEdit}>Edit shift</Button>}
           </>
         ) : undefined
       }

@@ -11,7 +11,10 @@ import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
+import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.time.Instant
@@ -40,6 +43,30 @@ class TripRepository(
 
     fun observeActiveTrip(): Flow<TripEntity?> = tripDao.observeActiveTrip()
 
+    /**
+     * Read-only view of the active trip's persisted GPS trace ([TripEntity.gpsTraceJson], decoded)
+     * for the Meter screen's route-polyline backdrop (Meter "game-level" visual pass, 2026-09-03).
+     * Purely additive: same Room `Flow` as [observeActiveTrip], same [decodeGpsTrace] this class
+     * already uses for sync — no new write path, no behavior change. Emits an empty list when there
+     * is no open trip or the trace is still `"[]"`.
+     *
+     * **Fixed (2026-09-07, real fare-integrity bug, not just a cosmetic map gap):** the live
+     * meter's own persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
+     * `doPersistTick`) used to always call [tick] with `newPoints = emptyList()`, so this trace
+     * never grew for the entire life of a live trip — confirmed to make `POST /v1/trips/sync`'s
+     * server-side `recompute_from_trace` (which replays this exact trace to independently validate
+     * `deviceTotal`) compute a flagfall-only fare and auto-flag every real trip for review.
+     * [HiredViewModel]'s `nextTracePoint` now feeds one real point per fare-engine tick into
+     * [tick] (see that method's own doc for a second, subtler variant of this same bug — recording
+     * a point only when the GPS fix itself changed — found and fixed on a live device the same
+     * day), so this Flow reflects the trip's actual driven path in near-real-time (bounded only by
+     * [tick]'s own Room write latency) rather than staying `"[]"` for the whole trip.
+     */
+    fun observeActiveTripGpsTrace(): Flow<List<TelemetryPointDto>> =
+        tripDao.observeActiveTrip().map { trip ->
+            trip?.let { runCatching { decodeGpsTrace(it.gpsTraceJson) }.getOrDefault(emptyList()) } ?: emptyList()
+        }
+
     fun observeTrip(clientUuid: String): Flow<TripEntity?> = tripDao.observeTrip(clientUuid)
 
     fun observeTripsByStatus(status: String): Flow<List<TripEntity>> = tripDao.observeTripsByStatus(status)
@@ -64,32 +91,81 @@ class TripRepository(
         type: String,
         startLat: Double,
         startLng: Double,
+        /** Minted by the caller, not here, as of 2026-09-06 — see
+         * [au.com.threesixty.cabdispatch.domain.SessionHolder.liveTripClientUuid]'s doc for the
+         * real race this closes: [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.openTripInRoom]
+         * needs the id BEFORE this suspend function's first DB write (which is when
+         * [observeActiveTrip]'s Flow can first observe the new row), so it can mark the trip
+         * "live" for this process strictly before that write happens, closing the window rather
+         * than racing it. Defaulted so this stays source-compatible with any future caller that
+         * doesn't care. */
+        clientUuid: String = UUID.randomUUID().toString(),
         paymentMethod: String = "cash",
         timeClass: String = "day",
         isPeak: Boolean = false,
         maxi: Boolean = false,
+        /** See [TripEntity.passengerCount]'s doc (Point to Point Transport (Fares) Order 2026
+         * compliance pass) — defaulted to 1 so every existing call site (a normal metered Start
+         * Meter tap) keeps compiling/behaving exactly as before. No UI call site passes a
+         * non-default value yet; wiring a passenger-count/wheelchair entry point is a future
+         * pass's job, not this one's. */
+        passengerCount: Int = 1,
+        /** See [TripEntity.wheelchairHiring]'s doc — same "no UI call site sets this yet" note as
+         * [passengerCount]. */
+        wheelchairHiring: Boolean = false,
+        /** See [TripEntity.airportRankRequestedMaxi]'s doc (maxi-at-airport-rank fare-integrity
+         * fix, 2026-09-05). Defaulted false so every existing call site keeps compiling/behaving
+         * exactly as before; [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
+         * `openTripInRoom` is the one real call site that now passes a non-default value through,
+         * mirroring the same flag it already passes to `fareEngine.startTrip`. */
+        airportRankRequestedMaxi: Boolean = false,
         /** See [TripEntity.negotiatedTotal]'s doc — "Set Price" entry point (2026-08-10
          * meter-polish pass). Defaulted null so every existing call site (a normal metered Start
          * Meter tap) keeps compiling/behaving unchanged. */
         negotiatedTotal: String? = null,
     ): TripEntity {
         val now = System.currentTimeMillis()
+        // Real address plumbing (History pane columns, Phase C 2026-09-03): reads the same
+        // hand-off object au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen's Trip
+        // Details card already reads addresses from (SessionHolder.pendingTrip — see
+        // au.com.threesixty.cabdispatch.domain.TripContext.originAddress/.destAddress's doc)
+        // rather than adding new parameters here, since this method's sole call site
+        // (HiredViewModel.openTripInRoom) was out of this pass's edit scope and already captures
+        // that exact TripContext instance as a local before calling here — re-reading the global
+        // hand-off at this point yields the identical object, not a race, because nothing clears
+        // it between HiredViewModel's init reading it and this suspend call running (the only
+        // clear-before-navigation path is the dashboard's Start Meter CANCEL, which never reaches
+        // this screen at all). `null` on both exactly when TripContext carried no address (street
+        // hail/rank job, a Start Meter/Set Price trip, or the Dispatch wheel-content pane's own
+        // accept path — see that doc's known gap) — the History pane must render "—", never a
+        // fabricated address, for that case.
+        val pendingContext = SessionHolder.pendingTrip.value
         val trip = TripEntity(
-            clientUuid = UUID.randomUUID().toString(),
+            clientUuid = clientUuid,
             vehicleId = vehicleId,
             driverId = driverId,
             shiftId = shiftId,
             tariffId = tariffId,
             type = type,
+            // Read from the simulator's own live state rather than taken as a parameter, so no
+            // screen can open a trip on fabricated GPS and forget to say so -- see
+            // TripEntity.simulated for why an unflagged simulated trip is a real problem and not
+            // just untidy.
+            simulated = GpsSimulator.isSimulating(),
             status = TripStatus.OPEN,
             timeClass = timeClass,
             isPeak = isPeak,
             maxi = maxi,
+            passengerCount = passengerCount,
+            wheelchairHiring = wheelchairHiring,
+            airportRankRequestedMaxi = airportRankRequestedMaxi,
             startAt = Instant.ofEpochMilli(now).toString(),
             startLat = startLat,
             startLng = startLng,
             paymentMethod = paymentMethod,
             negotiatedTotal = negotiatedTotal,
+            pickupAddress = pendingContext?.originAddress,
+            dropoffAddress = pendingContext?.destAddress,
             createdAt = now,
             updatedAt = now,
         )
@@ -131,6 +207,14 @@ class TripRepository(
         movingS: Int,
         waitingS: Int,
         tolls: String? = null,
+        /** Automatic NSW toll-road detection audit trail (roadId -> current charged amount) — see
+         * [TripEntity.autoTolledRoadsJson]'s doc. `null` (the default) leaves the existing value
+         * untouched, same convention as [tolls] itself — every pre-existing call site that never
+         * names this keeps compiling/behaving exactly as before (no auto-toll detection wired). */
+        autoTolledRoads: Map<String, String>? = null,
+        /** Real toll-road ids crossed this trip the registry couldn't auto-price — see
+         * [TripEntity.unpricedTollRoadIdsJson]'s doc. Same "`null` = leave untouched" convention. */
+        unpricedTollRoadIds: List<String>? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("tick() called for unknown trip clientUuid=$clientUuid")
@@ -145,6 +229,8 @@ class TripRepository(
             movingS = movingS,
             waitingS = waitingS,
             tolls = tolls ?: existing.tolls,
+            autoTolledRoadsJson = autoTolledRoads?.let { cabDispatchJson.encodeToString(it) } ?: existing.autoTolledRoadsJson,
+            unpricedTollRoadIdsJson = unpricedTollRoadIds?.let { cabDispatchJson.encodeToString(it) } ?: existing.unpricedTollRoadIdsJson,
             updatedAt = System.currentTimeMillis(),
         )
         tripDao.update(updated)
@@ -159,11 +245,19 @@ class TripRepository(
      * the point at which the outbox row for this trip becomes
      * [SyncOutboxEntity.readyToSync] — see that class's doc for why not
      * sooner.
+     *
+     * [endLat]/[endLng] are the real GPS fix at the moment the fare ended
+     * (e.g. `AppContainer.speedSource.locationFix.value` — "where the vehicle
+     * physically was", not the navigator's chosen destination). Deliberately
+     * `Double?`: when no live fix is available at close time, `null` leaves
+     * the coordinate already on the row untouched (typically the *intended*
+     * drop-off [updateDropoff] wrote while the trip was open) rather than
+     * writing a fabricated/wrong-but-plausible value.
      */
     suspend fun closeTrip(
         clientUuid: String,
-        endLat: Double,
-        endLng: Double,
+        endLat: Double?,
+        endLng: Double?,
         deviceTotal: String,
         paymentMethod: String? = null,
         surchargePct: String? = null,
@@ -178,6 +272,9 @@ class TripRepository(
          * JSON-encoded onto that column as-is; see [TripSyncItemDto]'s own doc for the known gap around this
          * not yet reaching the server via [toSyncItemDto]/`POST /v1/trips/sync`. */
         splitPayments: List<SplitPaymentEntryDto>? = null,
+        /** Driver tip (Close & Pay "tips" pass) — see [TripEntity.tip]'s doc. `null` = no tip
+         * recorded for this close. */
+        tip: String? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("closeTrip() called for unknown trip clientUuid=$clientUuid")
@@ -189,8 +286,8 @@ class TripRepository(
         val updated = existing.copy(
             status = TripStatus.CLOSED,
             endAt = Instant.ofEpochMilli(now).toString(),
-            endLat = endLat,
-            endLng = endLng,
+            endLat = endLat ?: existing.endLat,
+            endLng = endLng ?: existing.endLng,
             paymentMethod = paymentMethod ?: existing.paymentMethod,
             surchargePct = surchargePct,
             cleaningFee = cleaningFee,
@@ -200,10 +297,102 @@ class TripRepository(
             voucherCode = voucherCode,
             accountReference = accountReference,
             splitPaymentsJson = splitPayments?.let { cabDispatchJson.encodeToString(it) },
+            tip = tip,
             updatedAt = now,
         )
         tripDao.update(updated)
         upsertOutboxRow(updated, ready = true)
+        return updated
+    }
+
+    /**
+     * Corrects a trip's declared passenger count mid-trip (miscounts happen — see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.updatePassengerCount]'s doc).
+     * Point to Point Transport (Fares) Order 2026 UI-wiring pass: without this, a mid-trip
+     * correction would only ever update the live in-memory meter display
+     * ([au.com.threesixty.cabdispatch.domain.FareEngineImpl]) and never reach this persisted
+     * [TripEntity] row — meaning [au.com.threesixty.cabdispatch.domain.fare.TripFareReconstruction]
+     * (what Close & Pay actually bills from) would silently keep billing off the ORIGINAL
+     * passenger count the driver already corrected on-screen. New method, not a change to [tick]'s
+     * existing signature/behavior, per this pass's constraint not to touch other call sites.
+     */
+    suspend fun updatePassengerCount(clientUuid: String, passengerCount: Int): TripEntity {
+        val existing = tripDao.getByClientUuid(clientUuid)
+            ?: error("updatePassengerCount() called for unknown trip clientUuid=$clientUuid")
+        check(existing.status == TripStatus.OPEN) {
+            "updatePassengerCount() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
+        }
+        val updated = existing.copy(passengerCount = passengerCount, updatedAt = System.currentTimeMillis())
+        tripDao.update(updated)
+        upsertOutboxRow(updated, ready = false)
+        return updated
+    }
+
+    /**
+     * Records the drop-off the driver picked in the meter screen's navigator
+     * ([au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel.selectDestination]) on
+     * the open trip: [TripEntity.dropoffAddress] (a real geocoded `place_name`, never a guess —
+     * the column that History/Trip Details render and that was never populated before this
+     * pass except from a dispatch offer's `destAddress`) plus [TripEntity.endLat]/[endLng] as
+     * the *intended* end point. [closeTrip] overwrites the two coordinates with the real GPS fix
+     * at close time when one is available; if not, it leaves whatever this method wrote in place
+     * rather than fabricating a value (see [closeTrip]'s own doc) — so they are only reliably
+     * "where we're heading" while the trip is open, and become "where the fare actually ended"
+     * once closed (falling back to the intended destination only when no live fix exists).
+     *
+     * Pure metadata: none of the fare-reconstruction inputs (`distanceM`/`movingS`/`waitingS`/
+     * `tolls`/...) are touched, so this can never move the fare. Same read-copy-write shape as
+     * [updatePassengerCount]; the outbox draft is refreshed (not marked ready) for the same
+     * crash-recovery reason [tick] does it.
+     */
+    suspend fun updateDropoff(clientUuid: String, address: String, lat: Double, lng: Double): TripEntity {
+        val existing = tripDao.getByClientUuid(clientUuid)
+            ?: error("updateDropoff() called for unknown trip clientUuid=$clientUuid")
+        check(existing.status == TripStatus.OPEN) {
+            "updateDropoff() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
+        }
+        val updated = existing.copy(
+            dropoffAddress = address,
+            endLat = lat,
+            endLng = lng,
+            updatedAt = System.currentTimeMillis(),
+        )
+        tripDao.update(updated)
+        upsertOutboxRow(updated, ready = false)
+        return updated
+    }
+
+    /**
+     * Best-effort reverse-geocode fill for [TripEntity.pickupAddress]. Two call sites, both using
+     * the same idempotent write: [au.com.threesixty.cabdispatch.ui.screens.hired.MeterNavViewModel]
+     * (`resolvePickupAddress`) calls this the moment a destination is first picked, live, so the
+     * nav pane's PICK UP card has a real address to show; [au.com.threesixty.cabdispatch.ui.
+     * screens.closepay.CloseAndPayViewModel]'s `finalizeClose` calls it again right after
+     * [closeTrip] returns as a fallback for a trip whose driver never opened the navigator at all.
+     * Both use the trip's real [TripEntity.startLat]/[TripEntity.startLng] against
+     * [au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding.reverseGeocode].
+     * [TripEntity.pickupAddress]'s own doc explains why this column is often `null` at close time:
+     * it's only populated at [openTrip] from a dispatch offer's `originAddress`, so a
+     * street-hail/rank job or a Start Meter/Set Price trip opens with nothing to carry — History
+     * renders an honest "—" for that until now.
+     *
+     * Deliberately only fills a currently-`null`/blank [TripEntity.pickupAddress] — a trip that
+     * already carries a real dispatch-offer address is left untouched, never overwritten by a
+     * coarser reverse-geocoded guess. The caller is responsible for never invoking this with a
+     * fabricated [address]: [au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding]
+     * only ever hands back a real Mapbox result or `null`, and a `null`/failed lookup must leave
+     * this column exactly as it was, not call this method at all.
+     *
+     * Unlike every other write in this class, this one deliberately does NOT touch the outbox row:
+     * [pickupAddress]/[TripEntity.dropoffAddress] are local-only, History/Trip-Detail-only fields
+     * that were never part of [TripSyncItemDto]/[toSyncItemDto] (see that method's own field list)
+     * — there is nothing for [au.com.threesixty.cabdispatch.sync.SyncWorker] to re-send here.
+     */
+    suspend fun fillPickupAddressIfMissing(clientUuid: String, address: String): TripEntity? {
+        val existing = tripDao.getByClientUuid(clientUuid) ?: return null
+        if (!existing.pickupAddress.isNullOrBlank()) return existing
+        val updated = existing.copy(pickupAddress = address, updatedAt = System.currentTimeMillis())
+        tripDao.update(updated)
         return updated
     }
 
@@ -236,6 +425,7 @@ class TripRepository(
             shiftId = trip.shiftId,
             tariffId = trip.tariffId,
             type = trip.type,
+            simulated = trip.simulated,
             startAt = trip.startAt,
             endAt = trip.endAt,
             startLat = trip.startLat,
@@ -254,6 +444,16 @@ class TripRepository(
             timeClass = trip.timeClass,
             isPeak = trip.isPeak,
             maxi = trip.maxi,
+            passengerCount = trip.passengerCount,
+            wheelchairHiring = trip.wheelchairHiring,
+            // Maxi-at-airport-rank fare-integrity fix (2026-09-05): the backend's TripSyncItem
+            // schema already declares/validates this field (backend/app/schemas/trips.py) and the
+            // on-device fare engine already reads it correctly (see TripEntity.airportRankRequestedMaxi's
+            // doc) — this line is what actually gets a trip closed with the flag set to carry it to
+            // the server, so device_total (which includes the surcharge) doesn't diverge from the
+            // server's independent recompute and get rejected for exceeding the sync variance
+            // tolerance.
+            airportRankRequestedMaxi = trip.airportRankRequestedMaxi,
             tolls = trip.tolls,
             extras = trip.extras,
             cleaningFee = trip.cleaningFee,
@@ -262,6 +462,11 @@ class TripRepository(
             gpsTrace = decodeGpsTrace(trip.gpsTraceJson),
             receiptRef = trip.receiptRef,
             deviceTotal = trip.deviceTotal,
+            // See TripEntity.tip's doc — a tip is never folded into deviceTotal above (the
+            // fare-engine total), it round-trips as its own field, same "send it anyway,
+            // forward-compatible" convention this method already uses for voucherCode/
+            // accountReference/splitPayments.
+            tipAmount = trip.tip,
         )
     }
 

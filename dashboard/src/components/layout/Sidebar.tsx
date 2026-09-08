@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
+  ListChecks,
   Map,
   Send,
   MessageSquare,
@@ -14,15 +15,25 @@ import {
   Palette,
   ShieldCheck,
   Landmark,
-  ClipboardList,
   LogOut,
   Building2,
   MapPinned,
+  ScrollText,
+  Ticket,
+  Megaphone,
+  Trophy,
+  Coins,
+  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
+// Same rollup Fleet & Drivers' own ComplianceExpiryBanner reads
+// (`GET /v1/fleet/compliance-expiry`) -- surfaced here too as an ambient
+// sidebar count so an expiring licence/rego/insurance is visible from every
+// page, not just to a dispatcher who happens to open Fleet & Drivers.
+import { useComplianceExpiry } from "@/pages/fleet/api";
 
 interface NavItem {
   to: string;
@@ -32,6 +43,11 @@ interface NavItem {
 
 /** Route/label/icon list for the fleet-ops modules. Keep in sync with router.tsx. */
 const NAV_ITEMS: NavItem[] = [
+  // Pinned first — a plain checklist (real live checks, no fabricated
+  // progress) that's most useful the moment a new tenant logs in, before
+  // they've ever added a vehicle/driver/tariff. Never gated: a returning
+  // operator can ignore or revisit it same as any other nav item.
+  { to: "/getting-started", label: "Getting Started", icon: ListChecks },
   { to: "/live-map", label: "Live Map", icon: Map },
   { to: "/dispatch", label: "Dispatch", icon: Send },
   { to: "/messages", label: "Messages", icon: MessageSquare },
@@ -45,7 +61,24 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
   { to: "/billing", label: "Billing", icon: CreditCard },
   { to: "/payment-recon", label: "Payment Reconciliation", icon: Landmark },
-  { to: "/audit-log", label: "Audit Log", icon: ClipboardList },
+  { to: "/vouchers", label: "Vouchers & Accounts", icon: Ticket },
+  // Driver-engagement content (the tablet's Announcements / Incentive
+  // Progress / Wallet tiles). Announcement/incentive list+get are open to
+  // any tenant user server-side, writes are owner/admin gated in-page
+  // (`canWrite`), same as Vouchers. /wallet is owner/admin server-side and
+  // renders a notice for other roles (see pages/driver-engagement/WalletPage.tsx).
+  { to: "/announcements", label: "Announcements", icon: Megaphone },
+  { to: "/incentives", label: "Incentives", icon: Trophy },
+  { to: "/wallet", label: "Driver Wallets", icon: Coins },
+  // GET /v1/ratings is owner/admin only server-side (app/api/v1/ratings.py's
+  // `_require_admin`) -- the nav item stays visible to every role, same
+  // "let the page itself render the access notice" convention as Wallet.
+  { to: "/ratings", label: "Ratings", icon: Star },
+  // GET /v1/audit-log has no role gate server-side (any authenticated tenant
+  // user may read the trail) -- so this nav item stays visible to every
+  // role, same as every other item above. Only the in-page "Verify chain"
+  // action is owner/admin gated (see pages/audit-log/index.tsx's `canVerify`).
+  { to: "/audit-log", label: "Audit Log", icon: ScrollText },
   { to: "/settings/white-label", label: "White-label", icon: Palette },
   { to: "/settings/security", label: "Security", icon: ShieldCheck },
 ];
@@ -66,6 +99,12 @@ export function Sidebar() {
   const logoUrl = tenant?.theme_json?.logo_url;
 
   const navItems = isPlatformOwner(user) ? [...NAV_ITEMS, PLATFORM_NAV_ITEM] : NAV_ITEMS;
+
+  // Sidebar renders on every authenticated page, so this one query (60s
+  // refetch, same interval the banner itself uses) is how the count reaches
+  // every screen, not just Fleet & Drivers/Live Map.
+  const complianceExpiryQuery = useComplianceExpiry();
+  const complianceExpiryCount = complianceExpiryQuery.data?.items.length ?? 0;
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col bg-brand-primary text-brand-primary-foreground">
@@ -103,6 +142,14 @@ export function Sidebar() {
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{label}</span>
+                {to === "/fleet" && complianceExpiryCount > 0 && (
+                  <span
+                    className="ml-auto inline-flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-semibold text-destructive-foreground"
+                    title={`${complianceExpiryCount} accreditation/registration item${complianceExpiryCount === 1 ? "" : "s"} expiring or expired`}
+                  >
+                    {complianceExpiryCount}
+                  </span>
+                )}
               </NavLink>
             </li>
           ))}

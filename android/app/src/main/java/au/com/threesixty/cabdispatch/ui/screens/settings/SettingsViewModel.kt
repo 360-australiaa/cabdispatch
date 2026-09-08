@@ -17,12 +17,18 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
+import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
+import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
+import au.com.threesixty.cabdispatch.domain.LocateOutcome
 import au.com.threesixty.cabdispatch.domain.SessionHolder
+import au.com.threesixty.cabdispatch.domain.ThemeMode
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.hardware.printing.PrinterDevice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import retrofit2.HttpException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -30,16 +36,30 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class GpsQuality { NO_FIX, POOR, FAIR, GOOD, PERMISSION_DENIED }
+// GpsQuality moved to au.com.threesixty.cabdispatch.domain.GpsQuality (2026-09-02, Home-dashboard
+// redesign pass) so au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel can
+// share the exact same accuracy tiers instead of duplicating them — see that file's own doc.
 enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
-enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UP_TO_DATE, REQUIRED }
+/**
+ * [UNREGISTERED] is deliberately distinct from [UNKNOWN_OFFLINE]. Found on the pilot tablet,
+ * 2026-09-07: the heartbeat had been failing with a flat "offline or server unreachable" while
+ * the server was demonstrably healthy. It was returning **404** -- the device record this tablet
+ * still holds an id for had been removed by a fleet wipe, so there was nothing on the server to
+ * beat against. Those two states need opposite responses from whoever reads the screen ("wait for
+ * signal" versus "re-pair this tablet"), and collapsing them into one message sent the reader
+ * looking for a network fault that did not exist.
+ */
+enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UNREGISTERED, UP_TO_DATE, REQUIRED }
 
 /** Mirrors [MapboxOfflineRegion.DownloadState] but as a UI-friendly type (no Mapbox SDK types
  * leaking into the state a Composable reads) — see that class's doc for the actual download. */
 sealed interface OfflineMapDownloadState {
     data object NotStarted : OfflineMapDownloadState
     data class Downloading(val progressPercent: Int) : OfflineMapDownloadState
-    data object Completed : OfflineMapDownloadState
+    /** [regionLabel] is a driver-facing name ("Sydney metro" / "Karachi metro") for whichever
+     * region [MapboxOfflineRegion.downloadRegionNear] actually picked — was a hardcoded "Sydney
+     * metro" string in SettingsScreen regardless of the real region until 2026-08-28. */
+    data class Completed(val regionLabel: String) : OfflineMapDownloadState
     data class Failed(val message: String) : OfflineMapDownloadState
 }
 
@@ -54,8 +74,33 @@ sealed interface LocateResponseState {
     data object Idle : LocateResponseState
     data object Sent : LocateResponseState
     data object NoFixYet : LocateResponseState
-    data object NoVehicleBound : LocateResponseState
     data class Failed(val message: String) : LocateResponseState
+}
+
+/**
+ * Projects the process-wide [LocateOutcome] onto this screen's own type.
+ *
+ * There used to be TWO locate implementations. [DeviceCommandHeartbeat] answered correctly, and
+ * this ViewModel kept a private copy that published a VEHICLE position against
+ * `SessionHolder.session.vehicleUuid` -- and the copy was the one the About tab actually rendered.
+ * Its own doc admitted it was "an un-migrated duplicate left behind".
+ *
+ * That duplicate is what a technician saw as "Location request failed to send - HTTP 404 not
+ * found": the tablet held a vehicle UUID for a car that had since been deleted, so
+ * `POST /v1/fleet/positions` answered 404 and the tile printed the HTTP status. The tablet was
+ * fine; the identity it was publishing against was gone. The heartbeat now reports on the DEVICE
+ * route, which needs no vehicle at all, and this screen reads that one result instead of running
+ * its own.
+ *
+ * [LocateOutcome.NoVehicleBound] has no counterpart here on purpose -- it cannot happen any more,
+ * because answering a locate no longer involves a vehicle.
+ */
+private fun LocateOutcome.toScreenState(): LocateResponseState = when (this) {
+    LocateOutcome.None -> LocateResponseState.Idle
+    LocateOutcome.Sent -> LocateResponseState.Sent
+    LocateOutcome.NoFixYet -> LocateResponseState.NoFixYet
+    LocateOutcome.NoVehicleBound -> LocateResponseState.Idle
+    is LocateOutcome.Failed -> LocateResponseState.Failed(message)
 }
 
 data class SettingsUiState(
@@ -74,7 +119,37 @@ data class SettingsUiState(
     val factoryResetComplete: Boolean = false,
     val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,
     val locateResponse: LocateResponseState = LocateResponseState.Idle,
+    val pairMeter: PairMeterState = PairMeterState.Idle,
+    /** Driver's local self-declaration that the bound vehicle has 5+ seats — see
+     * [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s doc. Loaded from that store in
+     * [SettingsViewModel.init], updated via [SettingsViewModel.setMaxiVehicle]. */
+    val isMaxiVehicle: Boolean = false,
+    /** Settings two-pane pass (2026-09-03) — the three real preference rows, backed by
+     * [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore]. Mirrored into this state the
+     * same way [isMaxiVehicle] is (loaded once in [SettingsViewModel.init], each setter writes
+     * through to the store and updates this copy) even though the store's own `StateFlow`s are
+     * also read directly by other screens — see that store's class doc for why. */
+    val autoAcceptJobs: Boolean = false,
+    val showMapInBackground: Boolean = true,
+    val allowCash: Boolean = true,
+    /** Real Light/Dark/System display theme (2026-09-04 day-mode pass) — see [ThemeMode]'s own
+     * doc and [au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore.themeMode]. Mirrored
+     * into this state the same way the three flags above are. */
+    val themeMode: ThemeMode = ThemeMode.DARK,
 )
+
+/** Real meter/device pairing (2026-08-28 — backend spec: `POST /v1/fleet/devices/register`,
+ * device.id persisted so [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel]'s
+ * existing heartbeat call finally has a non-null [au.com.threesixty.cabdispatch.domain.SessionHolder.deviceId]
+ * to fire against). See [SettingsViewModel.submitPairingCode]. */
+sealed interface PairMeterState {
+    data object Idle : PairMeterState
+    data object Submitting : PairMeterState
+    data class Success(val vehicleId: String?) : PairMeterState
+    /** [message] is shown verbatim — for the 409 "vehicle has an open shift" case this is the
+     * server's own explanatory text (spec: "show the server's message text directly"). */
+    data class Error(val message: String) : PairMeterState
+}
 
 /**
  * S6 — Settings/Diagnostics (spec B5). [AndroidViewModel] (not a plain
@@ -94,9 +169,62 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 delay(GPS_NETWORK_POLL_INTERVAL_MS)
             }
         }
+        // Mirror the ONE real locate result rather than running a second attempt of our own -- see
+        // LocateOutcome.toScreenState for the duplicate this replaced and the 404 it produced.
+        viewModelScope.launch {
+            AppContainer.deviceCommandHeartbeat.state.collect { command ->
+                _uiState.update { it.copy(locateResponse = command.locate.toScreenState()) }
+            }
+        }
         loadDeviceStatus()
         loadFareSchedule()
-        _uiState.update { it.copy(pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice) }
+        _uiState.update {
+            it.copy(
+                pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice,
+                isMaxiVehicle = AppContainer.maxiVehicleStore.isMaxiVehicle(),
+                autoAcceptJobs = AppContainer.settingsPreferencesStore.autoAcceptJobs.value,
+                showMapInBackground = AppContainer.settingsPreferencesStore.showMapInBackground.value,
+                allowCash = AppContainer.settingsPreferencesStore.allowCash.value,
+                themeMode = AppContainer.settingsPreferencesStore.themeMode.value,
+            )
+        }
+    }
+
+    /** See [SettingsUiState.autoAcceptJobs]'s doc. */
+    fun setAutoAcceptJobs(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setAutoAcceptJobs(value)
+        _uiState.update { it.copy(autoAcceptJobs = value) }
+    }
+
+    /** See [SettingsUiState.showMapInBackground]'s doc. */
+    fun setShowMapInBackground(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setShowMapInBackground(value)
+        _uiState.update { it.copy(showMapInBackground = value) }
+    }
+
+    /** See [SettingsUiState.allowCash]'s doc. */
+    fun setAllowCash(value: Boolean) {
+        AppContainer.settingsPreferencesStore.setAllowCash(value)
+        _uiState.update { it.copy(allowCash = value) }
+    }
+
+    /** See [SettingsUiState.themeMode]'s doc. [au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme]
+     * (composed once at the app root, not here) is what actually reacts to the store's `StateFlow`
+     * and repaints the whole app — this just writes through, same as every other real toggle above. */
+    fun setThemeMode(value: ThemeMode) {
+        AppContainer.settingsPreferencesStore.setThemeMode(value)
+        _uiState.update { it.copy(themeMode = value) }
+    }
+
+    /**
+     * Updates the driver's local maxi-vehicle declaration — see [SettingsUiState.isMaxiVehicle]'s
+     * doc and [au.com.threesixty.cabdispatch.domain.MaxiVehicleStore]'s own doc for why this is a
+     * per-device self-declaration, not fleet-registry data. New method, no existing call site
+     * touched.
+     */
+    fun setMaxiVehicle(value: Boolean) {
+        AppContainer.maxiVehicleStore.setMaxiVehicle(value)
+        _uiState.update { it.copy(isMaxiVehicle = value) }
     }
 
     // --- GPS quality ---
@@ -120,16 +248,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             runCatching { locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) }.getOrNull(),
         ).minByOrNull { it.accuracy }
 
-        if (fix == null) {
-            _uiState.update { it.copy(gpsQuality = GpsQuality.NO_FIX, gpsAccuracyM = null) }
-            return
+        // Same thresholds as before this pass, now shared with the Home dashboard's status strip
+        // via GpsQualityClassifier — see that object's own doc. Behavior-preserving: granted==true
+        // here always (the early-return above already handled the false case), fix?.accuracy null
+        // maps to NO_FIX exactly as the old inline `if (fix == null)` branch did.
+        _uiState.update {
+            it.copy(gpsQuality = GpsQualityClassifier.classify(granted, fix?.accuracy), gpsAccuracyM = fix?.accuracy)
         }
-        val quality = when {
-            fix.accuracy <= 10f -> GpsQuality.GOOD
-            fix.accuracy <= 30f -> GpsQuality.FAIR
-            else -> GpsQuality.POOR
-        }
-        _uiState.update { it.copy(gpsQuality = quality, gpsAccuracyM = fix.accuracy) }
     }
 
     // --- Network status ---
@@ -176,82 +301,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 // on (see DeviceDto's doc / backend HONESTY NOTE) — real OS reboot needs
                 // device-owner permissions this app doesn't hold, so it stays a backend-only queue.
                 if (device.locateRequested) {
-                    respondToLocateRequest()
                 }
-            }.onFailure {
-                _uiState.update { it.copy(forceUpdateStatus = ForceUpdateStatus.UNKNOWN_OFFLINE) }
+            }.onFailure { error ->
+                // 404 means the server has no such device -- not that it is unreachable. See
+                // ForceUpdateStatus.UNREGISTERED.
+                val unregistered = (error as? HttpException)?.code() == 404
+                _uiState.update {
+                    it.copy(
+                        forceUpdateStatus = if (unregistered) {
+                            ForceUpdateStatus.UNREGISTERED
+                        } else {
+                            ForceUpdateStatus.UNKNOWN_OFFLINE
+                        },
+                    )
+                }
             }
         }
     }
 
-    /**
-     * Answers an admin's MDM "locate" request (`Device.locateRequested`, read back on the
-     * heartbeat above) by publishing this device's current real position through the same
-     * live-position pipeline the fleet dashboard's Live Map already watches
-     * (`POST /v1/fleet/positions` — [ApiService.publishPosition][au.com.threesixty.cabdispatch.data.remote.ApiService.publishPosition],
-     * shared/API_SUMMARY.md "Live Ops"), so a dispatcher sees a fresh pin appear/move as evidence
-     * the request was answered.
-     *
-     * No acknowledge/clear step: the only endpoint that flips `locate_requested` back off is
-     * `POST /v1/fleet/devices/{id}/locate`, which is admin-only server-side
-     * (`backend/app/api/v1/fleet.py::set_device_locate`) — this device's own JWT (driver or staff
-     * role) is never an admin, so it structurally cannot call it. Per this pass's brief, a fresh
-     * position publish is treated as sufficient evidence on its own — the dispatcher watching Live
-     * Map sees the pin, which is the actual thing they're waiting on. The flag simply stays set
-     * server-side until an admin clears it from the dashboard, which just means this method
-     * re-publishes on every subsequent heartbeat while it's still set — reasonable behaviour for a
-     * "tell me where you are" request either way, not a bug.
-     *
-     * Best-effort and silent-on-failure (beyond [LocateResponseState] diagnostics), matching every
-     * other background call in this file: [SessionHolder.session]'s [vehicleId] being unset or
-     * [AppContainer.speedSource]'s [locationFix][au.com.threesixty.cabdispatch.domain.SpeedSource.locationFix]
-     * not having a fix yet (no permission, cold start, no signal) both mean there's nothing honest
-     * to publish yet, so this skips rather than sending a fabricated position.
-     *
-     * Known limitation, flagged rather than left implicit: [loadDeviceStatus] only runs once, when
-     * this ViewModel is created (i.e. whenever the driver opens S6/Settings) — there's no
-     * periodic/background heartbeat anywhere in this app yet. A "Locate" request only gets
-     * answered the next time S6 happens to be opened, not the instant an admin sets the flag.
-     * Closing that gap would mean a periodic background heartbeat (e.g. WorkManager, mirroring
-     * [au.com.threesixty.cabdispatch.sync.SyncWorker]'s pattern) — a materially bigger change than
-     * "wire the existing heartbeat flow", left as a real, open follow-up rather than silently
-     * implied to already work continuously.
-     */
-    private suspend fun respondToLocateRequest() {
-        val vehicleId = SessionHolder.session.value?.vehicleId
-        if (vehicleId == null) {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.NoVehicleBound) }
-            return
-        }
-        val fix = AppContainer.speedSource.locationFix.value
-        if (fix == null) {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.NoFixYet) }
-            return
-        }
-        runCatching {
-            AppContainer.apiService.publishPosition(
-                PositionPublishRequestDto(
-                    vehicleId = vehicleId,
-                    lat = fix.lat,
-                    lng = fix.lng,
-                    // Deliberately a fixed placeholder, not a guess: this call site only knows "an
-                    // admin asked where this device is", not the driver's real
-                    // available/on-trip/offline status — that's the Idle screen's separate,
-                    // still-unwired "For Hire" toggle (HANDOFF.md "Availability broadcast not
-                    // wired"). No server-side enum constraint on `status` (see
-                    // PositionPublishRequestDto's doc), so this is a safe, honest value until that
-                    // toggle publishes a real one.
-                    status = LOCATE_RESPONSE_STATUS,
-                ),
-            )
-        }.onSuccess {
-            _uiState.update { it.copy(locateResponse = LocateResponseState.Sent) }
-        }.onFailure { error ->
-            _uiState.update {
-                it.copy(locateResponse = LocateResponseState.Failed(error.message ?: "Unknown error"))
-            }
-        }
-    }
 
     // --- Passenger-facing fare schedule (cl.15 display requirement) ---
     private fun loadFareSchedule() {
@@ -285,9 +352,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun pairPrinter(deviceId: String) {
+    fun pairPrinter(device: PrinterDevice) {
         viewModelScope.launch {
-            AppContainer.receiptPrinterGateway.pair(deviceId)
+            AppContainer.receiptPrinterGateway.pair(device)
             _uiState.update { it.copy(pairedPrinter = AppContainer.receiptPrinterGateway.pairedDevice) }
         }
     }
@@ -344,7 +411,27 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         else -> {
                             withContext(Dispatchers.IO) { AppContainer.database.clearAllTables() }
                             AppContainer.accessToken = null
+                            AppContainer.refreshToken = null
                             SessionHolder.clear()
+                            // A factory reset must also UNPAIR. This wiped Room, the tokens and the
+                            // session but left the device id and secret sitting in
+                            // DevicePairingStore, so a "factory reset" tablet came back up still
+                            // paired -- DevicePairingStore.clear() had no caller at all, and both
+                            // DeviceCommandHeartbeat's and Session.kt's docs asserted the opposite
+                            // of what actually happened.
+                            //
+                            // Cosmetic until 2026-09-08; not any more. Registration is now the gate
+                            // in front of the login screen, so a tablet that had been reset and
+                            // handed to another depot would sail straight past a check that exists
+                            // precisely to stop it. SessionHolder.clear() deliberately does not
+                            // touch deviceId (logging off must not unpair), so this is the one
+                            // place that has to say so explicitly.
+                            SessionHolder.deviceId = null
+                            AppContainer.devicePairingStore.clear()
+                            // ...and back to first-install state, so the next person to switch it
+                            // on gets the technician's commissioning checklist rather than a login
+                            // screen on a tablet nobody has set up.
+                            AppContainer.commissioningStore.clear()
                             _uiState.update {
                                 it.copy(factoryResetInProgress = false, factoryResetComplete = true)
                             }
@@ -382,15 +469,63 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         _uiState.update { it.copy(offlineMapDownload = OfflineMapDownloadState.Downloading(0)) }
         viewModelScope.launch {
-            MapboxOfflineRegion.downloadSydneyMetroRegion(token).collect { state ->
+            // Downloads whichever metro region (Sydney or Karachi) is nearest the driver's
+            // current GPS fix (2026-08-28, active Karachi field-test fix) — was always
+            // downloadSydneyMetroRegion regardless of device location, which wasted bandwidth
+            // downloading Sydney tiles a Karachi-based test device would never actually use
+            // offline. See MapboxOfflineRegion.downloadRegionNear's doc.
+            val fix = AppContainer.speedSource.locationFix.value
+            MapboxOfflineRegion.downloadRegionNear(token, fix).collect { state ->
                 val mapped = when (state) {
                     is MapboxOfflineRegion.DownloadState.Started -> OfflineMapDownloadState.Downloading(0)
                     is MapboxOfflineRegion.DownloadState.InProgress ->
                         OfflineMapDownloadState.Downloading(state.progressPercent)
-                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed
+                    is MapboxOfflineRegion.DownloadState.Completed -> OfflineMapDownloadState.Completed(
+                        regionLabel = when (state.regionId) {
+                            MapboxOfflineRegion.KARACHI_METRO_REGION_ID -> "Karachi metro"
+                            else -> "Sydney metro"
+                        },
+                    )
                     is MapboxOfflineRegion.DownloadState.Failed -> OfflineMapDownloadState.Failed(state.message)
                 }
                 _uiState.update { it.copy(offlineMapDownload = mapped) }
+            }
+        }
+    }
+
+    // --- Meter/device pairing (2026-08-28, backend spec) ---
+
+    fun clearPairMeterError() = _uiState.update { it.copy(pairMeter = PairMeterState.Idle) }
+
+    fun scanPairingQr(activity: android.app.Activity) {
+        viewModelScope.launch {
+            val code = AppContainer.qrScanner.scan(activity)
+            if (code != null) submitPairingCode(code)
+        }
+    }
+
+    /** [pairingCode] is the 8-char code an admin generated for a specific vehicle
+     * (`POST /v1/fleet/vehicles/{id}/pairing-code` on the dashboard side). Registers this
+     * physical tablet as that vehicle's meter and persists the resulting device id so
+     * [loadDeviceStatus]'s existing heartbeat call — previously a structural no-op, see
+     * [au.com.threesixty.cabdispatch.domain.SessionHolder.deviceId]'s own long-standing TODO —
+     * finally has something real to fire against.
+     *
+     * The call itself lives in [DevicePairingRepository]: the readiness gate in front of the login
+     * screen pairs too, and the two must behave identically — same normalisation, same persistence
+     * (including the device secret, which only that repository has ever stored), same error text.
+     * A second copy here would be a second thing to keep in step. */
+    fun submitPairingCode(pairingCode: String) {
+        if (pairingCode.isBlank()) return
+        _uiState.update { it.copy(pairMeter = PairMeterState.Submitting) }
+        viewModelScope.launch {
+            when (val result = DevicePairingRepository.pair(getApplication(), pairingCode)) {
+                is DevicePairingRepository.PairResult.Success -> {
+                    _uiState.update { it.copy(pairMeter = PairMeterState.Success(result.vehicleId)) }
+                    loadDeviceStatus() // re-fires heartbeat now that deviceId is real
+                }
+                is DevicePairingRepository.PairResult.Failure ->
+                    _uiState.update { it.copy(pairMeter = PairMeterState.Error(result.message)) }
             }
         }
     }

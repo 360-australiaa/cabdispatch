@@ -36,6 +36,7 @@ class TariffBase(BaseModel):
     multi_hire_pct: Decimal = Decimal("0.75")
     psl_amount: Decimal = Decimal("1.32")
     surcharge_pct_cap: Decimal = Decimal("5.0")
+    cleaning_fee_cap: Decimal = Decimal("124.14")
 
     @model_validator(mode="after")
     def _effective_to_after_from(self) -> TariffBase:
@@ -73,6 +74,7 @@ class TariffUpdate(BaseModel):
     multi_hire_pct: Decimal | None = None
     psl_amount: Decimal | None = None
     surcharge_pct_cap: Decimal | None = None
+    cleaning_fee_cap: Decimal | None = None
 
 
 class TariffRead(TariffBase):
@@ -189,6 +191,7 @@ class TariffPresetDefaults(BaseModel):
     multi_hire_pct: Decimal
     psl_amount: Decimal
     surcharge_pct_cap: Decimal
+    cleaning_fee_cap: Decimal
 
 
 class TariffPresetRead(BaseModel):
@@ -223,6 +226,7 @@ class TariffPresetOverrides(BaseModel):
     multi_hire_pct: Decimal | None = None
     psl_amount: Decimal | None = None
     surcharge_pct_cap: Decimal | None = None
+    cleaning_fee_cap: Decimal | None = None
 
 
 class TariffFromPresetCreate(BaseModel):

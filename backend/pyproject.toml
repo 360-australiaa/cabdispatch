@@ -4,6 +4,13 @@ version = "0.1.0"
 description = "Cab Dispatch — multi-tenant NSW taxi-meter SaaS backend"
 requires-python = ">=3.12"
 dependencies = [
+    # zoneinfo has no bundled database on Windows (and some slim Linux images),
+    # and app.services.fare_engine.NSW_FARE_ZONE must resolve everywhere the fare
+    # engine runs -- including a developer's machine running the test suite.
+    # A missing tzdata here is a ZoneInfoNotFoundError at import, not a subtle
+    # mispricing, but it is still better to depend on it explicitly than to rely
+    # on the deployment image happening to carry system tzdata.
+    "tzdata>=2024.1",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy[asyncio]>=2.0",

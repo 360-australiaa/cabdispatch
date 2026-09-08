@@ -17,10 +17,13 @@ import json
 import logging
 import os
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
 import stripe
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.payment import (
@@ -29,6 +32,7 @@ from app.models.payment import (
     STATUS_REFUNDED,
     STATUS_SUCCEEDED,
 )
+from app.models.vouchers import CorporateAccount, Voucher
 from app.services.fare_engine import round_half_up
 
 logger = logging.getLogger("cab_dispatch.payments")
@@ -288,42 +292,81 @@ def status_for_event(event_type: str) -> str | None:
 # --- Voucher / linked corporate ("Account") payment methods (blueprint 5.2.5) -
 # Two new Trip.payment_method values (see app.models.trips / app.schemas.trips):
 # "voucher" (promo code/prepaid voucher redemption) and "account" (pre-registered
-# linked corporate account, pay-later/invoiced). Neither has a real backing
-# table in this codebase yet (v1 scope, per the task brief) — both are stub
-# validation-only checks, deliberately NOT the real-or-mock external-API
-# pattern above: there is no external voucher/corporate-account API being
-# called here at all, so there is nothing to mock a fallback for.
+# linked corporate account, pay-later/invoiced). Both now have a real backing
+# table (app.models.vouchers.Voucher / CorporateAccount) -- this replaces the
+# earlier v1-scope non-empty-string-only stub validation. Deliberately NOT the
+# real-or-mock external-API pattern above: there is no external voucher/
+# corporate-account API being called here at all, this is a plain local ledger.
 
 
 class InvalidVoucherCodeError(ValueError):
-    """Raised when a voucher_code is missing/whitespace-only."""
+    """Raised when a voucher_code is missing/whitespace-only, doesn't resolve
+    to a tenant-owned Voucher row, or resolves to one that's already been
+    redeemed or has expired."""
 
 
 class InvalidAccountReferenceError(ValueError):
-    """Raised when an account_reference is missing/whitespace-only."""
+    """Raised when an account_reference is missing/whitespace-only, doesn't
+    resolve to a tenant-owned CorporateAccount row, or resolves to one that's
+    inactive."""
 
 
-def redeem_voucher(*, voucher_code: str) -> dict:
-    """Stub voucher/promo-code redemption. Validates `voucher_code` is a
-    non-empty string and logs the redemption attempt; does NOT check the code
-    against any real voucher/promo-code table (none exists yet in this
-    codebase — a later pass can wire this to one without changing this
-    function's contract)."""
-    if not voucher_code or not voucher_code.strip():
+async def redeem_voucher(
+    session: AsyncSession, *, tenant_id: str, voucher_code: str, trip_id: str
+) -> dict:
+    """Redeems a real Voucher row (app.models.vouchers.Voucher) for `trip_id`.
+    Raises InvalidVoucherCodeError (422 at every call site) if the code
+    doesn't resolve to a tenant-owned voucher, or resolves to one already
+    redeemed or expired. On success marks the voucher redeemed
+    (redeemed_at/redeemed_by_trip_id) and returns its value_aud. Does NOT
+    commit -- caller owns the transaction (same contract as
+    app.services.trips.close_trip, which is this function's own caller)."""
+    code = (voucher_code or "").strip()
+    if not code:
         raise InvalidVoucherCodeError("voucher_code must be a non-empty string")
-    logger.info("Voucher redeemed (stub, no real voucher ledger yet): code=%s", voucher_code)
-    return {"voucher_code": voucher_code, "redeemed": True}
 
-
-def validate_account_reference(*, account_reference: str) -> None:
-    """Stub validation for the 'account' payment method (pre-registered linked
-    corporate account, pay-later/invoiced). Validates `account_reference` is a
-    non-empty string and logs the attempt; does NOT check it against any real
-    corporate-account table (none exists yet in this codebase — v1 scope, per
-    the task brief)."""
-    if not account_reference or not account_reference.strip():
-        raise InvalidAccountReferenceError("account_reference must be a non-empty string")
-    logger.info(
-        "Account-reference payment recorded (stub, no real corporate-account ledger yet): ref=%s",
-        account_reference,
+    result = await session.execute(
+        select(Voucher).where(Voucher.tenant_id == tenant_id, Voucher.code == code)
     )
+    voucher = result.scalar_one_or_none()
+    if voucher is None:
+        raise InvalidVoucherCodeError(f"Unknown voucher code: {voucher_code}")
+    if voucher.redeemed_at is not None:
+        raise InvalidVoucherCodeError(f"Voucher {code} has already been redeemed")
+    if voucher.expires_at is not None and voucher.expires_at <= datetime.now(UTC):
+        raise InvalidVoucherCodeError(f"Voucher {code} has expired")
+
+    voucher.redeemed_at = datetime.now(UTC)
+    voucher.redeemed_by_trip_id = trip_id
+    logger.info("Voucher redeemed: tenant=%s code=%s trip_id=%s", tenant_id, code, trip_id)
+    return {"voucher_code": voucher.code, "redeemed": True, "value_aud": voucher.value_aud}
+
+
+async def validate_account_reference(
+    session: AsyncSession, *, tenant_id: str, account_reference: str
+) -> dict:
+    """Validates against a real CorporateAccount row. Raises
+    InvalidAccountReferenceError (422 at every call site) if the reference
+    doesn't resolve to a tenant-owned corporate account, or resolves to an
+    inactive one."""
+    reference = (account_reference or "").strip()
+    if not reference:
+        raise InvalidAccountReferenceError("account_reference must be a non-empty string")
+
+    result = await session.execute(
+        select(CorporateAccount).where(
+            CorporateAccount.tenant_id == tenant_id, CorporateAccount.reference == reference
+        )
+    )
+    account = result.scalar_one_or_none()
+    if account is None:
+        raise InvalidAccountReferenceError(f"Unknown corporate account reference: {account_reference}")
+    if not account.active:
+        raise InvalidAccountReferenceError(f"Corporate account {reference} is not active")
+
+    logger.info("Account-reference validated: tenant=%s ref=%s", tenant_id, reference)
+    return {
+        "account_reference": account.reference,
+        "company_name": account.company_name,
+        "active": account.active,
+    }

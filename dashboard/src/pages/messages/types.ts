@@ -57,3 +57,25 @@ export interface DriverOptionsResponse {
   skip: number;
   limit: number;
 }
+
+/**
+ * One entry of `GET /v1/messages/templates` — the fixed canned-message menu
+ * (mirrors backend `app/schemas/messages.py::MessageTemplateRead`). Includes
+ * both driver-side quick-request codes (e.g. "no_job"/"recall"/"job_query"/
+ * "other") and dispatch-side quick-status codes (e.g. "check_in"/
+ * "return_to_depot"/"contact_base_urgent") — the dashboard only ever renders
+ * the `sender_type === "dispatch"` subset, since no driver logs into it.
+ */
+export interface MessageTemplate {
+  code: string;
+  label: string;
+  sender_type: MessageSenderType | string;
+}
+
+/** Body for `POST /v1/messages/templates/{code}`. Mirrors backend
+ * `TemplateMessageCreate` — `note` is an optional free-text suffix appended
+ * to the template's canned body. */
+export interface TemplateSendBody {
+  driver_id: string;
+  note?: string;
+}

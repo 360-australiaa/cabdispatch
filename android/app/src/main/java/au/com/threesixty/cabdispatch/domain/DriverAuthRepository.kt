@@ -80,6 +80,10 @@ class SharedPreferencesDriverAuthRepository(
             val user = response.user
             if (accessToken != null && user != null) {
                 AppContainer.accessToken = accessToken
+                // Real gap closed 2026-09-06: this field existed on the response the whole time
+                // and was simply never read — see AppContainer.refreshToken's doc for the 401s
+                // that went unrecovered without it.
+                AppContainer.refreshToken = response.refreshToken
                 cacheDriver(driverId, pin, user)
                 return DriverLoginResult.Success(user)
             }
@@ -116,6 +120,7 @@ class SharedPreferencesDriverAuthRepository(
     ): Result<UserDto> = runCatching {
         val token = apiService.mfaLogin(MfaLoginRequestDto(mfaToken = mfaToken, code = code))
         AppContainer.accessToken = token.accessToken
+        AppContainer.refreshToken = token.refreshToken
         cacheDriver(driverId, pin, token.user)
         token.user
     }
@@ -125,6 +130,31 @@ class SharedPreferencesDriverAuthRepository(
             .putString(hashKey(driverId), sha256(driverId, pin))
             .putString(userKey(driverId), json.encodeToString(user))
             .apply()
+    }
+
+    /**
+     * TEMPORARY debug-only helper: pre-populates this device's offline-login cache (the same
+     * cache [login]'s network-failure fallback already reads from above) with a fabricated demo
+     * driver record, so [login] can succeed fully offline on a device that has never reached a
+     * real backend — e.g. testing the app's screens/navigation with no backend deployed yet.
+     * Only called from [au.com.threesixty.cabdispatch.ui.screens.login.LoginVehicleBindViewModel.quickLoginDemoDriver]'s
+     * debug-gated button. Remove once a reachable backend is the normal dev/test setup — this is
+     * a stopgap, not a real auth path.
+     */
+    fun seedOfflineDemoDriver(driverId: String, pin: String) {
+        cacheDriver(
+            driverId,
+            pin,
+            UserDto(
+                id = "demo-driver-offline",
+                tenantId = null,
+                role = "driver",
+                name = "Demo Driver",
+                email = driverId,
+                status = "active",
+                photoUrl = null,
+            ),
+        )
     }
 
     private fun hashKey(driverId: String) = "hash_$driverId"

@@ -181,6 +181,10 @@ class RealLocationProvider(
             speedKmh = resolveSpeedKmh(location, lastAccepted),
             accuracyM = if (location.hasAccuracy()) location.accuracy else Float.MAX_VALUE,
             timestampMillis = location.time,
+            // Same honest-null shape as accuracyM just above: hasBearing() is false whenever the
+            // platform has no bearing to report (stationary device, no recent movement vector) —
+            // read as null there rather than fabricating a heading, per LocationFix.heading's doc.
+            heading = if (location.hasBearing()) location.bearing.toDouble() else null,
         )
         if (!passesFilter(candidate, lastAccepted)) return
         lastAccepted = candidate

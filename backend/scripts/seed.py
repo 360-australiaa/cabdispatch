@@ -3,8 +3,9 @@
 Creates:
   - the platform tenant "TCT" (id = the PLATFORM_TENANT_ID sentinel in
     app.core.security), a global (tenant_id IS NULL) Fares Order reference
-    tariff for both urban and country regions with the EXACT NSW Fares Order
-    2025 (no.2) rates (re-derived from app.services.fare_engine's
+    tariff for both urban and country regions with the EXACT NSW Point to
+    Point Transport (Fares) Order 2026 rates (re-derived from
+    app.services.fare_engine's
     URBAN_TARIFF / COUNTRY_TARIFF constants — the same source of truth the
     golden fare-engine tests assert against, not re-guessed).
   - a demo tenant "Lilly Cabs" with its own urban rank/hail tariff, a copy of
@@ -23,6 +24,11 @@ Idempotent: safe to re-run — every row is looked up by its natural key first
 and only created if missing.
 
     uv run python scripts/seed.py
+
+Run `uv run python scripts/seed_toll_roads.py` as well (any order relative to
+this script) to seed the real NSW toll-road registry (13 roads, 141
+gantries) — split into its own script because it's a much larger, purely
+reference-data (no tenant/user) dataset; see that script's own docstring.
 """
 from __future__ import annotations
 
@@ -35,7 +41,7 @@ from sqlalchemy import select
 import app.models  # noqa: F401 — populate Base.metadata before any query runs
 from app.core.database import AsyncSessionLocal
 from app.core.security import PLATFORM_TENANT_ID, hash_password
-from app.models.geofence import GEOFENCE_KIND_REGION, GEOFENCE_KIND_TOLL, Geofence
+from app.models.geofence import GEOFENCE_KIND_REGION, Geofence
 from app.models.tariffs import Tariff
 from app.models.tenant import Tenant
 from app.models.user import ROLE_DRIVER, ROLE_OWNER, User
@@ -52,9 +58,10 @@ DEMO_DRIVER_PIN = "123456"
 PLATFORM_TENANT_NAME = "TCT"
 DEMO_TENANT_NAME = "Lilly Cabs"
 
-# NSW Fares Order 2025 (no.2), effective 3 Nov 2025 — matches the golden
-# fare-engine tests in tests/test_fare_engine_golden.py exactly.
-FARES_ORDER_EFFECTIVE_FROM = datetime(2025, 11, 3, tzinfo=UTC)
+# NSW Point to Point Transport (Fares) Order 2026, effective 1 June 2026 —
+# matches the golden fare-engine tests in tests/test_fare_engine_golden.py
+# exactly.
+FARES_ORDER_EFFECTIVE_FROM = datetime(2026, 6, 1, tzinfo=UTC)
 
 # Rate fields shared 1:1 between fare_engine.Tariff and the DB Tariff model
 # (see app.services.tariffs._FARE_ENGINE_FIELDS).
@@ -74,6 +81,7 @@ _RATE_FIELDS = (
     "multi_hire_pct",
     "psl_amount",
     "surcharge_pct_cap",
+    "cleaning_fee_cap",
 )
 
 
@@ -81,37 +89,29 @@ def _rate_kwargs(engine_tariff: fe.Tariff) -> dict[str, Decimal]:
     return {f: getattr(engine_tariff, f) for f in _RATE_FIELDS}
 
 
-# --- global (tenant_id IS NULL) reference geofences — blueprint 5.2.4/7.2.5 --
+# --- global (tenant_id IS NULL) reference geofences — blueprint 7.2.5 -------
 #
-# Coordinates are APPROXIMATE real-world landmark locations (a few hundred
-# metres of slop is expected/acceptable — this is dev/demo seed data for a
-# "near this landmark" circle check, not a survey-grade toll-gantry position),
-# hand-picked from public knowledge of each location, not from any live
-# tolling-authority feed. `toll_amount` values are similarly ILLUSTRATIVE
-# round figures for dev/demo purposes, not live Transurban/tolling-authority
-# rates — a real deployment would source both from an authoritative feed
-# before going live.
+# The 9 toll-kind entries this list used to carry for the M5 East, Sydney
+# Harbour Bridge/Tunnel, Eastern Distributor, Cross City Tunnel, Lane Cove
+# Tunnel, M2, WestConnex M4/M8, M7, and NorthConnex are SUPERSEDED, not
+# duplicated here — see `app.models.toll` / `app.services.tolls` /
+# `scripts/seed_toll_roads.py` for the real per-road, per-gantry,
+# direction-aware, quarterly-price-versioned registry that replaces them
+# (loaded by that separate idempotent script, run alongside this one), and
+# `alembic/versions/a9c1f4e7d2b8_nsw_toll_road_registry.py` for the migration
+# that deletes those 9 rows from any database that already ran the old
+# version of this script (leaving both mechanisms live at once would
+# double-charge every trip that crosses one of these 9 real roads).
+#
+# The one surviving entry below is a genuine `kind="region"` row (not
+# pricing, not superseded by anything toll-related) — coordinates are still
+# an APPROXIMATE real-world landmark location, same "near this landmark"
+# convention as before.
 GLOBAL_GEOFENCES: list[dict] = [
-    {
-        "name": "M5 East Motorway — Sydney entry (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.9333,
-        "center_lng": 151.0900,
-        "radius_m": 300,
-        "toll_amount": Decimal("3.21"),
-    },
-    {
-        "name": "Sydney Harbour Bridge / Tunnel (approx.)",
-        "kind": GEOFENCE_KIND_TOLL,
-        "center_lat": -33.8523,
-        "center_lng": 151.2108,
-        "radius_m": 400,
-        "toll_amount": Decimal("4.82"),
-    },
     {
         # A "region" example (not a toll) — the airport precinct fits blueprint
         # 7.2.5's tariff-zone use case (see app.models.trips.TRIP_TYPE_AIRPORT_FIXED)
-        # more naturally than 5.2.4's toll-detection use case.
+        # more naturally than a toll-detection use case.
         "name": "Sydney (Kingsford Smith) Airport precinct (approx.)",
         "kind": GEOFENCE_KIND_REGION,
         "center_lat": -33.9399,
@@ -268,7 +268,7 @@ async def seed() -> None:
         await get_or_create_global_reference_tariff(session, region="urban", engine_tariff=fe.URBAN_TARIFF)
         await get_or_create_global_reference_tariff(session, region="country", engine_tariff=fe.COUNTRY_TARIFF)
 
-        print("Seeding global toll/region reference geofences...")
+        print("Seeding global region reference geofence (see scripts/seed_toll_roads.py for the real toll registry)...")
         for spec in GLOBAL_GEOFENCES:
             await get_or_create_global_geofence(session, **spec)
 
