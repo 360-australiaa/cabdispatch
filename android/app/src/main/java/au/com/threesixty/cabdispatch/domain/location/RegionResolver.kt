@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.domain.location
 
 import au.com.threesixty.cabdispatch.data.remote.SydneyCbdFallback
+import au.com.threesixty.cabdispatch.domain.JurisdictionConfig
 import au.com.threesixty.cabdispatch.domain.LocationFix
 
 /**
@@ -87,6 +88,31 @@ object RegionResolver {
             // — fall back to urban, the one region every tenant always has a tariff for, rather
             // than to rural-NSW "country" which may not exist and would silently block the meter.
             distanceKm > OPERATING_FOOTPRINT_RADIUS_KM -> REGION_URBAN
+            else -> REGION_COUNTRY
+        }
+    }
+
+    /**
+     * Same resolution as [resolve], but reading its centre point and radii off a
+     * [JurisdictionConfig] instead of the hardcoded [SydneyCbdFallback]/[URBAN_RADIUS_KM]/
+     * [OPERATING_FOOTPRINT_RADIUS_KM] constants above — the X1 jurisdiction seam
+     * (`docs/plans/2026-09-08-global-meter-program.md` Wave 3) this resolver was named in as a
+     * "reads its centre/radius from config" task.
+     *
+     * Not called from anywhere yet: no call site holds a non-default [JurisdictionConfig] today
+     * (see that class's own "seam, not solution" doc), so every existing caller keeps using
+     * [resolve] above, unchanged. [JurisdictionConfig.NSW] reproduces [resolve]'s own constants
+     * exactly — [RegionResolverConfigTest] asserts the two overloads agree for every fixture case
+     * [resolve]'s own tests already cover.
+     */
+    fun resolve(lat: Double?, lng: Double?, config: JurisdictionConfig): String {
+        if (lat == null || lng == null) return REGION_URBAN
+        val distanceKm = GeoMath.distanceKm(
+            lat, lng, config.regionResolverCentreLat, config.regionResolverCentreLng
+        )
+        return when {
+            distanceKm <= config.urbanRadiusKm -> REGION_URBAN
+            distanceKm > config.operatingFootprintRadiusKm -> REGION_URBAN
             else -> REGION_COUNTRY
         }
     }

@@ -68,6 +68,24 @@ data class TariffDto(
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
     val signature: String? = null,
+    // X1 jurisdiction seam (docs/plans/2026-09-08-global-meter-program.md Wave 3): only
+    // `ApiService.activeTariff`'s response (backend's `SignedTariffRead`) ever populates this —
+    // plain tariff CRUD (`TariffRead`) doesn't carry it, same "absent on every other endpoint"
+    // shape [signature] already has above, and for the same reason: `ignoreUnknownKeys` +
+    // this nullable default make sharing one DTO across both response shapes safe. Cached
+    // "beside the tariff" for free — it round-trips through [TariffEntity.rawJson] with every
+    // other field on this DTO; see [au.com.threesixty.cabdispatch.sync.TariffCache].
+    val jurisdiction: JurisdictionDto? = null,
+)
+
+/** Mirrors `JurisdictionRead` — the resolved tenant timezone/currency/GST block
+ * `GET /v1/tariffs/active` carries alongside the tariff itself, see [TariffDto.jurisdiction]. */
+@Serializable
+data class JurisdictionDto(
+    val jurisdiction: String,
+    val timezone: String,
+    val currency: String,
+    @SerialName("gst_divisor") val gstDivisor: String? = null,
 )
 
 // ---- Toll roads (real NSW toll registry — mirrors `backend/app/schemas/toll.py` field-for-field,

@@ -1,6 +1,8 @@
 """Pydantic v2 schemas for the tenant domain's admin-PIN endpoints."""
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 # 4-8 numeric digits. Not hardcoded to exactly 6 even though it replaces the
@@ -43,6 +45,15 @@ class TenantRead(BaseModel):
     theme_json: TenantTheme | None
     plan: str
     status: str
+    # Jurisdiction seam (X1) — read-only here; nothing in this workstream
+    # makes these writable via the API (that is X2/B10's tenant-onboarding
+    # scope, per docs/plans/2026-09-08-global-meter-program.md). Every row
+    # today reads NSW/AUD/Australia-Sydney/11 via the migration's
+    # server_default — see app.models.tenant.Tenant.
+    timezone: str
+    currency: str
+    jurisdiction: str
+    gst_divisor: Decimal | None
 
 
 class TenantThemeUpdate(BaseModel):
