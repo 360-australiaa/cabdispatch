@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { FileText, Pencil, Play, Square, Trash2 } from "lucide-react";
 import {
   Badge,
@@ -19,7 +19,6 @@ import { useDeleteShiftMutation, useDriversLookupQuery, useShiftsQuery, useVehic
 import { EditShiftModal } from "./EditShiftModal";
 import { EndShiftModal } from "./EndShiftModal";
 import { formatDateTime, formatMoney, reconciledBadgeVariant, shiftStatusBadgeVariant, shiftStatusLabel } from "./format";
-import { ShiftReportModal } from "./ShiftReportModal";
 import { StartShiftModal } from "./StartShiftModal";
 import type { Shift } from "./types";
 
@@ -36,6 +35,7 @@ const RECONCILED_OPTIONS = [
 ];
 
 export default function ShiftsPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const canManage = !!user && MANAGE_ROLES.has(user.role);
 
@@ -55,7 +55,6 @@ export default function ShiftsPage() {
   const [startOpen, setStartOpen] = useState(false);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [endingShift, setEndingShift] = useState<Shift | null>(null);
-  const [reportShiftId, setReportShiftId] = useState<string | null>(null);
   const [deletingShift, setDeletingShift] = useState<Shift | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -170,8 +169,8 @@ export default function ShiftsPage() {
           <Button
             variant="ghost"
             size="icon"
-            title="View report"
-            onClick={() => setReportShiftId(row.id)}
+            title="View shift"
+            onClick={() => navigate(`/shifts/${row.id}`)}
           >
             <FileText className="h-4 w-4" />
           </Button>
@@ -288,7 +287,7 @@ export default function ShiftsPage() {
         data={shiftsQuery.data?.items ?? []}
         rowKey={(row) => row.id}
         isLoading={shiftsQuery.isLoading}
-        onRowClick={(row) => setReportShiftId(row.id)}
+        onRowClick={(row) => navigate(`/shifts/${row.id}`)}
         emptyState="No shifts match these filters."
       />
 
@@ -307,24 +306,6 @@ export default function ShiftsPage() {
       />
 
       <EndShiftModal shift={endingShift} open={endingShift != null} onClose={() => setEndingShift(null)} />
-
-      <ShiftReportModal
-        shiftId={reportShiftId}
-        onClose={() => setReportShiftId(null)}
-        onEdit={
-          canManage
-            ? () => {
-                const shift = shiftsQuery.data?.items.find((s) => s.id === reportShiftId);
-                if (shift) {
-                  setEditingShift(shift);
-                  setReportShiftId(null);
-                }
-              }
-            : undefined
-        }
-        driverLabelById={driverLabelById}
-        vehicleLabelById={vehicleLabelById}
-      />
 
       <Modal
         open={deletingShift != null}

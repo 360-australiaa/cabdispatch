@@ -384,3 +384,129 @@ export function useTripGpsTraceQuery(tripId: string | null, enabled: boolean) {
     enabled: enabled && tripId != null,
   });
 }
+
+// --- Single trip (dashboard trip-detail page) -------------------------------
+// `GET /v1/trips/{id}` -- the plain `TripRead` row, real and unfiltered by
+// tenant beyond the usual `get_current_tenant_id` scoping. `/trips/:tripId`
+// (command-centre plan §7) is the first caller that needs one trip on its
+// own rather than a page of them.
+
+export function useTripQuery(tripId: string | null) {
+  return useQuery({
+    queryKey: [TRIPS_KEY, tripId],
+    queryFn: async () => {
+      const res = await apiClient.get<Trip>(`/v1/trips/${tripId}`);
+      return res.data;
+    },
+    enabled: tripId != null,
+  });
+}
+
+// --- Payments for one trip (Trip page Payments tab) -------------------------
+// `GET /v1/payments?trip_id=` -- real server-side filter on
+// `backend/app/api/v1/payments.py::list_payments`; `method` is optional
+// there (defaults to every method), unlike `pages/payment-recon/api.ts`'s
+// `usePaymentsList`, which always pins `method` to cabcharge/ttss for that
+// page's reconciliation view specifically. This trip-scoped read wants every
+// payment row for the trip regardless of method, so it calls the endpoint
+// directly rather than routing through that narrower hook.
+
+export type TripPaymentMethod = "tap_to_pay" | "link" | "cash" | "cabcharge" | "ttss";
+export type TripPaymentStatus =
+  | "pending"
+  | "requires_action"
+  | "succeeded"
+  | "failed"
+  | "refunded"
+  | "canceled";
+
+export interface TripPayment {
+  id: string;
+  tenant_id: string;
+  trip_id: string;
+  method: TripPaymentMethod;
+  amount: string;
+  surcharge: string;
+  stripe_pi_id: string | null;
+  status: TripPaymentStatus;
+  captured_at: string | null;
+  change_given: string | null;
+  docket_number: string | null;
+  notes: string | null;
+  subsidy_amount: string | null;
+  passenger_paid_amount: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TripPaymentListResponse {
+  items: TripPayment[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export function useTripPaymentsQuery(tripId: string | null) {
+  return useQuery({
+    queryKey: [TRIPS_KEY, tripId, "payments"],
+    queryFn: async () => {
+      const res = await apiClient.get<TripPaymentListResponse>("/v1/payments", {
+        params: { trip_id: tripId, limit: 50 },
+      });
+      return res.data;
+    },
+    enabled: tripId != null,
+  });
+}
+
+// --- Receipt resend (Trip page Receipt tab) ---------------------------------
+// `POST /v1/trips/{id}/receipt/email` and `/receipt/sms` -- real, tested on
+// the backend, never called from the dashboard until now (plan §7 flags
+// exactly this gap). Both require the trip to be closed server-side (409
+// otherwise, since the fare columns the PDF renders from are only final
+// after `.../close`); both regenerate/reuse the stored receipt PDF and
+// return a `mock`/`would_send_to` shape identical to the Stripe integration's
+// own mock-fallback contract (see `app/services/receipts.py`).
+
+export interface ReceiptEmailResponse {
+  mock: boolean;
+  would_send_to?: string | null;
+  to_email?: string | null;
+  sendgrid_status_code?: number | null;
+  receipt_ref: string | null;
+  pdf_relative_path: string;
+  pdf_generated_now: boolean;
+}
+
+export interface ReceiptSmsResponse {
+  mock: boolean;
+  would_send_to?: string | null;
+  to_phone?: string | null;
+  twilio_sid?: string | null;
+  message?: string | null;
+  receipt_ref: string | null;
+  pdf_relative_path: string;
+  pdf_generated_now: boolean;
+}
+
+export function useEmailReceiptMutation() {
+  return useMutation({
+    mutationFn: async ({ tripId, toEmail }: { tripId: string; toEmail: string }) => {
+      const res = await apiClient.post<ReceiptEmailResponse>(`/v1/trips/${tripId}/receipt/email`, {
+        to_email: toEmail,
+      });
+      return res.data;
+    },
+  });
+}
+
+export function useSmsReceiptMutation() {
+  return useMutation({
+    mutationFn: async ({ tripId, toPhone }: { tripId: string; toPhone: string }) => {
+      const res = await apiClient.post<ReceiptSmsResponse>(`/v1/trips/${tripId}/receipt/sms`, {
+        to_phone: toPhone,
+      });
+      return res.data;
+    },
+  });
+}

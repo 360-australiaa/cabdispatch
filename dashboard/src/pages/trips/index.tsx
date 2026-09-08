@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Download, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
 import { EntityLink } from "@/components/EntityLink";
 import {
@@ -8,14 +8,12 @@ import {
   Card,
   CardContent,
   Input,
-  Modal,
   PageHeader,
   Select,
   Table,
   type TableColumn,
 } from "@/components/ui";
 import {
-  useDeleteTripMutation,
   useDriversLookupQuery,
   useTariffsLookupQuery,
   useTripsQuery,
@@ -24,7 +22,6 @@ import {
   type TripStatus,
   type TripType,
 } from "@/hooks/useTrips";
-import { TripDetailModal } from "./TripDetailModal";
 import { TripFormModal } from "./TripFormModal";
 import { downloadTripsCsv } from "./csv";
 import {
@@ -57,6 +54,7 @@ const FLAGGED_OPTIONS = [
 ];
 
 export default function TripsPage() {
+  const navigate = useNavigate();
   // A trip id/receipt/vehicle/driver deep link (e.g. from the new Ratings
   // page's "View trip" link) lands here as /trips?search=<value> -- read it
   // once on mount so the link actually pre-filters instead of dumping the
@@ -74,10 +72,6 @@ export default function TripsPage() {
   const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [editingTrip, setEditingTrip] = useState<Trip | null>(null);
-  const [detailTrip, setDetailTrip] = useState<Trip | null>(null);
-  const [deletingTrip, setDeletingTrip] = useState<Trip | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const tripsQuery = useTripsQuery({
     status: statusFilter || undefined,
@@ -91,7 +85,6 @@ export default function TripsPage() {
   const vehiclesQuery = useVehiclesLookupQuery();
   const driversQuery = useDriversLookupQuery();
   const tariffsQuery = useTariffsLookupQuery();
-  const deleteMutation = useDeleteTripMutation();
 
   const vehicles = vehiclesQuery.data ?? [];
   const drivers = driversQuery.data ?? [];
@@ -403,7 +396,7 @@ export default function TripsPage() {
         data={filteredTrips}
         rowKey={(row) => row.id}
         isLoading={tripsQuery.isLoading}
-        onRowClick={(row) => setDetailTrip(row)}
+        onRowClick={(row) => navigate(`/trips/${row.id}`)}
         emptyState="No trips match these filters."
         pageSize={PAGE_SIZE}
       />
@@ -416,89 +409,6 @@ export default function TripsPage() {
         drivers={drivers}
         tariffs={tariffs}
       />
-
-      <TripFormModal
-        open={editingTrip != null}
-        onClose={() => setEditingTrip(null)}
-        mode="edit"
-        trip={editingTrip ?? undefined}
-        vehicles={vehicles}
-        drivers={drivers}
-        tariffs={tariffs}
-      />
-
-      <TripDetailModal
-        open={detailTrip != null}
-        onClose={() => setDetailTrip(null)}
-        trip={detailTrip}
-        vehicleLabel={
-          detailTrip ? (vehicleLabelById.get(detailTrip.vehicle_id) ?? detailTrip.vehicle_id) : ""
-        }
-        driverLabel={
-          detailTrip ? (driverLabelById.get(detailTrip.driver_id) ?? detailTrip.driver_id) : ""
-        }
-        onEdit={() => {
-          if (detailTrip) {
-            setEditingTrip(detailTrip);
-            setDetailTrip(null);
-          }
-        }}
-        onDelete={() => {
-          if (detailTrip) {
-            setDeletingTrip(detailTrip);
-            setDetailTrip(null);
-          }
-        }}
-      />
-
-      <Modal
-        open={deletingTrip != null}
-        onClose={() => {
-          setDeletingTrip(null);
-          setDeleteError(null);
-        }}
-        title="Delete trip?"
-        description="This only works while the trip is still open — closed trips are financial records and cannot be deleted."
-        footer={
-          <>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDeletingTrip(null);
-                setDeleteError(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleteMutation.isPending}
-              onClick={async () => {
-                if (!deletingTrip) return;
-                setDeleteError(null);
-                try {
-                  await deleteMutation.mutateAsync(deletingTrip.id);
-                  setDeletingTrip(null);
-                } catch {
-                  setDeleteError(
-                    "Could not delete this trip — it may have just been closed. Refresh and try again.",
-                  );
-                }
-              }}
-            >
-              {deleteMutation.isPending ? "Deleting…" : "Delete"}
-            </Button>
-          </>
-        }
-      >
-        {deletingTrip && (
-          <p className="text-sm text-muted-foreground">
-            Trip {deletingTrip.id.slice(0, 8)} started {formatDateTime(deletingTrip.start_at)} will be
-            permanently removed.
-          </p>
-        )}
-        {deleteError && <p className="mt-2 text-sm text-destructive">{deleteError}</p>}
-      </Modal>
     </div>
   );
 }

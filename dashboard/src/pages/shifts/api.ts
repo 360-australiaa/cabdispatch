@@ -26,6 +26,21 @@ export function useShiftsQuery(filters: ShiftListFilters) {
   });
 }
 
+/** `GET /v1/shifts/{id}` -- the plain `ShiftRead` row, real and unfiltered
+ * beyond the usual tenant scoping. `/shifts/:shiftId` (command-centre plan
+ * §7) is the first caller that needs one shift on its own rather than a
+ * page of them. */
+export function useShiftQuery(shiftId: string | null) {
+  return useQuery({
+    queryKey: [SHIFTS_KEY, shiftId],
+    queryFn: async () => {
+      const res = await apiClient.get<Shift>(`/v1/shifts/${shiftId}`);
+      return res.data;
+    },
+    enabled: shiftId != null,
+  });
+}
+
 export function useShiftReportQuery(shiftId: string | null) {
   return useQuery({
     queryKey: [SHIFTS_KEY, "report", shiftId],
