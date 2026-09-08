@@ -139,6 +139,16 @@ class Device(Base, TimestampMixin, TenantScopedMixin):
     # cleared them.
     command_acked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # WHICH command that acknowledgement was for. `command_acked_at` alone
+    # cannot answer it, and once more than one command is acknowledgeable
+    # (restart, force-update, kiosk-lock -- see
+    # app.services.fleet.record_command_ack) a bare timestamp is actively
+    # misleading: an admin queuing a force-update would see the timestamp move
+    # for a restart acked an hour earlier and read it as "the update landed".
+    # NULL on rows that predate this column means "not recorded", not "never
+    # acknowledged" -- pair it with command_acked_at, which is the older field.
+    last_acked_command: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # --- device credential + pairing lifecycle -------------------------------
     #
     # SHA-256 of a secret minted at registration and handed to the tablet exactly

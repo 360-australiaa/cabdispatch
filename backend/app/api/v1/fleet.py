@@ -27,6 +27,7 @@ from app.core.security import (
     get_current_tenant_id,
     get_current_user,
     get_optional_tenant_id,
+    get_optional_token_payload,
     require_role,
 )
 from app.models.fleet import Device, Vehicle
@@ -38,6 +39,7 @@ from app.schemas.fleet import (
     DeviceHeartbeatRequest,
     DeviceRead,
     DeviceRegisterRequest,
+    DeviceRotateSecretResponse,
     DeviceUpdate,
     FleetForceWipeRequest,
     FleetForceWipeResult,
@@ -77,6 +79,41 @@ _require_admin = require_role("owner", "admin")
 _require_owner = require_role("owner")
 
 
+async def get_optional_admin(
+    payload: dict | None = Depends(get_optional_token_payload),
+    session: AsyncSession = Depends(get_session),
+) -> User | None:
+    """`_require_admin` where "no Authorization header at all" is a valid answer
+    instead of a 401 — for the one route in this file that accepts an
+    `X-Device-Secret` INSTEAD of a human token (`verify-admin-pin`).
+
+    It weakens nothing: a header that IS present is validated and role-checked
+    exactly as strictly as `_require_admin`, so a driver token still gets a 403
+    rather than being downgraded to "anonymous". Only the total absence of a
+    token becomes expressible, and the route itself must then find another
+    credential or refuse.
+    """
+    if payload is None:
+        return None
+
+    user_id = payload.get("sub")
+    user = None
+    if user_id:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Requires one of roles: owner, admin"
+        )
+    return user
+
+
 def _fleet_error_to_http(exc: fleet_service.FleetError) -> HTTPException:
     if isinstance(exc, fleet_service.VehicleNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
@@ -103,9 +140,26 @@ async def list_vehicles(
     status_filter: str | None = Query(default=None, alias="status"),
     vehicle_class: str | None = Query(default=None),
     rego: str | None = Query(default=None, description="Case-insensitive partial match"),
+    rego_exact: str | None = Query(
+        default=None,
+        description="Exact rego match (case-insensitive). Returns 0 or 1 vehicle.",
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
+    """`rego_exact` is the meter's rego→UUID resolver and exists because this
+    list is capped at 100 (backend audit §3 G6).
+
+    `ApiService.listVehicles(limit = 100)` walks the whole page looking for one
+    rego and has no paging loop, so on a tenant with a 101st vehicle that lookup
+    silently fails for whoever sorts last — the meter simply cannot find its own
+    car. The pre-existing `rego` filter is a case-insensitive PARTIAL match
+    built for a dashboard search box; it cannot serve as a resolver because
+    "AB12" also matches "AB123", so the client would still have to disambiguate.
+    `rego_exact` is a separate parameter rather than a change to `rego` on
+    purpose: tightening `rego` would break that search box, and the two have
+    genuinely different jobs. Both may be supplied; they simply AND together.
+    """
     stmt = select(Vehicle).where(Vehicle.tenant_id == tenant_id)
     count_stmt = select(func.count()).select_from(Vehicle).where(Vehicle.tenant_id == tenant_id)
 
@@ -119,6 +173,13 @@ async def list_vehicles(
         pattern = f"%{rego.upper()}%"
         stmt = stmt.where(Vehicle.rego.like(pattern))
         count_stmt = count_stmt.where(Vehicle.rego.like(pattern))
+    if rego_exact is not None:
+        # Regos are stored upper-cased (see VehicleBase's validator), so
+        # upper-casing the input is the whole of the case-insensitivity and
+        # keeps this an index-usable equality rather than a function call on the
+        # column.
+        stmt = stmt.where(Vehicle.rego == rego_exact.upper())
+        count_stmt = count_stmt.where(Vehicle.rego == rego_exact.upper())
 
     total = (await session.execute(count_stmt)).scalar_one()
     result = await session.execute(stmt.order_by(Vehicle.rego).offset(skip).limit(limit))
@@ -464,6 +525,44 @@ async def create_device(
     return device
 
 
+@router.get("/devices/me", response_model=DeviceRead)
+async def get_own_device(
+    x_device_secret: str = Header(alias="X-Device-Secret"),
+    session: AsyncSession = Depends(get_session),
+):
+    """A tablet reading its OWN row, authenticated by nothing but its device
+    secret — chiefly to answer "which vehicle am I bound to?".
+
+    Both existing device-reading routes (`GET /devices` and
+    `GET /devices/{id}`) are bearer-only, so a parked, logged-off tablet holding
+    a stale vehicle binding could not correct itself until a human signed in
+    (backend audit §3 G5) — and that is precisely the tablet an operator is
+    trying to straighten out. The binding also goes stale without anyone doing
+    anything wrong: deleting a vehicle nulls `Device.vehicle_id`
+    (`fleet_service.unlink_devices_from_vehicle`) while the tablet keeps its
+    old `vehicleUuid` indefinitely.
+
+    **Declared above `GET /devices/{device_id}` deliberately.** FastAPI matches
+    routes in declaration order, so with the parameterised route first, `me`
+    would be swallowed as a device id and answered with a 404 from a bearer-only
+    handler. Do not reorder these two.
+
+    `X-Device-Secret` is REQUIRED here — no bearer fallback, unlike the
+    heartbeat. There is no device id in this URL, so a bearer token alone could
+    not identify a row to return; a tablet old enough to have no secret has
+    `GET /devices/{id}` and its own stored id. 401 on an unknown or revoked
+    secret, never 404: with no id in the request there is nothing for a 404 to
+    be "not found" about, and a distinct answer would confirm which secrets
+    exist.
+    """
+    try:
+        return await fleet_service.authenticate_device_by_secret(session, secret=x_device_secret)
+    except fleet_service.DeviceAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+        ) from exc
+
+
 @router.get("/devices/{device_id}", response_model=DeviceRead)
 async def get_device(
     device_id: str,
@@ -571,6 +670,53 @@ async def register_device(
     return response
 
 
+@router.post("/devices/{device_id}/rotate-secret", response_model=DeviceRotateSecretResponse)
+async def rotate_device_secret(
+    device_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    admin: User = Depends(_require_admin),
+):
+    """Admin-only. Mints a fresh device secret, invalidating the old one, and
+    returns it in plaintext exactly once — the second and last route in this
+    system that ever does (the other is `POST /devices/register`).
+
+    Before this, `fleet_service.mint_device_secret` had a single call site,
+    `register_device`, so a device secret was immortal: the only way to change
+    one was to physically visit the tablet with a fresh pairing code (backend
+    audit §3 G2). The duress hardware in this same codebase has had
+    `POST /duress-devices/{id}/rotate-secret` since it landed — the asymmetry
+    was an oversight, not a decision.
+
+    Rotation is NOT a re-pair, and the difference is the point: `vehicle_id`,
+    `paired_at` and `revoked_at` are untouched. This says "the credential on
+    this tablet may have leaked", not "this tablet moved car". It is also not a
+    substitute for revocation — a rotated secret leaves the device active, so a
+    genuinely lost tablet wants `PATCH /devices/{id}` with `revoked: true`.
+
+    Refuses on a revoked device: handing a working credential to a tablet an
+    operator has deliberately retired would quietly un-revoke it in every
+    practical sense while the dashboard still showed it as retired.
+    """
+    try:
+        device = await fleet_service.get_active_device_or_404(
+            session, tenant_id=tenant_id, device_id=device_id
+        )
+    except fleet_service.FleetError as exc:
+        raise _fleet_error_to_http(exc) from exc
+
+    device, secret = await fleet_service.rotate_device_secret(
+        session, device, actor_user_id=admin.id
+    )
+
+    # Same one-shot handover as register_device: set on the response object, not
+    # the ORM row -- device_secret is not a column.
+    response = DeviceRotateSecretResponse.model_validate(
+        {**DeviceRead.model_validate(device).model_dump(), "device_secret": secret}
+    )
+    return response
+
+
 async def _authenticate_device_or_bearer(
     session: AsyncSession,
     *,
@@ -601,7 +747,15 @@ async def _authenticate_device_or_bearer(
             raise _fleet_error_to_http(exc) from exc
     if tenant_id is not None:
         try:
-            return await fleet_service.get_device_or_404(
+            # `get_ACTIVE_device_or_404`, not `get_device_or_404`. This branch
+            # used the latter, which does not look at `revoked_at` -- so
+            # revoking a tablet stopped only its device-secret calls, and a
+            # revoked, lost or stolen tablet with any valid human token on it
+            # went right on heartbeating, answering locates and acknowledging
+            # commands (backend audit §3 G3). Cutting a tablet off is the whole
+            # purpose of the revoke button, and it had a hole in it exactly the
+            # size of one driver login.
+            return await fleet_service.get_active_device_or_404(
                 session, tenant_id=tenant_id, device_id=device_id
             )
         except fleet_service.FleetError as exc:
@@ -799,8 +953,9 @@ async def set_device_reboot(
 async def verify_device_admin_pin(
     device_id: str,
     payload: VerifyAdminPinRequest,
-    user: User = Depends(_require_admin),
-    tenant_id: str = Depends(get_current_tenant_id),
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    user: User | None = Depends(get_optional_admin),
+    tenant_id: str | None = Depends(get_optional_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """What a device calls before doing something destructive locally (e.g.
@@ -818,11 +973,19 @@ async def verify_device_admin_pin(
     could query in a loop until the tenant's admin PIN fell out (backend audit
     §5). It is now `owner|admin` only.
 
-    Consequence for the tablet's factory-reset flow, stated plainly rather than
-    papered over: that flow runs on a driver token today and will now get a 403.
-    The intended replacement is device-secret authentication
-    (`X-Device-Secret`), whose general mechanism is a separate workstream; until
-    that lands, an owner/admin token is required for this route.
+    ✅ DEVICE-SECRET PATH (this is the replacement the note above promised).
+    The tablet's factory-reset flow ran on a driver token, which the role gate
+    correctly started refusing — and the right answer was never "give the tablet
+    an admin token", which would hand every tablet in the fleet the power to
+    administer the tenant. A tablet presenting a valid `X-Device-Secret`
+    authenticates AS ITSELF: the tenant comes off its own row, so it can only
+    ever check a PIN against the tenant it is enrolled in, and revoking the
+    tablet closes this route to it along with everything else. No human token is
+    involved in a factory reset any more.
+
+    Exactly one of the two credentials is required. A device secret is checked
+    first because it is the specific one; a bearer token still needs `owner` or
+    `admin`, and a caller offering neither gets a 401.
 
     ⚠ RATE LIMIT + LOCKOUT. Keyed on the authenticated user (not the IP): the
     threat is a valid token grinding the PIN, and that token moves between IPs
@@ -836,7 +999,34 @@ async def verify_device_admin_pin(
     accompanied by `valid=False`, but callers must check `configured`
     explicitly rather than inferring "not configured" from `valid=False`
     alone — that would be indistinguishable from "PIN set, but wrong"."""
-    if peek_exhausted(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", user.id):
+    device: Device | None = None
+    if x_device_secret:
+        try:
+            device = await fleet_service.authenticate_device(
+                session, device_id=device_id, secret=x_device_secret
+            )
+        except fleet_service.DeviceAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+            ) from exc
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
+        tenant_id = device.tenant_id
+    elif user is None or tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint requires an X-Device-Secret header or an owner/admin bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # The rate-limit and lockout key. Keyed on whichever principal actually
+    # authenticated -- the threat is a valid credential grinding the PIN, and
+    # both kinds of credential move between IPs freely. Keying a device on its
+    # own id also means one compromised tablet cannot lock out an operator, and
+    # vice versa.
+    rate_key = f"device:{device.id}" if device is not None else user.id
+
+    if peek_exhausted(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", rate_key):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed admin PIN attempts; locked out temporarily",
@@ -845,14 +1035,15 @@ async def verify_device_admin_pin(
     enforce(
         VERIFY_ADMIN_PIN_PER_USER,
         "admin-pin",
-        user.id,
+        rate_key,
         detail="Too many admin PIN attempts",
     )
 
-    try:
-        await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
-    except fleet_service.FleetError as exc:
-        raise _fleet_error_to_http(exc) from exc
+    if device is None:
+        try:
+            await fleet_service.get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+        except fleet_service.FleetError as exc:
+            raise _fleet_error_to_http(exc) from exc
 
     try:
         tenant = await tenant_service.check_admin_pin(session, tenant_id=tenant_id)
@@ -861,7 +1052,7 @@ async def verify_device_admin_pin(
 
     configured, valid = tenant_service.verify_admin_pin(tenant, pin=payload.pin)
     if not valid:
-        register_failure(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", user.id)
+        register_failure(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", rate_key)
     return VerifyAdminPinResponse(valid=valid, configured=configured)
 
 

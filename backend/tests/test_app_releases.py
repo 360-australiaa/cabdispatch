@@ -178,3 +178,78 @@ async def test_list_app_releases_reflects_unpublish(client, session):
     assert listed["is_active"] is False
 
 
+
+
+# ==============================================================================
+# B5 · OTA with nobody logged in (backend audit §3, G5's app-releases half)
+# ==============================================================================
+
+
+async def _paired_device_secret(client, session, *, tenant_name, rego, android_id):
+    """A really-enrolled device's secret. Mirrors tests/test_fleet.py's own
+    `_paired_device` rather than cross-importing it, matching this codebase's
+    per-test-file-owns-its-helpers convention."""
+    headers = await auth_headers(client, session, role="admin", tenant_name=tenant_name)
+    vehicle_id = (
+        await client.post(
+            "/v1/fleet/vehicles",
+            json={"rego": rego, "vehicle_class": "standard"},
+            headers=headers,
+        )
+    ).json()["id"]
+    code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+    ).json()["code"]
+    registered = (
+        await client.post(
+            "/v1/fleet/devices/register",
+            json={"android_id": android_id, "pairing_code": code},
+        )
+    ).json()
+    return headers, registered["id"], registered["device_secret"]
+
+
+async def test_a_device_secret_can_check_for_and_fetch_an_update(client, session):
+    """OTA self-update is the one thing a tablet most needs to do with nobody
+    logged into it. `AppUpdateChecker.kt` polled these routes on whatever human
+    token happened to be around, so a tablet sitting logged-off -- the one most
+    likely to be running an old build -- could not update at all, and a tablet
+    stuck on a build too old to log in could never recover over the air."""
+    owner_headers = await _platform_owner_headers(client, session)
+    content = b"ota-apk-bytes"
+    published = await _publish_release(
+        client, owner_headers, version_code=900, version_name="9.0.0", content=content
+    )
+    release_id = published.json()["id"]
+
+    _headers, device_id, secret = await _paired_device_secret(
+        client, session, tenant_name="OTA Tenant", rego="OT-001", android_id="android-ot-1"
+    )
+    device_headers = {"X-Device-Secret": secret}
+
+    latest = await client.get("/v1/app-releases/latest", headers=device_headers)
+    assert latest.status_code == 200
+    assert latest.json()["version_code"] == 900
+
+    download = await client.get(
+        f"/v1/app-releases/{release_id}/download", headers=device_headers
+    )
+    assert download.status_code == 200
+    assert download.content == content
+
+    # A wrong secret does not fall through to "anonymous" -- it is refused.
+    assert (
+        await client.get("/v1/app-releases/latest", headers={"X-Device-Secret": "nope"})
+    ).status_code == 401
+
+    # And retiring a tablet cuts off its updates along with everything else.
+    admin_headers = _headers
+    await client.patch(
+        f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=admin_headers
+    )
+    assert (
+        await client.get("/v1/app-releases/latest", headers=device_headers)
+    ).status_code == 401
+    assert (
+        await client.get(f"/v1/app-releases/{release_id}/download", headers=device_headers)
+    ).status_code == 401
