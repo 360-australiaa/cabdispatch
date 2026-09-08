@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,6 +45,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -61,6 +64,8 @@ import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.color
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Space
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.rememberInfiniteFloat
 
 /**
@@ -103,24 +108,44 @@ private sealed interface RailAction {
  * active-fare pane when a trip is active"). A plain function (not a `val`) since this genuinely
  * varies per composition rather than being a fixed table.
  */
-private fun railItems(hasActiveTrip: Boolean) = listOf(
-    RailItem(Icons.Rounded.Home, "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)),
-    RailItem(Icons.Rounded.Receipt, "TRIPS", RailAction.ToPane(CaptainPane.TRIPS)),
-    RailItem(Icons.Rounded.SwapHoriz, "DISPATCH", RailAction.ToPane(CaptainPane.DISPATCH)),
-    RailItem(Icons.Rounded.Speed, "METER", RailAction.ToPane(if (hasActiveTrip) CaptainPane.METER else CaptainPane.DASHBOARD)),
-    RailItem(Icons.Rounded.SsidChart, "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)),
-    RailItem(Icons.Rounded.History, "HISTORY", RailAction.ToPane(CaptainPane.SHIFT)),
-    RailItem(Icons.Rounded.LocationOn, "ZONES", RailAction.ToPane(CaptainPane.ZONES)),
-    RailItem(Icons.Rounded.Sell, "PRICING", RailAction.ToPane(CaptainPane.PRICING)),
-    RailItem(Icons.Rounded.ConfirmationNumber, "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)),
-    RailItem(Icons.Rounded.Person, "DRIVER", RailAction.OpenProfile),
-    RailItem(Icons.Rounded.SettingsSuggest, "SETTINGS", RailAction.OpenSettings),
+private fun railItems(hasActiveTrip: Boolean) = buildList {
+    add(RailItem(Icons.Rounded.Home, "DASHBOARD", RailAction.ToPane(CaptainPane.DASHBOARD)))
+    // THE TWO LABELS WERE SWAPPED (A3, 2026-09-08) - each pointed at the other one's content:
+    //
+    //   old "TRIPS"   -> CaptainPane.TRIPS -> TripsWheelContent(variant = HISTORY)  = trip history
+    //   old "HISTORY" -> CaptainPane.SHIFT -> ShiftWheelContent                     = shift summary
+    //
+    // So a driver looking for their completed trips had to tap TRIPS, while HISTORY gave them a
+    // shift report. Fixed by renaming the labels to match the panes they actually open, rather
+    // than by re-pointing the panes: the panes themselves are correct and are reached from other
+    // places too (TripsWheelContent's own onShiftReportClick jumps to SHIFT), so moving the
+    // destinations would have broken those instead.
+    add(RailItem(Icons.Rounded.History, "HISTORY", RailAction.ToPane(CaptainPane.TRIPS)))
+    add(RailItem(Icons.Rounded.SwapHoriz, "DISPATCH", RailAction.ToPane(CaptainPane.DISPATCH)))
+    // METER IS NO LONGER AN ALIAS (A3). It used to point at CaptainPane.DASHBOARD whenever no fare
+    // was open, which made tapping it do nothing visible; worse, the selection resolver below
+    // picks the FIRST item matching the current pane, so DASHBOARD always won the highlight and
+    // METER could never appear selected. The item looked permanently broken.
+    //
+    // Now it simply is not in the list unless a fare is genuinely running - at which point it
+    // appears, glowing, as the one thing the driver needs. Nothing is lost: with no fare open
+    // there was never anywhere for it to go.
+    if (hasActiveTrip) {
+        add(RailItem(Icons.Rounded.Speed, "METER", RailAction.ToPane(CaptainPane.METER)))
+    }
+    add(RailItem(Icons.Rounded.SsidChart, "EARNINGS", RailAction.ToPane(CaptainPane.EARNINGS)))
+    add(RailItem(Icons.Rounded.Receipt, "SHIFT", RailAction.ToPane(CaptainPane.SHIFT)))
+    add(RailItem(Icons.Rounded.LocationOn, "ZONES", RailAction.ToPane(CaptainPane.ZONES)))
+    add(RailItem(Icons.Rounded.Sell, "PRICING", RailAction.ToPane(CaptainPane.PRICING)))
+    add(RailItem(Icons.Rounded.ConfirmationNumber, "VOUCHERS", RailAction.ToPane(CaptainPane.VOUCHERS)))
+    add(RailItem(Icons.Rounded.Person, "DRIVER", RailAction.OpenProfile))
+    add(RailItem(Icons.Rounded.SettingsSuggest, "SETTINGS", RailAction.OpenSettings))
     // Messages, Live map and Log off used to live only in the flyout that was deleted. The one
     // rail now carries every real destination (it scrolls), so nothing working is stranded.
-    RailItem(Icons.Rounded.Mail, "MESSAGES", RailAction.ToPane(CaptainPane.MESSAGES)),
-    RailItem(Icons.Rounded.Map, "MAP", RailAction.ToPane(CaptainPane.MAP)),
-    RailItem(Icons.AutoMirrored.Rounded.Logout, "LOG OUT", RailAction.LogOff),
-)
+    add(RailItem(Icons.Rounded.Mail, "MESSAGES", RailAction.ToPane(CaptainPane.MESSAGES)))
+    add(RailItem(Icons.Rounded.Map, "MAP", RailAction.ToPane(CaptainPane.MAP)))
+    add(RailItem(Icons.AutoMirrored.Rounded.Logout, "LOG OUT", RailAction.LogOff))
+}
 
 /**
  * [dispatchOfferCount] is the size of the live pending-offer list
@@ -180,16 +205,18 @@ internal fun CaptainNavRail(
     // CaptainPane.METER (distinct from DASHBOARD's), so both light up correctly on their own pane.
     val items = railItems(hasActiveTrip)
     val activeIndex = items.indexOfFirst { (it.action as? RailAction.ToPane)?.pane == pane }
+    val scrollState = rememberScrollState()
     GlassCard(modifier = modifier.width(RAIL_WIDTH), cornerRadiusDp = 22) {
+      Box {
         // Scrollable — with 14 real destinations at a legible touch-target size the list runs
         // taller than the rail's real available height (measured live on the SM-T575: an
         // un-scrollable Column here silently clipped everything from HISTORY down).
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = 12.dp, horizontal = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .verticalScroll(scrollState)
+                .padding(vertical = Space.smd, horizontal = Space.sm),
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // Say WHY the menu is unresponsive, not just that it is.
@@ -207,10 +234,13 @@ internal fun CaptainNavRail(
             if (hasActiveTrip) {
                 Text(
                     "FARE RUNNING\nMeter + Settings only",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 9.sp,
-                    lineHeight = 12.sp,
+                    // 9sp -> 12sp (A3). This was the smallest text in the entire app, on the one
+                    // message whose whole purpose is to explain to a confused driver why the menu
+                    // has stopped responding - reported from the tablet as "why can't I see
+                    // settings, all menu is locked?". A 9sp explanation of a lock is barely an
+                    // explanation.
+                    style = Type.tiny,
+                    lineHeight = 15.sp,
                     letterSpacing = 0.4.sp,
                     textAlign = TextAlign.Center,
                     color = CaptainPalette.warning,
@@ -235,6 +265,32 @@ internal fun CaptainNavRail(
                 )
             }
         }
+        // SCROLL AFFORDANCE (A3, 2026-09-08).
+        //
+        // The rail scrolls - it has done since it absorbed the deleted flyout's destinations - but
+        // nothing ever said so. With 13 destinations at a legible touch-target size the list runs
+        // roughly 940dp against ~590dp of rail, so about five items sat permanently below the
+        // fold with no scrollbar, no peek and no indicator of any kind. The audit's finding: six
+        // destinations were "effectively hidden". A driver has no reason to try dragging a menu
+        // that gives every appearance of being complete.
+        //
+        // A soft fade over the bottom edge, shown only while there is actually more to reach
+        // (`canScrollForward`), and gone once the driver hits the end. Static gradient, no
+        // animation. Not hit-testable, so it never eats a tap meant for the last visible tile.
+        if (scrollState.canScrollForward) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, CaptainPalette.hudBg.copy(alpha = 0.92f)),
+                        ),
+                    ),
+            )
+        }
+      }
     }
 }
 
@@ -270,6 +326,16 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
         label = "rail-fg",
     )
     val fill by animateColorAsState(if (selected) CaptainPalette.hudAccent.copy(alpha = 0.24f) else Color.Transparent, label = "rail-fill")
+    // SANCTIONED LOOP 3 OF 3 (A3 motion pass), plus the selection halo.
+    //
+    // `live` is METER while a fare is genuinely running, and that one is the important survivor:
+    // it is how a driver on any other pane can tell at a glance that a meter is still accruing.
+    // A loop that means "money is currently being counted" is information, not decoration.
+    //
+    // `selected` also breathes, which means exactly one tile is always animating. That is a
+    // deliberate, bounded exception rather than an oversight: it is a single small halo on the
+    // item the driver themselves just chose, and it is the app's only remaining "you are here"
+    // affordance now that the METER alias no longer double-highlights.
     val breathe by rememberInfiniteFloat(enabled = selected || live, from = 0.45f, to = 1f, durationMs = 1300)
     val halo = when {
         selected -> CaptainPalette.hudAccent
@@ -280,8 +346,10 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
     val lockedAlpha by animateFloatAsState(if (locked) 0.35f else 1f, label = "rail-locked-alpha")
     Box(
         modifier = Modifier
-            .width(96.dp)
-            .height(72.dp)
+            // 96x72 -> 88x68 (A3), inside a 116 -> 104dp rail. Still far above the 48dp minimum;
+            // the 4dp per tile buys back enough vertical room for two more items to clear the fold.
+            .width(88.dp)
+            .heightIn(min = 68.dp)
             .scale(scale)
             .alpha(lockedAlpha)
             .then(if (halo != null) Modifier.neonGlow(halo, 16.dp, strength = breathe) else Modifier)
@@ -293,7 +361,9 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box {
-                Icon(item.icon, contentDescription = null, tint = fg, modifier = Modifier.size(26.dp))
+                // A3 a11y pass: all 14 rail icons were contentDescription = null. The label is
+                // right there in the tile, so it is also the correct spoken name.
+                Icon(item.icon, contentDescription = item.label, tint = fg, modifier = Modifier.size(24.dp))
                 if (badge != null) {
                     Box(
                         modifier = Modifier
@@ -309,7 +379,7 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
                             if (badge > 9) "9+" else badge.toString(),
                             fontFamily = InterFamily,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             color = CaptainPalette.onAccent,
                         )
                     }
@@ -317,13 +387,12 @@ private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boole
             }
             Text(
                 item.label,
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 11.sp,
+                // 11sp -> 12sp (A3, Type.tiny - the floor).
+                style = Type.tiny,
                 letterSpacing = 1.sp,
                 color = fg,
                 maxLines = 1,
-                modifier = Modifier.padding(top = 6.dp),
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
     }

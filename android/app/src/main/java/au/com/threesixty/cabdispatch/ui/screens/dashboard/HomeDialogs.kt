@@ -73,7 +73,7 @@ internal fun VoucherInfoDialog(onDismiss: () -> Unit) {
                 .padding(28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Vouchers", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
+            Text("Vouchers", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
             // Updated for Phase G (`squishy-herding-iverson.md`): a real voucher-ledger browse
             // screen now exists (the nav rail's VOUCHERS item -> VouchersPaneContent), so this
             // quick-action tile's copy no longer claims "no voucher wallet at all" — it still
@@ -83,7 +83,7 @@ internal fun VoucherInfoDialog(onDismiss: () -> Unit) {
                 "Browse available/used/expired vouchers from the VOUCHERS tab in the side menu. A " +
                     "voucher code is redeemed at the end of the trip, during payment.",
                 fontFamily = InterFamily,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 color = CaptainPalette.textSecondary,
             )
             CaptainButton(text = "Got it", onClick = onDismiss, modifier = Modifier.fillMaxWidth())
@@ -126,13 +126,13 @@ internal fun DriverIdCard(
                 session?.driverName ?: "No driver signed in",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 34.sp,
+                fontSize = 32.sp,
                 color = CaptainPalette.textPrimary,
             )
             Text(
                 session?.let { "DRIVER # ${it.driverId.take(8).uppercase()} · VEHICLE ${it.vehicleId}" } ?: "—",
                 fontFamily = RobotoMonoFamily,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 color = CaptainPalette.textSecondary,
             )
             if (verified == true) {
@@ -174,7 +174,7 @@ internal fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Set price — fixed fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
+            Text("Set price — fixed fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
             Text(
                 // 2026-09 product correction: this used to read "Levies and GST still apply on
                 // top" — no longer true. A negotiated/fixed price is now all-inclusive (see
@@ -193,7 +193,7 @@ internal fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit
                     text = if (amount.isEmpty()) "$0" else "$" + amount,
                     fontFamily = au.com.threesixty.cabdispatch.ui.theme.ChakraPetch,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 44.sp,
+                    fontSize = 32.sp,
                     color = CaptainPalette.success,
                 )
             }
@@ -263,7 +263,7 @@ internal fun TripDetailsDialog(
                 .padding(32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Text("Before you start the meter", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
+            Text("Before you start the meter", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
             Text(
                 "Passenger count is the main thing that turns on the maxi (×1.5) rate — a quick, honest check before you drive off.",
                 fontFamily = InterFamily,
@@ -273,7 +273,7 @@ internal fun TripDetailsDialog(
 
             // --- Passenger count stepper (big, elderly-friendly touch targets) ---
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("PASSENGERS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+                Text("PASSENGERS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     StepperButton(label = "−", enabled = passengerCount > 1, onClick = { passengerCount = (passengerCount - 1).coerceIn(1, 11) })
                     Box(
@@ -284,7 +284,7 @@ internal fun TripDetailsDialog(
                             passengerCount.toString(),
                             fontFamily = au.com.threesixty.cabdispatch.ui.theme.ChakraPetch,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 40.sp,
+                            fontSize = 32.sp,
                             color = CaptainPalette.textPrimary,
                         )
                     }

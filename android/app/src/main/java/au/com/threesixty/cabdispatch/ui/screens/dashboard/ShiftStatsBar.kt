@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,7 +45,13 @@ import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.color
 import au.com.threesixty.cabdispatch.ui.theme.hudSpring
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
+import androidx.compose.foundation.layout.ColumnScope
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Radius
+import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
+import au.com.threesixty.cabdispatch.ui.theme.Space
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.PulsingDot
 import java.math.RoundingMode
 import java.time.Duration
@@ -70,7 +77,10 @@ import java.util.Locale
 
 /** Bar-cell value size: 32sp (the kit's 24sp default is a card size; this bar is read at arm's
  * length by an older driver population — see this file's class doc). */
-private val STATS_VALUE_SIZE = 32.sp
+/** 32sp -> 28sp (A3, matching [Type.numeral]) for the 152dp -> 120dp bar. Still read at arm's
+ * length by an older driver population - see this file's class doc - just no longer sized for a
+ * bar that is 32dp taller than it now is. */
+private val STATS_VALUE_SIZE = 28.sp
 
 @Composable
 internal fun ShiftStatsBar(
@@ -96,34 +106,67 @@ internal fun ShiftStatsBar(
     val pctChange = extras.earningsPctChange
 
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        HudStatTile(
+        HomeStatTile(
             icon = Icons.Rounded.Schedule,
             label = "Shift time",
-            value = elapsedLabel ?: "—",
             sub = state.session?.shiftStartAt?.let { "Started ${formatClockTime(it)}" } ?: "No active shift",
-            valueFontSize = STATS_VALUE_SIZE,
             modifier = Modifier.weight(1f).fillMaxHeight(),
+            value = {
+                Text(elapsedLabel ?: "—", style = Type.numeral, color = CaptainPalette.textPrimary, maxLines = 1)
+            },
             footer = { ShiftProgressBar(fraction = elapsedFraction) },
         )
-        HudStatTile(
+        // A one-shot pop the moment the count actually increments (A3) - the trip a driver just
+        // finished should register as an event, not as a digit that quietly became a different
+        // digit. Keyed on the value, so it costs nothing and animates nothing until one changes.
+        val tripsPop = rememberValueChangePop(state.todayStats.tripsCount)
+        HomeStatTile(
             icon = Icons.Rounded.DirectionsCar,
             label = "Trips",
-            value = state.todayStats.tripsCount.toString(),
             sub = "Completed",
             tone = HudTone.Success,
-            valueFontSize = STATS_VALUE_SIZE,
             modifier = Modifier.weight(1f).fillMaxHeight(),
+            value = {
+                Text(
+                    state.todayStats.tripsCount.toString(),
+                    style = Type.numeral,
+                    color = CaptainPalette.textPrimary,
+                    maxLines = 1,
+                    modifier = tripsPop,
+                )
+            },
             footer = if (activeTrips != null) { { ActiveTripsPill(active = activeTrips) } } else null,
         )
-        HudStatTile(
+        // EARNINGS gets the physics treatment (A3): the money figure rolls per-digit through
+        // RollingMoneyText - the same primitive the live meter already uses for the fare - instead
+        // of silently swapping. A completed trip should visibly LAND on the number it changed.
+        // Value-driven, one shot, still the instant it stops.
+        val earnings = "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString()
+        HomeStatTile(
             icon = Icons.Rounded.AttachMoney,
             label = "Earnings",
-            value = "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString(),
             sub = "Today",
             tone = HudTone.Success,
-            valueFontSize = STATS_VALUE_SIZE,
             modifier = Modifier.weight(1f).fillMaxHeight(),
-            footer = if (pctChange != null) { { EarningsDelta(pct = pctChange) } } else null,
+            value = {
+                RollingMoneyText(amount = earnings, fontSize = STATS_VALUE_SIZE, color = CaptainPalette.textPrimary)
+            },
+            // SUPPRESSED BEFORE THE FIRST FARE OF THE DAY (A3).
+            //
+            // "-100% vs yesterday" is what a driver saw at 09:00 with no trips yet against any
+            // non-zero yesterday. It is arithmetically true, entirely useless, and actively
+            // demoralising at the exact moment of the shift when it can only discourage. The
+            // comparison is real and stays for the rest of the day; it simply does not run before
+            // there is anything to compare.
+            footer = when {
+                state.todayStats.tripsCount == 0 -> {
+                    { Text("First trip of the day", style = Type.tiny, color = CaptainPalette.textSecondary, modifier = Modifier.padding(top = 6.dp)) }
+                }
+                pctChange != null -> {
+                    { EarningsDelta(pct = pctChange) }
+                }
+                else -> null
+            },
         )
         NextBreakTile(
             remaining = remaining,
@@ -134,6 +177,73 @@ internal fun ShiftStatsBar(
             onTakeBreak = onTakeBreak,
             modifier = Modifier.weight(1.55f).fillMaxHeight(),
         )
+    }
+}
+
+/**
+ * The stat-bar cell (A3, 2026-09-08) - [au.com.threesixty.cabdispatch.ui.theme.HudStatTile] with
+ * the value as a **slot** rather than a `String`.
+ *
+ * WHY THIS IS NOT JUST A CHANGE TO HudStatTile. It should be, and eventually it will be: the only
+ * difference is `value: @Composable () -> Unit` in place of `value: String`, which is a strictly
+ * additive, backwards-compatible improvement to the shared kit. But `ui/theme/Hud.kt` is owned by
+ * workstream A4 for this wave, and the program's operating rules are explicit that a workstream
+ * does not edit another's files - so this pass takes the local copy and flags the upstream in its
+ * report rather than reaching across the boundary. **When A3 and A4 have both merged, fold this
+ * back into HudStatTile and delete it.**
+ *
+ * What the slot buys, and why it was worth a local composable at all:
+ * - EARNINGS renders through `RollingMoneyText`, so the money figure rolls per digit when a fare
+ *   closes instead of silently swapping to a different number.
+ * - TRIPS carries a one-shot scale pop (see [rememberValueChangePop]) the moment the count
+ *   increments.
+ *
+ * Both are the "physics on value changes" half of this redesign's motion brief: reactions to real
+ * state, one shot, still again the instant they finish. Neither is a loop.
+ */
+@Composable
+private fun HomeStatTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    sub: String?,
+    value: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    tone: HudTone = HudTone.Accent,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
+) {
+    val toneColor = tone.color()
+    GlassCard(modifier = modifier, cornerRadiusDp = 18) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = Space.smd, vertical = Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // A3 a11y pass: the shared tile hardcodes contentDescription = null on this
+                    // icon; here the label is available and is the correct spoken name.
+                    Icon(icon, contentDescription = label, tint = toneColor, modifier = Modifier.size(16.dp))
+                    Text(
+                        label.uppercase(),
+                        // 11sp -> 12sp (A3, Type.tiny - the floor).
+                        style = Type.tiny,
+                        letterSpacing = 1.sp,
+                        color = CaptainPalette.textMuted,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+                Box(modifier = Modifier.padding(top = 4.dp)) { value() }
+                if (sub != null) {
+                    Text(
+                        sub,
+                        style = Type.tiny,
+                        color = CaptainPalette.textSecondary,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                if (footer != null) footer()
+            }
+        }
     }
 }
 
@@ -186,9 +296,7 @@ private fun EarningsDelta(pct: Double) {
     val up = pct >= 0
     Text(
         "${if (up) "+" else "−"}${"%.0f".format(Locale.ENGLISH, kotlin.math.abs(pct))}% vs yesterday",
-        fontFamily = InterFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 12.sp,
+        style = Type.tiny,
         color = if (up) CaptainPalette.success else CaptainPalette.danger,
         modifier = Modifier.padding(top = 6.dp),
     )
@@ -231,7 +339,7 @@ internal fun NextBreakTile(
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(76.dp), contentAlignment = Alignment.Center) {
                 HudRing(progress = fraction, modifier = Modifier.fillMaxSize(), strokeWidthDp = 6)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Rounded.Coffee, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(16.dp))
@@ -251,7 +359,7 @@ internal fun NextBreakTile(
                         "NEXT BREAK",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(start = 6.dp),
@@ -261,7 +369,7 @@ internal fun NextBreakTile(
                     remaining?.let { "Break in ${formatDurationHmm(it)}" } ?: "No active shift",
                     fontFamily = ChakraPetch,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     color = if (urgent) CaptainPalette.danger else CaptainPalette.textPrimary,
                     maxLines = 1,
                     modifier = Modifier.padding(top = 4.dp),
@@ -283,7 +391,7 @@ internal fun NextBreakTile(
                             (latestFatigueKind?.let { " · ${it.replace('_', ' ')}" } ?: ""),
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = CaptainPalette.warning,
                         maxLines = 1,
                         modifier = Modifier.padding(top = 2.dp),
@@ -291,20 +399,22 @@ internal fun NextBreakTile(
                 }
                 // Honest local action, not a fabricated break schedule — see this composable's own
                 // doc. Real two-way availability toggle; claims no return time this app doesn't know.
+                // ~30dp -> 48dp (A3). This was the smallest touch target on the screen, on the
+                // one tile the whole app presents as its elderly-friendly fatigue feature.
                 Box(
                     modifier = Modifier
-                        .padding(top = 8.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .padding(top = Space.sm)
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(Radius.sm))
                         .background(CaptainPalette.hudAccent.copy(alpha = 0.22f))
-                        .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                        .gameClick(onClick = onTakeBreak, shape = RoundedCornerShape(12.dp), glowColor = CaptainPalette.hudSweepMid)
-                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                        .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.6f), RoundedCornerShape(Radius.sm))
+                        .gameClick(onClick = onTakeBreak, shape = RoundedCornerShape(Radius.sm), glowColor = CaptainPalette.hudSweepMid)
+                        .padding(horizontal = Space.smd),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         if (isAvailable) "☕ TAKE BREAK" else "▶ RESUME",
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
+                        style = Type.tiny,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.hudSweepMid,
                     )
@@ -365,12 +475,12 @@ private fun formatDurationHmm(d: Duration): String {
 private fun parseInstantOrOffset(iso: String): Instant? =
     runCatching { Instant.parse(iso) }.recoverCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
 
-@Preview(name = "Bottom bar (dark)", widthDp = 1280, heightDp = 176, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(name = "Bottom bar (dark)", widthDp = 1280, heightDp = 144, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable
 private fun PreviewShiftStatsBar() {
     CaptainPalette.applyTheme(isLight = false)
     val state = previewState()
-    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(152.dp)) {
+    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(120.dp)) {
         ShiftStatsBar(
             state = state,
             extras = HomeExtras(verified = true, earningsPctChange = 12.0, tripsActiveThisShift = 1, fatigueAlertCount = 1, latestFatigueKind = "shift_duration"),
@@ -380,12 +490,12 @@ private fun PreviewShiftStatsBar() {
     }
 }
 
-@Preview(name = "Bottom bar (light)", widthDp = 1280, heightDp = 176, backgroundColor = 0xFFF4F3F8, showBackground = true)
+@Preview(name = "Bottom bar (light)", widthDp = 1280, heightDp = 144, backgroundColor = 0xFFF4F3F8, showBackground = true)
 @Composable
 private fun PreviewShiftStatsBarLight() {
     CaptainPalette.applyTheme(isLight = true)
     val state = previewState()
-    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(152.dp)) {
+    Row(modifier = Modifier.fillMaxSize().background(CaptainPalette.hudBg).padding(12.dp).height(120.dp)) {
         ShiftStatsBar(
             state = state,
             extras = HomeExtras(verified = true, earningsPctChange = 12.0, tripsActiveThisShift = 1, fatigueAlertCount = 1, latestFatigueKind = "shift_duration"),

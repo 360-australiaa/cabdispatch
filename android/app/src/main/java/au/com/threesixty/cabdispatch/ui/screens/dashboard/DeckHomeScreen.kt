@@ -2,7 +2,9 @@ package au.com.threesixty.cabdispatch.ui.screens.dashboard
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -70,6 +73,7 @@ import au.com.threesixty.cabdispatch.ui.screens.trips.TripsWheelContent
 import au.com.threesixty.cabdispatch.ui.screens.vouchers.VouchersPaneContent
 import au.com.threesixty.cabdispatch.ui.screens.zones.ZonesPaneContent
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.color
 import au.com.threesixty.cabdispatch.ui.theme.DriverAvatar
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -178,7 +182,7 @@ import java.time.Instant
  */
 /** The rail is a narrow icon-over-label column now (mockup #3/#4), not a 232dp icon+text list:
  * 96dp tiles + 10dp side padding. Every tile is still a full 96x72dp touch target. */
-internal val RAIL_WIDTH = 116.dp
+internal val RAIL_WIDTH = 104.dp
 
 private val RAIL_GUTTER = 16.dp
 
@@ -299,6 +303,19 @@ fun DeckHomeScreen(
     // text a driver reads while driving, so legibility comes first; verified visually against every
     // panel below rather than assumed safe at a glance.
     TechGridBackdrop()
+    // Radial vignette pulling the eye toward the meter card (A3, depth-not-motion pass). A single
+    // static radial gradient darkening the canvas edges; no animation, no RenderEffect, and no
+    // pointer input, so it never intercepts a touch meant for the content above it.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(Color.Transparent, CaptainPalette.bg.copy(alpha = 0.55f)),
+                    radius = 900f,
+                ),
+            ),
+    )
     // Prominence pass (2026-09-02): two large, soft ambient glow washes behind the whole screen —
     // "lots of shades", not a single flat fill — positioned near the header and the nav rail so
     // the wash reads as ambient depth rather than a literal spotlight on one element. Plain Boxes
@@ -361,49 +378,97 @@ fun DeckHomeScreen(
             }
         }
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-        Row(modifier = Modifier.weight(1f).padding(top = 20.dp, start = 32.dp, end = 12.dp, bottom = 20.dp)) {
+        Row(modifier = Modifier.weight(1f).padding(top = Space.mlg, start = Space.xl, end = Space.smd, bottom = Space.mlg)) {
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (pane) {
                         CaptainPane.DASHBOARD -> {
-                            MeterCard(
-                                state = state,
-                                meterPhase = meterPhase,
-                                negotiatedTotal = pendingTrip?.negotiatedTotal,
-                                onStartMeter = { showTripDetails = true },
-                                onCancelStart = ::onCancelStart,
-                                onSetPrice = { showSetPrice = true },
-                                onVouchers = { showVoucherInfo = true },
-                                // 590dp -> 660dp (2026-08-29 prominence pass): grown so the bigger
-                                // dial + bigger corner tiles below have real clearance from each
-                                // other instead of visibly colliding — see MeterDial/NightFareTile/
-                                // QuickActionTile's own comments for the exact measurements.
-                                modifier = Modifier.width(660.dp).fillMaxHeight(),
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            // Driver-engagement tiles (2026-09-04, backend commit 58ccfcf): the
-                            // mockup's WALLET BALANCE / RATING / ANNOUNCEMENTS / INCENTIVE PROGRESS
-                            // now sit under the live-dispatch card in this right-hand column. On the
-                            // fixed 1280dp canvas this column is only ~316dp wide beside the 660dp
-                            // meter card, so the tiles stack vertically and the column scrolls
-                            // rather than shrinking any of them; the dispatch card keeps a fixed
-                            // height (its own LazyColumn needs bounded height inside a scroller) and
-                            // still has VIEW ALL for the full list. See EngagementTiles.kt for the
-                            // real-data / honest "Add funds" rules.
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .verticalScroll(rememberScrollState()),
-                            ) {
-                                LiveDispatchCard(
-                                    dispatchState = dispatchState,
-                                    onAccept = dispatchViewModel::acceptOffer,
-                                    onViewAll = { pane = CaptainPane.DISPATCH },
-                                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                            // A3 layout grid (2026-09-08). The whole Dashboard pane is now a
+                            // 560 / 468 two-column split on the fixed 1280x800 canvas, against the
+                            // old 660 / ~432:
+                            //
+                            //   1280 - 32 - 12 = 1236 inner
+                            //   1236 - 104 (rail) - 12 (gutter) = 1120 left region
+                            //   1120 - 560 (meter) - 16 (gap)   =  544 right column
+                            //
+                            // The 100dp the meter card gave back, plus the 12dp off the rail, is
+                            // what lets all four MY ACCOUNT tiles fit in a 2x2 grid without a
+                            // scroller - see the right column below.
+                            //
+                            // StaggerIn wraps each region: this is the "game interface" the owner
+                            // asked for, spent on ARRIVAL rather than ambience. The screen
+                            // assembles itself in ~465ms on pane entry and is then completely
+                            // static. See HomeMotion.kt for why that is the only form of
+                            // game-feel this repo's calm-motion rule permits.
+                            StaggerIn(index = 0) {
+                                MeterCard(
+                                    state = state,
+                                    meterPhase = meterPhase,
+                                    negotiatedTotal = pendingTrip?.negotiatedTotal,
+                                    onStartMeter = { showTripDetails = true },
+                                    onCancelStart = ::onCancelStart,
+                                    onSetPrice = { showSetPrice = true },
+                                    onVouchers = { showVoucherInfo = true },
+                                    // 660dp -> 560dp (A3). The old width existed to hold three
+                                    // absolutely-positioned children apart from each other; that
+                                    // layout is gone, so the width that propped it up can go too.
+                                    modifier = Modifier.width(560.dp).fillMaxHeight(),
                                 )
-                                Spacer(Modifier.height(16.dp))
-                                DriverEngagementTiles(modifier = Modifier.fillMaxWidth())
+                            }
+                            Spacer(Modifier.width(Space.md))
+                            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                // LIVE DISPATCH COLLAPSES WHEN EMPTY - the owner's loudest
+                                // complaint, verbatim: "the announcement / dispatch job section is
+                                // showing very empty. If it's empty, why we are showing it".
+                                //
+                                // The card was `.height(300.dp)`, unconditionally, so for most of
+                                // a shift a driver stared at a 300x432dp block containing one line
+                                // of grey text. Now the full card composes only when there is
+                                // something in it, and a 56dp DispatchIdleStrip stands in
+                                // otherwise - see that composable's own doc for why the answer to
+                                // "why are we showing it" is a small honest strip rather than
+                                // nothing at all.
+                                val hasOffers = dispatchState.cards.isNotEmpty()
+                                StaggerIn(index = 1) {
+                                    AnimatedVisibility(
+                                        visible = hasOffers || dispatchState.loading,
+                                        enter = fadeIn(tween(220)) + expandVertically(tween(260)),
+                                        exit = fadeOut(tween(160)) + shrinkVertically(tween(200)),
+                                    ) {
+                                        LiveDispatchCard(
+                                            dispatchState = dispatchState,
+                                            onAccept = dispatchViewModel::acceptOffer,
+                                            onViewAll = { pane = CaptainPane.DISPATCH },
+                                            // heightIn, not a fixed 300dp: the card is now as tall
+                                            // as the offers in it, bounded so a long queue cannot
+                                            // push MY ACCOUNT off the bottom.
+                                            modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 340.dp),
+                                        )
+                                    }
+                                }
+                                if (!hasOffers && !dispatchState.loading) {
+                                    StaggerIn(index = 1) {
+                                        DispatchIdleStrip(
+                                            isAvailable = state.isAvailable,
+                                            error = dispatchState.error,
+                                            onViewAll = { pane = CaptainPane.DISPATCH },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(Space.md))
+                                // MY ACCOUNT as a 2x2 grid (A3). Was a vertical stack of four
+                                // full-width tiles - roughly 700-800dp of content - inside a
+                                // ~461dp scroller with no scrollbar, no peek and no scroll
+                                // indicator of any kind. Three of the four tiles were below an
+                                // invisible fold, so in practice the driver saw WALLET and nothing
+                                // else. Directly the owner's "make the dashboard screen more
+                                // accessible with all the features": the features were all there,
+                                // they were simply unreachable.
+                                DriverEngagementTiles(
+                                    twoColumn = true,
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                )
                             }
                         }
                         CaptainPane.DISPATCH -> PaneShell("Live dispatch", onBack = { pane = CaptainPane.DASHBOARD }) {
@@ -504,33 +569,32 @@ fun DeckHomeScreen(
                 // back the moment Close & Pay actually closes the trip. Header and nav rail are
                 // untouched — the driver keeps METER/other panes and the SOS pill reachable.
                 if (pane == CaptainPane.DASHBOARD || (pane == CaptainPane.METER && !hasActiveTrip)) {
-                    Spacer(Modifier.height(18.dp))
-                    // 136dp -> 152dp (2026-09-04 HUD chrome pass): the NEXT BREAK cell now carries
-                    // the ring + "Break in" + "Working until" + the TAKE BREAK button at
-                    // arm's-length sizes, which needs the extra 16dp.
-                    Row(modifier = Modifier.height(152.dp).fillMaxWidth()) {
-                        // SystemStatusCard (GPS/network/printer/meter, bottom-right) removed
-                        // 2026-09-06 on direct driver feedback -- redundant with the header strip's
-                        // own StatusDot row (CaptainHeader, ~line 903) which already shows the same
-                        // GPS/network/printer/battery state, just persistently repeated a second
-                        // time here. ShiftStatsBar now simply fills the whole row instead of sharing
-                        // it -- weight(1f) with no sibling already stretches full-width, no extra
-                        // width math needed.
+                    Spacer(Modifier.height(Space.md))
+                    // 152dp -> 120dp, and the single-child Row wrapper is deleted (A3).
+                    //
+                    // That Row became redundant on 2026-09-06 when SystemStatusCard was removed
+                    // from beside it: a Row whose only child is `weight(1f).fillMaxHeight()` does
+                    // nothing a plain height on the child would not, and its own comment already
+                    // said as much ("no extra width math needed"). It was scaffolding held up by
+                    // a sibling that no longer exists.
+                    //
+                    // heightIn rather than height, here and throughout: at a 1.3x system font
+                    // scale a hard 120dp clips the NEXT BREAK cell's four stacked lines outright.
+                    StaggerIn(index = 2) {
                         ShiftStatsBar(
                             state = state,
                             extras = homeExtras,
                             // Real toggle (2026-09-06, matching the header pill's own
                             // onToggleAvailability): TAKE BREAK/RESUME is the same setAvailable
-                            // flip either direction, not a one-way "go on break" — see
-                            // NextBreakTile's own doc for why it now shows the state-appropriate
-                            // label instead of always "TAKE BREAK".
+                            // flip either direction, not a one-way "go on break" - see
+                            // NextBreakTile's own doc.
                             onTakeBreak = { viewModel.setAvailable(!state.isAvailable) },
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
                         )
                     }
                 }
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Space.smd))
             CaptainNavRail(
                 pane = pane,
                 hasActiveTrip = hasActiveTrip,
@@ -647,7 +711,12 @@ private fun TechGridBackdrop() {
     }
 }
 
-private const val TECH_GRID_ALPHA = 0.05f
+/** 0.05 -> 0.08 (A3). "Depth instead of motion" is how this redesign buys the game-like feel it
+ * is not allowed to buy with animation: a slightly more present grid, the GlassCard sheen and the
+ * radial vignette below all add dimensionality at exactly zero frames per second. Still far below
+ * anything that competes with the text drawn on top - every panel above it is a full opaque or
+ * glass surface, never bare text on grid. */
+private const val TECH_GRID_ALPHA = 0.08f
 
 private const val TECH_GRID_STEP_DP = 64
 
