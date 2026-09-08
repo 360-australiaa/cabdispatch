@@ -1,0 +1,50 @@
+# Root EditorConfig for the Cab Dispatch monorepo.
+#
+# Three surfaces with three toolchains (Kotlin/Gradle, Python/ruff, TypeScript/Vite) share one
+# checkout, and until now nothing declared the basics — which is how a repo ends up with mixed
+# tabs, mixed line endings and trailing whitespace that shows up as noise in every diff. IDEs and
+# most formatters read this file directly, so it is the one place that does not need a plugin.
+#
+# Line endings are LF everywhere on purpose, even though the primary development machine is
+# Windows: the build runs in Linux CI containers, `gradlew` and `entrypoint.sh` are executed as
+# shell scripts, and CRLF in those is a "bad interpreter" failure at runtime rather than a
+# cosmetic issue. Git's own core.autocrlf handles the working-copy side.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Kotlin. 4 spaces and a 120-column limit, matching the detekt configuration applied in
+# android/app/build.gradle.kts (buildUponDefaultConfig, whose MaxLineLength default is 120).
+[*.{kt,kts}]
+indent_size = 4
+max_line_length = 120
+
+# Python. ruff is configured in backend/pyproject.toml; these values mirror it so an editor
+# without the ruff plugin still produces conforming code.
+[*.py]
+indent_size = 4
+max_line_length = 120
+
+# Web. The dashboard follows the prevailing TS/JS convention of 2 spaces, not the repo default.
+[*.{ts,tsx,js,jsx,json,css,html,yml,yaml}]
+indent_size = 2
+
+# Markdown. Trailing whitespace is significant (two spaces = hard line break), so the global
+# trim rule must not apply here.
+[*.md]
+trim_trailing_whitespace = false
+
+# Generated / vendored. The Gradle wrapper script and the detekt baseline are written by tools;
+# reformatting them creates spurious diffs and, for gradlew.bat, breaks it.
+[gradlew.bat]
+end_of_line = crlf
+
+[**/detekt-baseline.xml]
+trim_trailing_whitespace = false
+insert_final_newline = false

@@ -20,26 +20,6 @@ import kotlinx.coroutines.launch
 enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
 /**
- * Debug-only quick-login convenience, see [LoginVehicleBindViewModel.quickLoginDemoDriver]. Not a
- * secret (committed to the repo, gated to debug builds only), but still gated to debug builds so
- * it never renders in a release build.
- *
- * **Fixed 2026-08-28 (was previously stale):** this used to hold the seeded demo driver's *email*
- * (`driver@lillycabs.test`), which 401s against `POST /v1/auth/driver-login` (that endpoint takes
- * `driver_code` + `pin`, not email + password) — confirmed live against the deployed server
- * (`72.61.107.107:8001`): `{"detail":"Invalid driver code or PIN"}`. Falling through to
- * [au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository]'s offline cache
- * masked the failure in the UI (login "succeeded") but left [AppContainer.accessToken] unset, so
- * every authenticated call after — starting with the tariff fetch — 401'd too and the meter could
- * never actually start via this button. Replaced with `GL2HY` / `123456`, this tenant's real seeded
- * driver code, verified live the same day (`POST /v1/auth/driver-login` → `200 OK`, real access +
- * refresh tokens issued). If a fresh `backend/scripts/seed.py` run ever mints a different code,
- * update these two constants to match its stdout output.
- */
-const val DEMO_DRIVER_ID = "GL2HY"
-const val DEMO_DRIVER_PIN = "123456"
-
-/**
  * Standard pre-shift check items, per spec B5 S1 ("pre-shift inspection
  * checklist form"). TODO(compliance agent): confirm this list against the
  * actual Compliance Dossier checklist template (spec Part C) — these are
@@ -123,22 +103,6 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     fun onDriverIdChanged(value: String) = _uiState.update { it.copy(driverIdInput = value, loginError = null) }
     fun onPinChanged(value: String) = _uiState.update { it.copy(pinInput = value, loginError = null) }
     fun onVehicleIdChanged(value: String) = _uiState.update { it.copy(vehicleIdInput = value) }
-
-    /**
-     * Debug-build convenience only (see [DEMO_DRIVER_ID]/[DEMO_DRIVER_PIN] and the button's
-     * `BuildConfig.DEBUG` gate in [LoginVehicleBindScreen]) — fills this tenant's real seeded
-     * driver credentials and submits immediately, so testing on-device doesn't mean retyping the
-     * same driver code/PIN every rebuild/reinstall.
-     */
-    fun quickLoginDemoDriver() {
-        // TEMPORARY: seed the offline-login cache so `login()` below succeeds via its existing
-        // network-failure fallback even when no backend is reachable at all (see
-        // DriverAuthRepository.seedOfflineDemoDriver's doc). Remove once a reachable backend is
-        // the normal dev/test setup.
-        driverAuthRepository.seedOfflineDemoDriver(DEMO_DRIVER_ID, DEMO_DRIVER_PIN)
-        _uiState.update { it.copy(driverIdInput = DEMO_DRIVER_ID, pinInput = DEMO_DRIVER_PIN) }
-        login()
-    }
 
     fun login() {
         val state = _uiState.value

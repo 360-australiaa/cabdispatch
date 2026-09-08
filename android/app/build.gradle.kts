@@ -5,6 +5,37 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
+    // Static analysis. Versioned here rather than in the root build file because detekt applies
+    // to this module only -- `:app` is the sole Kotlin source set in the project. 1.23.7 is the
+    // release built against Kotlin 1.9.x, matching this module's compiler; a newer detekt would
+    // parse sources with a mismatched frontend.
+    id("io.gitlab.arturbosch.detekt") version "1.23.7"
+}
+
+// Detekt runs on the existing tree with a BASELINE (detekt-baseline.xml), not with the rules
+// switched off: every finding that existed at Phase 0 is recorded there and suppressed, so CI
+// fails on *new* findings only. That is a deliberate trade -- a fresh 3,000-finding report on a
+// 40k-line codebase gets ignored by everyone, and a rule nobody reads is worse than no rule.
+// Regenerate with `./gradlew :app:detektBaseline` ONLY when deliberately accepting debt; the
+// normal way to clear an entry is to fix the code so it disappears from the report.
+detekt {
+    buildUponDefaultConfig = true
+    baseline = file("detekt-baseline.xml")
+    // Compose codebase: the generated task set would otherwise fan out per variant.
+    source.setFrom(files("src/main/java", "src/test/java"))
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    jvmTarget = "17"
+    reports {
+        html.required.set(true)
+        sarif.required.set(true)
+        md.required.set(false)
+    }
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configureEach {
+    jvmTarget = "17"
 }
 
 // Mapbox public access token (pk.*), read from local.properties (gitignored, machine-specific —
@@ -32,6 +63,17 @@ val mapboxAccessToken: String = localProperties.getProperty("MAPBOX_ACCESS_TOKEN
 // (see ApiService.kt header comment) when local.properties does not set
 // it, preserving the previous zero-config emulator behavior.
 val apiBaseUrlOverride: String = localProperties.getProperty("API_BASE_URL", "http://10.0.2.2:8001")
+
+// Release-variant backend URL. Same local.properties/env pattern as the debug override above,
+// but with no usable default: the placeholder is a tripwire, not a fallback. A release APK built
+// against `https://api.cabdispatch.example.com` would point the meter at a domain nobody owns, so
+// the `afterEvaluate` guard at the bottom of this file refuses to build the release variant while
+// this still holds the placeholder value. Resolution order: local.properties, then the
+// RELEASE_API_BASE_URL environment variable (for CI/build machines with no local.properties).
+val releaseApiBaseUrlPlaceholder = "https://api.cabdispatch.example.com"
+val releaseApiBaseUrl: String = localProperties.getProperty("RELEASE_API_BASE_URL")
+    ?: System.getenv("RELEASE_API_BASE_URL")
+    ?: releaseApiBaseUrlPlaceholder
 
 android {
     namespace = "au.com.threesixty.cabdispatch"
@@ -99,6 +141,24 @@ android {
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
     }
 
+    // Android lint. Same baseline strategy as detekt above: `lint-baseline.xml` records the
+    // findings that already existed when CI was introduced (2 errors, 42 warnings) so the gate
+    // fails on NEW findings only. The two baselined errors are real and should be fixed, but
+    // both live in files owned by other Phase 0 / Wave 1 workstreams and are listed for them:
+    //   - AndroidManifest.xml: ACCESS_FINE_LOCATION requested without ACCESS_COARSE_LOCATION
+    //     [CoarseFineLocation] -- belongs to the fare/location workstream (A1), which is already
+    //     editing the manifest for the meter foreground service.
+    //   - ui/theme/Theme.kt: a `remember` call returning Unit [RememberReturnType] -- belongs to
+    //     the Android UI cleanup workstream, which owns Theme.kt.
+    // Delete the corresponding entries from the baseline as those land; do not regenerate the
+    // whole file to paper over something new.
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        checkDependencies = true
+        warningsAsErrors = false
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -106,9 +166,12 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // TODO(sibling agent, release hardening): replace with the deployed
-            // backend URL before shipping a release build.
-            buildConfigField("String", "API_BASE_URL", "\"https://api.cabdispatch.example.com\"")
+            // The deployed backend URL for release builds. This is deliberately NOT committed:
+            // set RELEASE_API_BASE_URL in local.properties (gitignored) or in the environment on
+            // the build machine. While it is unset this stays at the placeholder below and the
+            // release build is FAILED by the guard in `afterEvaluate` at the bottom of this file
+            // -- see that block for why a placeholder must never be allowed to ship.
+            buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
         }
     }
 
@@ -249,4 +312,48 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+}
+
+// -- Release hardening tripwire (Phase 0, security addendum) --------------------------------
+// A release APK is the artifact that reaches drivers' tablets, and the two things below are
+// exactly the mistakes that produced the 0.6.2 incident: an APK built with a URL that was never
+// meant to ship, distributed to a real fleet. Gradle cannot see "you meant to set this" -- so the
+// placeholder is treated as an error rather than a default, and the build stops before any
+// release artifact exists.
+//
+// Why `afterEvaluate` + `doFirst` and not a top-level `if`: a top-level check runs during
+// *configuration*, i.e. on every single Gradle invocation including `:app:testDebugUnitTest` and
+// `:app:lintDebug` in CI, which would break every debug build on a machine that has no reason to
+// set a release URL. Attaching the check to the release tasks themselves means it fires only when
+// someone actually asks for a release artifact.
+//
+// To build a real release: set RELEASE_API_BASE_URL in local.properties (gitignored) or as an
+// environment variable on the build machine. It must be https -- see
+// docs/audits/2026-09-08-backend-audit.md section 5, which found the shipped APK talking
+// plaintext HTTP to production, carrying JWTs, device secrets and GPS in the clear.
+afterEvaluate {
+    val releaseArtifactTasks = tasks.matching { task ->
+        val name = task.name
+        (name.startsWith("assemble") || name.startsWith("bundle") || name.startsWith("package")) &&
+            name.contains("Release")
+    }
+    releaseArtifactTasks.configureEach {
+        doFirst {
+            if (releaseApiBaseUrl == releaseApiBaseUrlPlaceholder) {
+                throw GradleException(
+                    "Refusing to build a release artifact: API_BASE_URL is still the placeholder " +
+                        "'$releaseApiBaseUrlPlaceholder'. Set RELEASE_API_BASE_URL in " +
+                        "local.properties or in the environment to the real deployed backend " +
+                        "URL. See the release-hardening notes in app/build.gradle.kts.",
+                )
+            }
+            if (!releaseApiBaseUrl.startsWith("https://")) {
+                throw GradleException(
+                    "Refusing to build a release artifact: RELEASE_API_BASE_URL must be https. " +
+                        "A release build must not ship plaintext HTTP -- tokens, the device " +
+                        "secret, duress audio and GPS all travel over it.",
+                )
+            }
+        }
+    }
 }

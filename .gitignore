@@ -48,3 +48,11 @@ Thumbs.db
 meter screens/
 .idea/
 *.apk
+
+# Built APKs/AABs. The `*.apk` rule above already covers the file extension; this pins the
+# directory release artifacts are staged in, so a whole build output tree (mapping.txt, .aab,
+# unpacked dex) can never be committed either. Three ~145 MB APKs used to sit untracked in the
+# repo root -- one careless stage-everything would have committed them, and the live driver
+# credential inside them, permanently (docs/audits/2026-09-08-backend-audit.md section 5 addendum).
+android/dist/
+*.aab
