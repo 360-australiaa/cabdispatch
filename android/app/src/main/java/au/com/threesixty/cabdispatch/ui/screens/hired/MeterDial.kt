@@ -248,7 +248,7 @@ internal fun MeterDial(
         label = "band-color",
     )
     val speedSize by animateFloatAsState(
-        targetValue = if (band == SpeedBand.FAST) 28f else 24f,
+        targetValue = if (band == SpeedBand.FAST) 38f else 32f,
         animationSpec = tween(700),
         label = "band-speed-size",
     )
@@ -268,6 +268,10 @@ internal fun MeterDial(
         GlowingSpeedometer(
             speedKmh = fareState.currentSpeedKmh.toFloat(),
             modifier = Modifier.size(d),
+            // 14dp -> 18dp ring (owner, 2026-09-08: "the meter design is not looking good ... good
+            // prominent font, good colors"). The ring is the meter's one big shape; a thin one read
+            // as a placeholder on the 1280x800 canvas.
+            strokeWidthDp = 18,
             // Real-motion take two (2026-09-06), explicitly requested and explicitly opt-in here
             // only — see GlowingSpeedometer's [motion] doc. Flip this to false to revert instantly
             // if it reproduces the earlier "moving circle" distress; nothing else needs to change.
@@ -294,7 +298,7 @@ internal fun MeterDial(
                         "ACTIVE FARE",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
+                        fontSize = 14.sp,
                         letterSpacing = 2.sp,
                         color = CaptainPalette.textSecondary,
                         modifier = Modifier.padding(top = 2.dp),
@@ -319,7 +323,7 @@ internal fun MeterDial(
                         // MeterPaneLayout's DIAL_COL_WEIGHT doc for the matching 50/50 layout
                         // change this pairs with): a passenger seated beside the dial should be
                         // able to read the running total at a glance, not just the driver.
-                        fontSize = if (totalText.length > 8) 58.sp else 76.sp,
+                        fontSize = if (totalText.length > 8) 68.sp else 88.sp,
                         modifier = Modifier
                             .padding(top = 2.dp)
                             .scale(tickScale.value),
@@ -544,7 +548,7 @@ internal fun MeterDial(
                         " km/h",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(bottom = 3.dp),
                     )
@@ -570,10 +574,9 @@ internal fun MeterDial(
 private fun DialReadout(label: String, value: String, valueColor: Color = CaptainPalette.textPrimary) {
     // Bumped alongside the rest of MeterDial (2026-09-06 passenger-readability pass) — width grown
     // to match so three of these in a Row don't crowd the bigger value text.
-    Column(modifier = Modifier.width(80.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
-        Text(label, style = Type.tiny, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
-        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, color = valueColor, maxLines = 1)
+    Column(modifier = Modifier.width(96.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = Type.tiny, letterSpacing = 1.sp, color = CaptainPalette.textSecondary)
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = valueColor, maxLines = 1)
     }
 }
 

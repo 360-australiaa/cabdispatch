@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
+  LayoutDashboard,
   ListChecks,
   Map,
   Send,
@@ -79,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: "operations",
     labelKey: "nav.group.operations",
     items: [
+      { to: "/", labelKey: "nav.overview", icon: LayoutDashboard },
       { to: "/live-map", labelKey: "nav.liveMap", icon: Map },
       { to: "/dispatch", labelKey: "nav.dispatch", icon: Send },
       { to: "/messages", labelKey: "nav.messages", icon: MessageSquare },
@@ -374,6 +376,7 @@ function NavItemLink({
   return (
     <NavLink
       to={to}
+      end={to === "/"}
       className={({ isActive }) =>
         cn(
           "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent",

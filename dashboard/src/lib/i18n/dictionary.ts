@@ -40,6 +40,7 @@ export const EN_AU = {
 
   "nav.gettingStarted": "Getting Started",
   "nav.group.operations": "Operations",
+  "nav.overview": "Overview",
   "nav.liveMap": "Live Map",
   "nav.dispatch": "Dispatch",
   "nav.messages": "Messages",

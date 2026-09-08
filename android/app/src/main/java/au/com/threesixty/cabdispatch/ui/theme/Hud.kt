@@ -511,6 +511,7 @@ fun GlowingSpeedometer(
     val emberPaint = rememberEmberPaint()
     val clock = rememberSpeedClock(enabled = motion, speed = animatedSpeed, maxKmh = safeMax)
     val labelArgb = CaptainPalette.textSecondary.toArgb()
+    val litLabelArgb = CaptainPalette.textPrimary.toArgb()
     val labelPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = android.graphics.Paint.Align.CENTER
@@ -584,15 +585,14 @@ fun GlowingSpeedometer(
             val cx = g.center.x
             val cy = g.center.y
             val tickOuter = g.radius - g.strokePx
-            val majorLen = 11.dp.toPx()
-            val minorLen = 5.dp.toPx()
+            val majorLen = 13.dp.toPx()
+            val minorLen = 6.dp.toPx()
             // Label size/margin bumped 2026-09-06 (direct feedback: "the speedometer ten, twenty,
             // sixty... should be very prominent, make it big") — the extra 2dp of margin (9dp ->
             // 11dp) gives the bigger glyphs the same clearance from the tick ring the old 10sp
             // size had at 9dp, rather than letting them crowd the major ticks.
             val labelR = tickOuter - majorLen - 11.dp.toPx()
-            labelPaint.textSize = 13.sp.toPx()
-            labelPaint.color = labelArgb
+            labelPaint.textSize = 15.sp.toPx()
             val steps = (safeMax / 5f).toInt() // one tick per 5 km/h
             for (i in 0..steps) {
                 val kmh = i * 5f
@@ -611,6 +611,8 @@ fun GlowingSpeedometer(
                     cap = StrokeCap.Round,
                 )
                 if (major && showLabels) {
+                    // Numerals the arc has passed light up with it; the rest stay secondary.
+                    labelPaint.color = if (lit) litLabelArgb else labelArgb
                     val lx = cx + dirX * labelR
                     val ly = cy + dirY * labelR - (labelPaint.ascent() + labelPaint.descent()) / 2f
                     drawContext.canvas.nativeCanvas.drawText(kmh.roundToInt().toString(), lx, ly, labelPaint)

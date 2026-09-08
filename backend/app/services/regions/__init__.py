@@ -21,6 +21,7 @@ Golden-vector honesty: `NSWRegion` must reproduce today's behaviour bit for
 bit. Nothing in `tests/test_fare_engine_golden.py` was changed to make this
 pass — see that file's own untouched assertions.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -86,6 +87,18 @@ class FareRegion:
     #: documentation for now, not a second code path; the multiplier value
     #: itself already lives on the per-tenant `Tariff.maxi_multiplier`.
     maxi_rule: str
+    #: Airport access/pickup fee the jurisdiction lets a driver pass through
+    #: as an extra when a hiring STARTS inside the airport precinct (NSW: the
+    #: Sydney Airport ground-transport access fee, IPART Point-to-Point
+    #: passenger-service extras). ``None`` where no such fee exists. The
+    #: tablet's `JurisdictionConfig` carries the same three values and
+    #: auto-applies the toll preset at trip start; this copy is the server's
+    #: reference so the two can be cross-checked in tests, not a second
+    #: charging path.
+    airport_access_fee: Decimal | None = None
+    airport_precinct_lat: float | None = None
+    airport_precinct_lng: float | None = None
+    airport_precinct_radius_m: float | None = None
 
     def is_public_holiday(self, d: date) -> bool:
         return d in self.holidays(d.year)

@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +58,7 @@ import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.AutoTollAlert
 import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareState
+import au.com.threesixty.cabdispatch.data.remote.ZoneDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TollPreset
@@ -75,6 +77,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.GlowingSpeedometer
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
+import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.Radius
@@ -347,6 +350,10 @@ fun HiredScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // Chip lane: the fleet-command chips (FLEET LOCKED etc.) draw at the top-left of the
+            // content area; without this the dial card's corner sat under them (tablet, 2026-09-08).
+            // Same Space.xl lane PaneShell reserves.
+            Spacer(Modifier.height(Space.xl))
             // --- Maxi rate / wheelchair-hiring indicators (Point to Point Transport (Fares)
             // Order 2026 UI-wiring pass). Read ONLY [fareState.maxiRateApplied] — the pure fare
             // engine's own derived flag, copied through by FareEngineImpl — never recomputed here
@@ -856,6 +863,20 @@ internal fun RowScope.MeterPaneLayout(
                     value = if (isPaused) "PAUSED" else "IN PROGRESS",
                     tone = if (isPaused) HudTone.Warning else HudTone.Accent,
                 )
+                // Owner (2026-09-08): "in the meter, where is the zone?" -- the dispatch zone the
+                // cab is physically inside right now, from the same zone list the Zones board
+                // plots. Real containment (haversine <= radius) against the live fix; nothing
+                // shown when the cab is in no zone or the list has not loaded, never a guess.
+                val zones by produceState<List<ZoneDto>>(initialValue = emptyList()) {
+                    value = AppContainer.zonesRepository.listZones().getOrNull()?.items ?: emptyList()
+                }
+                val zoneLabel = remember(zones, liveFix?.lat, liveFix?.lng) {
+                    val fix = liveFix ?: return@remember null
+                    zones.filter { NavProgress.haversineM(fix.lat, fix.lng, it.centerLat, it.centerLng) <= it.radiusM }
+                        .minByOrNull { it.radiusM }
+                        ?.let { z -> if (z.name.isBlank()) "ZONE ${z.number}" else "${z.number} · ${z.name.uppercase()}" }
+                }
+                zoneLabel?.let { HudStatusPill(label = "Zone", value = it, tone = HudTone.Neutral) }
                 AnimatedVisibility(visible = hasDestination && navState.offRoute, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
                     HudStatusPill(label = "Nav", value = "REROUTING…", tone = HudTone.Warning)
                 }

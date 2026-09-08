@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/components/NotFound";
@@ -20,6 +20,7 @@ import LoginPage from "@/pages/login";
 // `LoginPage` is deliberately NOT lazy: it is the first thing an
 // unauthenticated visitor sees, and making it a second round-trip would
 // trade the win back on the one route where latency is most visible.
+const OverviewPage = lazy(() => import("@/pages/overview"));
 const GettingStartedPage = lazy(() => import("@/pages/getting-started"));
 const LiveMapPage = lazy(() => import("@/pages/live-map"));
 const DispatchPage = lazy(() => import("@/pages/dispatch"));
@@ -121,7 +122,9 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      { index: true, element: <Navigate to="/live-map" replace /> },
+      // The owner's home: one screen of live fleet, today's money and what
+      // needs attention (pages/overview). Previously a redirect to /live-map.
+      { index: true, element: lazyRoute(<OverviewPage />) },
       { path: "getting-started", element: lazyRoute(<GettingStartedPage />) },
       { path: "live-map", element: lazyRoute(<LiveMapPage />) },
       { path: "dispatch", element: lazyRoute(<DispatchPage />) },

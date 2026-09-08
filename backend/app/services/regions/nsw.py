@@ -7,6 +7,7 @@ straight off the existing module-level constants in `fare_engine.py`
 there is exactly one copy of "what is a NSW public holiday" in this backend
 — this file wraps it in a `FareRegion`, it does not fork it.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -45,6 +46,14 @@ NSW_REGION = register_region(
             "Airport rank; a wheelchair hiring always overrides it off "
             "(cl 2(d)(ii))."
         ),
+        # Sydney Airport ground-transport access fee (IPART Point-to-Point
+        # passenger extras, 2025-26 schedule): a flat pass-through when the
+        # hiring starts inside the airport precinct. Precinct = 1.8 km around
+        # the terminals; mirrors android JurisdictionConfig.NSW exactly.
+        airport_access_fee=Decimal("6.43"),
+        airport_precinct_lat=-33.9399,
+        airport_precinct_lng=151.1753,
+        airport_precinct_radius_m=1_800.0,
     )
 )
 

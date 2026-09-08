@@ -63,6 +63,7 @@ import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.color
 import java.io.ByteArrayOutputStream
 import java.time.Instant
@@ -165,6 +166,9 @@ fun ProfileScreen(
                 ProfileTabPill("Documents", selected = activeTab == ProfileTab.DOCUMENTS) { activeTab = ProfileTab.DOCUMENTS }
             }
         }
+        // Chip lane: FLEET LOCKED and friends draw just under the title row; without this lane the
+        // profile card's top-left corner sat under them (tablet, 2026-09-08).
+        Spacer(Modifier.height(Space.xl))
         Spacer(Modifier.height(20.dp))
 
         when (activeTab) {

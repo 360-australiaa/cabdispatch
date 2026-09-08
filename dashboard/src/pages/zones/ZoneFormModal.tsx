@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight } from "lucide-react";
 import { Button, Input, Modal } from "@/components/ui";
 import {
   useCreateZoneMutation,
@@ -9,6 +9,7 @@ import {
 } from "@/hooks/useZones";
 import { extractErrorMessage } from "./format";
 import { useResetOnChange } from "@/lib/useResetOnChange";
+import { SWAP_HINT, formatHumanCoords, looksSwapped, parseCoords } from "./coordinateHints";
 
 export interface ZoneFormModalProps {
   open: boolean;
@@ -70,6 +71,17 @@ export function ZoneFormModal({ open, onClose, mode, zone }: ZoneFormModalProps)
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
+
+  function swapCoords() {
+    setForm((f) => ({ ...f, centerLat: f.centerLng, centerLng: f.centerLat }));
+  }
+
+  // Human check under the coordinate inputs: what was typed, read back with
+  // hemisphere letters, plus a non-blocking "these look swapped" hint. Both
+  // values can be perfectly valid and still be the wrong way round -- see
+  // coordinateHints.ts.
+  const coords = parseCoords(form.centerLat, form.centerLng);
+  const swapped = coords != null && looksSwapped(coords.lat, coords.lng);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -161,27 +173,50 @@ export function ZoneFormModal({ open, onClose, mode, zone }: ZoneFormModalProps)
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Center latitude</label>
-            <Input
-              type="number"
-              step="any"
-              value={form.centerLat}
-              onChange={(e) => update("centerLat", e.target.value)}
-              required
-            />
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="zone-center-lat" className="text-xs font-medium text-muted-foreground">
+                Center latitude
+              </label>
+              <Input
+                id="zone-center-lat"
+                type="number"
+                step="any"
+                value={form.centerLat}
+                onChange={(e) => update("centerLat", e.target.value)}
+                required
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="zone-center-lng" className="text-xs font-medium text-muted-foreground">
+                Center longitude
+              </label>
+              <Input
+                id="zone-center-lng"
+                type="number"
+                step="any"
+                value={form.centerLng}
+                onChange={(e) => update("centerLng", e.target.value)}
+                required
+              />
+            </div>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-muted-foreground">Center longitude</label>
-            <Input
-              type="number"
-              step="any"
-              value={form.centerLng}
-              onChange={(e) => update("centerLng", e.target.value)}
-              required
-            />
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="font-mono text-muted-foreground" data-testid="zone-coords-readback">
+              {coords ? formatHumanCoords(coords.lat, coords.lng) : "—"}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={swapCoords} className="gap-1">
+              <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" />
+              Swap
+            </Button>
           </div>
+          {swapped && (
+            <p className="flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning" role="status">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{SWAP_HINT}</span>
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1">
