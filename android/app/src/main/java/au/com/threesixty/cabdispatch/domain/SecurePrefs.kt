@@ -44,6 +44,40 @@ object SecurePrefs {
     private const val TAG = "SecurePrefs"
 
     /**
+     * The two keys `androidx.security.crypto` stores its own Tink keyset under, inside the very
+     * prefs file it encrypts.
+     *
+     * They are the reason this class shipped a crash-on-launch (2026-09-08, found on the test
+     * tablet). Both migration steps below read a prefs file *by name* as plaintext. On a device
+     * that had already run an encrypted build, the file under that name IS the encrypted store,
+     * and `all` hands back these two reserved entries as ordinary strings. They were copied to the
+     * legacy slot and then written back into the encrypted store, where
+     * `EncryptedSharedPreferences` rejects them outright:
+     *
+     *     SecurityException: __androidx_security_crypto_encrypted_prefs_key_keyset__ is a
+     *     reserved key for the encryption keyset.
+     *
+     * That throws from `Application.onCreate`, so the process dies before any UI exists — and
+     * because the stash guard treats a non-empty legacy file as "already stashed", every later
+     * launch took the same path. The app was bricked permanently on upgrade, on every tablet that
+     * already had an encrypted store, which is all of them.
+     *
+     * Skipping these keys is not merely a guard: a keyset is never app data. It belongs to the
+     * store it came from and is meaningless in another one, so there is nothing to preserve.
+     */
+    internal val RESERVED_KEYSET_KEYS = setOf(
+        "__androidx_security_crypto_encrypted_prefs_key_keyset__",
+        "__androidx_security_crypto_encrypted_prefs_value_keyset__",
+    )
+
+    /**
+     * True when [entries] came from a file that is already an `EncryptedSharedPreferences` store
+     * rather than a genuine plaintext one. Detected by its keyset, which only that store writes.
+     */
+    internal fun looksEncrypted(entries: Map<String, Any?>) =
+        entries.keys.any { it in RESERVED_KEYSET_KEYS }
+
+    /**
      * The encrypted store for [name], with a one-time migration from the plaintext file of the
      * same name. See the class doc.
      */
@@ -98,6 +132,10 @@ object SecurePrefs {
 
         val editor = encrypted.edit()
         for ((key, value) in entries) {
+            // Never copy a keyset back into an encrypted store -- it throws, from onCreate.
+            // See RESERVED_KEYSET_KEYS. Also self-heals a device already bricked by the old code:
+            // the poisoned legacy file is now skipped past and then deleted below.
+            if (key in RESERVED_KEYSET_KEYS) continue
             // Only the types these four stores actually write. An unknown type is dropped with a
             // log rather than crashing the app on launch — and dropping it is safe: every value
             // here is re-derivable by logging in or re-pairing.
@@ -146,6 +184,10 @@ object SecurePrefs {
         val original = appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
         val entries = original.all
         if (entries.isEmpty()) return
+        // The file under this name is already the encrypted store (this device has run an
+        // encrypted build before), so there is no plaintext here to rescue. Stashing it would copy
+        // the keyset into the legacy slot and brick the next launch -- see RESERVED_KEYSET_KEYS.
+        if (looksEncrypted(entries)) return
 
         val editor = appContext.getSharedPreferences(legacy, Context.MODE_PRIVATE).edit()
         for ((key, value) in entries) {

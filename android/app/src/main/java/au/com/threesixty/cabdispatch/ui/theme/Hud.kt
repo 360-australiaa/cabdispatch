@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -1172,8 +1173,17 @@ fun HudStatTile(
 ) {
     val toneColor = tone.color()
     GlassCard(modifier = modifier, cornerRadiusDp = 18) {
+        // fillMaxWidth + align(Center), NOT fillMaxSize (2026-09-08). fillMaxSize makes this Row
+        // take the FULL height it is offered, so the tile is only as tall as its content while a
+        // caller pins an exact height -- and grows without limit the moment one doesn't. A3
+        // rightly moved ShiftStatsBar from `height(120.dp)` to `heightIn(min = 120.dp)` so the
+        // NEXT BREAK cell can grow at a large system font scale; the two together made the stats
+        // bar swallow the entire screen. Column measures that unweighted bar before the weighted
+        // row above it, so the meter pane -- START METER included -- was measured at zero height
+        // and never drawn. Wrapping the height keeps the font-scale growth and gives the space
+        // back. Centering preserves the look for the callers that DO pin a height.
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().align(Alignment.Center).padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {

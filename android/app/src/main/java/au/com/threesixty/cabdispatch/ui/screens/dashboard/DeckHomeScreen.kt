@@ -363,7 +363,15 @@ fun DeckHomeScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(CaptainPalette.glowDangerSoft)
-                    .padding(horizontal = 32.dp, vertical = 10.dp),
+                    // start inset, not 32dp (2026-09-08): MainActivity stacks the FLEET LOCKED /
+                    // TABLET NOT REGISTERED chips in a top-START overlay column at exactly this
+                    // height, so they drew straight over the first word of this banner -- on the
+                    // tablet it read "nauthorized". The banner keeps its full-width background so
+                    // it still reads as one strip; only its content starts clear of the chip lane.
+                    // An overlay covering something is expected here (see FleetCommandOverlays'
+                    // Placement doc); covering the text that says why the meter is refusing to
+                    // work is not.
+                    .padding(start = 180.dp, end = 32.dp, top = 10.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.danger, modifier = Modifier.size(18.dp))

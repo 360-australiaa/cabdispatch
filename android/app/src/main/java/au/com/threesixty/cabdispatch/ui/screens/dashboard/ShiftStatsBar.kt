@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
@@ -105,7 +106,15 @@ internal fun ShiftStatsBar(
     // yesterday baseline — both render nothing, never a fabricated "0%" or "+12%".
     val pctChange = extras.earningsPctChange
 
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    // height(IntrinsicSize.Min) (2026-09-08). The four tiles below are each `fillMaxHeight()`, so
+    // they take whatever height this Row is offered. Once A3 moved the caller from a fixed
+    // `height(120.dp)` to `heightIn(min = 120.dp)` -- correctly, so the NEXT BREAK cell can grow at
+    // a large system font scale -- "whatever it is offered" became the entire remaining column.
+    // Column measures this unweighted bar before the weighted row above it, so the meter pane was
+    // then measured at zero height: START METER, the fare dial and the map simply were not drawn.
+    // Binding the Row to its own intrinsic height keeps the tiles equal-height and still lets them
+    // grow with the font scale, while giving the rest of the screen its space back.
+    Row(modifier = modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         HudStatTile(
             icon = Icons.Rounded.Schedule,
             label = "Shift time",
