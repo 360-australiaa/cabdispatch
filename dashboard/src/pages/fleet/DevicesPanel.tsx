@@ -64,7 +64,11 @@ const KIOSK_FILTER_OPTIONS = [
  * functional trap" policy already used for locked settings rows in the
  * Android app's own SettingsScreen ("COMING SOON" badge, greyed out,
  * tap-safe). */
-const RESTART_APP_REASON =
+// Exported so the device page (dashboard command-centre plan §6) can reuse
+// this exact wording for its own "Restart app" action rather than growing a
+// second, possibly-drifting copy -- see that page's own note on why there is
+// no separate "Reboot" control distinct from this one.
+export const RESTART_APP_REASON =
   "Restarts the meter app on the tablet — not the Android OS. Rebooting the OS needs Device " +
   "Owner provisioning this build doesn't have. The tablet picks this up on its next heartbeat " +
   "(within a minute), restarts, and reports back, which is what clears the pending state.";

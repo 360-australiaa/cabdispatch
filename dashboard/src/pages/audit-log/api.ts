@@ -11,6 +11,12 @@ export const PAGE_LIMIT = 25;
 export interface AuditLogFilters {
   entity_type?: string;
   entity_id?: string;
+  /** Alias for `entity_id` a caller can pass without knowing this table's
+   * own `entity_type`/`entity_id` naming -- added for the driver/vehicle
+   * detail page's Activity tab (dashboard command-centre plan §4/§5). Same
+   * `AuditLog.entity_id` column as `entity_id` above; see
+   * `backend/app/api/v1/audit_log.py::list_audit_log_entries`. */
+  subject_id?: string;
   actor_user_id?: string;
   action?: string;
   at_from?: string;

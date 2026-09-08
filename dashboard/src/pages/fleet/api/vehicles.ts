@@ -46,6 +46,23 @@ export function useVehicles(skip: number, filters: VehicleFilters) {
   });
 }
 
+/** Single vehicle by id, fresh off `GET /v1/fleet/vehicles/{id}` -- the CRUD
+ * record (rego, make/model, class, status, compliance-expiry dates), not the
+ * Live Ops rollup (`useVehicleDetailQuery` in `pages/live-map/useVehicleDetail.ts`
+ * carries live_status/position/current driver/device instead). The Vehicle
+ * page (`pages/vehicles/VehiclePage.tsx`) is the first caller that needs both
+ * shapes for the one vehicle at once. */
+export function useVehicle(id: string | null) {
+  return useQuery({
+    queryKey: ["fleet", "vehicles", id],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Vehicle>(`/v1/fleet/vehicles/${id}`);
+      return data;
+    },
+    enabled: id != null,
+  });
+}
+
 /** Unpaginated-ish (first 100) vehicle list for cross-reference dropdowns/labels. */
 export function useVehicleOptions() {
   return useQuery({

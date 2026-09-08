@@ -82,6 +82,29 @@ export interface Trip {
   receipt_ref: string | null;
   flagged_for_review: boolean;
   review_notes: string | null;
+  /** Ad hoc-geofence toll ids (kind="toll" OR kind="airport") already folded
+   * into `tolls` above — see backend/app/models/trips.py::Trip.auto_tolls_applied's
+   * own doc comment. IDs only, no amount/kind on this field alone; the
+   * Vehicle page's Tolls tab cross-references these against `GET /v1/geofences`
+   * (which carries `kind` and `toll_amount`) to split an auto-charged airport
+   * access fee from an ad hoc toll circle. Optional because this dashboard's
+   * `Trip` type predates the field being surfaced here -- a trip fetched
+   * before this addition landed in a cached response simply omits it, same
+   * "absent means not known here yet" convention as everywhere else this
+   * type uses `| null`. */
+  auto_tolls_applied?: string[] | null;
+  /** Real NSW toll-road registry charges already folded into `tolls` above,
+   * keyed by `TollRoad.id` (or `TollPoint.id` for a per_point road) -- one
+   * entry per road/point, value is the dollar amount charged for it as a
+   * string. See backend/app/models/trips.py::Trip.auto_tolled_roads's own
+   * doc comment. This is the one field that gives an exact per-road dollar
+   * breakdown; cross-reference the keys against `GET /v1/toll-roads` for
+   * road/point names. */
+  auto_tolled_roads?: Record<string, string> | null;
+  /** Real toll roads/points this trip genuinely crossed but that were NOT
+   * auto-charged (no captured price for that road) -- surfaced so a
+   * dispatcher knows a manual toll may be missing, never a guessed amount. */
+  unpriced_toll_road_ids?: string[] | null;
   created_at: string;
   updated_at: string;
 }

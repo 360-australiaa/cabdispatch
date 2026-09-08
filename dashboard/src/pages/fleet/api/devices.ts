@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
-import type { Device, DeviceFormValues, Page } from "../types";
+import type { Device, DeviceFormValues, DeviceRotateSecretResponse, Page } from "../types";
 import { LOOKUP_LIMIT, PAGE_LIMIT } from "./constants";
 import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
@@ -11,6 +11,12 @@ import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
  * Split out of `pages/fleet/api.ts` (804 lines) in Phase 0. Every function
  * here is the original, unchanged; `api/index.ts` re-exports all of them so no
  * call site's import path changed.
+ *
+ * `useDeviceDetailQuery`, `useRotateDeviceSecret` and `useSetDeviceRevoked`
+ * below are new (dashboard command-centre plan, §6 device page) -- added
+ * here rather than in `pages/devices/` so the device page's mutations live
+ * next to, and invalidate the same query keys as, every other Device
+ * mutation in this file.
  */
 
 export interface DeviceFilters {
@@ -53,6 +59,76 @@ export function useDeviceOptions() {
       });
       return data.items;
     },
+  });
+}
+
+/**
+ * One device, by id -- `GET /v1/fleet/devices/{id}` (a real single-item
+ * endpoint that already existed but had no dashboard caller; the device
+ * list/CRUD pages all fetched the whole page and found their row in it).
+ * Backs `/devices/:deviceId` (dashboard command-centre plan §6). Polls only
+ * while a command this device is waiting on is outstanding -- same
+ * conditional-poll reasoning as `useDevices` above, scoped to one row
+ * instead of the whole list.
+ */
+export function useDeviceDetailQuery(deviceId: string | null) {
+  return useQuery({
+    queryKey: ["fleet", "devices", "detail", deviceId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<Device>(`/v1/fleet/devices/${deviceId}`);
+      return data;
+    },
+    enabled: deviceId != null,
+    ...pollingQueryOptions(
+      whileActive(
+        POLL.PENDING_ACTION,
+        (query: { state: { data?: Device } }) =>
+          !!query.state.data && (query.state.data.locate_requested || query.state.data.reboot_requested),
+      ),
+    ),
+  });
+}
+
+/**
+ * Admin-only. Mints a fresh device secret and returns it in plaintext exactly
+ * once (`POST /v1/fleet/devices/{id}/rotate-secret`) -- the endpoint has
+ * existed since the device domain landed but nothing in the dashboard ever
+ * called it (found while building the device page). NOT a re-pair: the
+ * device's `vehicle_id`/`paired_at` are untouched, this only invalidates the
+ * credential currently on the tablet. The caller must show `device_secret`
+ * to the operator once and never log or persist it.
+ */
+export function useRotateDeviceSecret() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<DeviceRotateSecretResponse>(
+        `/v1/fleet/devices/${id}/rotate-secret`,
+      );
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
+/**
+ * Admin-only. Sets/clears `Device.revoked` (`PATCH /v1/fleet/devices/{id}`)
+ * -- the backend's real, reversible "retire this tablet" flag (see
+ * `DeviceUpdate.revoked`'s own doc: a revoked device's heartbeat 404s, and
+ * re-pairing with a fresh code clears the flag). Deliberately separate from
+ * `useDeleteDevice`: that is a permanent, irreversible unregister (`DELETE`,
+ * "This can't be undone" in `DevicesPanel`'s own confirm copy) and the two
+ * must not be presented as the same action -- see the device page's own
+ * Revoke/Delete actions for which is which.
+ */
+export function useSetDeviceRevoked() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, revoked }: { id: string; revoked: boolean }) => {
+      const { data } = await apiClient.patch<Device>(`/v1/fleet/devices/${id}`, { revoked });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
   });
 }
 

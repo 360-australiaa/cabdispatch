@@ -18,6 +18,12 @@ export interface Shift {
   card_total: string;
   psl_owed: string;
   reconciled: boolean;
+  /** Break-tracking (see backend `app/schemas/shift.py::ShiftRead`) --
+   * managed exclusively via `POST /v1/shifts/{id}/break/start` and
+   * `/break/end`, never settable through `ShiftUpdate`. Non-null
+   * `break_started_at` means a break is in progress right now. */
+  break_started_at: string | null;
+  break_taken: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -103,8 +103,32 @@ export interface Device {
   last_locate_accuracy_m: number | null;
   last_locate_at: string | null;
   command_acked_at: string | null;
+  // WHICH command `command_acked_at` is for -- "restart", "force_update" or
+  // "kiosk_lock" (see backend `DeviceRead.last_acked_command`'s own doc).
+  // Real field, always returned by the backend, just never modelled here
+  // until the device-page workstream needed to show "kiosk requested vs.
+  // tablet confirmed" honestly -- a bare `command_acked_at` can't say which
+  // of three commands it was for, and `kiosk_lock` is a standing desired
+  // state that is never cleared on ack the way `restart`/`force_update` are.
+  //
+  // Optional (not just nullable) so every existing `Device`-shaped test
+  // fixture across the app doesn't need updating just because this page
+  // started reading a field that was already on the wire -- a fixture that
+  // omits it reads as `undefined`, and every caller here treats that the
+  // same as `null` ("no ack recorded"), never as a fabricated value.
+  last_acked_command?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * `POST /v1/fleet/devices/{id}/rotate-secret` response -- structurally a
+ * `Device`, but `device_secret` is guaranteed present (backend
+ * `DeviceRotateSecretResponse`). The plaintext secret is shown exactly once;
+ * never log or persist it beyond the confirming modal's own state.
+ */
+export interface DeviceRotateSecretResponse extends Device {
+  device_secret: string;
 }
 
 export interface DeviceFormValues {

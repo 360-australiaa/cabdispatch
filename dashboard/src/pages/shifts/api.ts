@@ -166,3 +166,33 @@ export function useDeleteShiftMutation() {
     onSuccess: () => invalidateShifts(queryClient),
   });
 }
+
+/** `POST /v1/shifts/{id}/break/start` -- starts a break on an open shift
+ * (409 if one is already in progress or the shift has ended). Real and,
+ * per the command-centre plan's inventory, unused anywhere in the
+ * dashboard until the driver-page workstream's Shifts tab -- added here
+ * rather than forked per-caller since any later shift-page "Record break"
+ * action wants the same mutation. */
+export function useStartBreakMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiClient.post<Shift>(`/v1/shifts/${id}/break/start`);
+      return res.data;
+    },
+    onSuccess: () => invalidateShifts(queryClient),
+  });
+}
+
+/** `POST /v1/shifts/{id}/break/end` -- ends the in-progress break (409 if
+ * none is in progress). */
+export function useEndBreakMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiClient.post<Shift>(`/v1/shifts/${id}/break/end`);
+      return res.data;
+    },
+    onSuccess: () => invalidateShifts(queryClient),
+  });
+}

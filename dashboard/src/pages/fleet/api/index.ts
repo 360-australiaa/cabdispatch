@@ -19,6 +19,7 @@ export {
   useDeleteVehicle,
   useGeneratePairingCode,
   useUpdateVehicle,
+  useVehicle,
   useVehicleLifetimeTotals,
   useVehicleLiveOptions,
   useVehicleOptions,
@@ -44,6 +45,7 @@ export {
 export {
   useCreateDevice,
   useDeleteDevice,
+  useDeviceDetailQuery,
   useDeviceOptions,
   useDevices,
   useForceUpdate,
@@ -51,6 +53,8 @@ export {
   useKioskLock,
   useLocateDevice,
   useRestartApp,
+  useRotateDeviceSecret,
+  useSetDeviceRevoked,
   useUpdateDevice,
   type DeviceFilters,
 } from "./devices";
