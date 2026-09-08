@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.work.WorkManager
+import au.com.threesixty.cabdispatch.data.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,6 +54,13 @@ class ConnectivitySyncTrigger(context: Context) {
             satisfyingNetworkCount++
             _isOnline.value = true
             SyncWorker.enqueueOneTime(WorkManager.getInstance(appContext))
+            // T2 (architecture audit 2026-09-08, §2.3): the toll registry used to be refreshed
+            // exactly once, fire-and-forget, at process start — so a tablet that booted with no
+            // signal (a driver starting a shift in a basement car park is the ordinary case) ran
+            // the entire shift against an empty cache and auto-detected no tolls at all, silently.
+            // Regaining connectivity is the obvious moment to fix that, and it is the same event
+            // this callback already treats as "we can reach the server again".
+            AppContainer.refreshTollRegistry()
         }
 
         override fun onLost(network: Network) {

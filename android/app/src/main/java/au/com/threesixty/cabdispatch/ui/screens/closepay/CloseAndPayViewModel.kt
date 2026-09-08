@@ -10,7 +10,10 @@ import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
+import au.com.threesixty.cabdispatch.domain.fare.COUNTRY_TARIFF
+import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
 import au.com.threesixty.cabdispatch.domain.fare.Tariff
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
@@ -165,6 +168,25 @@ sealed interface CloseAndPayUiState {
         val paymentInFlight: Boolean,
         val paymentError: String?,
         val paymentLinkUrl: String?,
+        /**
+         * True when no cached tariff row could be resolved for this trip and the fare below was
+         * computed from the built-in Fares Order rate card instead
+         * ([au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF]/`COUNTRY_TARIFF`).
+         *
+         * F11 (architecture audit 2026-09-08, §2.2). This screen used to refuse outright — "no
+         * cached tariff for this trip, cannot compute the closing fare" — and that is a dead end at
+         * the worst possible moment: the passenger is in the car, the journey is over, and the
+         * driver has no way to take payment and no way out of the screen. The trip had already been
+         * driven and the fare had already been accruing against a rate card the meter had in hand;
+         * refusing at the till does not undo any of that, it just strands the driver.
+         *
+         * Falling back is the lesser harm, but it is only acceptable *visibly*. This flag exists so
+         * [CloseAndPayScreen] can say plainly that default rates were used, because a fare computed
+         * from a rate card that may not be this operator's is exactly the kind of thing a driver
+         * needs to know to query later, and exactly the kind of thing this app's honesty rule
+         * forbids hiding. Never silently true.
+         */
+        val usingDefaultRates: Boolean = false,
     ) : CloseAndPayUiState {
         /**
          * The amount actually collected from the passenger for cash/card-family payments —
@@ -279,24 +301,36 @@ class CloseAndPayViewModel : ViewModel() {
         }
     }
 
+    /**
+     * The built-in Fares Order rate card to bill against when this trip's own tariff row cannot be
+     * resolved — F11's fallback. See [CloseAndPayUiState.ReadyToClose.usingDefaultRates] for why
+     * blocking payment was the wrong answer.
+     *
+     * Urban vs country is decided by resolving the trip's own recorded start position through
+     * [RegionResolver] — the same classifier the meter itself uses to pick a region — rather than
+     * defaulting to urban. Urban carries the higher flagfall and a peak charge country has none of,
+     * so guessing urban for a country trip would over-charge, and this is already a situation where
+     * the exact rate card is uncertain; the one thing that must not happen is resolving that
+     * uncertainty in the operator's favour by default.
+     */
+    private fun defaultTariffFor(trip: TripEntity): Tariff =
+        if (RegionResolver.resolve(trip.startLat, trip.startLng).equals("country", ignoreCase = true)) {
+            COUNTRY_TARIFF
+        } else {
+            URBAN_TARIFF
+        }
+
     private suspend fun loadTariffAndInit(trip: TripEntity) {
         val tariffEntity = AppContainer.tariffDao.getById(trip.tariffId)
-        if (tariffEntity == null) {
-            _uiState.value = CloseAndPayUiState.LoadError(
-                "No cached tariff for this trip (tariffId=${trip.tariffId}) — cannot compute the closing fare.",
-            )
-            return
+        val tariffDto = tariffEntity?.let {
+            runCatching { cabDispatchJson.decodeFromString<TariffDto>(it.rawJson) }.getOrNull()
         }
-        val tariffDto = runCatching {
-            cabDispatchJson.decodeFromString<TariffDto>(tariffEntity.rawJson)
-        }.getOrNull()
-        if (tariffDto == null) {
-            _uiState.value = CloseAndPayUiState.LoadError(
-                "Cached tariff payload is corrupt (tariffId=${trip.tariffId}).",
-            )
-            return
-        }
-        val tariff = tariffDto.toDomainTariff()
+        // F11: a missing row and a corrupt payload are the same situation from the driver's seat --
+        // we do not have this operator's rate card -- and both used to end the screen in a
+        // LoadError the driver could not act on or leave. Both now fall through to the built-in
+        // Fares Order card, flagged on screen.
+        val usingDefaultRates = tariffDto == null
+        val tariff = tariffDto?.toDomainTariff() ?: defaultTariffFor(trip)
         val method = PaymentMethodOption.CASH
         // The Passenger Service Levy is a mandatory regulated pass-through (Point to Point
         // Transport (Fares) Order 2026), not a driver-optional toggle (2026-09-05 fix — this used
@@ -328,6 +362,7 @@ class CloseAndPayViewModel : ViewModel() {
             corporateAccountActiveCount = null,
             paymentInFlight = false,
             paymentError = null,
+            usingDefaultRates = usingDefaultRates,
             paymentLinkUrl = null,
         )
         loadPaymentGridCounts()

@@ -195,17 +195,51 @@ class RealLocationProvider(
     /** Prefer the platform's own speed reading; fall back to a position-delta estimate only when
      * the platform reports none for this fix (see class doc). Never negative. */
     private fun resolveSpeedKmh(location: Location, previous: LocationFix?): Double {
-        if (location.hasSpeed()) return (location.speed * MS_TO_KMH).toDouble().coerceAtLeast(0.0)
+        if (location.hasSpeed()) return stationaryClamp(location.speed).toDouble()
         if (previous == null) return 0.0
         val dtSeconds = (location.time - previous.timestampMillis) / 1000.0
         if (dtSeconds <= 0.0) return previous.speedKmh
         val distanceKm = distanceKm(previous.lat, previous.lng, location.latitude, location.longitude)
-        return (distanceKm / (dtSeconds / 3600.0)).coerceAtLeast(0.0)
+        val impliedMetresPerSecond = (distanceKm * 1000.0 / dtSeconds).toFloat()
+        return stationaryClamp(impliedMetresPerSecond).toDouble()
     }
+
+    /**
+     * Reports a speed of exactly zero below [STATIONARY_SPEED_MS], instead of the small non-zero
+     * figure the platform actually hands back.
+     *
+     * F6 (architecture audit 2026-09-08, §2.1): a parked cab with poor sky view -- a rank under an
+     * awning, a kerb between two towers -- emits fixes that wander five to twenty metres, and
+     * `Location.hasSpeed()` is usually true for them with a small positive value attached. The fare
+     * engine integrated that, so a stationary vehicle accrued phantom distance for as long as it
+     * sat there. The driver saw the distance readout creep with the handbrake on.
+     *
+     * 1.4 m/s is ~5 km/h -- brisk walking pace. Below it, a taxi is not making progress worth
+     * charging distance for, and everything below it is far more likely to be receiver noise than
+     * travel. Clamping to zero is also the conservative direction: it can only ever charge the
+     * passenger less, never more, which is the same principle
+     * [au.com.threesixty.cabdispatch.domain.fare.roundDownToCent] applies to the total.
+     *
+     * Note this returns km/h and takes m/s -- the two units the two call sites above already had
+     * in hand.
+     */
+    private fun stationaryClamp(metresPerSecond: Float): Float =
+        if (metresPerSecond < STATIONARY_SPEED_MS) 0f else (metresPerSecond * MS_TO_KMH).coerceAtLeast(0f)
 
     /** Simple sanity filtering only — see class doc for why this is deliberately not a Kalman
      * filter. Returns `false` to drop [candidate] and keep [previous] as the accepted state. */
     private fun passesFilter(candidate: LocationFix, previous: LocationFix?): Boolean {
+        // 0. Absolute accuracy floor (F6). Checked BEFORE the `previous == null` shortcut below, so
+        // it also applies to the very first fix of a trip -- which is precisely the one most likely
+        // to be a coarse network/cell estimate hundreds of metres wide, and which every subsequent
+        // fix's jump- and degradation-filtering is then measured against. A fix this vague says
+        // nothing useful about where the vehicle is; accepting it and charging the haversine to the
+        // next real fix would bill the receiver's own uncertainty as distance travelled.
+        //
+        // Float.MAX_VALUE is the honest "platform reported no accuracy at all" sentinel (see
+        // LocationFix.accuracyM's doc) and is correctly rejected here as unknown-and-therefore-poor.
+        if (candidate.accuracyM > MAX_ACCEPTABLE_ACCURACY_M) return false
+
         if (previous == null) return true
         val dtSeconds = (candidate.timestampMillis - previous.timestampMillis) / 1000.0
         if (dtSeconds <= 0.0) return false // stale/out-of-order fix relative to the last accepted one
@@ -225,11 +259,24 @@ class RealLocationProvider(
         return true
     }
 
-    private fun distanceKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-        val results = FloatArray(1)
-        Location.distanceBetween(lat1, lng1, lat2, lng2, results)
-        return results[0] / 1000.0
-    }
+    /**
+     * Great-circle distance, delegated to [GeoMath.distanceKm].
+     *
+     * F6 (architecture audit §2.1, and §6.5's duplicated-logic finding) folded this onto the shared
+     * helper. It used to call `android.location.Location.distanceBetween` -- marginally more
+     * accurate (WGS84 ellipsoid rather than [GeoMath]'s sphere), but the difference is far below
+     * the metre-scale noise the filters above are built to reject, and it made every filtering
+     * decision in this class reachable only on a device or under Robolectric. The filters are
+     * fare-affecting logic; this codebase's convention for fare-affecting logic is a plain-Kotlin,
+     * JVM-testable port (see `domain/fare/FareEngine.kt`'s own doc), and [GeoMath] exists to be
+     * exactly that.
+     *
+     * [au.com.threesixty.cabdispatch.domain.fare.tollHaversineM] is deliberately NOT collapsed in:
+     * it has to stay byte-identical to the backend's own geofence maths or toll containment would
+     * disagree across the wire.
+     */
+    private fun distanceKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double =
+        GeoMath.distanceKm(lat1, lng1, lat2, lng2)
 
     /**
      * Stops [supervisePermission] and any in-flight update subscription. Not called anywhere yet
@@ -250,5 +297,12 @@ class RealLocationProvider(
         const val ACCURACY_DEGRADATION_FACTOR = 3.0
         const val ACCURACY_GRACE_PERIOD_SECONDS = 5.0
         const val MS_TO_KMH = 3.6f
+
+        /** F6: horizontal-accuracy floor, metres. A fix vaguer than this is noise, not a position. */
+        const val MAX_ACCEPTABLE_ACCURACY_M = 50f
+
+        /** F6: below this ground speed (m/s, ~5 km/h) the vehicle is treated as stationary and the
+         * reported speed is clamped to exactly zero. See [stationaryClamp]. */
+        const val STATIONARY_SPEED_MS = 1.4f
     }
 }

@@ -41,6 +41,13 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        // T2: the toll registry rides the same 15-minute periodic wakeup the outbox drain already
+        // has. A price revision or a newly-opened road otherwise reaches this device only on the
+        // next process restart, which on a kiosked tablet left running for a whole shift may be
+        // days. Deliberately not allowed to fail the work: a registry refresh that errors must
+        // never turn an otherwise-successful outbox drain into a retry.
+        runCatching { AppContainer.tollRegistryCache.refresh() }
+
         val result = OutboxDrainer(appContainerPorts()).drainOnce()
         // WorkManager's own retry uses the BackoffCriteria configured below —
         // exponential backoff, so a flaky connection doesn't hammer the API.

@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import kotlinx.coroutines.flow.Flow
 import java.time.DayOfWeek
@@ -19,6 +20,20 @@ import java.time.ZoneId
  * presentational-only WEEK/MONTH/ALL pills (they used to all render the exact same on-device
  * recent-trips list as TODAY — see this project's git history) with real boundaries fed into
  * [TripDao.observeTripsInRange].
+ */
+/**
+ * **F12 (architecture audit 2026-09-08, §2.2) — which midnight these periods break on.** Both
+ * boundary functions below used to default to [ZoneId.systemDefault], the tablet's own configured
+ * zone, while every fare-affecting classification in this app is pinned to [NSW_FARE_ZONE] (see
+ * [au.com.threesixty.cabdispatch.domain.resolveTimeClassFor]'s doc on why, and on the field-test
+ * tablet in another country that surfaced it). Two different midnights for the same trip: a fare
+ * could be billed at the night rate for one calendar day while being counted in another day's
+ * takings. A driver reconciling a shift against the dashboard would find the totals simply did not
+ * agree, with nothing on either screen to explain it.
+ *
+ * These now break on the same midnight the fare does. A6 will make the operating zone configurable
+ * for non-NSW tenants; the constant is the correct answer until it is, and — unlike the device zone
+ * — it is at least the same answer the money already uses.
  */
 enum class TripPeriod(val label: String) {
     ALL("All"),
@@ -38,9 +53,9 @@ enum class TripPeriod(val label: String) {
             MONTH -> "last month"
         }
 
-    /** Inclusive lower bound (epoch millis, device-local calendar) for "this [label]" — 0L for
+    /** Inclusive lower bound (epoch millis, on the fare calendar — see this enum's F12 doc) — 0L for
      * [ALL] (no lower bound; [TripDao.observeTripsInRange] treats that as "since the epoch"). */
-    fun startEpochMillis(zone: ZoneId = ZoneId.systemDefault(), today: LocalDate = LocalDate.now(zone)): Long =
+    fun startEpochMillis(zone: ZoneId = NSW_FARE_ZONE, today: LocalDate = LocalDate.now(zone)): Long =
         when (this) {
             ALL -> 0L
             TODAY -> today.atStartOfDay(zone).toInstant().toEpochMilli()
@@ -55,7 +70,7 @@ enum class TripPeriod(val label: String) {
      * previous-period comparison delta — never a fabricated percentage, see
      * [au.com.threesixty.cabdispatch.ui.screens.earnings.EarningsWheelViewModel].
      */
-    fun previousRangeEpochMillis(zone: ZoneId = ZoneId.systemDefault(), today: LocalDate = LocalDate.now(zone)): Pair<Long, Long>? =
+    fun previousRangeEpochMillis(zone: ZoneId = NSW_FARE_ZONE, today: LocalDate = LocalDate.now(zone)): Pair<Long, Long>? =
         when (this) {
             ALL -> null
             TODAY -> {

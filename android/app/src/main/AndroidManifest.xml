@@ -55,6 +55,16 @@
          docs/OTA_UPDATE_ROLLOUT.md), not through the Play Store. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- F4 (architecture audit 2026-09-08, §2.1): the running meter is a foreground service, so a
+         fare keeps accruing when the driver presses Back, when the app is backgrounded under Doze,
+         and across a process restart - all three of which used to silently stop charging with a
+         passenger still in the car. FOREGROUND_SERVICE_LOCATION is the API 34+ type-specific
+         companion permission required alongside the service's own
+         android:foregroundServiceType="location" declaration below; without it, startForeground()
+         throws on this app's targetSdk 35. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
     <application
         android:name=".CabDispatchApp"
         android:allowBackup="false"
@@ -85,6 +95,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The running fare's foreground service - see domain/MeterForegroundService.kt.
+
+             foregroundServiceType="location": the honest type, not a convenient one. The fare is
+             accrued from GPS and this service exists precisely to keep that GPS-driven accrual
+             alive while the app is not in front; declaring anything else would be claiming a
+             different justification than the real one.
+
+             exported="false": nothing outside this app has any business starting or stopping a
+             taxi meter. stopWithTask="false": closing the app from Recents must NOT end a hiring
+             that is still in progress - that is one of the three exact scenarios F4 exists to fix.
+             -->
+        <service
+            android:name=".domain.MeterForegroundService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="location" />
 
         <!-- Sibling agent (offline sync engine): register the WorkManager
              sync worker's provider here if a custom Configuration.Provider is

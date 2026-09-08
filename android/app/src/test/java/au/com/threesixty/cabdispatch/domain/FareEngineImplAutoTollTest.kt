@@ -6,10 +6,6 @@ import au.com.threesixty.cabdispatch.domain.fare.TollPriceRef
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.TollRoadRef
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -17,15 +13,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigDecimal
 import java.math.RoundingMode
-
-/** Same one-real-tick helper [FareEngineImplRunningDisplayTest] already defines — duplicated here
- * (not shared) since it's a two-line, file-private test utility, same call this project's own
- * pure-function docs make elsewhere for not sharing a tiny self-contained piece across files. */
-@OptIn(ExperimentalCoroutinesApi::class)
-private suspend fun TestScope.advanceOneTick() {
-    advanceTimeBy(1000)
-    runCurrent()
-}
 
 /**
  * Wires [FareEngineImpl]'s live auto-toll detection (see `domain/fare/TollDetector.kt`) end to end
@@ -39,17 +26,6 @@ private suspend fun TestScope.advanceOneTick() {
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FareEngineImplAutoTollTest {
-
-    private class FakeSpeedSource(initialSpeedKmh: Double) : SpeedSource {
-        private val _speedKmh = MutableStateFlow(initialSpeedKmh)
-        override val speedKmh: StateFlow<Double> = _speedKmh
-        private val _locationFix = MutableStateFlow<LocationFix?>(null)
-        override val locationFix: StateFlow<LocationFix?> = _locationFix
-
-        fun setFix(lat: Double, lng: Double) {
-            _locationFix.value = LocationFix(lat = lat, lng = lng, speedKmh = _speedKmh.value, accuracyM = 10f, timestampMillis = 0L)
-        }
-    }
 
     private fun urbanTariffDto(): TariffDto = TariffDto(
         id = "tariff-urban-2026",
@@ -99,30 +75,45 @@ class FareEngineImplAutoTollTest {
 
     @Test
     fun `an auto-detected toll is billed and visible on an ordinary metered trip`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() })
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(
+            speedSource,
+            backgroundScope,
+            TollRegistryProvider { oneWayRoadRegistry() },
+            nanoTimeSource = virtualNanoTimeSource(),
+        )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent() // let the async registry-snapshot load (see FareEngineImpl.startTrip) complete
 
-        speedSource.setFix(gantryLat, gantryLng)
-        advanceOneTick()
+        speedSource.emitFixAt(testScheduler.currentTime, gantryLat, gantryLng)
+        // No new fix on this tick: the vehicle stays at the gantry the line above put it at.
+        advanceOneTickWithNoNewFix()
 
         val state = engine.state.value
         assertEquals(1, state.autoTollsApplied.size)
         assertEquals("MILITARY_E_RAMP", state.autoTollsApplied.first().roadId)
         assertEquals(BigDecimal("2.15"), state.breakdown.tolls)
         // flagfall 5.17 + psl 1.32 + toll 2.15 = 8.64, plus the one second of WAITING-mode accrual
-        // advanceOneTick() itself drives at speed 0 (1/60 min * 1.130 c/min ≈ 0.0188) — rounded to
-        // cents for the same reason FareEngineImplRunningDisplayTest's own waiting-accrual test
-        // rounds before comparing (see that file's doc): raw ticked amounts are kept unrounded
-        // between ticks by design.
-        assertEquals(BigDecimal("8.66"), state.total.setScale(2, RoundingMode.HALF_UP))
+        // the tick itself drives at speed 0 (1/60 min * 1.130 c/min ≈ 0.0188) = 8.6588.
+        //
+        // 8.65, not the 8.66 this asserted before F8. The dial no longer sums [FareBreakdown]
+        // itself; it publishes the pure engine's own `close(...).grandTotal`, which truncates to
+        // cents per Act s76(5)/(6) (`roundDownToCent`) rather than rounding half-up, because the
+        // regulated maximum fare must never be exceeded. 8.6588 -> 8.65. The old expectation was
+        // the naive sum rounded UP — the dial previewing a fare one cent higher than the bill that
+        // would actually be charged.
+        assertEquals(BigDecimal("8.65"), state.total.setScale(2, RoundingMode.HALF_UP))
     }
 
     @Test
     fun `the same auto-detected toll is recorded but never inflates a negotiated fixed price`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() })
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(
+            speedSource,
+            backgroundScope,
+            TollRegistryProvider { oneWayRoadRegistry() },
+            nanoTimeSource = virtualNanoTimeSource(),
+        )
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -131,8 +122,9 @@ class FareEngineImplAutoTollTest {
         )
         runCurrent()
 
-        speedSource.setFix(gantryLat, gantryLng)
-        advanceOneTick()
+        speedSource.emitFixAt(testScheduler.currentTime, gantryLat, gantryLng)
+        // No new fix on this tick: the vehicle stays at the gantry the line above put it at.
+        advanceOneTickWithNoNewFix()
 
         val state = engine.state.value
         // Recorded for audit — the toll genuinely happened and is still tracked...
@@ -144,12 +136,18 @@ class FareEngineImplAutoTollTest {
 
     @Test
     fun `the driver can remove a false-positive auto-detected toll`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() })
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(
+            speedSource,
+            backgroundScope,
+            TollRegistryProvider { oneWayRoadRegistry() },
+            nanoTimeSource = virtualNanoTimeSource(),
+        )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()
-        speedSource.setFix(gantryLat, gantryLng)
-        advanceOneTick()
+        speedSource.emitFixAt(testScheduler.currentTime, gantryLat, gantryLng)
+        // No new fix on this tick: the vehicle stays at the gantry the line above put it at.
+        advanceOneTickWithNoNewFix()
         assertEquals(1, engine.state.value.autoTollsApplied.size)
         val tollsBeforeRemoval = engine.state.value.breakdown.tolls
 
@@ -164,30 +162,37 @@ class FareEngineImplAutoTollTest {
         assertTrue(state.breakdown.tolls < tollsBeforeRemoval)
 
         // Re-crossing the same gantry afterwards must not silently re-add it.
-        speedSource.setFix(gantryLat, gantryLng + 0.00001)
-        advanceOneTick()
+        speedSource.emitFixAt(testScheduler.currentTime, gantryLat, gantryLng + 0.00001)
+        advanceOneTickWithNoNewFix()
         assertTrue(engine.state.value.autoTollsApplied.isEmpty())
     }
 
     @Test
     fun `an empty, never-cached toll registry detects nothing and never blocks the trip`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
+        val speedSource = FakeMeterGps(0.0)
         // No TollRegistryProvider passed — defaults to TollRegistryProvider.EMPTY, the honest
         // "offline, or nothing has ever been cached" fallback (see that companion's own doc).
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()
 
-        speedSource.setFix(gantryLat, gantryLng)
-        advanceOneTick()
+        speedSource.emitFixAt(testScheduler.currentTime, gantryLat, gantryLng)
+        // No new fix on this tick: the vehicle stays at the gantry the line above put it at.
+        advanceOneTickWithNoNewFix()
 
         val state = engine.state.value
         assertTrue(state.autoTollsApplied.isEmpty())
         assertTrue(state.unpricedTollRoads.isEmpty())
         assertEquals(BigDecimal.ZERO, state.breakdown.tolls)
         // The ordinary metered accrual must be completely unaffected — flagfall 5.17 + psl 1.32,
-        // plus the same one second of WAITING-mode accrual as the other test above (rounded to
-        // cents for the same reason).
-        assertEquals(BigDecimal("6.51"), state.total.setScale(2, RoundingMode.HALF_UP))
+        // plus the same one second of WAITING-mode accrual as the other test above: 6.5088.
+        //
+        // 6.50, not the 6.51 this asserted before F8. The dial no longer sums [FareBreakdown]
+        // itself; it publishes the pure engine's own `close(...).grandTotal`, which applies
+        // `roundDownToCent` per Act s76(5)/(6) — the regulated maximum fare must never be exceeded,
+        // so a computed subtotal is truncated rather than rounded up. 6.5088 -> 6.50. The old value
+        // was the naive sum rounded half-up, i.e. the dial showing one cent MORE than the bill it
+        // was previewing. This test now pins the billed figure, which is the point of F8.
+        assertEquals(BigDecimal("6.50"), state.total.setScale(2, RoundingMode.HALF_UP))
     }
 }

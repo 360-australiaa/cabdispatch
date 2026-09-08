@@ -40,17 +40,25 @@ import java.util.UUID
 
 class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
-    // TODO(integration agent): see FareEngine's doc comment — this instance
-    // is recreated per nav entry, not process-scoped.
-    private val fareEngine: FareEngine = FareEngineImpl(
-        AppContainer.speedSource,
-        viewModelScope,
-        // Real automatic NSW toll-road registry — a pure, fast local Room read (see
-        // TollRegistryCache.snapshot's own doc), never a network call from this hot path.
-        TollRegistryProvider { AppContainer.tollRegistryCache.snapshot() },
-    )
+    /**
+     * The running meter — **process-scoped**, owned by [AppContainer.meterController], not by this
+     * ViewModel.
+     *
+     * F4 (architecture audit 2026-09-08, §2.1, rated blocker) resolved the standing TODO that used
+     * to sit here. This class constructed its own [FareEngineImpl] on `viewModelScope`, which tied
+     * the fare's lifetime to a navigation entry: press Back and the tick loop was cancelled, let
+     * Doze suspend a backgrounded app and it stopped, lose the process and it was gone — each of
+     * them a trip that quietly stops being charged for with the passenger still in the car.
+     *
+     * This ViewModel is now what the audit asked for: a thin observer. It reads [fareState] and
+     * forwards driver actions. It owns no fare state, starts no tick loop, and persists nothing —
+     * [MeterController] does all three, for as long as the *hiring* lasts rather than as long as
+     * this screen does. Creating and destroying this class as often as navigation likes is now
+     * free.
+     */
+    private val meter = AppContainer.meterController
 
-    val fareState: StateFlow<FareState> = fareEngine.state
+    val fareState: StateFlow<FareState> = meter.state
 
     /**
      * True only when this ViewModel instance was created for a trip that's
@@ -105,28 +113,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
         val tripContext = SessionHolder.pendingTrip.value
         if (tripContext != null) {
-            fareEngine.startTrip(
-                tripContext.tariff,
-                tripContext.startLat,
-                tripContext.startLng,
-                isMaxiVehicle = tripContext.isMaxiVehicle,
-                passengerCount = tripContext.passengerCount,
-                wheelchairHiring = tripContext.wheelchairHiring,
-                airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
-                // "Set Price" fix (product-reported, 2026-09): this was already persisted to Room
-                // (openTripInRoom below) and already billed correctly at Close & Pay
-                // (reconstructFareState wires TripEntity.negotiatedTotal into the pure engine's
-                // close()) — but the LIVE engine never learned about it, so the dial kept showing
-                // the ordinary metered accrual for a trip the driver had already fixed a price on.
-                // See FareState.negotiatedTotal/.total's doc for what this changes (display only,
-                // never what gets billed).
-                negotiatedTotal = tripContext.negotiatedTotal?.let { runCatching { BigDecimal(it) }.getOrNull() },
-            )
+            // Opens the Room row and starts the process-scoped meter against it. The
+            // `fareState.onEach { persistTick() }` subscription that used to be launched here on
+            // viewModelScope has moved into MeterController along with the engine — see that
+            // class's doc for why hoisting the accrual without its persistence would have been
+            // worse than hoisting neither.
             openTripInRoom(tripContext)
-
-            fareState
-                .onEach { state -> persistTick(state) }
-                .launchIn(viewModelScope)
         }
 
         fareState
@@ -182,9 +174,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         // disagree in the first place.
         val clientUuid = UUID.randomUUID().toString()
         SessionHolder.markTripLive(clientUuid)
+        // Started BEFORE the suspending Room write below, not after: startTrip() sets the
+        // initial FareState synchronously (status/timeClass/peak breakdown), and the `initial` read
+        // a few lines down depends on that having already happened — the same ordering the old
+        // code relied on when it called fareEngine.startTrip() from init.
+        meter.startTrip(tripContext, clientUuid)
         viewModelScope.launch {
-            // fareEngine.startTrip() above set the initial state synchronously
-            // (status/timeClass/peak breakdown), so this read is safe here.
             val initial = fareState.value
             val trip = tripRepository.openTrip(
                 clientUuid = clientUuid,
@@ -336,14 +331,14 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePause() {
         when (fareState.value.status) {
-            TripStatus.HIRED -> fareEngine.pause()
-            TripStatus.STOPPED -> fareEngine.resume()
+            TripStatus.HIRED -> meter.pause()
+            TripStatus.STOPPED -> meter.resume()
             else -> Unit
         }
     }
 
     fun addToll(preset: TollPreset) {
-        fareEngine.addToll(preset)
+        meter.addToll(preset)
     }
 
     /** Driver-initiated correction of an auto-detected toll — see [FareEngine.removeAutoToll]'s
@@ -351,12 +346,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * durably reflects the correction, same "no separate persistence call needed" pattern
      * [addToll] already relies on. */
     fun removeAutoToll(roadId: String) {
-        fareEngine.removeAutoToll(roadId)
+        meter.removeAutoToll(roadId)
     }
 
     /** Driver dismissal of a "needs manual toll" notice — see [FareEngine.dismissUnpricedToll]'s doc. */
     fun dismissUnpricedToll(roadId: String) {
-        fareEngine.dismissUnpricedToll(roadId)
+        meter.dismissUnpricedToll(roadId)
     }
 
     /**
@@ -369,7 +364,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * original one — see [TripRepository.updatePassengerCount]'s doc.
      */
     fun updatePassengerCount(count: Int) {
-        fareEngine.updatePassengerCount(count)
+        meter.updatePassengerCount(count)
         val clientUuid = persistedTripClientUuid ?: return
         viewModelScope.launch {
             runCatching { tripRepository.updatePassengerCount(clientUuid, count) }
@@ -390,15 +385,36 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * guard, which only reacts to the *first* qualifying emission.
      */
     fun endTrip(onClosed: () -> Unit) {
-        val closedState = fareEngine.close()
+        // Stops the engine, ends the persistence subscription, and takes the foreground service
+        // down — see MeterController.stopTrip's doc for why the service ends with the fare rather
+        // than with Close & Pay.
+        val closedState = meter.stopTrip()
         val clientUuid = persistedTripClientUuid
         if (clientUuid == null) {
             onClosed()
             return
         }
-        val point = nextTracePoint()
+        // One last synchronous persist of the final state before navigating. MeterController's own
+        // subscription has just been cancelled by stopTrip(), and awaiting this write (rather than
+        // firing and forgetting) is what stops S4's `observeActiveTrip` Flow from initialising off
+        // the second-to-last tick's counters and never seeing the final one — see
+        // CloseAndPayViewModel's `loadTariffAndInit` guard, which only reacts to the FIRST
+        // qualifying emission.
         viewModelScope.launch {
-            doPersistTick(clientUuid, closedState, point)
+            runCatching {
+                tripRepository.tick(
+                    clientUuid = clientUuid,
+                    newPoints = emptyList(),
+                    distanceM = closedState.distanceKm.movePointRight(3).setScale(0, RoundingMode.HALF_UP).toInt(),
+                    movingS = closedState.movingSeconds,
+                    waitingS = closedState.waitingSeconds,
+                    tolls = closedState.breakdown.tolls.toPlainString(),
+                    autoTolledRoads = closedState.autoTollsApplied.associate { it.roadId to it.amount.toPlainString() },
+                    unpricedTollRoadIds = closedState.unpricedTollRoads.map { it.roadId },
+                    accruedDistanceCharge = closedState.breakdown.distanceAmount.toPlainString(),
+                    accruedWaitingCharge = closedState.breakdown.waitingAmount.toPlainString(),
+                )
+            }
             SessionHolder.clearLiveTrip()
             onClosed()
         }

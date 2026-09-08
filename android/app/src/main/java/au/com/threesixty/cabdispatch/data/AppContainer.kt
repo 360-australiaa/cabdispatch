@@ -7,11 +7,13 @@ import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_8_9
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_9_10
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_10_11
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
 import au.com.threesixty.cabdispatch.data.remote.MapboxReverseGeocoding
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
+import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.RefreshRequestDto
 import au.com.threesixty.cabdispatch.data.remote.RefreshResponseDto
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
@@ -38,7 +40,11 @@ import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
+import au.com.threesixty.cabdispatch.domain.FareEngine
+import au.com.threesixty.cabdispatch.domain.FareEngineImpl
+import au.com.threesixty.cabdispatch.domain.MeterController
 import au.com.threesixty.cabdispatch.domain.SpeedSource
+import au.com.threesixty.cabdispatch.domain.TollRegistryProvider
 import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
 import au.com.threesixty.cabdispatch.domain.location.SwitchableSpeedSource
 import au.com.threesixty.cabdispatch.domain.RemoteTripStatsRepository
@@ -245,7 +251,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
             .build()
 
         val loggingInterceptor = HttpLoggingInterceptor().apply {
@@ -292,6 +298,11 @@ object AppContainer {
         // returns an honest empty registry (never throws) if this hasn't completed yet by the time
         // a trip starts — see [TollRegistryCache]'s own "offline-empty-cache" doc.
         startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+        // F4's restart half: a process that died mid-hiring left an OPEN trip row behind, and the
+        // passenger is very likely still in the car. Rebuild the live meter from it and resume
+        // ticking, so the dial comes back showing the real running total rather than zero. A no-op
+        // in the ordinary case (no open trip) — see MeterController.restoreOpenTripIfAny's doc.
+        startupScope.launch { runCatching { meterController.restoreOpenTripIfAny() } }
 
         // Begins supervising session/shift state for the ambient position heartbeat (see
         // [livePositionHeartbeat]'s own doc) — must be started unconditionally here, not left to
@@ -437,6 +448,21 @@ object AppContainer {
      * per GPS fix. */
     val tollRegistryCache by lazy { TollRegistryCache(tollRegistryDao, apiService) }
 
+    /**
+     * Fire-and-forget toll-registry refresh — T2 (architecture audit 2026-09-08, §2.3).
+     *
+     * The refresh itself is a suspending network call; every caller that needs to trigger one is a
+     * plain non-suspending callback ([au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger]'s
+     * `onAvailable`). Rather than have each grow its own scope, they call this. Failures are
+     * swallowed on purpose: an empty or stale registry is an already-handled, honestly-degraded
+     * state (see [TollRegistryCache]'s own "offline-empty-cache" doc — the meter simply detects
+     * nothing and the driver keeps using manual toll presets), so a failed refresh must never
+     * become a crash or a user-visible error on a path the driver did not ask for.
+     */
+    fun refreshTollRegistry() {
+        startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+    }
+
     // --- S4-S6 agent: fare-breakdown engine + hardware gateways ---
     //
     // RESOLVED (integration pass): there are still TWO "FareEngine" types in
@@ -471,6 +497,62 @@ object AppContainer {
     // `pureFareEngine` (not the bare `fareEngine` the live-ticking one might
     // suggest) specifically so it does not collide with that one.
     val pureFareEngine: PureFareEngine by lazy { PureFareEngine() }
+
+    /**
+     * The live, ticking meter — process-scoped, not screen-scoped. **F4** (architecture audit
+     * 2026-09-08, §2.1, rated blocker).
+     *
+     * The note immediately above explains why there are two `FareEngine` types and why they stay
+     * unconverged. This property is about a different question that note left open: not *which*
+     * engine computes the live fare, but *how long that engine is allowed to live*.
+     *
+     * It used to be constructed inside `HiredViewModel` on `viewModelScope`. That made the fare's
+     * lifetime the navigation entry's lifetime, so a fare stopped accruing when the driver pressed
+     * Back, when Doze suspended a backgrounded app's coroutines, or when the process was killed —
+     * every one of those with a passenger still in the car. Here, on a `SupervisorJob` scope that
+     * ends only with the process and driven by
+     * [au.com.threesixty.cabdispatch.domain.MeterForegroundService], its lifetime is the *hiring's*
+     * lifetime, which is the only one that was ever correct.
+     *
+     * Own scope rather than [startupScope], for the same isolation reason [speedSource] and
+     * [duressController] each take one: the money path must not be able to be taken down by an
+     * unrelated coroutine failing somewhere else in a shared scope.
+     */
+    val fareEngine: FareEngine by lazy {
+        FareEngineImpl(
+            speedSource,
+            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            // Real automatic NSW toll-road registry — a pure, fast local Room read (see
+            // TollRegistryCache.snapshot's own doc), never a network call from this hot path.
+            TollRegistryProvider { tollRegistryCache.snapshot() },
+        )
+    }
+
+    /**
+     * Owns the running hiring: [fareEngine], the Room persistence subscription that used to live on
+     * `HiredViewModel.viewModelScope` alongside it, and the foreground service's lifecycle. See
+     * [MeterController]'s own doc for why the accrual and its persistence had to be hoisted
+     * together rather than one without the other.
+     *
+     * Published to [MeterController.instance] on construction so
+     * [au.com.threesixty.cabdispatch.domain.MeterForegroundService] — which the OS constructs, and
+     * which therefore cannot be handed dependencies — can reach the running meter to render its
+     * notification.
+     */
+    val meterController: MeterController by lazy {
+        MeterController(
+            appContext = appContext,
+            fareEngine = fareEngine,
+            tripRepository = tripRepository,
+            speedSource = speedSource,
+            tariffLookup = { tariffId ->
+                tariffDao.getById(tariffId)?.let { row ->
+                    runCatching { cabDispatchJson.decodeFromString<TariffDto>(row.rawJson) }.getOrNull()
+                }
+            },
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        ).also { MeterController.publish(it) }
+    }
 
     // Hardware interfaces — see android/README.md "Real vs mocked". The rest are clearly-labeled
     // mocks (no certified payment/printer/SMS/email hardware exists to integrate against in this
