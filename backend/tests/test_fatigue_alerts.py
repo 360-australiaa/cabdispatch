@@ -366,9 +366,59 @@ async def test_list_and_acknowledge_fatigue_alerts(client: AsyncClient, session:
     assert resp.json()["acknowledged"] is True
 
 
-async def test_list_fatigue_alerts_requires_dispatch_role(client: AsyncClient, session: AsyncSession):
-    headers = await auth_headers(client, session, role="driver")
-    resp = await client.get("/v1/fatigue-alerts", headers=headers)
+async def test_driver_lists_only_their_own_fatigue_alerts(client: AsyncClient, session: AsyncSession):
+    """A driver may list their OWN alerts; nobody else's; and may not acknowledge.
+
+    Replaces test_list_fatigue_alerts_requires_dispatch_role, which asserted a
+    bare driver GET was a 403. That policy was real, and the driver home screen
+    was already calling this endpoint for its own count -- so every driver on
+    every tablet logged a 403 on every poll (seen 2026-09-08). Being told you
+    have been flagged as fatigued is not ops-only data; you are the one reader
+    who can act on it fastest.
+    """
+    headers_a = await auth_headers(client, session, role="driver", tenant_name="Fatigue Self Scope")
+    tenant_id = await _tenant_of(headers_a)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    over_limit = datetime.now(UTC) - timedelta(hours=settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS + 1)
+
+    async def raise_alert_for(headers: dict) -> str:
+        driver_id = _user_id_of(headers)
+        vehicle_id = str(uuid.uuid4())
+        shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_limit)
+        trip = await _create_trip(
+            client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id, shift_id=shift["id"]
+        )
+        resp = await client.patch(
+            f"/v1/trips/{trip['id']}/tick", json={"points": [_point(speed_kmh=40.0)]}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        return driver_id
+
+    driver_a = await raise_alert_for(headers_a)
+    # SAME tenant as driver A -- auth_headers mints a fresh tenant unless told otherwise.
+    headers_b = await auth_headers(client, session, role="driver", tenant_id=tenant_id)
+    driver_b = await raise_alert_for(headers_b)
+    assert driver_a != driver_b
+
+    # Bare GET as a driver: 200, and ONLY their own rows -- never the tenant's.
+    resp = await client.get("/v1/fatigue-alerts", headers=headers_a)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] >= 1
+    assert {row["driver_id"] for row in body["items"]} == {driver_a}
+
+    # Asking for yourself explicitly is the same answer.
+    resp = await client.get("/v1/fatigue-alerts", params={"driver_id": driver_a}, headers=headers_a)
+    assert resp.status_code == 200
+    assert {row["driver_id"] for row in resp.json()["items"]} == {driver_a}
+
+    # Asking for someone else is refused outright, not silently narrowed.
+    resp = await client.get("/v1/fatigue-alerts", params={"driver_id": driver_b}, headers=headers_a)
+    assert resp.status_code == 403
+
+    # Acknowledging stays dispatch-only.
+    own_alert_id = body["items"][0]["id"]
+    resp = await client.post(f"/v1/fatigue-alerts/{own_alert_id}/acknowledge", json={}, headers=headers_a)
     assert resp.status_code == 403
 
 

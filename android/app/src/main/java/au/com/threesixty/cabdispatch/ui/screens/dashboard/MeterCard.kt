@@ -96,6 +96,13 @@ internal fun MeterCard(
     onSetPrice: () -> Unit,
     onVouchers: () -> Unit,
     modifier: Modifier = Modifier,
+    // A fare is OPEN in Room right now (DeckHomeScreen's real observeActiveTrip read). Seen on
+    // the tablet, 2026-09-08: after the process was killed mid-fare the app came back on the
+    // dashboard with this card reading OFF / START METER while the header said HIRED and the
+    // rail said FARE RUNNING. Two of three surfaces told the truth; the one with the biggest
+    // button did not, and that button would have started a second fare on top of the first.
+    hasActiveTrip: Boolean = false,
+    onResumeMeter: () -> Unit = {},
 ) {
     val fixedFareActive = negotiatedTotal != null
     // Glassmorphism pass (2026-09-07, design brief item 3): the single most prominent dashboard
@@ -137,6 +144,8 @@ internal fun MeterCard(
                     enabled = state.tariff != null,
                     onStartMeter = onStartMeter,
                     onCancelStart = onCancelStart,
+                    hasActiveTrip = hasActiveTrip,
+                    onResumeMeter = onResumeMeter,
                     size = dialSize,
                 )
             }
@@ -361,6 +370,9 @@ internal fun MeterDial(
     enabled: Boolean,
     onStartMeter: () -> Unit,
     onCancelStart: () -> Unit,
+    /** See [MeterCard]'s parameter of the same name: an open fare must never be offered START. */
+    hasActiveTrip: Boolean = false,
+    onResumeMeter: () -> Unit = {},
     /** Measured by the caller from its own constraints (A3) rather than hardcoded here - see
      * [MeterCard]'s BoxWithConstraints for the 16:9 clipping bug that fixed. */
     size: androidx.compose.ui.unit.Dp,
@@ -397,10 +409,12 @@ internal fun MeterDial(
                 color = CaptainPalette.textSecondary,
                 modifier = Modifier.padding(top = Space.xs),
             )
-            val (label, sub) = when (meterPhase) {
-                MeterStartPhase.Idle -> "OFF" to "Tap to start a new fare"
-                MeterStartPhase.Starting -> "STARTING" to "Starting meter…"
-                is MeterStartPhase.Failed -> "OFF" to meterPhase.message
+            val resumable = hasActiveTrip && meterPhase !is MeterStartPhase.Starting
+            val (label, sub) = when {
+                resumable -> "RUNNING" to "A fare is open — return to the meter"
+                meterPhase is MeterStartPhase.Starting -> "STARTING" to "Starting meter…"
+                meterPhase is MeterStartPhase.Failed -> "OFF" to meterPhase.message
+                else -> "OFF" to "Tap to start a new fare"
             }
             // 62sp -> 76sp: the single biggest number on the screen, on purpose — an older driver
             // glancing over should never have to squint to know whether the meter is running. Bold
@@ -435,10 +449,14 @@ internal fun MeterDial(
             Spacer(Modifier.height(Space.md))
             // Primary action on the whole screen — widened and heightened well past the standard
             // button size (184x54 -> 240x76) so it reads as unmistakably THE thing to press.
-            if (meterPhase is MeterStartPhase.Starting) {
-                CaptainButton(text = "CANCEL", outline = true, widthDp = 220, heightDp = 64, fontSize = 20.sp, onClick = onCancelStart)
-            } else {
-                StartMeterButton(widthDp = 220, heightDp = 64, fontSize = 20.sp, enabled = enabled, onClick = onStartMeter)
+            when {
+                meterPhase is MeterStartPhase.Starting ->
+                    CaptainButton(text = "CANCEL", outline = true, widthDp = 220, heightDp = 64, fontSize = 20.sp, onClick = onCancelStart)
+                // Never offer START METER over an open fare -- see hasActiveTrip's doc.
+                resumable ->
+                    CaptainButton(text = "RETURN TO METER", widthDp = 240, heightDp = 64, fontSize = 18.sp, onClick = onResumeMeter)
+                else ->
+                    StartMeterButton(widthDp = 220, heightDp = 64, fontSize = 20.sp, enabled = enabled, onClick = onStartMeter)
             }
         }
     }

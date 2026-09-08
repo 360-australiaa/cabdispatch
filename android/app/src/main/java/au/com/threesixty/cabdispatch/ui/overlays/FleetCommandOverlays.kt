@@ -154,6 +154,15 @@ fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
         }
     }
 
+    // Nothing to update to means nothing to demand. The depot's flag and the publish record
+    // disagree (UpToDate), and this panel used to say exactly that -- across the top of the meter
+    // dial and the dispatch card, for as long as the flag stayed set. Seen on the tablet the first
+    // time the home screen was reached, 2026-09-08. A driver cannot act on it and the depot can
+    // already see its own flag, so the loud top-centre panel stands down for that one state. The
+    // moment a release IS published the checker moves to Available and the panel returns with a
+    // real UPDATE action.
+    if (updateState is AppUpdateState.UpToDate) return
+
     Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier

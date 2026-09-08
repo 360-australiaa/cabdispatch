@@ -235,6 +235,17 @@ fun DeckHomeScreen(
     // jumping to Profile — the card itself carries the "View profile" path so nothing is lost.
     var showDriverId by rememberSaveable { mutableStateOf(false) }
     var meterPhase by remember { mutableStateOf<MeterStartPhase>(MeterStartPhase.Idle) }
+    // Resume, do not restart (tablet, 2026-09-08). After a process death mid-fare -- an upgrade,
+    // Doze, a crash -- the app came back on the DASHBOARD pane while Room still held the open
+    // trip: header HIRED, rail FARE RUNNING, meter card OFF / START METER. The route that reads
+    // the open trip and resumes the engine is HIRED, and nothing sent the driver there. The first
+    // time an open fare is observed on this screen while it is idle on the dashboard, go to the
+    // meter. Keyed on the open-fare flag, so it fires on the false-to-true edge and never on a plain recomposition.
+    LaunchedEffect(hasActiveTrip) {
+        if (hasActiveTrip && !startOnMeter && pane == CaptainPane.DASHBOARD && meterPhase == MeterStartPhase.Idle) {
+            pane = CaptainPane.METER
+        }
+    }
     val scope = rememberCoroutineScopeCompat()
 
     val duressState by AppContainer.duressController.state.collectAsState()
@@ -414,6 +425,8 @@ fun DeckHomeScreen(
                                     meterPhase = meterPhase,
                                     negotiatedTotal = pendingTrip?.negotiatedTotal,
                                     onStartMeter = { showTripDetails = true },
+                                    hasActiveTrip = hasActiveTrip,
+                                    onResumeMeter = { pane = CaptainPane.METER },
                                     onCancelStart = ::onCancelStart,
                                     onSetPrice = { showSetPrice = true },
                                     onVouchers = { showVoucherInfo = true },
