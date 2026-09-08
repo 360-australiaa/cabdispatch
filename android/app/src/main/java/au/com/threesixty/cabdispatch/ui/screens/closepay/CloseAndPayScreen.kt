@@ -77,6 +77,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
@@ -187,6 +188,9 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
 
     Column(modifier = Modifier.fillMaxSize()) {
         ClosingStatusStrip()
+        // Chip lane: the app-level status chips sit just under the strip; every sub-screen's
+        // headline starts below them (tablet, 2026-09-08: FLEET LOCKED clipped the first letter).
+        Spacer(Modifier.height(Space.lg))
         Box(modifier = Modifier.weight(1f)) {
             // Premium pass (2026-08-29): sub-screens previously hard-cut. Entering a method's
             // entry flow slides in from the right; returning to the picker slides back from the
@@ -244,12 +248,16 @@ private fun ClosingStatusStrip() {
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HudStatusPill(
-            label = "Trip",
-            value = "CLOSING",
-            tone = HudTone.Danger,
-        )
-        Spacer(Modifier.weight(1f))
+        // The pill fills whatever width it is given, so it is boxed into the weighted slot and
+        // the clock keeps its own intrinsic width at the end -- otherwise the clock was pushed
+        // clean off the right edge (tablet, 2026-09-08).
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            HudStatusPill(
+                label = "Trip",
+                value = "CLOSING",
+                tone = HudTone.Danger,
+            )
+        }
         Text(
             rememberDeckClock(),
             fontFamily = RobotoMonoFamily,
@@ -1332,17 +1340,29 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
     val scope = rememberCoroutineScope2()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
+        // Same shape as ClosingStatusStrip, for the same reasons (tablet, 2026-09-08): the pill
+        // printed "TRIP CLOSED" over the clock, and the strip never reported itself as chrome so
+        // FLEET LOCKED sat on the receipt's operator line.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .reportsChromeHeader()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                HudStatusPill(label = "Trip", value = "CLOSED", tone = HudTone.Success)
+            }
             Text(
                 rememberDeckClock(),
                 fontFamily = RobotoMonoFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
                 color = CaptainPalette.textSecondary,
-                modifier = Modifier.align(Alignment.CenterStart),
             )
-            HudStatusPill(label = "Trip", value = "CLOSED", tone = HudTone.Success, modifier = Modifier.align(Alignment.Center))
         }
+        Spacer(Modifier.height(Space.lg))
         Row(modifier = Modifier.weight(1f).padding(horizontal = 96.dp, vertical = 24.dp)) {
             // Receipt paper — deliberately kept cream/monospace regardless of app theme; it mimics
             // a real thermal-printer slip, not a themed UI surface.
