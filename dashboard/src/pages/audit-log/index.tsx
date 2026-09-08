@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { Download, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import {
   Badge,
   Button,
@@ -9,13 +9,47 @@ import {
   Modal,
   PageHeader,
   Pagination,
+  Select,
   Table,
   type TableColumn,
 } from "@/components/ui";
 import { useAuditLogQuery, useVerifyAuditLogChain, PAGE_LIMIT, type AuditLogFilters } from "./api";
+import { downloadAuditLogCsv } from "./csv";
+import { classifyEntry } from "./diff";
 import type { AuditLogEntry } from "./types";
 
 const EM_DASH = String.fromCharCode(8212);
+
+/** Known `action`/`entity_type` values, enumerated from every
+ * `record_audit(action=..., entity_type=...)` call site in the backend
+ * (`git grep 'action="\|entity_type="' backend/app/services backend/app/api`).
+ * There is no distinct-values endpoint and adding one is a backend change
+ * outside this workstream, so these are a plain literal list rather than
+ * free text -- see the plan's `<Select>` filters requirement. A value the
+ * backend starts emitting later and this list hasn't caught up with would
+ * simply not filter to anything -- it would not silently swallow rows,
+ * since "All" is always the default. */
+const ACTION_OPTIONS = [
+  { value: "", label: "All actions" },
+  { value: "create", label: "create" },
+  { value: "update", label: "update" },
+  { value: "delete", label: "delete" },
+  { value: "close", label: "close" },
+  { value: "reassign", label: "reassign" },
+  { value: "tick", label: "tick" },
+  { value: "device_registered", label: "device_registered" },
+  { value: "device_secret_rotated", label: "device_secret_rotated" },
+  { value: "shift_device_vehicle_mismatch", label: "shift_device_vehicle_mismatch" },
+  { value: "shift_force_closed_driver_deleted", label: "shift_force_closed_driver_deleted" },
+  { value: "shift_force_closed_vehicle_deleted", label: "shift_force_closed_vehicle_deleted" },
+];
+
+const ENTITY_TYPE_OPTIONS = [
+  { value: "", label: "All entity types" },
+  { value: "device", label: "device" },
+  { value: "shift", label: "shift" },
+  { value: "trip", label: "trip" },
+];
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return EM_DASH;
@@ -37,29 +71,6 @@ function formatJsonValue(value: unknown): string {
   return String(value);
 }
 
-/** Diffs a generic before/after snapshot pair into {field, from, to} rows.
- * Unlike a single-entity change log (see tariffs/ChangeLogModal.tsx), this
- * page covers every entity type in the system, so field labels are just the
- * raw JSON keys -- there is no fixed per-domain label map to draw on here. */
-function diffJson(
-  before: Record<string, unknown> | null,
-  after: Record<string, unknown> | null,
-): { field: string; from: unknown; to: unknown }[] {
-  const keys = new Set<string>([
-    ...(before ? Object.keys(before) : []),
-    ...(after ? Object.keys(after) : []),
-  ]);
-  const rows: { field: string; from: unknown; to: unknown }[] = [];
-  for (const key of keys) {
-    const fromVal = before ? before[key] : undefined;
-    const toVal = after ? after[key] : undefined;
-    if (String(fromVal) !== String(toVal)) {
-      rows.push({ field: key, from: fromVal, to: toVal });
-    }
-  }
-  return rows.sort((a, b) => a.field.localeCompare(b.field));
-}
-
 /** Read-only audit trail for the whole tenant (GET /v1/audit-log), plus a
  * prominent tamper-evidence check (GET /v1/audit-log/verify). No
  * create/edit/delete affordances anywhere here -- the backend exposes none
@@ -72,6 +83,9 @@ export default function AuditLogPage() {
   const [dateTo, setDateTo] = useState("");
   const [offset, setOffset] = useState(0);
   const [detailEntry, setDetailEntry] = useState<AuditLogEntry | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   const filters: AuditLogFilters = {
     action: actionFilter.trim() || undefined,
@@ -102,6 +116,24 @@ export default function AuditLogPage() {
     setDateFrom("");
     setDateTo("");
     setOffset(0);
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const { truncated } = await downloadAuditLogCsv(filters);
+      if (truncated) {
+        setExportNotice(
+          "The export was cut off before covering every matching entry -- narrow the date range or filters and export again to get the rest.",
+        );
+      }
+    } catch {
+      setExportError("Could not export the audit log. Check the backend connection and try again.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   const columns: TableColumn<AuditLogEntry>[] = [
@@ -157,10 +189,11 @@ export default function AuditLogPage() {
     },
   ];
 
-  const detailChanges = detailEntry
-    ? diffJson(detailEntry.before_json, detailEntry.after_json)
-    : [];
-  const detailIsCreate = detailEntry != null && detailEntry.before_json == null;
+  const detailDiff = detailEntry ? classifyEntry(detailEntry) : null;
+  const detailChanges = detailDiff?.changes ?? [];
+  const detailIsCreate = detailDiff?.status === "create";
+  const detailIsDelete = detailDiff?.status === "delete";
+  const detailBeforeNotRecorded = detailDiff?.status === "before-not-recorded";
   const detailTitle = detailEntry
     ? detailEntry.action + " " + EM_DASH + " " + detailEntry.entity_type
     : undefined;
@@ -170,7 +203,15 @@ export default function AuditLogPage() {
       <PageHeader
         title="Audit Log"
         description="Immutable, append-only trail of every recorded change across the tenant. Nothing here can be edited or removed."
+        actions={
+          <Button variant="outline" disabled={exporting} onClick={handleExport}>
+            <Download className="h-4 w-4" /> {exporting ? "Exporting…" : "Export CSV"}
+          </Button>
+        }
       />
+
+      {exportError && <p className="mb-3 text-sm text-destructive">{exportError}</p>}
+      {exportNotice && <p className="mb-3 text-sm text-muted-foreground">{exportNotice}</p>}
 
       {/* The whole point of this page -- kept large, colored, and above the
        * filters/table so it can never read as a secondary action. */}
@@ -232,9 +273,9 @@ export default function AuditLogPage() {
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Action</label>
-            <Input
-              className="w-40"
-              placeholder="e.g. update"
+            <Select
+              className="w-56"
+              options={ACTION_OPTIONS}
               value={actionFilter}
               onChange={(e) => {
                 setActionFilter(e.target.value);
@@ -244,9 +285,9 @@ export default function AuditLogPage() {
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Entity type</label>
-            <Input
+            <Select
               className="w-40"
-              placeholder="e.g. trip"
+              options={ENTITY_TYPE_OPTIONS}
               value={entityTypeFilter}
               onChange={(e) => {
                 setEntityTypeFilter(e.target.value);
@@ -336,8 +377,24 @@ export default function AuditLogPage() {
         {detailEntry && (
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={detailIsCreate ? "success" : "default"}>
-                {detailIsCreate ? "Created" : "Changed"}
+              <Badge
+                variant={
+                  detailIsCreate
+                    ? "success"
+                    : detailIsDelete
+                      ? "destructive"
+                      : detailBeforeNotRecorded
+                        ? "outline"
+                        : "default"
+                }
+              >
+                {detailIsCreate
+                  ? "Created"
+                  : detailIsDelete
+                    ? "Deleted"
+                    : detailBeforeNotRecorded
+                      ? "Prior state not recorded"
+                      : "Changed"}
               </Badge>
               <span className="text-xs text-muted-foreground">
                 {formatDateTime(detailEntry.at)}
@@ -350,43 +407,59 @@ export default function AuditLogPage() {
               </span>
             </div>
 
-            <div className="max-h-[45vh] overflow-y-auto rounded-md border border-border">
-              <table className="w-full text-xs">
-                <thead className="bg-muted text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium">Field</th>
-                    {!detailIsCreate && (
-                      <th className="px-3 py-2 text-left font-medium">Before</th>
-                    )}
-                    <th className="px-3 py-2 text-left font-medium">After</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailChanges.length === 0 ? (
+            {detailBeforeNotRecorded ? (
+              // Honesty-over-polish (plan rule 11): this action's prior state was
+              // never captured (see `./diff.ts`'s module doc for the real
+              // example -- `device_secret_rotated`). Rendering a blank "Before"
+              // column here would look like "nothing existed before", which is
+              // not the same claim as "we don't know what existed before". Say
+              // the true thing instead of a plausible-looking diff.
+              <div className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                This entry's action ({detailEntry.action}) does not carry a captured "before" state, so
+                no field-level diff can be reconstructed. The recorded "after" values are below.
+                <div className="mt-2 rounded border border-border bg-background p-2 font-mono">
+                  {formatJsonValue(detailEntry.after_json)}
+                </div>
+              </div>
+            ) : (
+              <div className="max-h-[45vh] overflow-y-auto rounded-md border border-border">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted text-muted-foreground">
                     <tr>
-                      <td
-                        colSpan={detailIsCreate ? 2 : 3}
-                        className="px-3 py-4 text-center text-muted-foreground"
-                      >
-                        No field-level changes recorded on this entry.
-                      </td>
+                      <th className="px-3 py-2 text-left font-medium">Field</th>
+                      {!detailIsCreate && (
+                        <th className="px-3 py-2 text-left font-medium">Before</th>
+                      )}
+                      <th className="px-3 py-2 text-left font-medium">After</th>
                     </tr>
-                  ) : (
-                    detailChanges.map(({ field, from, to }) => (
-                      <tr key={field} className="border-t border-border/60">
-                        <td className="px-3 py-1.5 font-medium text-foreground">{field}</td>
-                        {!detailIsCreate && (
-                          <td className="px-3 py-1.5 text-muted-foreground line-through">
-                            {formatJsonValue(from)}
-                          </td>
-                        )}
-                        <td className="px-3 py-1.5 text-foreground">{formatJsonValue(to)}</td>
+                  </thead>
+                  <tbody>
+                    {detailChanges.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={detailIsCreate ? 2 : 3}
+                          className="px-3 py-4 text-center text-muted-foreground"
+                        >
+                          No field-level changes recorded on this entry.
+                        </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    ) : (
+                      detailChanges.map(({ field, from, to }) => (
+                        <tr key={field} className="border-t border-border/60">
+                          <td className="px-3 py-1.5 font-medium text-foreground">{field}</td>
+                          {!detailIsCreate && (
+                            <td className="px-3 py-1.5 text-muted-foreground line-through">
+                              {formatJsonValue(from)}
+                            </td>
+                          )}
+                          <td className="px-3 py-1.5 text-foreground">{formatJsonValue(to)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className="flex flex-col gap-1 text-xs text-muted-foreground">
               <span className="font-mono break-all">hash: {detailEntry.hash}</span>
