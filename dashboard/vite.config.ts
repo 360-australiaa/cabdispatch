@@ -25,5 +25,11 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/setupTests.ts"],
     css: false,
+    // `e2e/` holds Playwright specs, which import from `@playwright/test` and
+    // drive a real browser against a real backend. Vitest would otherwise
+    // collect them by filename and fail on the first Playwright-only API.
+    // Two runners, two directories: `src/**/*.test.*` is vitest,
+    // `e2e/**/*.spec.ts` is Playwright.
+    exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
   },
 });
