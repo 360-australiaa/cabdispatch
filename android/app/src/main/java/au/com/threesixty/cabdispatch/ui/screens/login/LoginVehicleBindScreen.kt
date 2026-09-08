@@ -51,7 +51,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
@@ -208,17 +207,6 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
             state.loginError?.let {
                 Spacer(Modifier.height(14.dp))
                 Text(it, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.danger)
-            }
-            if (BuildConfig.DEBUG) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "QUICK LOGIN (DEMO DRIVER)",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = CaptainPalette.accent,
-                    modifier = Modifier.clickable { viewModel.quickLoginDemoDriver() },
-                )
             }
             Spacer(Modifier.weight(1f))
             CaptainButton(text = "Cancel", outline = true, modifier = Modifier.width(200.dp)) {

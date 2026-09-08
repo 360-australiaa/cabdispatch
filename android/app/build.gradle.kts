@@ -33,6 +33,17 @@ val mapboxAccessToken: String = localProperties.getProperty("MAPBOX_ACCESS_TOKEN
 // it, preserving the previous zero-config emulator behavior.
 val apiBaseUrlOverride: String = localProperties.getProperty("API_BASE_URL", "http://10.0.2.2:8001")
 
+// Release-variant backend URL. Same local.properties/env pattern as the debug override above,
+// but with no usable default: the placeholder is a tripwire, not a fallback. A release APK built
+// against `https://api.cabdispatch.example.com` would point the meter at a domain nobody owns, so
+// the `afterEvaluate` guard at the bottom of this file refuses to build the release variant while
+// this still holds the placeholder value. Resolution order: local.properties, then the
+// RELEASE_API_BASE_URL environment variable (for CI/build machines with no local.properties).
+val releaseApiBaseUrlPlaceholder = "https://api.cabdispatch.example.com"
+val releaseApiBaseUrl: String = localProperties.getProperty("RELEASE_API_BASE_URL")
+    ?: System.getenv("RELEASE_API_BASE_URL")
+    ?: releaseApiBaseUrlPlaceholder
+
 android {
     namespace = "au.com.threesixty.cabdispatch"
     compileSdk = 35
@@ -106,9 +117,12 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // TODO(sibling agent, release hardening): replace with the deployed
-            // backend URL before shipping a release build.
-            buildConfigField("String", "API_BASE_URL", "\"https://api.cabdispatch.example.com\"")
+            // The deployed backend URL for release builds. This is deliberately NOT committed:
+            // set RELEASE_API_BASE_URL in local.properties (gitignored) or in the environment on
+            // the build machine. While it is unset this stays at the placeholder below and the
+            // release build is FAILED by the guard in `afterEvaluate` at the bottom of this file
+            // -- see that block for why a placeholder must never be allowed to ship.
+            buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
         }
     }
 
@@ -249,4 +263,48 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+}
+
+// -- Release hardening tripwire (Phase 0, security addendum) --------------------------------
+// A release APK is the artifact that reaches drivers' tablets, and the two things below are
+// exactly the mistakes that produced the 0.6.2 incident: an APK built with a URL that was never
+// meant to ship, distributed to a real fleet. Gradle cannot see "you meant to set this" -- so the
+// placeholder is treated as an error rather than a default, and the build stops before any
+// release artifact exists.
+//
+// Why `afterEvaluate` + `doFirst` and not a top-level `if`: a top-level check runs during
+// *configuration*, i.e. on every single Gradle invocation including `:app:testDebugUnitTest` and
+// `:app:lintDebug` in CI, which would break every debug build on a machine that has no reason to
+// set a release URL. Attaching the check to the release tasks themselves means it fires only when
+// someone actually asks for a release artifact.
+//
+// To build a real release: set RELEASE_API_BASE_URL in local.properties (gitignored) or as an
+// environment variable on the build machine. It must be https -- see
+// docs/audits/2026-09-08-backend-audit.md section 5, which found the shipped APK talking
+// plaintext HTTP to production, carrying JWTs, device secrets and GPS in the clear.
+afterEvaluate {
+    val releaseArtifactTasks = tasks.matching { task ->
+        val name = task.name
+        (name.startsWith("assemble") || name.startsWith("bundle") || name.startsWith("package")) &&
+            name.contains("Release")
+    }
+    releaseArtifactTasks.configureEach {
+        doFirst {
+            if (releaseApiBaseUrl == releaseApiBaseUrlPlaceholder) {
+                throw GradleException(
+                    "Refusing to build a release artifact: API_BASE_URL is still the placeholder " +
+                        "'$releaseApiBaseUrlPlaceholder'. Set RELEASE_API_BASE_URL in " +
+                        "local.properties or in the environment to the real deployed backend " +
+                        "URL. See the release-hardening notes in app/build.gradle.kts.",
+                )
+            }
+            if (!releaseApiBaseUrl.startsWith("https://")) {
+                throw GradleException(
+                    "Refusing to build a release artifact: RELEASE_API_BASE_URL must be https. " +
+                        "A release build must not ship plaintext HTTP -- tokens, the device " +
+                        "secret, duress audio and GPS all travel over it.",
+                )
+            }
+        }
+    }
 }
