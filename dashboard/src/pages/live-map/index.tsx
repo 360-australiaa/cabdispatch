@@ -393,7 +393,11 @@ export default function LiveMapPage() {
   })();
 
   return (
-    <div>
+    // While the vehicle sheet is open the page gives up its right-hand 27rem so
+    // the sheet sits BESIDE the map instead of on top of it. The map picks the
+    // new width up through FleetMapCanvas's ResizeObserver. Below `lg` there is
+    // no room to share, so the sheet covers the page as a dialog would.
+    <div className={selectedVehicleId ? "transition-[padding] lg:pr-[27rem]" : "transition-[padding]"}>
       <PageHeader
         title="Live Map"
         description="Real-time vehicle positions and active duress events across the fleet."

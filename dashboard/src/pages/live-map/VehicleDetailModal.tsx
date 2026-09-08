@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { Badge, Button, Modal, Table, type TableColumn } from "@/components/ui";
+import { Badge, Button, Sheet, Table, type TableColumn } from "@/components/ui";
 import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
 import {
@@ -273,12 +273,16 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
   const scrubbedPoint = historyItems?.[scrubIndex];
 
   return (
-    <Modal
+    // A right-hand sheet, not a centred modal: this panel's whole job is to
+    // describe the vehicle the operator just flew the map to, and a centred
+    // dialog over a scrim covered it. With the sheet open the map stays live
+    // beside it -- pan it, watch the marker move, click another vehicle to swap
+    // the subject -- which is what "locate" actually means.
+    <Sheet
       open={open}
       onClose={onClose}
       title={vehicle ? `Vehicle ${vehicle.rego}` : "Vehicle detail"}
       description={vehicleId ?? undefined}
-      className="max-w-lg"
     >
       {vehicleQuery.isLoading && (
         <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
@@ -508,6 +512,6 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
           )}
         </div>
       )}
-    </Modal>
+    </Sheet>
   );
 }

@@ -4,5 +4,6 @@ export * from "./Table";
 export * from "./Input";
 export * from "./Select";
 export * from "./Modal";
+export * from "./Sheet";
 export * from "./Badge";
 export * from "./PageHeader";

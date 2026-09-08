@@ -770,6 +770,15 @@ function MapboxFleetMap({
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     mapRef.current = map;
 
+    // Mapbox measures its canvas once and never notices the container changing
+    // underneath it, so collapsing the nav rail -- or the vehicle sheet opening
+    // and squeezing the page -- left the map rendered at its old width with the
+    // right-hand strip blank and every click offset from what it hit. One
+    // observer fixes all of those cases; `map.resize()` is a no-op when the size
+    // has not actually changed.
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(containerRef.current);
+
     map.on("load", () => {
       map.resize();
       fitToVehicles(map, plotted);
@@ -888,6 +897,7 @@ function MapboxFleetMap({
         entry.marker.remove();
       });
       markersRef.current.clear();
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
     };
