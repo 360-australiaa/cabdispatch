@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { lazy, type FormEvent, Suspense, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ShieldCheck, ShieldOff } from "lucide-react";
 import {
@@ -14,8 +14,18 @@ import {
   PageHeader,
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import PasswordCard from "./PasswordCard";
+import RecoveryCodesCard from "./RecoveryCodesCard";
+import SessionsCard from "./SessionsCard";
 import { mfaDisable, mfaSetup, mfaVerify, setAdminPin } from "./api";
 import type { MfaSetupResponse } from "./types";
+
+// `React.lazy`, not a static import: the QR renderer (and the `qrcode`
+// library it dynamic-imports internally) has no business being fetched
+// until a user actually clicks "Enable two-factor authentication" — see
+// `MfaQrCode.tsx`'s own docstring for why it must stay out of both the
+// first-paint graph AND `vite.config.ts`'s `manualChunks`.
+const MfaQrCode = lazy(() => import("./MfaQrCode"));
 
 /** Matches the backend's `_PIN_PATTERN` in `app/schemas/tenant.py` (4-8 digits). */
 const ADMIN_PIN_PATTERN = /^\d{4,8}$/;
@@ -179,13 +189,23 @@ export default function SecuritySettingsPage() {
                 </p>
               </div>
 
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                  Setup URI (otpauth://)
-                </label>
-                <p className="break-all rounded-md border border-input bg-muted/40 p-2 font-mono text-xs text-foreground">
-                  {pendingSetup.otpauth_uri}
-                </p>
+              <div className="flex flex-wrap items-start gap-4">
+                <Suspense
+                  fallback={
+                    <div className="h-[200px] w-[200px] animate-pulse rounded-md bg-muted" />
+                  }
+                >
+                  <MfaQrCode otpauthUri={pendingSetup.otpauth_uri} />
+                </Suspense>
+
+                <div className="min-w-0 flex-1">
+                  <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                    Setup URI (otpauth://)
+                  </label>
+                  <p className="break-all rounded-md border border-input bg-muted/40 p-2 font-mono text-xs text-foreground">
+                    {pendingSetup.otpauth_uri}
+                  </p>
+                </div>
               </div>
 
               <div>
@@ -265,6 +285,12 @@ export default function SecuritySettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {mfaEnabled && <RecoveryCodesCard />}
+
+      <PasswordCard />
+
+      <SessionsCard />
 
       {isOwner && user?.tenant_id && (
         <Card className="mt-6 max-w-2xl">

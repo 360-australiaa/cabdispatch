@@ -202,7 +202,7 @@ describe("two-step MFA login", () => {
     await renderAuth();
 
     await act(async () => {
-      await auth.completeMfaLogin("mfa-tok", "123456");
+      await auth.completeMfaLogin("mfa-tok", { code: "123456" });
     });
 
     // The second step must forward the token from step one, not the password.
@@ -218,7 +218,7 @@ describe("two-step MFA login", () => {
     );
     await renderAuth();
 
-    await expect(auth.completeMfaLogin("mfa-tok", "000000")).rejects.toBeTruthy();
+    await expect(auth.completeMfaLogin("mfa-tok", { code: "000000" })).rejects.toBeTruthy();
 
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
     expect(screen.getByTestId("authed")).toHaveTextContent("false");

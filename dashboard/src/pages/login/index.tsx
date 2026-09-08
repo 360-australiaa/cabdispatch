@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@/components/ui";
 
@@ -42,6 +42,10 @@ export default function LoginPage() {
   const [mfaCode, setMfaCode] = useState("");
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [isVerifyingMfa, setIsVerifyingMfa] = useState(false);
+  // D10: "I lost my authenticator" fallback — a recovery code in place of a
+  // TOTP code, same mfa_token, same POST /v1/auth/mfa/login endpoint.
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   if (isAuthenticated) {
     const from = (location.state as { from?: Location })?.from?.pathname ?? "/live-map";
@@ -75,10 +79,17 @@ export default function LoginPage() {
     setMfaError(null);
     setIsVerifyingMfa(true);
     try {
-      await completeMfaLogin(mfaToken, mfaCode);
+      await completeMfaLogin(
+        mfaToken,
+        useRecoveryCode ? { recoveryCode: recoveryCode.trim() } : { code: mfaCode },
+      );
       navigate("/live-map", { replace: true });
     } catch {
-      setMfaError("Invalid or expired code. Try again.");
+      setMfaError(
+        useRecoveryCode
+          ? "That recovery code didn't work. Each one can only be used once."
+          : "Invalid or expired code. Try again.",
+      );
     } finally {
       setIsVerifyingMfa(false);
     }
@@ -89,6 +100,15 @@ export default function LoginPage() {
     setMfaToken(null);
     setMfaCode("");
     setMfaError(null);
+    setUseRecoveryCode(false);
+    setRecoveryCode("");
+  }
+
+  function toggleRecoveryCode() {
+    setUseRecoveryCode((v) => !v);
+    setMfaError(null);
+    setMfaCode("");
+    setRecoveryCode("");
   }
 
   return (
@@ -117,9 +137,17 @@ export default function LoginPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="password" className="text-sm font-medium">
-                  Password
-                </label>
+                <div className="flex items-center justify-between">
+                  <label htmlFor="password" className="text-sm font-medium">
+                    Password
+                  </label>
+                  <Link
+                    to="/forgot-password"
+                    className="text-xs font-medium text-brand-primary hover:underline"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
                 <Input
                   id="password"
                   type="password"
@@ -136,34 +164,64 @@ export default function LoginPage() {
             </form>
           ) : (
             <form onSubmit={handleMfaSubmit} className="flex flex-col gap-4">
-              <p className="text-sm text-muted-foreground">
-                Enter the 6-digit code from your authenticator app.
-              </p>
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="mfa-code" className="text-sm font-medium">
-                  Authentication code
-                </label>
-                <Input
-                  id="mfa-code"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  required
-                  autoFocus
-                  value={mfaCode}
-                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  placeholder="123456"
-                  className="text-center text-lg tracking-[0.5em]"
-                />
-              </div>
+              {!useRecoveryCode ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Enter the 6-digit code from your authenticator app.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="mfa-code" className="text-sm font-medium">
+                      Authentication code
+                    </label>
+                    <Input
+                      id="mfa-code"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      required
+                      autoFocus
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="123456"
+                      className="text-center text-lg tracking-[0.5em]"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Enter one of your unused recovery codes. Each one only works once.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="recovery-code" className="text-sm font-medium">
+                      Recovery code
+                    </label>
+                    <Input
+                      id="recovery-code"
+                      type="text"
+                      autoComplete="off"
+                      required
+                      value={recoveryCode}
+                      onChange={(e) => setRecoveryCode(e.target.value)}
+                      placeholder="XXXX-XXXX-XXXX"
+                      className="text-center font-mono tracking-widest"
+                    />
+                  </div>
+                </>
+              )}
               {mfaError && <p className="text-sm text-destructive">{mfaError}</p>}
               <Button
                 type="submit"
-                disabled={isVerifyingMfa || mfaCode.length !== 6}
+                disabled={
+                  isVerifyingMfa || (useRecoveryCode ? recoveryCode.trim().length === 0 : mfaCode.length !== 6)
+                }
                 className="mt-2"
               >
                 {isVerifyingMfa ? "Verifying…" : "Verify & sign in"}
+              </Button>
+              <Button type="button" variant="ghost" onClick={toggleRecoveryCode}>
+                {useRecoveryCode ? "Use my authenticator app instead" : "Use a recovery code instead"}
               </Button>
               <Button type="button" variant="ghost" onClick={handleBackToCredentials}>
                 Back

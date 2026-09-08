@@ -6,6 +6,10 @@ import type {
   MfaSetupResponse,
   MfaStatusResponse,
   MfaVerifyRequest,
+  PasswordChangeRequest,
+  RecoveryCodesResponse,
+  RecoveryCodeStatus,
+  SessionListResponse,
 } from "./types";
 
 /**
@@ -46,4 +50,45 @@ export async function setAdminPin(
     body,
   );
   return res.data;
+}
+
+/** Requires the current password; hashed server-side with the same scheme
+ * the account's password already uses (no new hashing scheme). */
+export async function changePassword(body: PasswordChangeRequest): Promise<void> {
+  await apiClient.post("/v1/auth/password/change", body);
+}
+
+/**
+ * Generates a fresh batch of ten single-use MFA recovery codes. The response
+ * is the ONLY time the plaintext codes are ever available — the caller must
+ * show them to the user immediately and never persist them itself (no
+ * localStorage, no console.log).
+ */
+export async function generateRecoveryCodes(): Promise<RecoveryCodesResponse> {
+  const res = await apiClient.post<RecoveryCodesResponse>("/v1/auth/mfa/recovery-codes/generate");
+  return res.data;
+}
+
+export async function getRecoveryCodeStatus(): Promise<RecoveryCodeStatus> {
+  const res = await apiClient.get<RecoveryCodeStatus>("/v1/auth/mfa/recovery-codes/status");
+  return res.data;
+}
+
+/** Every currently-live session for the caller's own account. */
+export async function listSessions(): Promise<SessionListResponse> {
+  const res = await apiClient.get<SessionListResponse>("/v1/auth/sessions");
+  return res.data;
+}
+
+/** Revokes one session by id — dies everywhere, including an already-open
+ * websocket connection authenticated with it (see backend
+ * `app.core.security.revocation_aware_pump`). */
+export async function revokeSession(sessionId: string): Promise<void> {
+  await apiClient.post(`/v1/auth/sessions/${sessionId}/revoke`);
+}
+
+/** "Sign out everywhere" — revokes every OTHER live session by default. Pass
+ * `includeCurrent: true` to also sign the caller themselves out. */
+export async function revokeAllSessions(includeCurrent = false): Promise<void> {
+  await apiClient.post(`/v1/auth/sessions/revoke-all?keep_current=${!includeCurrent}`);
 }
