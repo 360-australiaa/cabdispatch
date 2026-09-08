@@ -57,4 +57,38 @@ NSW_REGION = register_region(
     )
 )
 
-__all__ = ["NSW_REGION"]
+# Sydney Airport terminal taxi-rank pickup zones for `kind="airport"`
+# geofences (app.models.geofence). One circle per rank; a hiring that STARTS
+# inside any of them attracts `NSW_REGION.airport_access_fee` once (see
+# app.services.trips.apply_airport_access_fee_at_start). Where two circles
+# overlap (T2/T3 sit ~200 m apart) the smallest-radius one is charged.
+#
+# Coordinates and radii are APPROXIMATE — taken off the map, not surveyed —
+# and are to be confirmed on the map by the operator before going live.
+# They are deliberately NOT seeded into production (scripts/seed.py never
+# runs there); the dashboard's "Add Sydney Airport terminals" button creates
+# them through POST /v1/geofences, reading them from
+# GET /v1/geofences/presets/airport (app/api/v1/geofences.py), and the
+# tablet's offline fallback mirrors the same numbers.
+SYDNEY_AIRPORT_TERMINAL_ZONES: tuple[dict, ...] = (
+    {
+        "name": "Sydney Airport T1 International taxi rank",
+        "center_lat": -33.9361,
+        "center_lng": 151.1656,
+        "radius_m": 450.0,
+    },
+    {
+        "name": "Sydney Airport T2 Domestic taxi rank",
+        "center_lat": -33.9339,
+        "center_lng": 151.1799,
+        "radius_m": 400.0,
+    },
+    {
+        "name": "Sydney Airport T3 Domestic taxi rank",
+        "center_lat": -33.9333,
+        "center_lng": 151.1783,
+        "radius_m": 400.0,
+    },
+)
+
+__all__ = ["NSW_REGION", "SYDNEY_AIRPORT_TERMINAL_ZONES"]

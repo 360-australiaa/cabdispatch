@@ -1,6 +1,8 @@
-"""Geofences domain router — admin CRUD over the circular toll/region zones
-used by GPS auto-detection (see `app/services/geofence.py` +
-`app/services/trips.py::apply_tick`).
+"""Geofences domain router — admin CRUD over the circular toll/airport/region
+zones used by GPS auto-detection (see `app/services/geofence.py`,
+`app/services/trips.py::apply_tick` for `kind="toll"` and
+`app/services/trips.py::apply_airport_access_fee_at_start` for
+`kind="airport"`).
 
 Visibility vs. ownership (mirrors the nullable-tenant-id-for-global-reference
 pattern `app/api/v1/tariffs.py` already uses for the Fares Order reference
@@ -15,15 +17,27 @@ Every query filters by tenant_id (or explicitly allows tenant_id IS NULL) via
 `get_current_tenant_id` — the sole multi-tenancy enforcement mechanism in
 this system.
 
-Toll pricing is platform-admin-only (product decision, 2026 — same rule as
+Pricing is platform-admin-only (product decision, 2026 — same rule as
 `app/api/v1/tariffs.py`): a `kind="toll"` row carries `toll_amount`, which is
 pricing the dashboard's Tariff Studio "Toll Zones" tab manages, so writing
 one (create with `kind="toll"`, or update/delete of an existing toll row)
 requires `require_platform_owner` (`app/api/v1/platform.py`), not just
-owner/admin. `kind="region"` rows are NOT pricing — reserved for future
-tariff-zone auto-selection and not yet consumed by any service (see
-`app/models/geofence.py`) — so they stay tenant owner/admin-writable, same as
-before this pass.
+owner/admin. `kind="airport"` rows are pricing too — `toll_amount` is the
+Sydney Airport ground-transport access fee ($6.43 GST-inclusive per pickup
+at the T1/T2/T3 ranks, which the NSW Fares Order lets the driver add to the
+fare) — so they sit behind exactly the same gate
+(`GEOFENCE_PRICING_KINDS`). `kind="region"` rows are NOT pricing — reserved
+for future tariff-zone auto-selection and not yet consumed by any service
+(see `app/models/geofence.py`) — so they stay tenant owner/admin-writable,
+same as before this pass.
+
+`GET /v1/geofences/presets/airport` (any authenticated user) returns the
+three Sydney Airport terminal rank circles from
+`app.services.regions.nsw.SYDNEY_AIRPORT_TERMINAL_ZONES` priced at the NSW
+region's `airport_access_fee`, so the dashboard's one-click "Add Sydney
+Airport terminals" button and the tablet's fallback both read the same
+numbers. Production is never seeded with these rows (scripts/seed.py
+deliberately omits them): the platform owner creates them through this API.
 """
 from __future__ import annotations
 
@@ -33,16 +47,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
-from app.core.security import get_current_tenant_id, require_role
-from app.models.geofence import GEOFENCE_KIND_TOLL, GEOFENCE_KINDS, Geofence
+from app.core.security import get_current_tenant_id, get_current_user, require_role
+from app.models.geofence import GEOFENCE_KINDS, GEOFENCE_PRICING_KINDS, Geofence
 from app.models.user import User
-from app.schemas.geofence import GeofenceCreate, GeofenceRead, GeofenceUpdate, Page
+from app.schemas.geofence import (
+    AirportZonePreset,
+    GeofenceCreate,
+    GeofenceRead,
+    GeofenceUpdate,
+    Page,
+)
+from app.services.regions import get_region
+from app.services.regions.nsw import SYDNEY_AIRPORT_TERMINAL_ZONES
 
 router = APIRouter(prefix="/v1/geofences", tags=["geofences"])
 
 # Admin-only dependency reused across the write endpoints below, same pattern
-# as app.api.v1.fleet._require_admin. Toll-kind writes additionally require
-# platform-owner — see _require_platform_owner_for_toll below.
+# as app.api.v1.fleet._require_admin. Pricing-kind (toll/airport) writes
+# additionally require platform-owner — see _require_platform_owner_for_pricing
+# below.
 _require_admin = require_role("owner", "admin")
 
 # Same two-step composition app/api/v1/platform.py itself uses for every
@@ -54,9 +77,9 @@ _require_admin = require_role("owner", "admin")
 _require_owner_role = require_role("owner")
 
 
-async def _require_platform_owner_for_toll(user: User) -> None:
-    """Toll geofences carry pricing (`toll_amount`) — same platform-owner-only
-    write rule as tariffs (see module docstring)."""
+async def _require_platform_owner_for_pricing(user: User) -> None:
+    """Toll and airport geofences carry pricing (`toll_amount`) — same
+    platform-owner-only write rule as tariffs (see module docstring)."""
     await _require_owner_role(user=user)
     await require_platform_owner(user=user)
 
@@ -114,6 +137,18 @@ async def list_geofences(
     return Page(items=list(rows), total=total, skip=skip, limit=limit)
 
 
+@router.get("/presets/airport", response_model=list[AirportZonePreset])
+async def airport_zone_presets(
+    _user: User = Depends(get_current_user),
+):
+    """Read-only Sydney Airport terminal rank presets (module docstring).
+    Declared before the `/{geofence_id}` routes so "presets" is never
+    mistaken for a geofence id. Any authenticated user may read it — the
+    tablet's offline fallback needs it as much as the dashboard does."""
+    fee = get_region("NSW").airport_access_fee
+    return [AirportZonePreset(toll_amount=fee, **zone) for zone in SYDNEY_AIRPORT_TERMINAL_ZONES]
+
+
 @router.post("", response_model=GeofenceRead, status_code=status.HTTP_201_CREATED)
 async def create_geofence(
     payload: GeofenceCreate,
@@ -121,10 +156,10 @@ async def create_geofence(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(_require_admin),
 ):
-    # Toll pricing is platform-admin-only (module docstring); a plain tenant
-    # owner/admin may still create a region-kind geofence.
-    if payload.kind == GEOFENCE_KIND_TOLL:
-        await _require_platform_owner_for_toll(user)
+    # Toll/airport pricing is platform-admin-only (module docstring); a plain
+    # tenant owner/admin may still create a region-kind geofence.
+    if payload.kind in GEOFENCE_PRICING_KINDS:
+        await _require_platform_owner_for_pricing(user)
 
     row = Geofence(tenant_id=tenant_id, **payload.model_dump())
     session.add(row)
@@ -155,18 +190,18 @@ async def update_geofence(
     updates = payload.model_dump(exclude_unset=True)
     new_kind = updates.get("kind", row.kind)
     new_toll_amount = updates.get("toll_amount", row.toll_amount)
-    if new_kind == "toll" and new_toll_amount is None:
+    if new_kind in GEOFENCE_PRICING_KINDS and new_toll_amount is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="toll_amount is required when kind='toll'",
+            detail=f"toll_amount is required when kind='{new_kind}'",
         )
 
-    # Toll pricing is platform-admin-only (module docstring). Gate on EITHER
-    # side of the change so a tenant admin can't dodge it by converting an
-    # existing toll row to "region" (or a region row into a new toll row) --
-    # either direction touches pricing.
-    if row.kind == GEOFENCE_KIND_TOLL or new_kind == GEOFENCE_KIND_TOLL:
-        await _require_platform_owner_for_toll(user)
+    # Toll/airport pricing is platform-admin-only (module docstring). Gate on
+    # EITHER side of the change so a tenant admin can't dodge it by
+    # converting an existing toll/airport row to "region" (or a region row
+    # into a new priced row) -- either direction touches pricing.
+    if row.kind in GEOFENCE_PRICING_KINDS or new_kind in GEOFENCE_PRICING_KINDS:
+        await _require_platform_owner_for_pricing(user)
 
     for field, value in updates.items():
         setattr(row, field, value)
@@ -184,7 +219,7 @@ async def delete_geofence(
     user: User = Depends(_require_admin),
 ):
     row = await _get_owned_geofence(session, geofence_id, tenant_id)
-    if row.kind == GEOFENCE_KIND_TOLL:
-        await _require_platform_owner_for_toll(user)
+    if row.kind in GEOFENCE_PRICING_KINDS:
+        await _require_platform_owner_for_pricing(user)
     await session.delete(row)
     await session.commit()

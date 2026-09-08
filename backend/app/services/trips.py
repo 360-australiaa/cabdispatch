@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Vehicle
-from app.models.geofence import GEOFENCE_KIND_TOLL
+from app.models.geofence import GEOFENCE_KIND_AIRPORT, GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, TripGpsTrace
 from app.schemas.trips import TelemetryPoint
@@ -321,6 +321,11 @@ async def apply_tick(
         prev_lat, prev_lng, prev_ts = point.lat, point.lng, point.ts
 
         # --- toll geofence auto-detection (blueprint 5.2.4) --------------
+        # ONLY kind="toll" here, deliberately. kind="airport" zones are a
+        # pickup fee, charged once at trip creation
+        # (apply_airport_access_fee_at_start) — a vehicle ticking INTO the
+        # airport mid-trip is dropping a passenger off, and a drop-off never
+        # attracts the access fee.
         entered_tolls = await detect_geofences(
             session, tenant_id=tenant_id, lat=point.lat, lng=point.lng, kind=GEOFENCE_KIND_TOLL
         )
@@ -361,6 +366,87 @@ async def apply_tick(
     trip.auto_tolls_applied = list(applied_toll_geofence_ids)
 
     return trip
+
+
+async def apply_airport_access_fee_at_start(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    trip: Trip,
+    client_tolls: Decimal | None = None,
+) -> Geofence | None:
+    """Sydney Airport ground-transport access fee (NSW Fares Order; $6.43
+    GST-inclusive per taxi pickup at the T1/T2/T3 ranks, carried as
+    `toll_amount` on a `kind="airport"` geofence — see app.models.geofence).
+
+    Charged ONCE, when the hiring STARTS inside an airport zone: called from
+    `create_trip` with the freshly-built (not yet flushed) Trip row, using its
+    `start_lat`/`start_lng`. Never called from the tick path — driving into
+    the airport mid-trip is a drop-off, not a pickup — and never charges a
+    `TRIP_TYPE_AIRPORT_FIXED` trip, whose $60/$80 fixed fare already includes
+    it. Where several airport zones contain the pickup point (the T2/T3
+    circles overlap) only the smallest-radius one is charged. Visibility is
+    the usual tenant-owned-or-global rule (`detect_geofences`). Mutates
+    `trip.tolls` and `trip.auto_tolls_applied` in place and returns the zone
+    charged (None when nothing was); does NOT commit.
+
+    DOUBLE-COUNT RULE (checked against app/api/v1/trips.py and the tablet's
+    ApiService/TripRepository):
+      * `POST /v1/trips/sync` — the ONLY network path the Android meter's
+        offline-first close flow actually takes — never comes through here.
+        It builds the Trip row straight from `item.tolls`, the tablet's own
+        ledger (which already contains the fee the tablet auto-applied at
+        trip start, see android FareEngine.startTrip), via
+        `recompute_from_trace`. The tablet-computed value wins outright.
+      * `POST /v1/trips/{id}/close` carries no `tolls` field
+        (`TripCloseRequest`); `close_trip` assigns `trip.tolls =
+        breakdown.tolls`, which is a pass-through of the server ledger
+        `build_fare_state` read off the row. So the fee applied here survives
+        an online close unchanged and is never re-added.
+      * `PATCH /v1/trips/{id}` with `tolls` REPLACES the server ledger
+        wholesale (`update_trip` does a plain setattr). A client that pushes
+        its own ledger total takes ownership of `tolls`; the value applied
+        here is replaced, not added to, so that path cannot double count
+        either.
+      * `POST /v1/trips` itself: `client_tolls` is the create payload's
+        `tolls`. A NON-ZERO opening ledger means the caller is already
+        running its own toll ledger (the tablet's TripCreateDto sends its
+        ledger, and the tablet auto-applies this very fee at start), so the
+        server-side charge is SKIPPED — the client's figure wins, exactly as
+        it does on /sync. Server-side application therefore only ever
+        matters for server-metered trips (payload.tolls == 0), which is the
+        only case where nobody else is keeping the ledger.
+    """
+    if trip.type == TRIP_TYPE_AIRPORT_FIXED:
+        return None
+    if client_tolls is not None and client_tolls > 0:
+        return None
+    if trip.start_lat is None or trip.start_lng is None:
+        return None
+
+    zones = await detect_geofences(
+        session,
+        tenant_id=tenant_id,
+        lat=trip.start_lat,
+        lng=trip.start_lng,
+        kind=GEOFENCE_KIND_AIRPORT,
+    )
+    zones = [z for z in zones if z.toll_amount is not None]
+    if not zones:
+        return None
+
+    already_applied = set(trip.auto_tolls_applied or [])
+    if already_applied & {z.id for z in zones}:
+        # Belt and braces: a row that somehow already carries one of these
+        # ids was charged by an earlier call; "once" means once.
+        return None
+
+    zone = min(zones, key=lambda z: (z.radius_m, z.name, z.id))
+    trip.tolls = (trip.tolls or Decimal(0)) + zone.toll_amount
+    # Reassign (not mutate in place) — plain JSON column, same reasoning as
+    # apply_tick's own assignment.
+    trip.auto_tolls_applied = [*already_applied, zone.id]
+    return zone
 
 
 @dataclass

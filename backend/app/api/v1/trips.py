@@ -61,6 +61,7 @@ from app.services.trips import (
     TripNotClosedError,
     UnknownTariffError,
     accepted_tick_points,
+    apply_airport_access_fee_at_start,
     apply_tick,
     build_gps_trace_row,
     close_trip,
@@ -189,6 +190,14 @@ async def create_trip(
         extras=payload.extras,
         gps_trace_ref=payload.gps_trace_ref,
         negotiated_total=payload.negotiated_total,
+    )
+    # Sydney Airport access fee — charged ONCE here, at the pickup, when the
+    # start position lies inside a kind="airport" geofence; never on the tick
+    # path (a drop-off), never on an airport_fixed trip, and never when the
+    # caller already sent its own toll ledger (payload.tolls > 0) — see that
+    # function's docstring for the full double-count rule.
+    await apply_airport_access_fee_at_start(
+        session, tenant_id=tenant_id, trip=trip, client_tolls=payload.tolls
     )
     session.add(trip)
     try:
