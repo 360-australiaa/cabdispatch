@@ -3,3 +3,8 @@ dist
 .env
 .env.local
 *.local
+
+# Playwright output (e2e run artifacts, never committed).
+playwright-report
+test-results
+coverage
