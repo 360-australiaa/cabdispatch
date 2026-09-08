@@ -870,6 +870,7 @@ private fun AppVersionTile(state: SettingsUiState, modifier: Modifier) {
         ForceUpdateStatus.UNREGISTERED -> "unknown (tablet not registered)" to DiagTone.BAD
         ForceUpdateStatus.UP_TO_DATE -> "up to date" to DiagTone.OK
         ForceUpdateStatus.REQUIRED -> "update required" to DiagTone.BAD
+        ForceUpdateStatus.FLAGGED_NO_RELEASE -> "flagged by depot — no newer build published" to DiagTone.WARN
     }
     DiagTile(icon = Icons.Rounded.Inventory2, name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)
 }
@@ -898,7 +899,8 @@ private fun RerunSetupTile(onRerunSetup: () -> Unit, modifier: Modifier) {
 @Composable
 private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -> Unit, modifier: Modifier) {
     val (sub, tone) = when (state.forceUpdateStatus) {
-        ForceUpdateStatus.UP_TO_DATE, ForceUpdateStatus.REQUIRED ->
+        // FLAGGED_NO_RELEASE belongs here too: the flag was READ off an acknowledged heartbeat.
+        ForceUpdateStatus.UP_TO_DATE, ForceUpdateStatus.REQUIRED, ForceUpdateStatus.FLAGGED_NO_RELEASE ->
             "Sent on open · acknowledged by fleet server" to DiagTone.OK
         ForceUpdateStatus.UNKNOWN_OFFLINE -> "Failed — offline or server unreachable" to DiagTone.BAD
         // The server answered, and answered 404: this tablet's device record is gone (most often

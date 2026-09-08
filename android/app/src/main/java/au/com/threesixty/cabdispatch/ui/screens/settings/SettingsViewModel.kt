@@ -17,6 +17,7 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.data.remote.PositionPublishRequestDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.VerifyAdminPinRequestDto
+import au.com.threesixty.cabdispatch.domain.AppUpdateState
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
@@ -49,7 +50,15 @@ enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
  * signal" versus "re-pair this tablet"), and collapsing them into one message sent the reader
  * looking for a network fault that did not exist.
  */
-enum class ForceUpdateStatus { UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UNREGISTERED, UP_TO_DATE, REQUIRED }
+enum class ForceUpdateStatus {
+    UNKNOWN_NO_DEVICE, UNKNOWN_OFFLINE, UNREGISTERED, UP_TO_DATE, REQUIRED,
+    /** The depot flagged this tablet for an update but no newer build has been published: the
+     * flag and the publish record disagree. Not "required" -- there is nothing to install -- and
+     * not "up to date" either, because the depot's intent is real. Shown as a warning that says
+     * exactly that (tablet, 2026-09-08: this tile read "update required" in red for a build that
+     * did not exist). */
+    FLAGGED_NO_RELEASE,
+}
 
 /** Mirrors [MapboxOfflineRegion.DownloadState] but as a UI-friendly type (no Mapbox SDK types
  * leaking into the state a Composable reads) — see that class's doc for the actual download. */
@@ -317,10 +326,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             result.onSuccess { device ->
                 _uiState.update {
                     it.copy(
-                        forceUpdateStatus = if (device.forceUpdatePending) {
-                            ForceUpdateStatus.REQUIRED
-                        } else {
-                            ForceUpdateStatus.UP_TO_DATE
+                        forceUpdateStatus = when {
+                            !device.forceUpdatePending -> ForceUpdateStatus.UP_TO_DATE
+                            // Same source of truth as ForceUpdatePendingBanner: the checker has
+                            // asked the server for a release. UpToDate there means none exists.
+                            AppContainer.appUpdateChecker.state.value is AppUpdateState.UpToDate ->
+                                ForceUpdateStatus.FLAGGED_NO_RELEASE
+                            else -> ForceUpdateStatus.REQUIRED
                         },
                     )
                 }

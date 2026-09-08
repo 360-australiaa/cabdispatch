@@ -362,7 +362,10 @@ fun HiredScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp)
+                        // start inset: the FLEET LOCKED / TABLET NOT REGISTERED chips overlay this
+                        // exact lane top-start (tablet, 2026-09-08 -- the chip sat on the banner's
+                        // left end). The banner begins to the right of the chip lane instead.
+                        .padding(start = 176.dp, bottom = 8.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(CaptainPalette.danger)
                         .padding(horizontal = 24.dp, vertical = 8.dp),
