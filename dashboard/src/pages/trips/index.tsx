@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Download, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
+import { EntityLink } from "@/components/EntityLink";
 import {
   Badge,
   Button,
@@ -155,12 +156,16 @@ export default function TripsPage() {
     {
       key: "vehicle_id",
       header: "Vehicle",
-      render: (row) => vehicleLabelById.get(row.vehicle_id) ?? row.vehicle_id.slice(0, 8),
+      render: (row) => (
+        <EntityLink kind="vehicle" id={row.vehicle_id} name={vehicleLabelById.get(row.vehicle_id) ?? row.vehicle_id.slice(0, 8)} />
+      ),
     },
     {
       key: "driver_id",
       header: "Driver",
-      render: (row) => driverLabelById.get(row.driver_id) ?? row.driver_id.slice(0, 8),
+      render: (row) => (
+        <EntityLink kind="driver" id={row.driver_id} name={driverLabelById.get(row.driver_id) ?? row.driver_id.slice(0, 8)} />
+      ),
     },
     {
       key: "type",

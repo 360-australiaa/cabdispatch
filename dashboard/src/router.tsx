@@ -33,6 +33,15 @@ const TariffsPage = lazy(() => import("@/pages/tariffs"));
 const ZonesPage = lazy(() => import("@/pages/zones"));
 const PslPage = lazy(() => import("@/pages/psl"));
 const FleetPage = lazy(() => import("@/pages/fleet"));
+// Entity detail pages (dashboard command-centre plan, F1). Each is an
+// `EntityPage` shell for now -- see the page files themselves -- but the
+// route needs to exist so every later workstream, and this one's own
+// `EntityLink` wiring, has somewhere real to point.
+const DriverPage = lazy(() => import("@/pages/drivers/DriverPage"));
+const VehiclePage = lazy(() => import("@/pages/vehicles/VehiclePage"));
+const DevicePage = lazy(() => import("@/pages/devices/DevicePage"));
+const TripPage = lazy(() => import("@/pages/trips/TripPage"));
+const ShiftPage = lazy(() => import("@/pages/shifts/ShiftPage"));
 const CompliancePage = lazy(() => import("@/pages/compliance"));
 const BillingPage = lazy(() => import("@/pages/billing"));
 const VouchersPage = lazy(() => import("@/pages/vouchers"));
@@ -136,6 +145,11 @@ export const router = createBrowserRouter([
       { path: "zones", element: lazyRoute(<ZonesPage />) },
       { path: "psl", element: lazyRoute(<PslPage />) },
       { path: "fleet", element: lazyRoute(<FleetPage />) },
+      { path: "drivers/:driverId", element: lazyRoute(<DriverPage />) },
+      { path: "vehicles/:vehicleId", element: lazyRoute(<VehiclePage />) },
+      { path: "devices/:deviceId", element: lazyRoute(<DevicePage />) },
+      { path: "trips/:tripId", element: lazyRoute(<TripPage />) },
+      { path: "shifts/:shiftId", element: lazyRoute(<ShiftPage />) },
       { path: "compliance", element: lazyRoute(<CompliancePage />) },
       { path: "billing", element: lazyRoute(<BillingPage />) },
       { path: "payment-recon", element: lazyRoute(<PaymentReconciliationPage />) },

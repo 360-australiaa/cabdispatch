@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { EntityLink } from "@/components/EntityLink";
 import { Badge, Button, Sheet, Spinner, Table, type TableColumn } from "@/components/ui";
 import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
@@ -399,7 +400,13 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
               <p className="text-sm text-muted-foreground">No driver currently on shift in this vehicle.</p>
             ) : (
               <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
-                <Field label="Name">{vehicle.current_driver_name ?? vehicle.current_driver_id}</Field>
+                <Field label="Name">
+                  <EntityLink
+                    kind="driver"
+                    id={vehicle.current_driver_id}
+                    name={vehicle.current_driver_name ?? vehicle.current_driver_id}
+                  />
+                </Field>
                 <Field label="Phone">
                   {driverQuery.isLoading ? (
                     <Spinner size="sm" className="text-muted-foreground" label="Loading driver phone" />

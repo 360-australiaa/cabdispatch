@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Radio, RadioTower, TabletSmartphone } from "lucide-react";
+import { EntityLink } from "@/components/EntityLink";
 import apiClient from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
 import { formatAud, formatTimeSeconds } from "@/lib/format";
@@ -202,7 +203,12 @@ export default function OverviewPage() {
   );
 
   const fleetColumns: TableColumn<VehicleLiveRead>[] = [
-    { key: "rego", header: "Rego", sortable: true, render: (v) => <span className="font-medium">{v.rego}</span> },
+    {
+      key: "rego",
+      header: "Rego",
+      sortable: true,
+      render: (v) => <EntityLink kind="vehicle" id={v.id} name={v.rego} className="font-medium" />,
+    },
     {
       key: "driver",
       header: "Driver",
