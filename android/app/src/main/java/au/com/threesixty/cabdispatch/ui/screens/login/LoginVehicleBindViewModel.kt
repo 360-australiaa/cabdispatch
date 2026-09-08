@@ -21,10 +21,45 @@ import kotlinx.coroutines.launch
 enum class LoginStep { DRIVER_LOGIN, VEHICLE_BIND, INSPECTION }
 
 /**
- * Standard pre-shift check items, per spec B5 S1 ("pre-shift inspection
- * checklist form"). TODO(compliance agent): confirm this list against the
- * actual Compliance Dossier checklist template (spec Part C) — these are
- * placeholder items for now.
+ * The pre-shift inspection items a driver ticks before a shift opens. **These are still design
+ * placeholders, not a compliance-sourced list**, and the paragraphs below say exactly why, because
+ * "TODO(compliance agent)" did not tell the next reader anything they could act on.
+ *
+ * ### Finding (A7, 2026-09-08): the reference spec does not specify these items
+ * `docs/TCT-METER-01-spec.md` §A1 was checked line by line, and it does not contain a driver
+ * pre-shift vehicle-inspection checklist. What it actually contains is a different thing wearing a
+ * similar name:
+ *
+ * - **§A1 / NSW cl. 14 is about the METER**, not about the vehicle and not about a shift. Its
+ *   six requirements are performance standards on the device — display the fare in numerals in
+ *   AUD, calculate accurately at all times, be calibrated to the authorised fares, be resistant to
+ *   tampering and vandalism, be securely fixed or in a commercially designed mounting, and be
+ *   visible to all passengers (cl. 14(22)). Not one of them is something a driver ticks off each
+ *   morning; they are properties of an installation.
+ * - **The "cl.14 checklist" the spec names twice** (§B4.10 Compliance Vault: "calibration record,
+ *   mounting photo, accuracy test result, cl.14 checklist"; launch DoD item 2: "cl.14 checklist
+ *   satisfied per vehicle (mount, visibility, tamper measures)") is therefore a **per-vehicle
+ *   commissioning artefact filed in the Compliance Vault once**, not a per-shift driver form.
+ *   Reusing its three named items here would put "mount / visibility / tamper measures" in front
+ *   of a driver every morning and still not be the safety record this screen implies.
+ * - **§B5 S1 mentions "pre-shift inspection checklist" as a screen step and enumerates nothing.**
+ *   `POST /v1/shifts/start` accepts `inspection_json` as an arbitrary map, so the backend imposes
+ *   no vocabulary either — the shape is free and the *content* is the open question.
+ *
+ * The nine keys below come from the Command Deck v2 design (Figma `h0PSsXQ971dOJvt25tN7BA` node
+ * `10:111`, a 3×3 grid) — a UI layout, chosen for a grid that looks right. They are plausible, and
+ * plausible is the problem: this screen writes a dated, driver-attributed, server-persisted record
+ * asserting a safety inspection happened, which is a regulated artefact. Inventing its contents
+ * from a Figma frame would produce a record that reads as authoritative and is not, which is worse
+ * than an obviously unfinished one.
+ *
+ * ### OWNER decision required before this list can be called compliant
+ * Someone with the source documents has to name the items. The likely sources, none of which are
+ * in this repo: TfNSW's Point to Point Transport (Taxis and Hire Vehicles) Regulation 2017 daily
+ * vehicle-check requirements as they apply to the *operator's* Safety Management System; the
+ * TCT SMS itself (`TCT-SMS-DA-01` is referenced by the spec but not included here); and the
+ * operator's existing paper pre-shift sheet, if one is in use. Until then this list stays as it is
+ * and is described as placeholder wherever it is described at all.
  */
 val PRE_SHIFT_CHECKLIST_ITEMS = listOf(
     // Command Deck v2 checklist (Figma `h0PSsXQ971dOJvt25tN7BA` node `10:111`, 3×3 grid) —

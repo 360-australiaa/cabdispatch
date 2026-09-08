@@ -135,6 +135,27 @@ interface ApiService {
     ): DeviceDto
 
     /**
+     * `GET /v1/fleet/devices/me` (B5, 2026-09-08) — this tablet's OWN device row, addressed by
+     * nothing but the `X-Device-Secret` it already holds. No `deviceId` in the path and no bearer
+     * token, which is the point: it is the one read a parked, logged-off tablet can make to find
+     * out who it is and which vehicle the depot has bound it to.
+     *
+     * Not a duplicate of [deviceHeartbeat] even though both answer with a [DeviceDto]: the
+     * heartbeat needs a `deviceId` to address, so it cannot help a tablet that has lost the id but
+     * still holds the secret (prefs cleared by an OS storage sweep, a restore-from-backup, or an
+     * install that predates [DevicePairingStore] persisting it). [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat.start]
+     * calls this exactly once in that case, and never otherwise — see its doc for why this is not
+     * folded into the 60 s poll.
+     *
+     * The secret is an explicit parameter rather than something the auth interceptor attaches,
+     * matching every other device-secret call on this interface.
+     */
+    @GET("/v1/fleet/devices/me")
+    suspend fun deviceMe(
+        @Header("X-Device-Secret") deviceSecret: String,
+    ): DeviceDto
+
+    /**
      * Device-facing check against the tenant's server-side admin PIN (see
      * `POST /v1/tenants/{id}/admin-pin`, owner-only, for the set/overwrite side — not called from
      * this app). The hash is never sent to the device, only the boolean result. Backs
@@ -179,6 +200,16 @@ interface ApiService {
         // best-effort posture elsewhere rather than adding one for a fleet-roster lookup this pass
         // wasn't scoped to build out fully.
         @Query("limit") limit: Int = 100,
+        /**
+         * `?rego_exact=` (B5, 2026-09-08) — case-insensitive EXACT rego match, 0 or 1 row back.
+         * Added for [au.com.threesixty.cabdispatch.domain.ApiVehicleUuidResolver], which is the
+         * reason the caveat above was written: resolving one rego no longer depends on that car
+         * falling inside the first 100-row window. `null` (the default) leaves every other caller —
+         * Profile's vehicle-detail read, which genuinely wants the page — exactly as it was. A
+         * backend older than B5 ignores the unknown parameter and answers with the ordinary first
+         * page, so the caller still matches client-side rather than trusting the filter blindly.
+         */
+        @Query("rego_exact") regoExact: String? = null,
     ): VehiclePageDto
 
     // ---- Tariffs (B6 fare engine reads these; server is the source of truth,
@@ -371,7 +402,19 @@ interface ApiService {
      * thrown [retrofit2.HttpException], caught by that function's `runCatching`) when no release
      * has ever been published. */
     @GET("/v1/app-releases/latest")
-    suspend fun latestAppRelease(): LatestAppReleaseDto
+    suspend fun latestAppRelease(
+        /**
+         * `X-Device-Secret` (B5, 2026-09-08 — `require_device_or_user` in
+         * `backend/app/api/v1/app_releases.py`). Sent when this tablet holds one, so the device the
+         * `force_update_pending` flag actually targets — a parked, logged-off tablet with no bearer
+         * token anywhere in memory — can check for an update at all. `null` keeps the old
+         * bearer-only path byte-for-byte, which is what a device paired before the secret existed
+         * still uses. Retrofit omits a null `@Header` entirely, so an older backend never even sees
+         * the header; [au.com.threesixty.cabdispatch.domain.AppUpdateChecker] handles the other
+         * half of that (a `401` from a backend that has the header but not B5's handling of it).
+         */
+        @Header("X-Device-Secret") deviceSecret: String? = null,
+    ): LatestAppReleaseDto
 
     // ---- Vouchers / Corporate Accounts (Close & Pay payment-grid pass, real backend endpoints
     // added by the SaaS-platform Phase 3 voucher-ledger workstream, commit 1f93840) ----

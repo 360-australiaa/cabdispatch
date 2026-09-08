@@ -83,14 +83,62 @@ fun interface VehicleUuidResolver {
 /**
  * The real resolver: `GET /v1/fleet/vehicles`, matched client-side by [matchVehicleUuid].
  *
- * Same no-pagination-loop caveat as every other caller of [ApiService.listVehicles] (see its own
- * doc): a tenant with more than one page of vehicles can have a rego this never finds. Left as it
- * is rather than quietly fixed here, because changing it would change three call sites' behaviour
- * at once and this pass is about the binding going stale, not about fleet size.
+ * ### The pagination caveat, now closed (B5, 2026-09-08)
+ * This used to carry the same "a tenant with more than one page of vehicles can have a rego this
+ * never finds" caveat as every other caller of [ApiService.listVehicles]. B5 added `?rego_exact=`
+ * for exactly this call site — a case-insensitive EXACT match returning 0 or 1 row, so the answer
+ * no longer depends on the wanted car happening to fall inside the first 100-row window.
+ *
+ * [matchVehicleUuid] is still applied to whatever comes back, and that is deliberate rather than
+ * redundant: a backend older than B5 ignores the unknown query parameter and answers with the
+ * ordinary first page, in which case this degrades to precisely its previous behaviour instead of
+ * failing. No capability probe is needed for that — an ignored filter is not an error.
  */
 class ApiVehicleUuidResolver(private val apiService: ApiService) : VehicleUuidResolver {
     override suspend fun resolve(rego: String): String? =
-        runCatching { apiService.listVehicles() }
+        runCatching { apiService.listVehicles(regoExact = rego.trim()) }
             .getOrNull()
             ?.let { matchVehicleUuid(it.items, rego) }
+}
+
+/**
+ * Whether the fleet's own record of which car this tablet sits in should replace the binding the
+ * driver's session is currently holding — and if so, with what.
+ *
+ * ### Why this exists
+ * [DeviceCommandHeartbeat]'s 60 s poll has always received `DeviceDto.vehicle_id` — the fleet's
+ * *device* row's own vehicle binding, set by an admin on the dashboard — and always threw it away
+ * unread. That left the self-heal channel this file's class doc describes half-built: the app could
+ * notice a binding had gone stale (a `404` off `POST /v1/fleet/positions`) and re-resolve it from
+ * the roster by rego, but it could not be *told* the right answer by the depot that actually knows
+ * it. A wipe-and-reseed changes both halves at once, and a re-resolve by rego only recovers when
+ * the new car kept the old rego. Reading `vehicle_id` closes that: the tablet adopts the depot's
+ * answer on the next poll, with no driver action and no re-bind at login.
+ *
+ * Pure, and here rather than inside the heartbeat, for the same reason [matchVehicleUuid] is: this
+ * is the part with real edge cases, and the coroutine around it has none worth a fake Retrofit
+ * interface — the same split [KioskLockController.decideAction] already uses.
+ *
+ * ### The three cases that must NOT rebind
+ * - **No session.** A parked, logged-off tablet has no [DriverSession] to correct. The heartbeat
+ *   still runs (that is the whole point of the device secret), but there is nothing to write into.
+ * - **`reported == null`.** The device row exists but the depot has not bound it to a vehicle.
+ *   That is "unknown", not "no vehicle" — dropping a working binding the driver established at
+ *   login because an admin never filled the device's vehicle field in would take a car OFF the
+ *   Live Map, which is the exact failure this file exists to prevent, just from the other side.
+ * - **Already equal.** No write, so [SessionHolder]'s durable store is not churned on every tick
+ *   and nothing downstream re-collects a session that did not actually change.
+ *
+ * Note what is deliberately NOT compared: [DriverSession.vehicleId], the driver-typed/QR'd rego.
+ * The device row carries a UUID, not a rego, and nothing here can turn one into the other without
+ * the roster call [ApiVehicleUuidResolver] makes. The rego stays exactly as the driver entered it —
+ * it is what every display and every rego-keyed API call still uses — and only
+ * [DriverSession.vehicleUuid], the field `POST /v1/fleet/positions` actually 404s on, is healed.
+ *
+ * @return the UUID to adopt, or `null` for "leave the session alone".
+ */
+fun decideVehicleRebind(current: DriverSession?, reportedVehicleUuid: String?): String? {
+    if (current == null) return null
+    val reported = reportedVehicleUuid?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return if (reported == current.vehicleUuid) null else reported
 }

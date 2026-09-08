@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.LockTaskMode
 import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import au.com.threesixty.cabdispatch.domain.DeviceReadiness
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import com.mapbox.common.MapboxOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -235,8 +236,19 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
             // screen reports what the tablet is holding right now; fetching one here would make an
             // offline tablet look worse than it is and would slow the gate down for no gain, since
             // this check cannot block anyone anyway.
+            // The REAL region for this tablet, not a hardcoded "urban". This was the last
+            // region-hardcoded call site left in the app (every other one was switched to
+            // RegionResolver in an earlier pass), and it was quietly wrong on precisely the tablet
+            // that most needs a commissioning screen: a country-region vehicle caches a "country"
+            // tariff, this probe asked the cache for "urban", got null, and reported "no signed
+            // tariff cached" forever — on a tablet holding a perfectly good in-force tariff.
+            //
+            // Degrades to RegionResolver.REGION_URBAN with no GPS fix, which is that resolver's own
+            // documented fallback and is also the honest answer here: with no fix there is nothing
+            // better to ask for, and urban is the one region every tenant always has a tariff for.
+            val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
             val tariff = runCatching {
-                AppContainer.tariffCache.getActiveTariff("urban") != null
+                AppContainer.tariffCache.getActiveTariff(region) != null
             }.getOrNull()
             // The verifying key, separately: a tariff without it cannot have its signature checked
             // offline, and a tariff-only test would go green on a tablet that cannot prove the
