@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { Button } from "./Button";
 
 export interface PaginationProps {
@@ -42,6 +43,7 @@ export function Pagination({
   const total = Math.max(1, pageCount);
   const isFirst = page <= 0;
   const isLast = page >= total - 1;
+  const { t } = useI18n();
 
   return (
     <nav
@@ -51,13 +53,7 @@ export function Pagination({
         className,
       )}
     >
-      <span aria-live="polite">
-        {summary ?? (
-          <>
-            Page {page + 1} of {total}
-          </>
-        )}
-      </span>
+      <span aria-live="polite">{summary ?? t("ui.pagination.pageOf", { page: page + 1, total })}</span>
       <div className="flex gap-2">
         <Button
           variant="outline"
@@ -65,7 +61,7 @@ export function Pagination({
           disabled={isFirst}
           onClick={() => onPageChange(Math.max(0, page - 1))}
         >
-          Previous
+          {t("common.previous")}
         </Button>
         <Button
           variant="outline"
@@ -73,7 +69,7 @@ export function Pagination({
           disabled={isLast}
           onClick={() => onPageChange(Math.min(total - 1, page + 1))}
         >
-          Next
+          {t("common.next")}
         </Button>
       </div>
     </nav>
@@ -107,6 +103,7 @@ export function CursorPagination({
   label = "Pagination",
   className,
 }: CursorPaginationProps) {
+  const { t } = useI18n();
   return (
     <nav
       aria-label={label}
@@ -118,10 +115,10 @@ export function CursorPagination({
       <span aria-live="polite">{summary}</span>
       <div className="flex gap-2">
         <Button variant="outline" size="sm" disabled={!hasPrevious} onClick={onPrevious}>
-          Previous
+          {t("common.previous")}
         </Button>
         <Button variant="outline" size="sm" disabled={!hasNext} onClick={onNext}>
-          Next
+          {t("common.next")}
         </Button>
       </div>
     </nav>

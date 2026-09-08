@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { Banknote, ListChecks, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardContent, Input, Modal, PageHeader, Select, Table, Tabs, type TabItem, type TableColumn } from "@/components/ui";
+import { Badge, Button, Card, CardContent, EmptyState, Input, Modal, PageHeader, Select, Table, Tabs, type TabItem, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { getJurisdictionCapabilities } from "@/lib/i18n";
 import {
   useDeleteLedgerEntryMutation,
   usePSLLedgerQuery,
@@ -40,8 +41,16 @@ const TABS: TabItem<Tab>[] = [
 ];
 
 export default function PslPage() {
-  const { user } = useAuth();
+  const { user, tenant } = useAuth();
   const canManage = !!user && MANAGE_ROLES.has(user.role);
+  // PSL (Passenger Service Levy) is a NSW-specific concept (audit §4,
+  // WS-F.4) -- gated the same way as the nav item that links here
+  // (components/layout/Sidebar.tsx). The nav link already hides for a
+  // tenant without this capability; this is the direct-URL fallback so the
+  // route itself is honest rather than showing an NSW-shaped screen to a
+  // tenant that isn't NSW. See lib/i18n/jurisdiction.ts for why every
+  // tenant has the capability today (no backend jurisdiction field yet).
+  const jurisdiction = getJurisdictionCapabilities(tenant);
 
   const [tab, setTab] = useState<Tab>("ledger");
 
@@ -230,6 +239,18 @@ export default function PslPage() {
   ];
 
   const tableKey = [driverFilter, periodFilter].join("|");
+
+  if (!jurisdiction.psl) {
+    return (
+      <div>
+        <PageHeader title="PSL Centre" />
+        <EmptyState
+          title="Not available for this tenant"
+          description="The Passenger Service Levy is a NSW-specific charge and isn't part of this tenant's jurisdiction."
+        />
+      </div>
+    );
+  }
 
   return (
     <div>

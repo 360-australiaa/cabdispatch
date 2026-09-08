@@ -33,6 +33,7 @@ import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
+import { useI18n, getJurisdictionCapabilities, type I18nKey } from "@/lib/i18n";
 // Same rollup Fleet & Drivers' own ComplianceExpiryBanner reads
 // (`GET /v1/fleet/compliance-expiry`) -- surfaced here too as an ambient
 // sidebar count so an expiring licence/rego/insurance is visible from every
@@ -42,13 +43,13 @@ import { useResetOnChange } from "@/lib/useResetOnChange";
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: I18nKey;
   icon: typeof Map;
 }
 
 interface NavGroup {
   id: string;
-  label: string;
+  labelKey: I18nKey;
   items: NavItem[];
 }
 
@@ -60,7 +61,7 @@ interface NavGroup {
  */
 const GETTING_STARTED: NavItem = {
   to: "/getting-started",
-  label: "Getting Started",
+  labelKey: "nav.gettingStarted",
   icon: ListChecks,
 };
 
@@ -76,45 +77,48 @@ const GETTING_STARTED: NavItem = {
 const NAV_GROUPS: NavGroup[] = [
   {
     id: "operations",
-    label: "Operations",
+    labelKey: "nav.group.operations",
     items: [
-      { to: "/live-map", label: "Live Map", icon: Map },
-      { to: "/dispatch", label: "Dispatch", icon: Send },
-      { to: "/messages", label: "Messages", icon: MessageSquare },
-      { to: "/duress", label: "Duress Desk", icon: ShieldAlert },
+      { to: "/live-map", labelKey: "nav.liveMap", icon: Map },
+      { to: "/dispatch", labelKey: "nav.dispatch", icon: Send },
+      { to: "/messages", labelKey: "nav.messages", icon: MessageSquare },
+      { to: "/duress", labelKey: "nav.duressDesk", icon: ShieldAlert },
     ],
   },
   {
     id: "trips",
-    label: "Trips & Fares",
+    labelKey: "nav.group.trips",
+    // "PSL Centre" is filtered out of `items` at render time for a tenant
+    // without the `psl` jurisdiction capability -- see
+    // `getJurisdictionCapabilities` (`lib/i18n/jurisdiction.ts`).
     items: [
-      { to: "/trips", label: "Trips", icon: Route },
-      { to: "/shifts", label: "Shifts & Reconciliation", icon: Clock },
-      { to: "/tariffs", label: "Tariff Studio", icon: Receipt },
-      { to: "/zones", label: "Zones & Demand", icon: MapPinned },
-      { to: "/psl", label: "PSL Centre", icon: Wallet },
+      { to: "/trips", labelKey: "nav.trips", icon: Route },
+      { to: "/shifts", labelKey: "nav.shifts", icon: Clock },
+      { to: "/tariffs", labelKey: "nav.tariffStudio", icon: Receipt },
+      { to: "/zones", labelKey: "nav.zones", icon: MapPinned },
+      { to: "/psl", labelKey: "nav.pslCentre", icon: Wallet },
     ],
   },
   {
     id: "fleet",
-    label: "Fleet",
+    labelKey: "nav.group.fleet",
     items: [
-      { to: "/fleet", label: "Fleet & Drivers", icon: Car },
-      { to: "/compliance", label: "Compliance Vault", icon: FileCheck2 },
+      { to: "/fleet", labelKey: "nav.fleetDrivers", icon: Car },
+      { to: "/compliance", labelKey: "nav.complianceVault", icon: FileCheck2 },
     ],
   },
   {
     id: "revenue",
-    label: "Revenue",
+    labelKey: "nav.group.revenue",
     items: [
-      { to: "/billing", label: "Billing", icon: CreditCard },
-      { to: "/payment-recon", label: "Payment Reconciliation", icon: Landmark },
-      { to: "/vouchers", label: "Vouchers & Accounts", icon: Ticket },
+      { to: "/billing", labelKey: "nav.billing", icon: CreditCard },
+      { to: "/payment-recon", labelKey: "nav.paymentRecon", icon: Landmark },
+      { to: "/vouchers", labelKey: "nav.vouchers", icon: Ticket },
     ],
   },
   {
     id: "engagement",
-    label: "Driver Engagement",
+    labelKey: "nav.group.engagement",
     // The tablet's Announcements / Incentive Progress / Wallet tiles.
     // Announcement/incentive list+get are open to any tenant user server-side,
     // writes are owner/admin gated in-page (`canWrite`), same as Vouchers.
@@ -124,32 +128,37 @@ const NAV_GROUPS: NavGroup[] = [
     // -- the nav item stays visible to every role, same "let the page itself
     // render the access notice" convention as Wallet.
     items: [
-      { to: "/announcements", label: "Announcements", icon: Megaphone },
-      { to: "/incentives", label: "Incentives", icon: Trophy },
-      { to: "/wallet", label: "Driver Wallets", icon: Coins },
-      { to: "/ratings", label: "Ratings", icon: Star },
+      { to: "/announcements", labelKey: "nav.announcements", icon: Megaphone },
+      { to: "/incentives", labelKey: "nav.incentives", icon: Trophy },
+      { to: "/wallet", labelKey: "nav.driverWallets", icon: Coins },
+      { to: "/ratings", labelKey: "nav.ratings", icon: Star },
     ],
   },
   {
     id: "admin",
-    label: "Administration",
+    labelKey: "nav.group.admin",
     // GET /v1/audit-log has no role gate server-side (any authenticated tenant
     // user may read the trail) -- so this nav item stays visible to every
     // role, same as every other item above. Only the in-page "Verify chain"
     // action is owner/admin gated (see pages/audit-log/index.tsx's `canVerify`).
     items: [
-      { to: "/audit-log", label: "Audit Log", icon: ScrollText },
-      { to: "/settings/white-label", label: "White-label", icon: Palette },
-      { to: "/settings/security", label: "Security", icon: ShieldCheck },
+      { to: "/audit-log", labelKey: "nav.auditLog", icon: ScrollText },
+      { to: "/settings/white-label", labelKey: "nav.whiteLabel", icon: Palette },
+      { to: "/settings/security", labelKey: "nav.security", icon: ShieldCheck },
     ],
   },
 ];
 
 /** Platform-owner-only nav item — see src/lib/platformAdmin.ts and
  * src/components/PlatformOwnerRoute.tsx for the matching route guard. */
-const PLATFORM_NAV_ITEM: NavItem = { to: "/platform", label: "Platform Admin", icon: Building2 };
+const PLATFORM_NAV_ITEM: NavItem = { to: "/platform", labelKey: "nav.platformAdmin", icon: Building2 };
 
 const COLLAPSED_STORAGE_KEY = "cabdispatch.sidebar.collapsedGroups";
+
+/** Shown until a tenant's own name/logo (`theme_json`) loads — see the
+ * `logoUrl` branch below. Not itself translated: it's the platform's own
+ * name, not a UI label, same reasoning as the login page's title. */
+const BRAND_DEFAULT_NAME = "Cab Dispatch";
 
 export interface SidebarProps {
   /** Drawer visibility on small screens. Ignored at `lg` and up. */
@@ -178,16 +187,24 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   // "no customization -> platform default" convention as the theme colors themselves.
   const { data: tenant } = useTenantQuery();
   const logoUrl = tenant?.theme_json?.logo_url;
+  const { t } = useI18n();
+  const jurisdiction = getJurisdictionCapabilities(tenant);
+
+  const baseGroups: NavGroup[] = NAV_GROUPS.map((group) =>
+    group.id === "trips" && !jurisdiction.psl
+      ? { ...group, items: group.items.filter((item) => item.to !== "/psl") }
+      : group,
+  );
 
   const groups: NavGroup[] = isPlatformOwner(user)
     ? [
-        ...NAV_GROUPS.slice(0, -1),
+        ...baseGroups.slice(0, -1),
         {
-          ...NAV_GROUPS[NAV_GROUPS.length - 1],
-          items: [...NAV_GROUPS[NAV_GROUPS.length - 1].items, PLATFORM_NAV_ITEM],
+          ...baseGroups[baseGroups.length - 1],
+          items: [...baseGroups[baseGroups.length - 1].items, PLATFORM_NAV_ITEM],
         },
       ]
-    : NAV_GROUPS;
+    : baseGroups;
 
   const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
 
@@ -268,7 +285,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                 CD
               </div>
               <span className="text-sm font-semibold tracking-wide">
-                {tenant?.name ?? "Cab Dispatch"}
+                {tenant?.name ?? BRAND_DEFAULT_NAME}
               </span>
             </>
           )}
@@ -307,7 +324,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                     )}
                     aria-hidden="true"
                   />
-                  {group.label}
+                  {t(group.labelKey)}
                 </button>
                 {!isCollapsed && (
                   <ul id={`nav-group-${group.id}`} className="mt-1 flex flex-col gap-1">
@@ -337,7 +354,7 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
             className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white"
           >
             <LogOut className="h-4 w-4" />
-            Log out
+            {t("nav.logout")}
           </button>
         </div>
       </aside>
@@ -346,12 +363,14 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
 }
 
 function NavItemLink({
-  item: { to, label, icon: Icon },
+  item: { to, labelKey, icon: Icon },
   complianceExpiryCount,
 }: {
   item: NavItem;
   complianceExpiryCount: number;
 }) {
+  const { t } = useI18n();
+  const label = t(labelKey);
   return (
     <NavLink
       to={to}

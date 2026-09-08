@@ -8,8 +8,20 @@ import {
 } from "./api";
 import { errorMessage } from "./format";
 import type { DuressDevice } from "./types";
+import {
+  COUNTRY_DIAL_CODES,
+  DEFAULT_COUNTRY_ISO,
+  isValidE164,
+  joinE164,
+  splitE164,
+} from "@/lib/i18n/phone";
 
 const NO_VEHICLE_VALUE = "";
+
+const COUNTRY_SELECT_OPTIONS = COUNTRY_DIAL_CODES.map((c) => ({
+  value: c.iso,
+  label: `${c.name} (${c.dialCode})`,
+}));
 
 /**
  * Create/register a new duress hardware device (`POST /v1/duress-devices`),
@@ -40,7 +52,14 @@ export function DeviceFormModal({
 
   const [deviceCode, setDeviceCode] = useState("");
   const [vehicleId, setVehicleId] = useState(NO_VEHICLE_VALUE);
-  const [phoneNumber, setPhoneNumber] = useState("");
+  // Phone number is stored/sent as one E.164 string (`phoneNumber`'s "wire"
+  // form), but edited as a country selector + national-number field so an
+  // operator isn't expected to type a leading '+61' by hand or guess the
+  // format -- the gap the audit flagged (§4, WS-F.5). `phoneCountryIso` and
+  // `phoneNational` are the two edited fields; `joinE164` combines them on
+  // save, `splitE164` decomposes a loaded value back into them.
+  const [phoneCountryIso, setPhoneCountryIso] = useState(DEFAULT_COUNTRY_ISO);
+  const [phoneNational, setPhoneNational] = useState("");
   const [plaintextSecret, setPlaintextSecret] = useState("");
   const [active, setActive] = useState(true);
 
@@ -48,10 +67,28 @@ export function DeviceFormModal({
     if (!open) return;
     setDeviceCode(device?.device_code ?? "");
     setVehicleId(device?.vehicle_id ?? NO_VEHICLE_VALUE);
-    setPhoneNumber(device?.phone_number ?? "");
+    const existing = device?.phone_number ?? "";
+    const split = existing ? splitE164(existing) : null;
+    if (split) {
+      setPhoneCountryIso(split.iso);
+      setPhoneNational(split.national);
+    } else {
+      // Empty, or an E.164 value from a country not in our short list (or,
+      // for a very old row, one that predates E.164 entirely) -- shown
+      // verbatim in the national field rather than guessed at, per the
+      // honesty rule. Saving without changing it will fail joinE164's
+      // round-trip validation below, which is correct: it forces the
+      // operator to actually pick a country rather than silently mangling
+      // an unrecognized number.
+      setPhoneCountryIso(DEFAULT_COUNTRY_ISO);
+      setPhoneNational(existing);
+    }
     setPlaintextSecret("");
     setActive(device?.active ?? true);
   }, [open, device]);
+
+  const phoneE164 = phoneNational.trim() ? joinE164(phoneCountryIso, phoneNational) : "";
+  const phoneValid = phoneE164 === "" || isValidE164(phoneE164);
 
   const vehicleOptionsQuery = useQuery({
     queryKey: ["duress-devices", "vehicle-options"],
@@ -69,13 +106,13 @@ export function DeviceFormModal({
       isEdit
         ? updateDuressDevice(device.id, {
             vehicle_id: vehicleId || null,
-            phone_number: phoneNumber.trim() || null,
+            phone_number: phoneE164 || null,
             active,
           })
         : createDuressDevice({
             device_code: deviceCode.trim(),
             vehicle_id: vehicleId || null,
-            phone_number: phoneNumber.trim() || null,
+            phone_number: phoneE164 || null,
             plaintext_secret: plaintextSecret,
           }),
     onSuccess: () => {
@@ -132,13 +169,30 @@ export function DeviceFormModal({
         </FormField>
 
         <FormField label="Phone number (optional)">
-          <Input
-            value={phoneNumber}
-            onChange={(e) => setPhoneNumber(e.target.value)}
-            placeholder="+61…"
-          />
+          <div className="flex gap-2">
+            <Select
+              options={COUNTRY_SELECT_OPTIONS}
+              value={phoneCountryIso}
+              onChange={(e) => setPhoneCountryIso(e.target.value)}
+              className="w-40 shrink-0"
+              aria-label="Country"
+            />
+            <Input
+              value={phoneNational}
+              onChange={(e) => setPhoneNational(e.target.value)}
+              placeholder="412 345 678"
+              aria-label="Phone number"
+              className="flex-1"
+            />
+          </div>
+          {!phoneValid && (
+            <p className="mt-1 text-sm text-destructive">
+              That's not a valid number for the selected country.
+            </p>
+          )}
           <p className="mt-1 text-xs text-muted-foreground">
-            The device's own SIM number — used by the "Call the cab" operator action.
+            The device's own SIM number — used by the "Call the cab" operator action. Stored as{" "}
+            {phoneE164 || "—"}.
           </p>
         </FormField>
 
@@ -175,7 +229,7 @@ export function DeviceFormModal({
           <Button type="button" variant="outline" onClick={handleClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={mutation.isPending}>
+          <Button type="submit" disabled={mutation.isPending || !phoneValid}>
             {mutation.isPending ? "Saving…" : isEdit ? "Save changes" : "Register device"}
           </Button>
         </div>
