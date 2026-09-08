@@ -47,3 +47,4 @@ Thumbs.db
 # a competitor's proprietary product UI into this repo's history)
 meter screens/
 .idea/
+*.apk
