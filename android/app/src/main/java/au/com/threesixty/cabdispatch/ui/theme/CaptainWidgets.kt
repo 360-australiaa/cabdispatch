@@ -126,11 +126,18 @@ fun PulsingDot(color: androidx.compose.ui.graphics.Color, animated: Boolean, mod
 /** Small helper so every "breathing" animation across the app (pulsing dot, SOS glow, meter-dial
  * glow) shares one reverse-repeating tween instead of hand-rolling `rememberInfiniteTransition` at
  * each call site. Returns a constant [to] (never animating) when [enabled] is false, so a
- * paused/idle state genuinely stops animating rather than freezing mid-pulse. */
+ * paused/idle state genuinely stops animating rather than freezing mid-pulse.
+ *
+ * A8 accessibility pass: also stops for [rememberReduceMotion] — the OS "Remove animations"
+ * setting — even when the caller asked for [enabled]=true, because this is the ONE choke point
+ * every `PulsingDot`/glow site in the app routes through. A driver with that setting on sees the
+ * dot/glow settle to its end state instantly rather than keep breathing; the state it signals
+ * (available, danger, live) is unchanged, only the loop is. */
 @Composable
 fun rememberInfiniteFloat(enabled: Boolean, from: Float, to: Float, durationMs: Int): androidx.compose.runtime.State<Float> {
+    val reduceMotion = rememberReduceMotion()
     val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
-    return if (enabled) {
+    return if (enabled && !reduceMotion) {
         transition.animateFloat(
             initialValue = from,
             targetValue = to,
