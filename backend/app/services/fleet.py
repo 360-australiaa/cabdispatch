@@ -78,12 +78,13 @@ import secrets
 import string
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Device, DevicePairingCode, DeviceVersionHistory, Vehicle
 from app.models.shift import Shift
 from app.models.user import User
+from app.services.audit_log import record_audit
 from app.services.shift import close_open_shifts_for_vehicle_deletion
 
 # Codes exclude visually-ambiguous characters (0/O, 1/I) since a driver may need
@@ -91,6 +92,15 @@ from app.services.shift import close_open_shifts_for_vehicle_deletion
 _PAIRING_CODE_ALPHABET = "".join(c for c in string.ascii_uppercase + string.digits if c not in "01OI")
 PAIRING_CODE_LENGTH = 8
 PAIRING_CODE_TTL_MINUTES = 15
+
+# How long a CONSUMED pairing code is kept before `generate_pairing_code` prunes
+# it. Its `used_by_device_id` is the only surviving record of which admin-issued
+# code enrolled which tablet, so it is worth keeping while a commissioning is
+# recent enough for someone to still be asking about it -- but not forever, and
+# the AuditLog `device_registered` / `device_repaired` row written by
+# `register_device` is the durable record either way. Expired-but-unused codes
+# carry no such history and are pruned as soon as they expire.
+_PAIRING_CODE_RETENTION_DAYS = 30
 
 
 class FleetError(Exception):
@@ -152,6 +162,33 @@ async def get_device_or_404(session: AsyncSession, *, tenant_id: str, device_id:
     )
     device = result.scalar_one_or_none()
     if device is None:
+        raise DeviceNotFoundError(device_id)
+    return device
+
+
+async def get_active_device_or_404(
+    session: AsyncSession, *, tenant_id: str, device_id: str
+) -> Device:
+    """`get_device_or_404`, but a REVOKED device is treated as absent.
+
+    This is the lookup every route a TABLET calls must use, and it exists
+    because `get_device_or_404` deliberately still returns revoked rows -- admin
+    CRUD needs them (that is how `PATCH /devices/{id}` un-revokes one, and how a
+    revoked tablet stays visible on the dashboard's device list instead of
+    vanishing). Revocation was therefore bypassable: `authenticate_device` below
+    checks `revoked_at`, but the bearer FALLBACK on the same routes went through
+    `get_device_or_404`, which does not -- so a revoked, lost or stolen tablet
+    with any valid human token on it kept heartbeating, answering locates and
+    acknowledging commands (backend audit §3 G3). Cutting a tablet off is the
+    entire point of the revoke button.
+
+    Raises DeviceNotFoundError for both unknown and revoked, exactly as
+    `authenticate_device` does, so the two paths give a revoked tablet the same
+    404 the Android client already reads as a sticky `deviceRejected`
+    (DeviceCommandHeartbeat.pollOnce).
+    """
+    device = await get_device_or_404(session, tenant_id=tenant_id, device_id=device_id)
+    if device.revoked_at is not None:
         raise DeviceNotFoundError(device_id)
     return device
 
@@ -262,6 +299,76 @@ async def authenticate_device(session: AsyncSession, *, device_id: str, secret: 
     return device
 
 
+async def authenticate_device_by_secret(session: AsyncSession, *, secret: str) -> Device:
+    """The device row that owns `secret`, with no device id supplied.
+
+    `authenticate_device` above needs the caller to already know which row it
+    is; that is fine for the heartbeat, whose URL carries the id, but it cannot
+    answer the one question a freshly-booted tablet actually has -- "which
+    vehicle am I in?" (backend audit §3 G5). Both device-reading routes were
+    bearer-only, so a parked, logged-off tablet holding a stale binding could
+    not self-heal without a human signing in first, and that is precisely the
+    tablet an operator is trying to straighten out.
+
+    A lookup BY the credential is safe here only because the stored value is a
+    deterministic SHA-256 of a 256-bit random secret we minted ourselves: the
+    hash is an exact-match index probe, not a guessable one. It would be
+    unsound for a password KDF, which is why this shape is confined to device
+    secrets. See `_hash_device_secret` for the rest of that reasoning.
+
+    Raises DeviceAuthError -- never DeviceNotFoundError -- for an unknown or
+    revoked secret. Without a device id in the request there is nothing for a
+    404 to be "not found" about, and answering "no such device" to a guess would
+    confirm which secrets exist.
+    """
+    result = await session.execute(
+        select(Device).where(Device.device_secret_hash == _hash_device_secret(secret))
+    )
+    device = result.scalar_one_or_none()
+    if device is None or device.revoked_at is not None:
+        raise DeviceAuthError("Device secret not recognised")
+    return device
+
+
+async def rotate_device_secret(
+    session: AsyncSession, device: Device, *, actor_user_id: str | None
+) -> tuple[Device, str]:
+    """Mints a fresh secret for an already-paired device, invalidating the old
+    one immediately, and returns the plaintext exactly once.
+
+    Until this existed, `mint_device_secret` had a single call site --
+    `register_device` -- so a device secret was effectively immortal and the
+    only way to change one was to physically visit the tablet with a new pairing
+    code (backend audit §3 G2). The duress hardware in this same codebase has
+    had `POST /duress-devices/{id}/rotate-secret` since it landed
+    (app/api/v1/duress_device.py); the asymmetry was an oversight, not a design.
+
+    Rotation is deliberately NOT a re-pair: `vehicle_id`, `paired_at` and
+    `revoked_at` are all left exactly as they are. This is "the credential on
+    this tablet may have leaked", not "this tablet moved car", and conflating
+    the two is how a routine security action would silently rebind a vehicle.
+
+    Audit-logged, because an operator who later finds a tablet has stopped
+    working needs to be able to see that someone rotated its secret and when.
+    """
+    secret, secret_hash = mint_device_secret()
+    device.device_secret_hash = secret_hash
+
+    await record_audit(
+        session,
+        tenant_id=device.tenant_id,
+        actor_user_id=actor_user_id,
+        action="device_secret_rotated",
+        entity_type="device",
+        entity_id=device.id,
+        after={"android_id": device.android_id, "vehicle_id": device.vehicle_id},
+    )
+
+    await session.commit()
+    await session.refresh(device)
+    return device, secret
+
+
 # --- pairing-code issuance + consumption -------------------------------------
 
 
@@ -269,6 +376,30 @@ async def generate_pairing_code(
     session: AsyncSession, *, tenant_id: str, vehicle_id: str
 ) -> DevicePairingCode:
     await get_vehicle_or_404(session, tenant_id=tenant_id, vehicle_id=vehicle_id)
+
+    # Lazy garbage collection of spent codes, on the same lazy-maintenance
+    # pattern the rest of this backend uses rather than a background timer (see
+    # app.services.lazy_maintenance): a pairing code that has been consumed or
+    # has expired can never be presented successfully again, so keeping it is
+    # pure accumulation -- one dead row per tablet per re-pair, forever
+    # (backend audit §3 G10). Minting is the natural moment because it is
+    # admin-triggered, already writing, and low-frequency.
+    #
+    # Consumed rows are kept for `_PAIRING_CODE_RETENTION_DAYS` rather than
+    # dropped the instant they are used: `used_by_device_id` is the only record
+    # of which admin-issued code enrolled which tablet, and that is worth having
+    # while a commissioning is still fresh enough for someone to ask about it.
+    # Expired-but-never-used rows carry no such history and go immediately.
+    now = datetime.now(UTC)
+    await session.execute(
+        delete(DevicePairingCode).where(
+            DevicePairingCode.tenant_id == tenant_id,
+            or_(
+                DevicePairingCode.used_at < now - timedelta(days=_PAIRING_CODE_RETENTION_DAYS),
+                and_(DevicePairingCode.used_at.is_(None), DevicePairingCode.expires_at < now),
+            ),
+        )
+    )
 
     code = "".join(secrets.choice(_PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_LENGTH))
     pairing = DevicePairingCode(
@@ -331,9 +462,17 @@ async def register_device(
         select(Device).where(Device.tenant_id == tenant_id, Device.android_id == android_id)
     )
     device = result.scalar_one_or_none()
+    is_new = device is None
     if device is None:
         device = Device(tenant_id=tenant_id, android_id=android_id)
         session.add(device)
+
+    # Captured BEFORE the rebind below, because it is the whole content of the
+    # audit record: which car this tablet was in when the pairing code was
+    # burned. `is_new` distinguishes a first enrolment from a re-pair; a
+    # re-pair onto a DIFFERENT vehicle is the one that matters.
+    previous_vehicle_id = device.vehicle_id
+    was_revoked = device.revoked_at is not None
 
     device.vehicle_id = pairing.vehicle_id
     if model is not None:
@@ -351,6 +490,39 @@ async def register_device(
     pairing.used_at = now
     await session.flush()  # so device.id is populated before we reference it below
     pairing.used_by_device_id = device.id
+
+    # AUDIT (backend audit §3 G1). Re-registration silently reassigned
+    # `vehicle_id` and wrote nothing anywhere: a tablet could be moved from car
+    # to car leaving no trace at all, and the only thing that ever noticed was
+    # the ADVISORY, non-blocking cross-check at shift start
+    # (app.services.shift, `shift_device_vehicle_mismatch`) -- which by
+    # construction fires only if someone starts a shift on the OLD car. Pairing
+    # is a commissioning event; it belongs in the tamper-evident chain like
+    # every other one.
+    #
+    # `actor_user_id` is None and that is honest rather than lazy: this route
+    # has no bearer token by design (the pairing code IS the credential), so
+    # there is no authenticated human to name. The admin who minted the code is
+    # recoverable from the DevicePairingCode row this references.
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=None,
+        action="device_registered" if is_new else "device_repaired",
+        entity_type="device",
+        entity_id=device.id,
+        before=None if is_new else {"vehicle_id": previous_vehicle_id, "revoked": was_revoked},
+        after={
+            "android_id": android_id,
+            "vehicle_id": pairing.vehicle_id,
+            "pairing_code_id": pairing.id,
+            # Called out explicitly rather than left to be inferred by diffing
+            # the two dicts, so a reviewer scanning the log for tablets that
+            # changed car can filter on one boolean.
+            "vehicle_changed": (not is_new) and previous_vehicle_id != pairing.vehicle_id,
+            "secret_rotated": True,
+        },
+    )
 
     await session.commit()
     await session.refresh(device)
@@ -433,12 +605,35 @@ async def record_locate_response(
 async def record_command_ack(session: AsyncSession, device: Device, *, command: str) -> Device:
     """Records that a device acted on a queued command, and clears its flag.
 
-    Only `restart` today. Same missing-clear problem as locate: an admin could
-    queue a restart and watch it read "Pending" forever, with no way to know
-    whether the tablet had ever seen it.
+    Same missing-clear problem `locate` and `reboot` were already fixed for: an
+    admin could queue a command and watch it read "Pending" forever, with no way
+    to know whether the tablet had ever seen it. This function understood only
+    `restart`, so `force_update_pending` and `kiosk_locked` -- half the commands
+    an admin can issue -- still had no ack path at all (backend audit §3 G9).
+
+    Two shapes of command, and the difference is deliberate:
+
+    * `restart` and `force_update` are ONE-SHOT REQUESTS. Their flags mean "do
+      this thing", so the acknowledgement clears them -- otherwise the device
+      would restart or re-install on every subsequent heartbeat forever.
+    * `kiosk_lock` is a DESIRED STATE. `kiosk_locked=True` means "this tablet
+      should be in kiosk mode", which stays true after the tablet enters it, so
+      acknowledging must NOT clear it -- doing so would unlock every tablet the
+      moment it confirmed it had locked. The ack is recorded on
+      `last_acked_command` / `command_acked_at` instead, which is what lets a
+      dashboard distinguish "locked, tablet confirmed" from "locked, tablet
+      never came back".
+
+    `last_acked_command` exists because a bare `command_acked_at` was
+    unambiguous only while `restart` was the sole ack-able command; with three
+    of them sharing one timestamp, an admin queuing a force-update would read a
+    restart acked an hour earlier as "the update landed".
     """
     if command == "restart":
         device.reboot_requested = False
+    elif command == "force_update":
+        device.force_update_pending = False
+    device.last_acked_command = command
     device.command_acked_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(device)

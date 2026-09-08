@@ -1341,3 +1341,514 @@ async def test_an_unknown_command_is_rejected_rather_than_silently_accepted(clie
     # A device claiming to have carried out something this server has no concept
     # of must not be recorded as having carried anything out.
     assert resp.status_code == 422
+
+
+# ==============================================================================
+# B5 · device commissioning lifecycle (backend audit §3, gaps G1/G2/G3/G5/G6/
+# G8/G9/G10)
+# ==============================================================================
+
+
+async def test_a_revoked_device_is_refused_on_the_BEARER_path_too(client, session):
+    """G3, the serious one. `authenticate_device` checked `revoked_at`; the
+    bearer FALLBACK on the same routes called `get_device_or_404`, which did
+    not. So revoking a lost or stolen tablet stopped only its device-secret
+    calls -- with any valid human token on it (a driver's, say) it kept
+    heartbeating, answering locates and acknowledging commands indefinitely.
+    Cutting a tablet off is the entire purpose of the revoke button.
+    """
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Bearer Revoke Tenant", rego="BR-001", android_id="android-br-1"
+    )
+
+    # Both credentials work while the device is live.
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 80},
+            headers={"X-Device-Secret": secret},
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 80}, headers=headers
+        )
+    ).status_code == 200
+
+    await client.patch(f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=headers)
+
+    # The device-secret path was always closed...
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 80},
+            headers={"X-Device-Secret": secret},
+        )
+    ).status_code == 404
+    # ...and now so is the bearer path, on every route a tablet calls.
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat", json={"battery": 80}, headers=headers
+        )
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/locate-response",
+            json={"lat": -33.8, "lng": 151.2},
+            headers=headers,
+        )
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/command-ack",
+            json={"command": "restart"},
+            headers=headers,
+        )
+    ).status_code == 404
+
+    # Admin CRUD still SEES the revoked row -- that is how it gets un-revoked,
+    # and how it stays visible on the dashboard instead of vanishing.
+    read = await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    assert read.status_code == 200
+    assert read.json()["revoked_at"] is not None
+
+
+async def test_rotating_a_secret_kills_the_old_one_and_the_new_one_works(client, session):
+    """G2. `mint_device_secret` had exactly one call site (registration), so a
+    device secret was immortal -- the only way to change one was to physically
+    visit the tablet with a fresh pairing code."""
+    headers, device_id, old_secret = await _paired_device(
+        client, session, tenant_name="Rotate Tenant", rego="RT-001", android_id="android-rt-1"
+    )
+
+    before = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+
+    resp = await client.post(f"/v1/fleet/devices/{device_id}/rotate-secret", headers=headers)
+    assert resp.status_code == 200
+    new_secret = resp.json()["device_secret"]
+    assert new_secret and new_secret != old_secret
+
+    # Old secret: dead. New secret: works.
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 55},
+            headers={"X-Device-Secret": old_secret},
+        )
+    ).status_code == 401
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/heartbeat",
+            json={"battery": 55},
+            headers={"X-Device-Secret": new_secret},
+        )
+    ).status_code == 200
+
+    # Rotation is NOT a re-pair: the vehicle binding and pairing timestamp are
+    # untouched. Conflating the two would silently rebind a car on what is
+    # meant to be a routine credential refresh.
+    after = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()
+    assert after["vehicle_id"] == before["vehicle_id"]
+    assert after["paired_at"] == before["paired_at"]
+    assert after["device_secret"] is None  # never returned again on an ordinary read
+
+    # ...and it is audit-logged, so an operator can see who cut a tablet off.
+    rotations = (
+        (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_id == device_id,
+                    AuditLog.action == "device_secret_rotated",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rotations) == 1
+
+
+async def test_rotate_secret_needs_admin_and_refuses_a_revoked_device(client, session):
+    headers, device_id, _secret = await _paired_device(
+        client, session, tenant_name="Rotate Guard Tenant", rego="RG-001", android_id="android-rg-1"
+    )
+    driver_headers = await auth_headers(
+        client, session, role=ROLE_DRIVER, tenant_name="Rotate Guard Tenant"
+    )
+    assert (
+        await client.post(f"/v1/fleet/devices/{device_id}/rotate-secret", headers=driver_headers)
+    ).status_code == 403
+
+    await client.patch(f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=headers)
+    # Handing a working credential to a retired tablet would un-revoke it in
+    # every practical sense while the dashboard still showed it as retired.
+    assert (
+        await client.post(f"/v1/fleet/devices/{device_id}/rotate-secret", headers=headers)
+    ).status_code == 404
+
+
+async def test_re_pairing_a_tablet_into_a_different_vehicle_is_audit_logged(client, session):
+    """G1. `register_device` reassigned `vehicle_id` unconditionally and wrote
+    nothing anywhere, so a tablet could move car to car leaving no trace. The
+    only thing that ever noticed was the ADVISORY shift-start cross-check --
+    which by construction fires only if somebody starts a shift on the old car.
+    """
+    headers = await auth_headers(client, session, role="admin", tenant_name="Repair Audit Tenant")
+    first_vehicle = (await _create_vehicle(client, headers, rego="RA-001")).json()["id"]
+    second_vehicle = (await _create_vehicle(client, headers, rego="RA-002")).json()["id"]
+
+    async def pair(vehicle_id):
+        code = (
+            await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+        ).json()["code"]
+        return (
+            await client.post(
+                "/v1/fleet/devices/register",
+                json={"android_id": "android-ra-1", "pairing_code": code},
+            )
+        ).json()
+
+    device = await pair(first_vehicle)
+    device_id = device["id"]
+
+    # First enrolment reads as a registration, not a re-pair.
+    rows = (
+        (
+            await session.execute(
+                select(AuditLog).where(AuditLog.entity_id == device_id).order_by(AuditLog.at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.action for r in rows] == ["device_registered"]
+
+    moved = await pair(second_vehicle)
+    assert moved["vehicle_id"] == second_vehicle
+
+    session.expire_all()
+    rows = (
+        (
+            await session.execute(
+                select(AuditLog).where(AuditLog.entity_id == device_id).order_by(AuditLog.at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.action for r in rows] == ["device_registered", "device_repaired"]
+
+    rebind = rows[-1]
+    assert rebind.entity_type == "device"
+    assert rebind.before_json["vehicle_id"] == first_vehicle
+    assert rebind.after_json["vehicle_id"] == second_vehicle
+    # Called out explicitly so a reviewer can filter on one boolean rather than
+    # diffing two dicts for every pairing event in the tenant.
+    assert rebind.after_json["vehicle_changed"] is True
+
+
+async def test_re_pairing_into_the_SAME_vehicle_is_logged_but_not_flagged_as_a_move(
+    client, session
+):
+    """A tablet re-paired into the car it was already in is a credential
+    refresh, not a vehicle move. Both are recorded -- only one is a move."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Same Vehicle Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="SV-001")).json()["id"]
+
+    async def pair():
+        code = (
+            await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+        ).json()["code"]
+        return (
+            await client.post(
+                "/v1/fleet/devices/register",
+                json={"android_id": "android-sv-1", "pairing_code": code},
+            )
+        ).json()
+
+    device_id = (await pair())["id"]
+    await pair()
+
+    session.expire_all()
+    rows = (
+        (
+            await session.execute(
+                select(AuditLog).where(AuditLog.entity_id == device_id).order_by(AuditLog.at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.action for r in rows] == ["device_registered", "device_repaired"]
+    assert rows[-1].after_json["vehicle_changed"] is False
+
+
+async def test_a_tablet_can_read_its_own_row_with_only_a_device_secret(client, session):
+    """G5. Both device-reading routes were bearer-only, so a parked, logged-off
+    tablet holding a stale binding could not correct itself until a human signed
+    in -- and that is exactly the tablet an operator is trying to straighten
+    out."""
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Devices Me Tenant", rego="DM-001", android_id="android-dm-1"
+    )
+    expected_vehicle = (
+        await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)
+    ).json()["vehicle_id"]
+
+    resp = await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": secret})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == device_id
+    assert body["vehicle_id"] == expected_vehicle
+    # Never leaks the credential back out.
+    assert body["device_secret"] is None
+
+    # A wrong secret is a 401 -- never a 404, which would confirm which secrets
+    # exist. No header at all cannot even be dispatched (the header is required).
+    assert (await client.get("/v1/fleet/devices/me")).status_code == 422
+    assert (
+        await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": "not-a-secret"})
+    ).status_code == 401
+
+    # And revoking the tablet closes it, like every other device route.
+    await client.patch(f"/v1/fleet/devices/{device_id}", json={"revoked": True}, headers=headers)
+    assert (
+        await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": secret})
+    ).status_code == 401
+
+
+async def test_devices_me_is_not_swallowed_by_the_device_id_route(client, session):
+    """Route-ordering regression guard. FastAPI matches in declaration order; if
+    `GET /devices/{device_id}` is ever moved above `GET /devices/me`, `me` gets
+    read as a device id and this endpoint silently becomes a bearer-only 404."""
+    _headers, _device_id, secret = await _paired_device(
+        client, session, tenant_name="Route Order Tenant", rego="RO-001", android_id="android-ro-1"
+    )
+    resp = await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": secret})
+    assert resp.status_code == 200
+
+
+async def test_force_update_and_kiosk_lock_can_finally_be_acknowledged(client, session):
+    """G9. `record_command_ack` understood only `restart`, so half the commands
+    an admin can queue had no ack path at all and read "Pending" forever -- the
+    exact bug `locate` and `reboot` were already fixed for."""
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Ack Tenant", rego="AK-001", android_id="android-ak-1"
+    )
+    device_headers = {"X-Device-Secret": secret}
+
+    # force_update is a ONE-SHOT REQUEST: acking clears it, or the tablet would
+    # re-install on every heartbeat forever.
+    await client.post(
+        f"/v1/fleet/devices/{device_id}/force-update", json={"enabled": True}, headers=headers
+    )
+    beat = await client.post(
+        f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=device_headers
+    )
+    assert beat.json()["force_update_pending"] is True
+
+    acked = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "force_update"},
+        headers=device_headers,
+    )
+    assert acked.status_code == 200
+    assert acked.json()["force_update_pending"] is False
+    assert acked.json()["last_acked_command"] == "force_update"
+    assert acked.json()["command_acked_at"] is not None
+
+    # kiosk_lock is a DESIRED STATE: acking records that the tablet applied it
+    # WITHOUT unlocking it. Clearing here would unlock every tablet the moment
+    # it confirmed it had locked.
+    await client.post(
+        f"/v1/fleet/devices/{device_id}/kiosk-lock", json={"enabled": True}, headers=headers
+    )
+    acked = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "kiosk_lock"},
+        headers=device_headers,
+    )
+    assert acked.status_code == 200
+    assert acked.json()["kiosk_locked"] is True
+    assert acked.json()["last_acked_command"] == "kiosk_lock"
+
+    # restart still behaves as before, and `last_acked_command` is what keeps a
+    # single shared timestamp from reading as "the update landed".
+    await client.post(
+        f"/v1/fleet/devices/{device_id}/reboot", json={"enabled": True}, headers=headers
+    )
+    acked = await client.post(
+        f"/v1/fleet/devices/{device_id}/command-ack",
+        json={"command": "restart"},
+        headers=device_headers,
+    )
+    assert acked.json()["reboot_requested"] is False
+    assert acked.json()["last_acked_command"] == "restart"
+
+    # An unknown command is rejected at the schema, not silently swallowed.
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/command-ack",
+            json={"command": "self_destruct"},
+            headers=device_headers,
+        )
+    ).status_code == 422
+
+
+async def test_rego_exact_resolves_one_vehicle_past_the_hundred_row_cap(client, session):
+    """G6. `GET /fleet/vehicles` is capped at 100 and the meter uses it as its
+    rego->UUID resolver with no paging loop, so the lookup silently fails on a
+    tenant's 101st vehicle. The pre-existing `rego` filter is a PARTIAL match
+    built for a dashboard search box and cannot serve as a resolver: "AB12"
+    also matches "AB123"."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Rego Exact Tenant")
+    for rego in ("AB12", "AB123", "ZZ999"):
+        await _create_vehicle(client, headers, rego=rego)
+
+    resp = await client.get("/v1/fleet/vehicles?rego_exact=ab12", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["rego"] == "AB12"
+
+    # The partial filter still behaves as the search box needs it to -- which is
+    # precisely why it could not be tightened in place.
+    partial = await client.get("/v1/fleet/vehicles?rego=ab12", headers=headers)
+    assert partial.json()["total"] == 2
+
+    assert (await client.get("/v1/fleet/vehicles?rego_exact=NOPE", headers=headers)).json()[
+        "total"
+    ] == 0
+
+
+async def test_verify_admin_pin_accepts_a_device_secret_instead_of_a_human_token(client, session):
+    """G8. The tablet's factory-reset flow ran on a driver token, which the role
+    gate correctly started refusing. The answer was never "give the tablet an
+    admin token" -- that hands every tablet in the fleet the power to administer
+    the tenant. A tablet authenticates as ITSELF instead."""
+    headers, device_id, secret = await _paired_device(
+        client, session, tenant_name="Pin Device Tenant", rego="PD-001", android_id="android-pd-1"
+    )
+    tenant_id = (await client.get(f"/v1/fleet/devices/{device_id}", headers=headers)).json()[
+        "tenant_id"
+    ]
+    # Same tenant as the device -- auth_headers creates a fresh tenant per call
+    # unless handed an existing tenant_id, and the admin-pin route refuses a
+    # path tenant that is not the caller's own.
+    owner_headers = await auth_headers(client, session, role="owner", tenant_id=tenant_id)
+    set_pin = await client.post(
+        f"/v1/tenants/{tenant_id}/admin-pin", json={"pin": "4821"}, headers=owner_headers
+    )
+    assert set_pin.status_code in (200, 204)
+
+    resp = await client.post(
+        f"/v1/fleet/devices/{device_id}/verify-admin-pin",
+        json={"pin": "4821"},
+        headers={"X-Device-Secret": secret},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"valid": True, "configured": True}
+
+    wrong = await client.post(
+        f"/v1/fleet/devices/{device_id}/verify-admin-pin",
+        json={"pin": "0000"},
+        headers={"X-Device-Secret": secret},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["valid"] is False
+
+    # A bad secret does not become an anonymous caller, and no credential at all
+    # is a 401 rather than an open oracle.
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/verify-admin-pin",
+            json={"pin": "4821"},
+            headers={"X-Device-Secret": "wrong"},
+        )
+    ).status_code == 401
+    assert (
+        await client.post(f"/v1/fleet/devices/{device_id}/verify-admin-pin", json={"pin": "4821"})
+    ).status_code == 401
+    # ...and the role gate on the human path is untouched.
+    driver_headers = await auth_headers(client, session, role=ROLE_DRIVER, tenant_id=tenant_id)
+    assert (
+        await client.post(
+            f"/v1/fleet/devices/{device_id}/verify-admin-pin",
+            json={"pin": "4821"},
+            headers=driver_headers,
+        )
+    ).status_code == 403
+
+
+async def test_minting_a_pairing_code_prunes_spent_ones(client, session):
+    """G10. Pairing codes were never garbage-collected -- one dead row per
+    tablet per re-pair, accumulating forever. Pruned lazily on mint, the same
+    pattern the rest of this backend uses instead of a background timer."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Prune Tenant")
+    vehicle_id = (await _create_vehicle(client, headers, rego="PR-001")).json()["id"]
+
+    async def mint():
+        return (
+            await client.post(f"/v1/fleet/vehicles/{vehicle_id}/pairing-code", headers=headers)
+        ).json()["code"]
+
+    stale_unused = await mint()
+    long_ago_used = await mint()
+    recently_used = await mint()
+
+    rows = {
+        row.code: row
+        for row in (
+            await session.execute(
+                select(DevicePairingCode).where(
+                    DevicePairingCode.code.in_([stale_unused, long_ago_used, recently_used])
+                )
+            )
+        ).scalars()
+    }
+    now = datetime.now(UTC)
+    # Never used, and expired: no history worth keeping.
+    rows[stale_unused].expires_at = now - timedelta(minutes=1)
+    # Used, but long enough ago that its `used_by_device_id` has stopped being
+    # something anyone is still asking about.
+    rows[long_ago_used].used_at = now - timedelta(days=60)
+    # Used yesterday: that link is still fresh, so it stays.
+    rows[recently_used].used_at = now - timedelta(days=1)
+    await session.commit()
+
+    await mint()
+
+    session.expire_all()
+    surviving = {
+        row.code for row in (await session.execute(select(DevicePairingCode))).scalars()
+    }
+    assert stale_unused not in surviving
+    assert long_ago_used not in surviving
+    assert recently_used in surviving
+
+
+async def test_pruning_never_reaches_across_tenants(client, session):
+    """The prune is a DELETE, so it gets the same tenant_id filter every other
+    query in this file gets -- one tenant minting a code must never remove
+    another tenant's rows."""
+    headers_a = await auth_headers(client, session, role="admin", tenant_name="Prune Scope A")
+    headers_b = await auth_headers(client, session, role="admin", tenant_name="Prune Scope B")
+    vehicle_a = (await _create_vehicle(client, headers_a, rego="PA-001")).json()["id"]
+    vehicle_b = (await _create_vehicle(client, headers_b, rego="PB-001")).json()["id"]
+
+    b_code = (
+        await client.post(f"/v1/fleet/vehicles/{vehicle_b}/pairing-code", headers=headers_b)
+    ).json()["code"]
+    b_row = (
+        await session.execute(select(DevicePairingCode).where(DevicePairingCode.code == b_code))
+    ).scalar_one()
+    b_row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    await session.commit()
+
+    await client.post(f"/v1/fleet/vehicles/{vehicle_a}/pairing-code", headers=headers_a)
+
+    session.expire_all()
+    still_there = (
+        await session.execute(select(DevicePairingCode).where(DevicePairingCode.code == b_code))
+    ).scalar_one_or_none()
+    assert still_there is not None

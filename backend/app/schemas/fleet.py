@@ -163,6 +163,13 @@ class DeviceRead(BaseModel):
     last_locate_accuracy_m: float | None = None
     last_locate_at: datetime | None = None
     command_acked_at: datetime | None = None
+    # WHICH command that acknowledgement was for -- "restart", "force_update" or
+    # "kiosk_lock". Read it together with `command_acked_at`: a timestamp on its
+    # own cannot say which of three commands landed, and showing a force-update
+    # as confirmed because a restart was acked an hour ago is exactly the kind
+    # of quietly-wrong status this field exists to prevent. `None` means no
+    # acknowledgement has been recorded since this field existed.
+    last_acked_command: str | None = None
     created_at: datetime
     updated_at: datetime
     # Not a Device column -- populated only by POST /devices/{id}/heartbeat
@@ -182,6 +189,20 @@ class DeviceRead(BaseModel):
     # read, so a device credential is never exposed to a dashboard user or to
     # anything that merely reads the fleet.
     device_secret: str | None = None
+
+
+class DeviceRotateSecretResponse(DeviceRead):
+    """`POST /v1/fleet/devices/{id}/rotate-secret`.
+
+    Structurally a `DeviceRead`, but `device_secret` is guaranteed present
+    rather than optional -- this and `POST /devices/register` are the only two
+    responses in this system that carry a device credential in plaintext, and
+    each does so exactly once. A separate model so that is visible in the
+    OpenAPI schema instead of being a `None`-by-default field a reader has to
+    know about.
+    """
+
+    device_secret: str
 
 
 # --- Device pairing / heartbeat / admin flag endpoints -----------------------------
@@ -229,7 +250,12 @@ class LocateResponseRequest(BaseModel):
 class CommandAckRequest(BaseModel):
     """A device reporting that it has acted on a queued command."""
 
-    command: Literal["restart"]
+    # The three commands an admin can queue that a device can report acting on.
+    # `restart` and `force_update` are one-shot requests whose flags the ack
+    # CLEARS; `kiosk_lock` is a desired state, so acknowledging it records that
+    # the tablet applied it without unlocking anything. See
+    # app.services.fleet.record_command_ack for why that difference matters.
+    command: Literal["restart", "force_update", "kiosk_lock"]
 
 
 class KioskLockRequest(BaseModel):

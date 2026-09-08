@@ -18,19 +18,67 @@ domains (see app/main.py's own module docstring):
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
-from app.core.security import get_current_user
+from app.core.security import get_optional_token_payload
 from app.schemas.app_releases import AppReleaseRead, AppReleaseUpdate, LatestAppReleaseRead
 from app.schemas.platform import Page
 from app.services import app_releases as app_releases_service
+from app.services import fleet as fleet_service
 
 platform_router = APIRouter(prefix="/v1/platform/app-releases", tags=["app-releases"])
 router = APIRouter(prefix="/v1/app-releases", tags=["app-releases"])
+
+
+async def require_device_or_user(
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
+    payload: dict | None = Depends(get_optional_token_payload),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Either a valid `X-Device-Secret` or a valid bearer token. Authorises
+    nothing beyond "you are a real caller" — these two routes are deliberately
+    not tenant-scoped (releases are platform-wide) and never were.
+
+    The device path exists because OTA self-update is the one thing a tablet
+    most needs to do with nobody logged into it. `AppUpdateChecker.kt` polled
+    `GET /latest` on whatever human token happened to be around, so a tablet
+    sitting logged-off — the one most likely to be running an old build —
+    could not update, and a tablet stuck on a build too old to log in could
+    never recover over the air at all. A device that can heartbeat can now also
+    check for and fetch a release.
+
+    A revoked device is refused: `fleet_service.authenticate_device_by_secret`
+    treats revoked exactly as unknown, so retiring a tablet cuts off its
+    updates along with everything else.
+    """
+    if x_device_secret:
+        try:
+            await fleet_service.authenticate_device_by_secret(session, secret=x_device_secret)
+        except fleet_service.DeviceAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device secret"
+            ) from exc
+        return
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint requires an X-Device-Secret header or a bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def _release_error_to_http(exc: app_releases_service.AppReleaseError) -> HTTPException:
@@ -126,7 +174,7 @@ async def update_app_release(
 @router.get("/latest", response_model=LatestAppReleaseRead)
 async def get_latest_app_release(
     session: AsyncSession = Depends(get_session),
-    _user=Depends(get_current_user),
+    _caller=Depends(require_device_or_user),
 ):
     """Polled by `domain/AppUpdateChecker.kt`'s `checkForUpdate()` — any
     authenticated tenant/device user, not platform-owner-gated (this is a
@@ -150,7 +198,7 @@ async def get_latest_app_release(
 async def download_app_release(
     release_id: str,
     session: AsyncSession = Depends(get_session),
-    _user=Depends(get_current_user),
+    _caller=Depends(require_device_or_user),
 ):
     """Streams the APK file for one release. Authenticated (any valid tenant/
     device bearer token) — deliberately not a public unauthenticated
