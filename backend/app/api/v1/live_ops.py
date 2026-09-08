@@ -49,6 +49,7 @@ from app.core.security import (
     WebSocketAuthError,
     authenticate_websocket_token,
     get_current_tenant_id,
+    revocation_aware_pump,
 )
 from app.schemas.live_ops import (
     DriverLiveRead,
@@ -261,8 +262,8 @@ async def get_position(
 # ==================================================================================
 
 
-async def _authenticate_ws(websocket: WebSocket) -> str:
-    """Resolves tenant_id for a websocket connection.
+async def _authenticate_ws(websocket: WebSocket) -> tuple[str, str | None]:
+    """Resolves (tenant_id, jti) for a websocket connection.
 
     The rule itself now lives in `app.core.security.authenticate_websocket_token`
     — one implementation shared by all four websocket routes in this codebase,
@@ -271,12 +272,17 @@ async def _authenticate_ws(websocket: WebSocket) -> str:
     wrapper exists only to keep this route's existing close-code contract: it
     re-raises as the `HTTPException` the handler below already maps to the
     4401/4403 application close codes the dashboard client understands.
+
+    The `jti` is returned alongside the tenant so the handler can hand it to
+    `revocation_aware_pump` — D10's fix for a session revoked mid-connection
+    (logout, "sign out everywhere") otherwise staying live for the rest of the
+    socket's natural life.
     """
     try:
         auth = await authenticate_websocket_token(websocket)
     except WebSocketAuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.reason) from exc
-    return auth.tenant_id
+    return auth.tenant_id, auth.payload.get("jti")
 
 
 @router.websocket("/v1/fleet/live")
@@ -295,7 +301,7 @@ async def fleet_live(websocket: WebSocket):
     `_FleetBroadcaster._subscribers`.
     """
     try:
-        tenant_id = await _authenticate_ws(websocket)
+        tenant_id, jti = await _authenticate_ws(websocket)
     except HTTPException as exc:
         code = 4401 if exc.status_code == status.HTTP_401_UNAUTHORIZED else 4403
         await websocket.close(code=code, reason=exc.detail)
@@ -304,9 +310,7 @@ async def fleet_live(websocket: WebSocket):
     await websocket.accept()
     queue = await live_ops_service.fleet_broadcaster.subscribe(tenant_id)
     try:
-        while True:
-            position = await queue.get()
-            await websocket.send_json(position)
+        await revocation_aware_pump(websocket, queue, jti)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

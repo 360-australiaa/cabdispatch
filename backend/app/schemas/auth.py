@@ -6,6 +6,8 @@ bearer token to call the rest of the API / log into the dashboard.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -104,4 +106,57 @@ class MfaDisableRequest(BaseModel):
 
 class MfaLoginRequest(BaseModel):
     mfa_token: str
-    code: str
+    # Exactly one of `code` (a live 6-digit TOTP) or `recovery_code` (one of
+    # the ten single-use codes from POST /mfa/recovery-codes/generate) must
+    # be supplied — see app/api/v1/auth.py::mfa_login.
+    code: str | None = None
+    recovery_code: str | None = None
+
+
+# --- D10: password change / reset -------------------------------------------
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    reset_token: str
+    new_password: str
+
+
+# --- D10: MFA recovery codes -------------------------------------------------
+
+
+class RecoveryCodesResponse(BaseModel):
+    """The ten plaintext codes — returned exactly ONCE, by
+    POST /mfa/recovery-codes/generate, and never retrievable again."""
+
+    codes: list[str]
+
+
+class RecoveryCodeStatus(BaseModel):
+    remaining: int
+
+
+# --- D10: sessions ("sign out everywhere") -----------------------------------
+
+
+class SessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_agent: str | None
+    ip_address: str | None
+    created_at: datetime
+    last_seen_at: datetime
+    is_current: bool = False
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionRead]

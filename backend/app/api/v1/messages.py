@@ -69,6 +69,7 @@ from app.core.security import (
     authenticate_websocket_token,
     get_current_tenant_id,
     get_current_user,
+    revocation_aware_pump,
 )
 from app.schemas.messages import (
     MessageCreate,
@@ -266,9 +267,9 @@ async def live(websocket: WebSocket, driver_id: str) -> None:
     await websocket.accept()
     queue = messages_service.message_broadcaster.subscribe(tenant_id, driver_id)
     try:
-        while True:
-            message = await queue.get()
-            await websocket.send_json(message)
+        # D10: rechecks revocation every poll tick for the life of the
+        # connection, not just at the handshake.
+        await revocation_aware_pump(websocket, queue, auth.payload.get("jti"))
     except WebSocketDisconnect:
         pass
     finally:

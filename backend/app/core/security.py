@@ -115,6 +115,30 @@ def decode_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
 
 
+# --- D10: password reset by email -------------------------------------------
+# Same single-purpose, single-use, short-lived pattern as TOKEN_TYPE_MFA above:
+# a distinct `type` claim so this token can never be replayed anywhere a
+# regular access/refresh token is accepted, a short TTL, and a burn-on-use via
+# the same `revocation_store` every other one-shot token already uses.
+
+TOKEN_TYPE_PASSWORD_RESET = "password_reset"
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 30
+
+
+def create_password_reset_token(*, user_id: str) -> str:
+    """No `tenant_id`/`role` claims — this token only ever proves "the holder
+    controls this account's registered email", it is never exchanged for a
+    session, so it carries nothing `get_current_user`/`get_current_tenant_id`
+    could accidentally be persuaded to accept."""
+    return _create_token(
+        user_id=user_id,
+        tenant_id=None,
+        role="",
+        token_type=TOKEN_TYPE_PASSWORD_RESET,
+        expires_delta=timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+    )
+
+
 # --- TOTP MFA (blueprint 12.2) ----------------------------------------------
 # Local computation only (pyotp), no external API — the payments.py-style
 # real-vs-mock credential fallback doesn't apply here, there's nothing to call
@@ -139,6 +163,40 @@ def verify_totp_code(*, secret: str, code: str) -> bool:
     matching the reference pattern used elsewhere in this workspace
     (captaindash/backend's app.core.security.verify_mfa)."""
     return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+
+# --- D10: MFA recovery codes -------------------------------------------------
+# Generated at RUNTIME via the stdlib `secrets` CSPRNG — never hardcoded,
+# never a fixture value, never logged. Shown to the user exactly once (by the
+# caller, immediately after generation); only the bcrypt HASH of each code is
+# ever persisted (see app.models.recovery_code.RecoveryCode), through the
+# SAME `hash_password`/`verify_password` pair used for the account password —
+# this is deliberately not a second hashing scheme.
+
+RECOVERY_CODE_COUNT = 10
+# XXXX-XXXX-XXXX, base32-alphabet (no 0/O/1/I ambiguity), 12 chars of entropy.
+_RECOVERY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def generate_recovery_codes(count: int = RECOVERY_CODE_COUNT) -> list[str]:
+    import secrets
+
+    def _one() -> str:
+        raw = "".join(secrets.choice(_RECOVERY_CODE_ALPHABET) for _ in range(12))
+        return f"{raw[0:4]}-{raw[4:8]}-{raw[8:12]}"
+
+    return [_one() for _ in range(count)]
+
+
+def hash_recovery_code(code: str) -> str:
+    """Normalises case/whitespace before hashing so a user typing a code back
+    in lowercase (or with the dashes copy-pasted differently) still matches —
+    the codes themselves are the secret, not their exact rendering."""
+    return hash_password(code.strip().upper())
+
+
+def verify_recovery_code(code: str, code_hash: str) -> bool:
+    return verify_password(code.strip().upper(), code_hash)
 
 
 # --- jti revocation set: Redis-backed with in-memory fallback ---------------
@@ -451,6 +509,54 @@ async def authenticate_websocket_token(websocket) -> WebSocketAuth:
         raise WebSocketAuthError("Token has no tenant scope", status.HTTP_403_FORBIDDEN)
 
     return WebSocketAuth(payload, token_tenant_id)
+
+
+WS_REVOCATION_POLL_SECONDS = 2.0
+
+
+async def revocation_aware_pump(
+    websocket,
+    queue,
+    jti: str | None,
+    *,
+    poll_interval: float | None = None,
+    close_code: int = 4401,
+) -> None:
+    """Relays items off `queue` to `websocket` via `send_json`, exactly like the
+    four websocket routes' previous `while True: send_json(await queue.get())`
+    loop — except it never blocks on `queue.get()` for longer than
+    `poll_interval` seconds without rechecking whether `jti` has since been
+    revoked (logout, refresh rotation, MFA-token burn, or D10's "sign out
+    everywhere").
+
+    Without this, `authenticate_websocket_token` only ever ran once, at the
+    handshake: a session revoked five minutes into an hour-long dashboard
+    connection (or a driver's job-offer feed) stayed live and kept receiving
+    real tenant data for the rest of that connection's natural life, because
+    nothing on the send-only path ever looked at the revocation store again.
+    That is the same class of bug this project's earlier waves fixed for
+    `mfa_pending`/refresh tokens at the handshake — this closes the same hole
+    for the *lifetime* of the connection, not just its start.
+
+    A blocked `queue.get()` is cancelled and retried on each timeout tick
+    rather than raced via `asyncio.wait`, so a message that arrives exactly at
+    a poll boundary is simply picked up on the next `get()` call one
+    `poll_interval` later at worst — an acceptable latency for a revocation
+    check, and far simpler than resuming a partially-consumed `wait`.
+    """
+    import asyncio
+
+    interval = poll_interval if poll_interval is not None else WS_REVOCATION_POLL_SECONDS
+
+    while True:
+        if jti and await revocation_store.is_revoked(jti):
+            await websocket.close(code=close_code, reason="Session revoked")
+            return
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=interval)
+        except TimeoutError:
+            continue
+        await websocket.send_json(item)
 
 
 def require_role(*roles: str):

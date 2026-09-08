@@ -78,6 +78,17 @@ VERIFY_ADMIN_PIN_PER_USER = "5/minute"
 # the 5/minute attempt rate above. The two are independent: the rate limit
 # stops a fast burst, the lockout stops a slow grind.
 VERIFY_ADMIN_PIN_LOCKOUT = "10/15minute"
+# D10 (security settings). Same per-IP-decorator + per-identifier-imperative
+# split as driver-login above: PASSWORD_RESET_PER_IP stops one host spraying
+# the endpoint; PASSWORD_RESET_PER_EMAIL (enforced imperatively, keyed on the
+# submitted email — independent of whether that email exists, so it cannot be
+# used to distinguish the two cases) stops a slow, rotating-IP grind against
+# one target's inbox. RECOVERY_CODE_GENERATE_PER_USER limits how often an
+# authenticated user can mint a fresh batch of ten codes (each call
+# invalidates the previous batch — see app/api/v1/auth.py).
+PASSWORD_RESET_PER_IP = "5/minute"
+PASSWORD_RESET_PER_EMAIL = "5/15minute"
+RECOVERY_CODE_GENERATE_PER_USER = "5/15minute"
 
 
 def _default_enabled() -> bool:
@@ -240,6 +251,9 @@ __all__ = [
     "DRIVER_LOGIN_PER_IP",
     "LOGIN_PER_IP",
     "MFA_LOGIN_PER_IP",
+    "PASSWORD_RESET_PER_EMAIL",
+    "PASSWORD_RESET_PER_IP",
+    "RECOVERY_CODE_GENERATE_PER_USER",
     "VERIFY_ADMIN_PIN_LOCKOUT",
     "VERIFY_ADMIN_PIN_PER_USER",
     "RateLimitExceeded",
