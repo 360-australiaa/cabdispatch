@@ -5,6 +5,37 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
+    // Static analysis. Versioned here rather than in the root build file because detekt applies
+    // to this module only -- `:app` is the sole Kotlin source set in the project. 1.23.7 is the
+    // release built against Kotlin 1.9.x, matching this module's compiler; a newer detekt would
+    // parse sources with a mismatched frontend.
+    id("io.gitlab.arturbosch.detekt") version "1.23.7"
+}
+
+// Detekt runs on the existing tree with a BASELINE (detekt-baseline.xml), not with the rules
+// switched off: every finding that existed at Phase 0 is recorded there and suppressed, so CI
+// fails on *new* findings only. That is a deliberate trade -- a fresh 3,000-finding report on a
+// 40k-line codebase gets ignored by everyone, and a rule nobody reads is worse than no rule.
+// Regenerate with `./gradlew :app:detektBaseline` ONLY when deliberately accepting debt; the
+// normal way to clear an entry is to fix the code so it disappears from the report.
+detekt {
+    buildUponDefaultConfig = true
+    baseline = file("detekt-baseline.xml")
+    // Compose codebase: the generated task set would otherwise fan out per variant.
+    source.setFrom(files("src/main/java", "src/test/java"))
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    jvmTarget = "17"
+    reports {
+        html.required.set(true)
+        sarif.required.set(true)
+        md.required.set(false)
+    }
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configureEach {
+    jvmTarget = "17"
 }
 
 // Mapbox public access token (pk.*), read from local.properties (gitignored, machine-specific —
@@ -108,6 +139,24 @@ android {
         // (CabDispatchApp.kt), which is what the actual Maps SDK v11 API expects (not a manifest
         // meta-data entry, that was the older v9/v10 pattern).
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
+    }
+
+    // Android lint. Same baseline strategy as detekt above: `lint-baseline.xml` records the
+    // findings that already existed when CI was introduced (2 errors, 42 warnings) so the gate
+    // fails on NEW findings only. The two baselined errors are real and should be fixed, but
+    // both live in files owned by other Phase 0 / Wave 1 workstreams and are listed for them:
+    //   - AndroidManifest.xml: ACCESS_FINE_LOCATION requested without ACCESS_COARSE_LOCATION
+    //     [CoarseFineLocation] -- belongs to the fare/location workstream (A1), which is already
+    //     editing the manifest for the meter foreground service.
+    //   - ui/theme/Theme.kt: a `remember` call returning Unit [RememberReturnType] -- belongs to
+    //     the Android UI cleanup workstream, which owns Theme.kt.
+    // Delete the corresponding entries from the baseline as those land; do not regenerate the
+    // whole file to paper over something new.
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        checkDependencies = true
+        warningsAsErrors = false
     }
 
     buildTypes {

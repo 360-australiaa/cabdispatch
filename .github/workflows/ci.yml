@@ -1,0 +1,150 @@
+# Cab Dispatch CI — the first automated gate this repo has had.
+#
+# Context (docs/plans/2026-09-08-global-meter-program.md, P0.2): three surfaces, ~180 commits
+# ahead of main, and until now nothing ran on a pull request. Each job below is scoped to one
+# surface and runs the same commands a developer runs locally, so a green check here means the
+# same thing as a clean local run — no CI-only shortcuts, no `|| true`, no continue-on-error.
+#
+# Jobs are independent and run in parallel; a failure in one does not mask the others, which
+# matters when three workstreams land in the same week.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A force-push or a rapid second push should not leave two runs racing for the same ref. Runs on
+# main are never cancelled — main is the deployed branch and its history of green/red matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android — unit tests, lint, detekt
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: app/build.gradle.kts pins sourceCompatibility/targetCompatibility and the Kotlin
+      # jvmTarget to 17, and AGP 8.5 requires it. Temurin is the distribution the Android
+      # toolchain is tested against.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The Mapbox Maps SDK resolves from a private Maven repo behind HTTP Basic auth with a
+      # secret sk.* "downloads" token (see android/settings.gradle.kts). Locally that comes from
+      # the gitignored local.properties; in CI it comes from a repository secret. Without it,
+      # dependency resolution fails with a 401 — an honest failure, and the reason this file is
+      # written to read the token from the environment rather than pretending the SDK is public.
+      #
+      # MAPBOX_ACCESS_TOKEN is the separate public pk.* runtime token; a build with it unset
+      # still compiles (the app degrades to its grid fallback at runtime), so it is optional here.
+      - name: Write local.properties
+        env:
+          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+          MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+        run: |
+          {
+            echo "MAPBOX_DOWNLOADS_TOKEN=${MAPBOX_DOWNLOADS_TOKEN}"
+            echo "MAPBOX_ACCESS_TOKEN=${MAPBOX_ACCESS_TOKEN}"
+          } > local.properties
+
+      - name: Unit tests and Android lint
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug
+
+      # Detekt runs against a committed baseline (android/app/detekt-baseline.xml) holding the
+      # findings that already existed at Phase 0, so this step fails on NEW findings only.
+      - name: Detekt
+        run: ./gradlew :app:detekt
+
+      # Reports are worth more than the red X when a run fails on a machine nobody can reach.
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  backend:
+    name: Backend — ruff and pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # uv, not pip: backend/uv.lock is committed, and `uv sync` installs exactly what it pins.
+      # Reproducing the developer's resolved dependency set is the whole point of a lockfile.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # pyproject.toml declares requires-python >= 3.12.
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff
+        run: uv run ruff check
+
+      - name: Pytest
+        run: uv run pytest
+
+  dashboard:
+    name: Dashboard — lint, tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      # `npm ci` rather than `npm install`: it installs strictly from the lockfile and fails if
+      # package.json and the lockfile disagree, which is the check we want on a PR.
+      - name: Install dependencies
+        run: npm ci
+
+      # NOTE (Phase 0): `lint` is currently `tsc --noEmit` and there is no `test` script yet.
+      # P0.5 (branch phase0/dashboard-scaffold) adds eslint + vitest and redefines `lint` as
+      # `eslint . && tsc --noEmit` and `test` as `vitest run`. This job is written for that
+      # merged state deliberately — it is the correct gate — so the `test` step will fail with
+      # "Missing script: test" until P0.5 lands. Do not weaken it in the meantime; land P0.5.
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
