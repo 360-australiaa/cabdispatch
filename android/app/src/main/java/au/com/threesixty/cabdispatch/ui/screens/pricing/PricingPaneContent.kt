@@ -133,9 +133,9 @@ private fun FareStructureCard(tariff: TariffDto) {
             Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
             Text("FARE STRUCTURE", style = EyebrowStyle)
             Divider()
-            PricingRow("Hiring charge (flag fall)", "$${tariff.flagFall}")
-            if (tariff.peakCharge.nonZeroOrNull() != null) PricingRow("Peak time hiring charge", "$${tariff.peakCharge}")
-            PricingRow("Waiting time", "$${tariff.waitingRatePerMin}/min")
+            PricingRow("Hiring charge (flag fall)", "$${tariff.flagFall.money()}")
+            if (tariff.peakCharge.nonZeroOrNull() != null) PricingRow("Peak time hiring charge", "$${tariff.peakCharge.money()}")
+            PricingRow("Waiting time", "$${tariff.waitingRatePerMin.money()}/min")
             // Fixed regulatory window (FareEngine.TimeClass.NIGHT: "10pm-6am, any night"), not a
             // per-tariff field — same reasoning TaxiFareHotlineNotice's static text uses in
             // SettingsScreen.kt.
@@ -143,11 +143,11 @@ private fun FareStructureCard(tariff: TariffDto) {
             PricingRow("Non-cash payment surcharge cap", "${tariff.surchargePctCap}%")
             PricingRow("Maxi-cab rate (5+ seats)", "${formatMaxiPercent(tariff.maxiMultiplier)}%")
             Divider()
-            PricingRow("Passenger Service Levy", "$${tariff.pslAmount}")
-            PricingRow("Cleaning fee cap", "$${tariff.cleaningFeeCap} + GST")
+            PricingRow("Passenger Service Levy", "$${tariff.pslAmount.money()}")
+            PricingRow("Cleaning fee cap", "$${tariff.cleaningFeeCap.money()} + GST")
             Divider()
-            PricingRow("Sydney Airport Fixed Fare — Standard", "$${AIRPORT_FIXED_FARE_STANDARD.toPlainString()}")
-            PricingRow("Sydney Airport Fixed Fare — Maxi", "$${AIRPORT_FIXED_FARE_MAXI.toPlainString()}")
+            PricingRow("Sydney Airport Fixed Fare — Standard", "$${AIRPORT_FIXED_FARE_STANDARD.toPlainString().money()}")
+            PricingRow("Sydney Airport Fixed Fare — Maxi", "$${AIRPORT_FIXED_FARE_MAXI.toPlainString().money()}")
         }
     }
 }
@@ -194,9 +194,9 @@ private fun DistanceTiersCard(tariff: TariffDto) {
 private fun DistanceTierRow(label: String, dayRate: String, nightRate: String, holidayRate: String?) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
-        PricingRow("Day rate", "$dayRate/km")
-        PricingRow("Night rate (10pm–6am)", "$nightRate/km")
-        if (holidayRate != null) PricingRow("Holiday rate (country)", "$holidayRate/km")
+        PricingRow("Day rate", "$${dayRate.money()}/km")
+        PricingRow("Night rate (10pm–6am)", "$${nightRate.money()}/km")
+        if (holidayRate != null) PricingRow("Holiday rate (country)", "$${holidayRate.money()}/km")
     }
 }
 
@@ -238,3 +238,13 @@ private fun formatMaxiPercent(multiplier: String): String {
  * row. Caught live during this pane's own on-device verification pass.
  */
 private fun String.nonZeroOrNull(): String? = takeIf { (toDoubleOrNull() ?: 0.0) != 0.0 }
+
+/**
+ * Passenger-facing money: the signed tariff carries four-decimal strings ("5.0000", "1.0920") so
+ * the engine never rounds early, but a passenger reads "$5.00" and "$1.09/min" (tablet audit,
+ * 2026-09-08: the rate card showed "$5.0000"). Half-up to cents; a non-numeric string is shown
+ * as-is rather than hidden.
+ */
+private fun String.money(): String = runCatching {
+    java.math.BigDecimal(this).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString()
+}.getOrDefault(this)

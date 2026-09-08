@@ -273,8 +273,10 @@ private fun TripHistoryBody(
         Spacer(Modifier.height(16.dp))
         HistoryTotalsBar(
             period = period,
-            tripCount = trips.size,
-            total = trips.fold(BigDecimal.ZERO) { acc, t -> acc + t.deviceTotal.toBigDecimalOrZero() },
+            // Simulated-GPS trips stay in the list (flagged) but never in the money: the footer
+            // total and count agree with the Earnings pane, which excludes them the same way.
+            tripCount = trips.count { !it.simulated },
+            total = trips.filter { !it.simulated }.fold(BigDecimal.ZERO) { acc, t -> acc + t.deviceTotal.toBigDecimalOrZero() },
             onShiftReportClick = onShiftReportClick,
         )
     }
@@ -315,10 +317,10 @@ private fun TripPeriod.rangeReadout(today: LocalDate = LocalDate.now()): String 
 // Column weights — one place, shared by the header row and every data row so they line up.
 private const val W_TIME = 0.9f
 private const val W_ADDRESS = 1.7f
-private const val W_DISTANCE = 0.8f
-private const val W_DURATION = 0.8f
+private const val W_DISTANCE = 0.7f
+private const val W_DURATION = 0.7f
 private const val W_FARE = 0.9f
-private const val W_STATUS = 1.6f
+private const val W_STATUS = 2.0f // room for "SIM · CASH  Synced" on one line (tablet, 2026-09-08)
 
 /**
  * The history table: one [GlassCard] holding a real header row (muted upper-case column labels on
@@ -451,7 +453,9 @@ private fun TripHistoryRow(trip: TripEntity, zebra: Boolean, last: Boolean, onCl
                 // history row; the mockup has no separate column for it) and its toned value is
                 // the status — "CARD · Completed". Only a genuinely open trip pulses.
                 HudStatusPill(
-                    label = trip.paymentMethod.asPaymentMethodLabel(),
+                    // A simulated-GPS trip is flagged for life; the row's muted label says so
+                    // ("SIM · CASH"), keeping the toned status on one line.
+                    label = (if (trip.simulated) "SIM · " else "") + trip.paymentMethod.asPaymentMethodLabel(),
                     value = trip.status.asTripStatusLabel(),
                     tone = tone,
                     pulsing = live,

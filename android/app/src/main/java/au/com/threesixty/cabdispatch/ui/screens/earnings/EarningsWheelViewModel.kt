@@ -98,7 +98,10 @@ class EarningsWheelViewModel : ViewModel() {
         _uiState.update { it.copy(period = period, loading = true, previousEarnings = null) }
     }
 
-    private fun recompute(trips: List<TripEntity>) {
+    private fun recompute(allTrips: List<TripEntity>) {
+        // Simulated-GPS trips are permanently flagged and are "not real revenue" (the simulator
+        // panel's own words), so they never count towards earnings, trip counts or distance here.
+        val trips = allTrips.filter { !it.simulated }
         val tollsTotal = trips.fold(BigDecimal.ZERO) { acc, t -> acc + t.tolls.toBigDecimalOrZero() }
         val otherTotal = trips.fold(BigDecimal.ZERO) { acc, t -> acc + t.extras.toBigDecimalOrZero() + t.cleaningFee.toBigDecimalOrZero() }
         val tipsTotal = trips.fold(BigDecimal.ZERO) { acc, t -> acc + (t.tip?.toBigDecimalOrZero() ?: BigDecimal.ZERO) }
