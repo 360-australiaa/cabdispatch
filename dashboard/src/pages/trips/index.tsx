@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { AlertTriangle, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
+import { AlertTriangle, Download, FileSpreadsheet, Flag, Plus, Search } from "lucide-react";
 import {
   Badge,
   Button,
@@ -25,6 +25,7 @@ import {
 } from "@/hooks/useTrips";
 import { TripDetailModal } from "./TripDetailModal";
 import { TripFormModal } from "./TripFormModal";
+import { downloadTripsCsv } from "./csv";
 import {
   formatDateTime,
   formatMoney,
@@ -218,6 +219,26 @@ export default function TripsPage() {
     },
   ];
 
+  function handleExportCsv() {
+    const total = tripsQuery.data?.total ?? filteredTrips.length;
+    downloadTripsCsv(filteredTrips, vehicleLabelById, driverLabelById, {
+      exportedAt: new Date().toISOString(),
+      filters: {
+        Status: statusFilter,
+        Type: typeFilter,
+        Vehicle: vehicleFilter ? (vehicleLabelById.get(vehicleFilter) ?? vehicleFilter) : "",
+        Driver: driverFilter ? (driverLabelById.get(driverFilter) ?? driverFilter) : "",
+        Review: flaggedFilter,
+        "Date range": dateFrom || dateTo ? `${dateFrom || "(no lower bound)"} to ${dateTo || "(no upper bound)"}` : "",
+        Search: search,
+      },
+      fetchCapped: total > FETCH_LIMIT,
+      fetchLimit: FETCH_LIMIT,
+      rowsFetched: tripsQuery.data?.items.length ?? 0,
+      totalMatching: total,
+    });
+  }
+
   // Forces <Table> to remount (resetting its internal page/sort state)
   // whenever a filter changes, so stale pagination can't hide matches.
   const tableKey = [
@@ -243,6 +264,9 @@ export default function TripsPage() {
                 <FileSpreadsheet className="h-4 w-4" /> NSW PtP export
               </Button>
             </Link>
+            <Button variant="outline" onClick={handleExportCsv} disabled={filteredTrips.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" /> New trip
             </Button>

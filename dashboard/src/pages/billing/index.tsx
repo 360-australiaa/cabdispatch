@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { isAxiosError } from "axios";
-import { FileText, Link2, Plus, Receipt } from "lucide-react";
+import { Download, FileText, Link2, Plus, Receipt } from "lucide-react";
 import {
   Badge,
   Button,
@@ -36,6 +36,7 @@ import {
   type SubscriptionRead,
   type SubscriptionStatus,
 } from "@/hooks/useBilling";
+import { printInvoice } from "./invoicePdf";
 
 const PLAN_OPTIONS: { value: BillingPlan; label: string }[] = [
   { value: "basic", label: "Basic" },
@@ -371,9 +372,11 @@ function SubscriptionsView({ canManage }: { canManage: boolean }) {
 }
 
 function InvoicesView() {
+  const { tenant } = useAuth();
   const { data: vehicles } = useVehiclesForBilling();
   const { data: subsData } = useSubscriptions({ skip: 0, limit: 200 });
   const [subscriptionFilter, setSubscriptionFilter] = useState("");
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const vehicleById = useMemo(() => {
     const map = new Map<string, string>();
@@ -439,6 +442,36 @@ function InvoicesView() {
       header: "",
       render: (row) => (row.mock ? <Badge variant="outline">Simulated</Badge> : null),
     },
+    {
+      key: "pdf",
+      header: "",
+      className: "text-right",
+      render: (row) => {
+        const sub = subscriptionById.get(row.subscription_id);
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPdfError(null);
+              const ok = printInvoice(row, {
+                tenantName: tenant?.name ?? "Cab Dispatch",
+                vehicleLabel: subscriptionLabel(row.subscription_id),
+                planLabel: sub ? planLabel(sub.plan) : "—",
+              });
+              if (!ok) {
+                setPdfError(
+                  "Could not open the invoice — your browser blocked the pop-up. Allow pop-ups for this site and try again.",
+                );
+              }
+            }}
+          >
+            <Download className="h-4 w-4" /> PDF
+          </Button>
+        );
+      },
+    },
   ];
 
   return (
@@ -454,6 +487,7 @@ function InvoicesView() {
         />
       </CardHeader>
       <CardContent>
+        {pdfError && <p className="mb-3 text-sm text-destructive">{pdfError}</p>}
         {isError ? (
           <ErrorBanner message={apiErrorMessage(error, "Failed to load invoices.")} />
         ) : (
