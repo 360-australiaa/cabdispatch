@@ -5,20 +5,26 @@ multi-tenancy isolation boundary in this system.
 
 Resources:
   - `/v1/psl/ledger` — full CRUD over the per-driver/per-period ledger rows.
+    `GET` returns a `Page` envelope (`items`/`total`/`skip`/`limit`) with a
+    real `SELECT count(*)` total — it used to return a bare capped array
+    with no total at all (dashboard audit: "client-side pagination over a
+    truncated page").
   - `/v1/psl/topup` / `/v1/psl/topups` — append-only top-up transaction log:
     create + list only, no update/delete (see app.models.psl_ledger.PSLTopUp).
+    `GET /topups` returns the same `Page` envelope as `/ledger`.
   - `/v1/psl/report` — read-only tenant-wide remittance aggregate for a period.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
 from app.models.user import User
+from app.schemas.driver_engagement import Page
 from app.schemas.psl_ledger import (
     PSLLedgerCreate,
     PSLLedgerRead,
@@ -40,7 +46,7 @@ _WRITE_ROLES = ("owner", "admin", "dispatcher")
 # --- PSL ledger CRUD ----------------------------------------------------------
 
 
-@router.get("/ledger", response_model=list[PSLLedgerRead])
+@router.get("/ledger", response_model=Page[PSLLedgerRead])
 async def list_ledger_entries(
     driver_id: str | None = Query(default=None),
     period: str | None = Query(default=None),
@@ -50,15 +56,30 @@ async def list_ledger_entries(
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(PSLLedgerEntry).where(PSLLedgerEntry.tenant_id == tenant_id)
+    """Returns a `Page` envelope (`items`/`total`/`skip`/`limit`) with a real
+    `SELECT count(*)` total, not the length of the page fetched — this used
+    to return a bare array with no total at all, capped at `limit<=200`,
+    which is exactly the server-side-pagination gap the dashboard audit
+    flagged for the PSL Centre (`pages/psl/index.tsx` fetching the max page
+    and paginating client-side over a possibly-truncated set)."""
+    filters = [PSLLedgerEntry.tenant_id == tenant_id]
     if driver_id is not None:
-        stmt = stmt.where(PSLLedgerEntry.driver_id == driver_id)
+        filters.append(PSLLedgerEntry.driver_id == driver_id)
     if period is not None:
-        stmt = stmt.where(PSLLedgerEntry.period == period)
-    stmt = stmt.order_by(PSLLedgerEntry.period.desc(), PSLLedgerEntry.driver_id).offset(skip).limit(limit)
+        filters.append(PSLLedgerEntry.period == period)
 
+    total = (
+        await session.execute(select(func.count()).select_from(PSLLedgerEntry).where(*filters))
+    ).scalar_one()
+    stmt = (
+        select(PSLLedgerEntry)
+        .where(*filters)
+        .order_by(PSLLedgerEntry.period.desc(), PSLLedgerEntry.driver_id)
+        .offset(skip)
+        .limit(limit)
+    )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    return Page(items=list(result.scalars().all()), total=total, skip=skip, limit=limit)
 
 
 @router.post("/ledger", response_model=PSLLedgerRead, status_code=status.HTTP_201_CREATED)
@@ -170,7 +191,7 @@ async def create_topup(
     return topup
 
 
-@router.get("/topups", response_model=list[PSLTopUpRead])
+@router.get("/topups", response_model=Page[PSLTopUpRead])
 async def list_topups(
     driver_id: str | None = Query(default=None),
     period: str | None = Query(default=None),
@@ -180,15 +201,22 @@ async def list_topups(
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(PSLTopUp).where(PSLTopUp.tenant_id == tenant_id)
+    """Same `Page` envelope + real total as `list_ledger_entries` above —
+    was a bare capped array with no total."""
+    filters = [PSLTopUp.tenant_id == tenant_id]
     if driver_id is not None:
-        stmt = stmt.where(PSLTopUp.driver_id == driver_id)
+        filters.append(PSLTopUp.driver_id == driver_id)
     if period is not None:
-        stmt = stmt.where(PSLTopUp.period == period)
-    stmt = stmt.order_by(PSLTopUp.created_at.desc()).offset(skip).limit(limit)
+        filters.append(PSLTopUp.period == period)
 
+    total = (
+        await session.execute(select(func.count()).select_from(PSLTopUp).where(*filters))
+    ).scalar_one()
+    stmt = (
+        select(PSLTopUp).where(*filters).order_by(PSLTopUp.created_at.desc()).offset(skip).limit(limit)
+    )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    return Page(items=list(result.scalars().all()), total=total, skip=skip, limit=limit)
 
 
 # --- PSL remittance report ----------------------------------------------------

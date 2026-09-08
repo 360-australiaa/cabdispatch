@@ -183,7 +183,20 @@ async def list_invoices(
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
     subscription_id: str | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
 ) -> InvoiceListResponse:
+    """Invoices aren't a DB table — they're synthesized per subscription by
+    `billing_service.list_invoices_for_subscription` (real Stripe if
+    configured, a deterministic mock otherwise, see that function's own
+    docstring) — so there is no `SELECT count(*)` to run. `total` is
+    nonetheless the real size of the full matching set (every invoice for
+    every matching subscription), computed BEFORE `skip`/`limit` slice it,
+    same contract as every other list in this API: `total` is never the
+    length of the page returned. This used to return every invoice for every
+    subscription unconditionally (dashboard audit: "unbounded fetch");
+    `skip`/`limit` are additive (defaulted high enough that an existing
+    caller with a small fleet sees no behaviour change)."""
     stmt = select(Subscription).where(Subscription.tenant_id == tenant_id)
     if subscription_id:
         stmt = stmt.where(Subscription.id == subscription_id)
@@ -201,7 +214,12 @@ async def list_invoices(
         for item in result["items"]:
             all_items.append(InvoiceRead(subscription_id=sub.id, **item))
 
-    return InvoiceListResponse(items=all_items, total=len(all_items), mock=any_mock)
+    all_items.sort(key=lambda inv: inv.period_start, reverse=True)
+    page_items = all_items[skip : skip + limit]
+
+    return InvoiceListResponse(
+        items=page_items, total=len(all_items), mock=any_mock, skip=skip, limit=limit
+    )
 
 
 # --- Stripe Connect onboarding ---------------------------------------------------

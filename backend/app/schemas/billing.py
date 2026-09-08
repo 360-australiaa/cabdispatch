@@ -70,6 +70,8 @@ class InvoiceListResponse(BaseModel):
     items: list[InvoiceRead]
     total: int
     mock: bool
+    skip: int = 0
+    limit: int = 200
 
 
 # --- Stripe Connect onboarding -------------------------------------------------

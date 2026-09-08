@@ -297,6 +297,71 @@ async def test_list_trips_paginated_and_filtered(client: AsyncClient, session: A
     assert len(paged.json()["items"]) == 1
 
 
+async def test_list_trips_filters_by_start_date_range(client: AsyncClient, session: AsyncSession):
+    """`start_from`/`start_to` give an exact `total` for a fixed window —
+    e.g. an incentive's `[starts_at, ends_at)` — instead of the "most recent
+    200, hope the window is covered" approximation this endpoint used to
+    force on callers (see `list_trips`'s doc comment)."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    await _create_trip(client, headers, tariff.id, start_at="2026-01-10T00:00:00Z")
+    await _create_trip(client, headers, tariff.id, start_at="2026-02-15T00:00:00Z")
+    await _create_trip(client, headers, tariff.id, start_at="2026-03-20T00:00:00Z")
+
+    resp = await client.get(
+        "/v1/trips?start_from=2026-02-01T00:00:00Z&start_to=2026-02-28T23:59:59Z",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["start_at"].startswith("2026-02-15")
+
+    wide = await client.get("/v1/trips?start_from=2026-01-01T00:00:00Z", headers=headers)
+    assert wide.json()["total"] == 3
+
+    narrow = await client.get("/v1/trips?start_to=2026-01-31T23:59:59Z", headers=headers)
+    assert narrow.json()["total"] == 1
+
+
+async def test_list_trips_filters_by_end_date_range(client: AsyncClient, session: AsyncSession):
+    """`end_from`/`end_to` filter on the CLOSE time — an open trip has
+    `end_at=None` and can never match, so this is meant to be paired with
+    `status=closed` (exactly how the incentive-progress window count uses
+    it)."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    open_trip = await _create_trip(client, headers, tariff.id)
+    closed_trip = await _create_trip(client, headers, tariff.id)
+    close_resp = await client.post(
+        f"/v1/trips/{closed_trip['id']}/close",
+        json={"end_at": "2026-05-10T00:00:00Z"},
+        headers=headers,
+    )
+    assert close_resp.status_code == 200
+
+    resp = await client.get(
+        "/v1/trips?status=closed&end_from=2026-05-01T00:00:00Z&end_to=2026-05-31T23:59:59Z",
+        headers=headers,
+    )
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == closed_trip["id"]
+
+    # The still-open trip's end_at is None -- it never matches an end_from filter.
+    still_open = await client.get(f"/v1/trips/{open_trip['id']}", headers=headers)
+    assert still_open.json()["end_at"] is None
+    none_match = await client.get(
+        "/v1/trips?end_from=2020-01-01T00:00:00Z", headers=headers
+    )
+    assert all(item["id"] != open_trip["id"] for item in none_match.json()["items"])
+
+
 async def test_get_trip_404_when_missing(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
     resp = await client.get(f"/v1/trips/{uuid.uuid4()}", headers=headers)
