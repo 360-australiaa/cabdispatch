@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1066,8 +1067,12 @@ fun HudStatusPill(
         cornerRadiusDp = 28,
         glow = if (tone == HudTone.Neutral) null else toneColor,
     ) {
+        // fillMaxHeight, NOT fillMaxSize (tablet, 2026-09-08). In a Row this pill was measured
+        // before its weighted siblings and took every pixel of width it was offered: on a zone
+        // card it pushed the zone's NAME to zero width, on the Close & Pay strip it shoved the
+        // clock off the right edge. A pill is as wide as its own label and value, no wider.
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxHeight().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PulsingDot(color = toneColor, animated = pulsing, size = 10.dp)
@@ -1194,6 +1199,12 @@ fun HudStatTile(
                         style = Type.tiny,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.textMuted,
+                        // One line, always. In a narrow tile (three abreast on a zone card) the
+                        // eyebrow wrapped mid-word -- "VEHIC / LES" (tablet, 2026-09-08). An
+                        // eyebrow that ellipsises is still a label; one that breaks a word is not.
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 6.dp),
                     )
                 }

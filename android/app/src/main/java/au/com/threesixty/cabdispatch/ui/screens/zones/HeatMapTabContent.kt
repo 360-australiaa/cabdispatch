@@ -42,7 +42,10 @@ import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import com.mapbox.geojson.Point
+import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.MapInitOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.annotation.annotations
@@ -102,6 +105,7 @@ fun HeatMapTabContent(
     // rather than re-centering on every 20s stats poll, which would fight a driver's own pan/zoom.
     var mapReady by remember { mutableStateOf(false) }
     var cameraFramed by remember { mutableStateOf(false) }
+    var noZonesNearby by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
@@ -118,10 +122,41 @@ fun HeatMapTabContent(
             }
             else -> {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)),
+                    // NO clip on the map view itself (tablet, 2026-09-08). Mapbox renders into a
+                    // SurfaceView, which punches a hole in the window that Compose's clip cannot
+                    // shape -- on this tablet the clipped surface simply never appeared: scale bar
+                    // and wordmark (ordinary views) drew, the map did not. The meter's backdrop map,
+                    // which works, carries no clip. The card around this already rounds the corners.
+                    modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
-                        val mapView = MapView(ctx)
-                        mapView.mapboxMap.loadStyle(Style.DARK) {
+                        // Style given AT CONSTRUCTION. A bare MapView(ctx) starts loading the SDK's
+                        // default style on its own; a loadStyle(DARK) issued right after it raced
+                        // that load and was dropped with "[Style]: Updated style is ignored due to
+                        // runtime changes" (logcat, tablet, 2026-09-08) -- so the callback that
+                        // creates the annotation manager, sets mapReady and frames the camera never
+                        // ran, and the pane stayed a black rectangle. MapInitOptions makes DARK the
+                        // one and only style load.
+                        // textureView = true. The style loads (logcat: "style loaded:
+                        // mapbox://styles/mapbox/dark-v11"), the camera frames, the annotation
+                        // manager exists -- and the canvas is still black. This pane sits inside
+                        // PaneShell, whose content Box is clip(RoundedCornerShape(18.dp)). Mapbox's
+                        // default SurfaceView punches a hole in the window that an ancestor's
+                        // Compose clip then masks entirely; the meter's backdrop map has no clipped
+                        // ancestor and works. A TextureView composites like an ordinary view and
+                        // honours the clip.
+                        val mapView = MapView(ctx, MapInitOptions(ctx, styleUri = Style.DARK, textureView = true))
+                        // START IT NOW (tablet, 2026-09-08: a black canvas, scale bar and logo but
+                        // no tiles and no zones). The lifecycle observer below only forwards FUTURE
+                        // ON_START events -- and when the Zones pane opens the activity is already
+                        // started, so that event never comes and a never-started MapView draws
+                        // nothing. The observer still handles stop/restart from here on.
+                        mapView.onStart()
+                        // Runtime evidence, kept: every load failure and the first full render are
+                        // logged so a black canvas can be read off logcat instead of guessed at.
+                        mapView.mapboxMap.subscribeMapLoadingError { android.util.Log.e("HeatMap", "map load error: ${it.type} ${it.message} ${it.sourceId ?: ""} ${it.tileId ?: ""}") }
+                        mapView.mapboxMap.subscribeMapLoaded { android.util.Log.i("HeatMap", "map fully loaded") }
+                        mapView.mapboxMap.getStyle {
+                            android.util.Log.i("HeatMap", "style loaded: ${it.styleURI}")
                             val circleManager = mapView.annotations.createCircleAnnotationManager()
                             circleManager.addClickListener(
                                 OnCircleAnnotationClickListener { clicked ->
@@ -138,8 +173,17 @@ fun HeatMapTabContent(
                     },
                 )
 
-                SurgeLegendCard(modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
+                SurgeLegendCard(modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)) // BottomEnd: BottomStart sat on the Mapbox wordmark
                 LastUpdatedChip(statsState.lastUpdatedAt, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp))
+                if (noZonesNearby) {
+                    Text(
+                        "No zones within 200 km of this vehicle — showing your position. Check the zone coordinates in the dashboard.",
+                        fontFamily = InterFamily,
+                        fontSize = 13.sp,
+                        color = CaptainPalette.warning,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp).padding(horizontal = 24.dp),
+                    )
+                }
                 selected?.let { (zone, stats) ->
                     SelectedZoneCard(zone, stats, modifier = Modifier.align(Alignment.TopStart).padding(16.dp), onDismiss = { selected = null })
                 }
@@ -154,12 +198,48 @@ fun HeatMapTabContent(
     androidx.compose.runtime.LaunchedEffect(mapReady, zones.isNotEmpty()) {
         if (cameraFramed || !mapReady || zones.isEmpty()) return@LaunchedEffect
         val holder = mapHolder.value ?: return@LaunchedEffect
-        holder.mapView.mapboxMap.setCamera(
-            CameraOptions.Builder()
-                .center(Point.fromLngLat(zones.map { it.centerLng }.average(), zones.map { it.centerLat }.average()))
-                .zoom(11.0)
-                .build(),
-        )
+        // Frame the zones' BOUNDING BOX, not their average centre at a fixed zoom 11 (tablet,
+        // 2026-09-08: five zones, a black canvas). Zones spread across a region average to a point
+        // none of them is near, and at z11 every circle sat off-screen over empty map. Fitting the
+        // box keeps every zone in view whatever their spread; the padding keeps the outermost
+        // circles clear of the legend and the scale bar.
+        // Frame the zones NEAR THE VEHICLE, not all of them. This tenant's zones are Sydney CBD,
+        // Bondi, Parramatta, Sydney Airport -- and Karachi, where the field-test tablet is. The
+        // average of those sat in the Indian Ocean and a box around them was half the planet; both
+        // rendered as a black canvas. Zones within 200 km of the current fix are the ones a driver
+        // can act on; only when none are that close does the frame fall back to all of them.
+        val fix = AppContainer.speedSource.locationFix.value
+        val nearby = if (fix == null) zones else zones.filter {
+            GeoMath.distanceKm(fix.lat, fix.lng, it.centerLat, it.centerLng) <= 200.0
+        }
+        if (nearby.isEmpty() && fix != null) {
+            // No zone within 200 km of the vehicle: frame the VEHICLE, never "all zones". The
+            // fallback that boxed every zone was how a single zone saved with its latitude and
+            // longitude swapped (zone 10, lat 67.17 lng 24.88 -- Scandinavia) dragged the camera
+            // from Sydney to the Bay of Bengal and left the pane a black sea. The card above the
+            // map says why nothing is drawn; the map itself shows where the driver actually is.
+            noZonesNearby = true
+            holder.mapView.mapboxMap.setCamera(
+                CameraOptions.Builder().center(Point.fromLngLat(fix.lng, fix.lat)).zoom(11.0).build(),
+            )
+        } else {
+            noZonesNearby = false
+            val framed = if (nearby.isEmpty()) zones else nearby
+            val points = framed.map { Point.fromLngLat(it.centerLng, it.centerLat) }
+            val camera = holder.mapView.mapboxMap.cameraForCoordinates(
+                points,
+                CameraOptions.Builder().build(),
+                com.mapbox.maps.EdgeInsets(120.0, 160.0, 220.0, 160.0),
+                null,
+                null,
+            )
+            holder.mapView.mapboxMap.setCamera(
+                CameraOptions.Builder()
+                    .center(camera.center)
+                    .zoom((camera.zoom ?: 11.0).coerceIn(9.0, 14.0))
+                    .build(),
+            )
+        }
         cameraFramed = true
     }
 
@@ -183,11 +263,14 @@ fun HeatMapTabContent(
                 .withPoint(Point.fromLngLat(zone.centerLng, zone.centerLat))
                 .withCircleRadius(radiusPxFor(zone.radiusM))
                 .withCircleColor(hex)
-                .withCircleOpacity(0.55)
-                .withCircleStrokeWidth(2.0)
-                .withCircleStrokeColor(hex)
+                .withCircleOpacity(0.45)
+                // White stroke, not the fill colour: a 1.0x zone's grey at 0.55 alpha on Style.DARK
+                // was indistinguishable from the map. The ring is what makes the zone findable.
+                .withCircleStrokeWidth(3.0)
+                .withCircleStrokeColor("#FFFFFF")
         }
         val annotations = holder.circleManager.create(created)
+        android.util.Log.i("HeatMap", "zones=" + zones.joinToString { "${it.number}@${it.centerLat},${it.centerLng} r=${it.radiusM}" } + " created=${annotations.size} cam=${holder.mapView.mapboxMap.cameraState.center.latitude()},${holder.mapView.mapboxMap.cameraState.center.longitude()} z=${holder.mapView.mapboxMap.cameraState.zoom}")
         zoneIdByAnnotationId.value = annotations.mapIndexed { index, annotation -> annotation.id to zones[index].id }.toMap()
     }
 

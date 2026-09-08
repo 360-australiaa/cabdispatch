@@ -33,6 +33,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -154,7 +156,9 @@ private fun ZoneCard(
     onUnplot: () -> Unit,
 ) {
     GlassCard(
-        modifier = Modifier.height(if (stats != null) 268.dp else 220.dp),
+        // Content-driven, not a fixed 268/220dp: with the stats row the fixed card clipped the
+        // three stat tiles to their eyebrows (tablet, 2026-09-08).
+        modifier = Modifier.heightIn(min = 200.dp),
         cornerRadiusDp = 20,
         glow = if (plotted) CaptainPalette.success else null,
     ) {
@@ -179,10 +183,14 @@ private fun ZoneCard(
                     )
                 }
                 Text(
-                    zone.name,
+                    // A zone saved without a name still gets a readable card. The number is real;
+                    // the void it used to leave was not information.
+                    zone.name.ifBlank { "Zone ${zone.number}" },
                     fontFamily = InterFamily,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     color = CaptainPalette.textPrimary,
                     modifier = Modifier.weight(1f),
                 )
@@ -194,10 +202,10 @@ private fun ZoneCard(
             if (stats != null) {
                 // Real vehicle-count/bookings/hails numbers off the same ZoneStatsDto row the
                 // Statistics/Surge Areas tabs render — see this function's own doc.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HudStatTile(
                         icon = Icons.Rounded.DirectionsCar,
-                        label = "Vehicles",
+                        label = "Cars",
                         value = "${stats.vacantVehicles + stats.busyVehicles}",
                         sub = "${stats.vacantVehicles} vacant",
                         valueFontSize = 18.sp,
@@ -205,14 +213,14 @@ private fun ZoneCard(
                     )
                     HudStatTile(
                         icon = Icons.Rounded.EventAvailable,
-                        label = "Bookings/hr",
+                        label = "Book/hr",
                         value = "${stats.bookingsLastHour}",
                         valueFontSize = 18.sp,
                         modifier = Modifier.weight(1f),
                     )
                     HudStatTile(
                         icon = Icons.Rounded.Flag,
-                        label = "Hails/hr",
+                        label = "Hail/hr",
                         value = "${stats.streetHailsLastHour}",
                         valueFontSize = 18.sp,
                         modifier = Modifier.weight(1f),
@@ -233,7 +241,7 @@ private fun ZoneCard(
                     )
                 }
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(16.dp))
             if (plotted) {
                 Box(
                     modifier = Modifier
