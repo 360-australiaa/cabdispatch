@@ -37,9 +37,24 @@ class TenantRead(BaseModel):
 
     id: str
     name: str
+    # The public, URL-safe handle a client sends to POST /v1/auth/driver-login
+    # before it holds any token (see app/models/tenant.py::Tenant.slug). Added
+    # here by X2 (2026-09-08) to close a real gap: `slug` existed on the model
+    # and was already REQUIRED by driver-login, but no endpoint returned it —
+    # an owner/admin logging into the dashboard could not discover the value
+    # their own tablets must be configured with. Never null for a row inserted
+    # through the ORM (the `before_insert` listener guarantees one); nullable
+    # here only because the column itself is nullable at the DB layer.
+    slug: str | None
     abn: str | None
     tsp_number: str | None
     bsp_number: str | None
+    # The operator's jurisdiction-issued authorisation number (e.g. NSW's
+    # "TSP-448041") — see app/models/tenant.py::Tenant.authorization_number
+    # for the tenant/jurisdiction split this is half of. Nullable: most
+    # tenants have not set one yet, and some jurisdictions have no such
+    # scheme at all.
+    authorization_number: str | None
     theme_json: TenantTheme | None
     plan: str
     status: str
@@ -50,9 +65,17 @@ class TenantThemeUpdate(BaseModel):
     platform default (the dashboard's "Reset to default" action) — distinct from omitting the
     field, which Pydantic can't distinguish from `None` here since this is the only field on the
     body today, so this endpoint always overwrites `theme_json` wholesale rather than merging
-    partial updates (matches `set_admin_pin`'s own "set/update are the same operation" precedent)."""
+    partial updates (matches `set_admin_pin`'s own "set/update are the same operation" precedent).
+
+    `authorization_number` follows the SAME always-overwrite convention (X2, 2026-09-08): sending
+    it as `null` clears it, same as `theme_json`. There is deliberately no third "leave unchanged"
+    state distinct from "resend the current value" — this endpoint has never distinguished
+    "omitted" from "sent as null" (Pydantic can't tell them apart on a body this shape without
+    `exclude_unset`, and this repo's existing precedent doesn't use it here), so a caller that
+    wants to change ONLY one of the two fields must resend the other's current value too."""
 
     theme_json: TenantTheme | None = None
+    authorization_number: str | None = Field(default=None, max_length=50)
 
 
 __all__ = [

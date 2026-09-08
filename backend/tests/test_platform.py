@@ -64,7 +64,11 @@ async def _make_tenant(session, *, name: str, plan: str = "standard") -> Tenant:
     "method,path,json_body",
     [
         ("GET", "/v1/platform/tenants", None),
-        ("POST", "/v1/platform/tenants", {"name": "Nope Cabs"}),
+        (
+            "POST",
+            "/v1/platform/tenants",
+            {"name": "Nope Cabs", "owner_email": "nope-owner@example.test", "owner_name": "Nope Owner"},
+        ),
         ("GET", "/v1/platform/tenants/{tenant_id}/summary", None),
         ("GET", "/v1/platform/health", None),
         ("GET", "/v1/platform/billing/summary", None),
@@ -127,27 +131,112 @@ async def test_list_platform_tenants_is_paginated(client, session):
 
 
 async def test_platform_owner_can_onboard_a_new_tenant(client, session):
+    """X2, 2026-09-08: onboarding now creates the tenant + owner user + a
+    default tariff in one transaction and hands back a one-time invite
+    token — real numbers asserted below, not just the tenant row."""
     headers = await _platform_owner_headers(client, session)
 
     resp = await client.post(
         "/v1/platform/tenants",
-        json={"name": "Brand New Cabs", "abn": "12345678901", "plan": "standard"},
+        json={
+            "name": "Brand New Cabs",
+            "abn": "12345678901",
+            "plan": "standard",
+            "owner_email": f"owner-{uuid.uuid4()}@brandnewcabs.test",
+            "owner_name": "Brand New Owner",
+        },
         headers=headers,
     )
     assert resp.status_code == 201
     body = resp.json()
     assert body["name"] == "Brand New Cabs"
     assert body["plan"] == "standard"
+    assert body["slug"]  # exposed now — see test_tenant_me_exposes_slug below
+    assert body["owner_email"].startswith("owner-")
+    assert len(body["invite_token"]) > 20
+    assert body["invite_expires_at"]
 
     list_resp = await client.get("/v1/platform/tenants", headers=headers)
     names = {row["name"] for row in list_resp.json()["items"]}
     assert "Brand New Cabs" in names
 
+    # The owner user exists, has a default urban tariff, and cannot yet log
+    # in (no password set — see app.services.platform.create_tenant).
+    owner_row = (
+        await session.execute(select(User).where(User.email == body["owner_email"]))
+    ).scalar_one()
+    assert owner_row.tenant_id == body["id"]
+    assert owner_row.role == "owner"
+    assert owner_row.pin_hash is None
+
+    login_resp = await client.post(
+        "/v1/auth/login", json={"email": body["owner_email"], "password": "whatever123"}
+    )
+    assert login_resp.status_code == 401
+
+    tariff_resp = await client.get(
+        "/v1/platform/tenants/{}/summary".format(body["id"]), headers=headers
+    )
+    assert tariff_resp.status_code == 200
+
+
+async def test_onboarded_owner_accepts_invite_and_can_then_log_in(client, session):
+    headers = await _platform_owner_headers(client, session)
+
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={
+            "name": f"Invite Flow Cabs {uuid.uuid4()}",
+            "owner_email": f"owner-{uuid.uuid4()}@inviteflow.test",
+            "owner_name": "Invite Flow Owner",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+
+    accept_resp = await client.post(
+        "/v1/platform/invites/accept",
+        json={"token": body["invite_token"], "password": "aRealPassword123"},
+    )
+    assert accept_resp.status_code == 200
+    accept_body = accept_resp.json()
+    assert accept_body["email"] == body["owner_email"]
+    assert accept_body["tenant_id"] == body["id"]
+
+    # Re-using the same token must fail — it is one-time.
+    replay_resp = await client.post(
+        "/v1/platform/invites/accept",
+        json={"token": body["invite_token"], "password": "someOtherPassword123"},
+    )
+    assert replay_resp.status_code == 400
+
+    login_resp = await client.post(
+        "/v1/auth/login", json={"email": body["owner_email"], "password": "aRealPassword123"}
+    )
+    assert login_resp.status_code == 200
+
+
+async def test_accept_invite_rejects_unknown_token(client, session):
+    resp = await client.post(
+        "/v1/platform/invites/accept",
+        json={"token": "not-a-real-token", "password": "aRealPassword123"},
+    )
+    assert resp.status_code == 400
+
 
 async def test_onboard_tenant_defaults_plan_to_standard(client, session):
     headers = await _platform_owner_headers(client, session)
 
-    resp = await client.post("/v1/platform/tenants", json={"name": "Default Plan Cabs"}, headers=headers)
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={
+            "name": "Default Plan Cabs",
+            "owner_email": f"owner-{uuid.uuid4()}@defaultplan.test",
+            "owner_name": "Default Plan Owner",
+        },
+        headers=headers,
+    )
     assert resp.status_code == 201
     assert resp.json()["plan"] == "standard"
 
@@ -155,15 +244,42 @@ async def test_onboard_tenant_defaults_plan_to_standard(client, session):
 async def test_onboard_tenant_rejects_blank_name(client, session):
     headers = await _platform_owner_headers(client, session)
 
-    resp = await client.post("/v1/platform/tenants", json={"name": "   "}, headers=headers)
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={"name": "   ", "owner_email": "blank-name@example.test", "owner_name": "Owner"},
+        headers=headers,
+    )
     assert resp.status_code == 422
 
 
 async def test_onboard_tenant_rejects_empty_string_name(client, session):
     headers = await _platform_owner_headers(client, session)
 
-    resp = await client.post("/v1/platform/tenants", json={"name": ""}, headers=headers)
+    resp = await client.post(
+        "/v1/platform/tenants",
+        json={"name": "", "owner_email": "empty-name@example.test", "owner_name": "Owner"},
+        headers=headers,
+    )
     assert resp.status_code == 422
+
+
+async def test_onboard_tenant_rejects_duplicate_owner_email(client, session):
+    headers = await _platform_owner_headers(client, session)
+    shared_email = f"dupe-{uuid.uuid4()}@example.test"
+
+    first = await client.post(
+        "/v1/platform/tenants",
+        json={"name": "Dupe Owner Cabs One", "owner_email": shared_email, "owner_name": "Owner One"},
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    second = await client.post(
+        "/v1/platform/tenants",
+        json={"name": "Dupe Owner Cabs Two", "owner_email": shared_email, "owner_name": "Owner Two"},
+        headers=headers,
+    )
+    assert second.status_code == 409
 
 
 async def test_platform_owner_gets_tenant_summary_rollup(client, session):

@@ -59,6 +59,22 @@ class Tenant(Base, TimestampMixin):
     # device; devices call POST /v1/fleet/devices/{id}/verify-admin-pin
     # instead, which checks the PIN server-side and returns a bool.
     admin_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The operator's real authorisation number issued BY its jurisdiction —
+    # e.g. NSW's "TSP-448041" (see android's
+    # domain/TenantBranding.kt for the split this documents in a table: the
+    # NUMBER is a tenant fact, its LABEL — "TSP authorisation" — is a
+    # jurisdiction fact and does NOT live here; that half belongs to X1's
+    # FareRegion/JurisdictionConfig seam). Added by X2 (tenant self-serve
+    # onboarding, 2026-09-08, migration c9d2f4a81b7e) specifically so the
+    # Android splash screen can eventually read this instead of compiling
+    # "TSP-448041" in as a literal for every tenant regardless of who they
+    # actually are.
+    #
+    # Nullable, deliberately: not every jurisdiction has an equivalent
+    # scheme, and a tenant that hasn't entered theirs yet (or operates
+    # somewhere with no such number) must show nothing rather than a fake
+    # placeholder — see this repo's "honesty over polish" rule.
+    authorization_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 def slugify_tenant_name(name: str, *, fallback: str | None = None) -> str:

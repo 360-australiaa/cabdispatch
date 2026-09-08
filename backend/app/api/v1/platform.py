@@ -28,10 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import PLATFORM_TENANT_ID, require_role
 from app.schemas.platform import (
+    OwnerInviteAcceptRequest,
+    OwnerInviteAcceptResponse,
     Page,
     PlatformBillingSummary,
     PlatformHealth,
     PlatformTenantCreate,
+    PlatformTenantOnboardRead,
     PlatformTenantRead,
     TenantStatusUpdate,
     TenantSubscriptionRead,
@@ -71,26 +74,69 @@ async def list_platform_tenants(
     return Page[PlatformTenantRead](items=tenants, total=total, skip=skip, limit=limit)
 
 
-@router.post("/tenants", response_model=PlatformTenantRead, status_code=status.HTTP_201_CREATED)
+@router.post("/tenants", response_model=PlatformTenantOnboardRead, status_code=status.HTTP_201_CREATED)
 async def create_platform_tenant(
     payload: PlatformTenantCreate,
     session: AsyncSession = Depends(get_session),
     _owner=Depends(require_platform_owner),
 ):
-    """Onboarding-flow entry point: creates a brand-new tenant on the
-    platform."""
+    """Onboarding-flow entry point: creates a brand-new tenant AND its owner
+    user AND a default tariff, in one transaction, and returns a one-time
+    owner-invite token (never logged, never retrievable again — see
+    app.services.platform.create_tenant's docstring). The caller — the
+    platform-owner console — is responsible for getting `invite_token` to
+    the new operator (e.g. as a link to a "set your password" page); this
+    API never emails it itself."""
     try:
-        tenant = await platform_service.create_tenant(
+        tenant, owner, invite_token, invite_expires_at = await platform_service.create_tenant(
             session,
             name=payload.name,
             abn=payload.abn,
             tsp_number=payload.tsp_number,
             bsp_number=payload.bsp_number,
             plan=payload.plan,
+            owner_email=payload.owner_email,
+            owner_name=payload.owner_name,
         )
     except platform_service.TenantNameRequiredError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return tenant
+    except platform_service.OwnerEmailRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except platform_service.DuplicateOwnerEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"email already in use: {exc}") from exc
+
+    return PlatformTenantOnboardRead(
+        id=tenant.id,
+        name=tenant.name,
+        slug=tenant.slug,
+        plan=tenant.plan,
+        status=tenant.status,
+        created_at=tenant.created_at,
+        owner_email=owner.email,
+        invite_token=invite_token,
+        invite_expires_at=invite_expires_at,
+    )
+
+
+@router.post("/invites/accept", response_model=OwnerInviteAcceptResponse)
+async def accept_owner_invite(
+    payload: OwnerInviteAcceptRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Exchanges a one-time owner-invite token for a password the owner
+    chooses themselves — deliberately NOT behind `require_platform_owner` (or
+    any auth at all): the owner accepting an invite holds no bearer token
+    yet. See app.services.platform.accept_owner_invite's docstring for the
+    full flow and why an invalid/used/expired token all return the SAME
+    error rather than distinguishing which."""
+    try:
+        user = await platform_service.accept_owner_invite(
+            session, raw_token=payload.token, password=payload.password
+        )
+    except platform_service.InvalidInviteTokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return OwnerInviteAcceptResponse(tenant_id=user.tenant_id, user_id=user.id, email=user.email)
 
 
 @router.get("/tenants/{tenant_id}/summary", response_model=TenantSummary)

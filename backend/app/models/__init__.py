@@ -35,6 +35,7 @@ from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
 from app.models.shift import Shift
 from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
+from app.models.tenant_invite import TenantInvite
 from app.models.toll import (
     TollGantry,
     TollPoint,
@@ -82,6 +83,7 @@ __all__ = [
     "Tariff",
     "TariffChangeLog",
     "Tenant",
+    "TenantInvite",
     "TollGantry",
     "TollPoint",
     "TollPointPriceRevision",

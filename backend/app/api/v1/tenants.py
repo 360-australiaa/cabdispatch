@@ -67,7 +67,9 @@ async def update_my_tenant_theme(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found") from exc
 
     theme_json = payload.theme_json.model_dump() if payload.theme_json is not None else None
-    return await tenant_service.update_theme(session, tenant, theme_json=theme_json)
+    return await tenant_service.update_theme(
+        session, tenant, theme_json=theme_json, authorization_number=payload.authorization_number
+    )
 
 
 @router.post("/{tenant_id}/admin-pin", response_model=AdminPinSetResponse)

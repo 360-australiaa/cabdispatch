@@ -421,7 +421,7 @@ async def seed() -> None:
             await session.execute(select(User).where(User.email == "driver@lillycabs.test"))
         ).scalar_one_or_none()
         demo_driver_code = (
-            await generate_unique_driver_code(session)
+            await generate_unique_driver_code(session, tenant_id=demo_tenant.id)
             if existing_driver is None or existing_driver.driver_code is None
             else None
         )

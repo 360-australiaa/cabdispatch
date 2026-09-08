@@ -201,13 +201,18 @@ async def assert_user_deletable(session: AsyncSession, *, user_id: str) -> None:
 
 
 async def assert_driver_code_available(
-    session: AsyncSession, *, driver_code: str, exclude_user_id: str | None = None
+    session: AsyncSession, *, tenant_id: str, driver_code: str, exclude_user_id: str | None = None
 ) -> None:
-    """driver_code is globally unique (like User.email — see
-    assert_email_available above), NOT tenant-scoped: POST
-    /v1/auth/driver-login has no tenant context to scope a lookup by, so two
-    drivers in different tenants sharing a code would make login ambiguous."""
-    stmt = select(func.count()).select_from(User).where(User.driver_code == driver_code)
+    """driver_code is unique PER TENANT (`uq_users_tenant_driver_code` —
+    see app/models/user.py::User), not platform-wide (X2, 2026-09-08 — fixes
+    a real tenancy bug: two operators could not both have a driver "101").
+    `POST /v1/auth/driver-login` already resolves the driver within a tenant
+    (`tenant_slug` + `driver_code` — see app/api/v1/auth.py::driver_login),
+    so scoping this check to `tenant_id` matches what the DB constraint and
+    the login lookup both actually enforce."""
+    stmt = select(func.count()).select_from(User).where(
+        User.tenant_id == tenant_id, User.driver_code == driver_code
+    )
     if exclude_user_id is not None:
         stmt = stmt.where(User.id != exclude_user_id)
     count = (await session.execute(stmt)).scalar_one()
@@ -215,15 +220,18 @@ async def assert_driver_code_available(
         raise DuplicateDriverCodeError(driver_code)
 
 
-async def generate_unique_driver_code(session: AsyncSession) -> str:
-    """Mints a random driver_code and confirms it's globally unused. Used by
-    POST /v1/users when creating a role="driver" user without an explicit
-    driver_code (see app/api/v1/users.py)."""
+async def generate_unique_driver_code(session: AsyncSession, *, tenant_id: str) -> str:
+    """Mints a random driver_code and confirms it's unused WITHIN this tenant
+    (see assert_driver_code_available's doc for why this is tenant-scoped, not
+    global). Used by POST /v1/users when creating a role="driver" user without
+    an explicit driver_code (see app/api/v1/users.py)."""
     for _ in range(_DRIVER_CODE_GENERATION_ATTEMPTS):
         code = "".join(secrets.choice(_DRIVER_CODE_ALPHABET) for _ in range(DRIVER_CODE_LENGTH))
         count = (
             await session.execute(
-                select(func.count()).select_from(User).where(User.driver_code == code)
+                select(func.count())
+                .select_from(User)
+                .where(User.tenant_id == tenant_id, User.driver_code == code)
             )
         ).scalar_one()
         if count == 0:
