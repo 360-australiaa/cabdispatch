@@ -44,14 +44,14 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from jose import JWTError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.security import (
-    PLATFORM_TENANT_ID,
-    decode_token,
+    WebSocketAuth,
+    WebSocketAuthError,
+    authenticate_websocket_token,
     get_current_tenant_id,
     get_current_user,
     require_role,
@@ -553,53 +553,32 @@ async def get_snapshot(
     return _snapshot_file_response(snapshot)
 
 
-async def _authenticate_websocket(websocket: WebSocket) -> dict | None:
+async def _authenticate_websocket(websocket: WebSocket) -> WebSocketAuth | None:
     """Websocket connections can't use the HTTP-only `Depends(get_current_tenant_id)`
-    chain (it's built on `Request`, not `WebSocket`), so this re-implements the
-    same bearer-token decode + tenant-scoping rule by hand for the one websocket
-    route in this domain. The token is accepted either as a `?token=` query
-    param (browsers can't set custom headers on the websocket handshake) or an
-    `Authorization: Bearer` header (non-browser clients).
+    chain (it's built on `Request`, not `WebSocket`), so the equivalent rule
+    lives in `app.core.security.authenticate_websocket_token` — shared by all
+    four websocket routes, and the single place the token type / revocation /
+    tenant checks are defined. This wrapper adds only this domain's role gate
+    and translates a rejection into a close frame.
 
-    Returns the decoded JWT payload, or `None` if the connection was rejected
+    Returns the authenticated result, or `None` if the connection was rejected
     (a close frame has already been sent in that case — the caller must not
     call `.accept()`)."""
-    token = websocket.query_params.get("token")
-    if not token:
-        auth_header = websocket.headers.get("authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ", 1)[1]
-
-    if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing bearer token")
-        return None
-
     try:
-        payload = decode_token(token)
-    except JWTError:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        auth = await authenticate_websocket_token(websocket)
+    except WebSocketAuthError as exc:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=exc.reason)
         return None
 
-    if payload.get("role") not in _DISPATCH_ROLES:
+    # This domain's own extra rule, on top of the shared one: the live GPS feed
+    # for a duress event is a dispatch-side surface, never a driver's.
+    if auth.payload.get("role") not in _DISPATCH_ROLES:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION, reason="Requires a dispatch-side role"
         )
         return None
 
-    return payload
-
-
-def _resolve_ws_tenant_id(websocket: WebSocket, payload: dict) -> str:
-    """Mirrors `app.core.security.get_current_tenant_id`'s owner/PLATFORM_TENANT_ID
-    cross-tenant rule, for the websocket route."""
-    token_tenant_id = payload.get("tenant_id")
-    role = payload.get("role")
-
-    if role == "owner" and token_tenant_id == PLATFORM_TENANT_ID:
-        override = websocket.query_params.get("tenant_id")
-        return override or token_tenant_id
-
-    return token_tenant_id
+    return auth
 
 
 @router.websocket("/{event_id}/live")
@@ -612,14 +591,11 @@ async def live(
     `POST /v1/duress/{event_id}/gps` for this event to all connected listeners.
     Backed by the in-process pub/sub in `app.services.duress.GPSBroadcaster`
     (see that class's docstring for the Redis swap-in path)."""
-    payload = await _authenticate_websocket(websocket)
-    if payload is None:
+    auth = await _authenticate_websocket(websocket)
+    if auth is None:
         return  # rejected + closed inside _authenticate_websocket
 
-    tenant_id = _resolve_ws_tenant_id(websocket, payload)
-    if not tenant_id:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token has no tenant scope")
-        return
+    tenant_id = auth.tenant_id
 
     try:
         event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)

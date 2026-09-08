@@ -350,6 +350,109 @@ async def get_optional_tenant_id(
 require_tenant_scope = get_current_tenant_id
 
 
+# --- WebSocket authentication ------------------------------------------------
+# Websocket routes cannot use the `Depends()` chain above: it is built on
+# `Request`, and a websocket handshake gives Starlette a `WebSocket` instead.
+# Every websocket route in this codebase therefore used to hand-roll its own
+# decode + tenant-resolution block, and the four copies had drifted apart:
+# NONE of them asserted the token TYPE, so a `mfa_pending` token — issued
+# BEFORE the second factor is verified — opened a live socket, defeating MFA
+# for every realtime surface, and a 14-day refresh token worked just as well.
+# Two of the four (jobs, messages) also skipped the revocation check entirely,
+# so a logged-out token still connected. There is now exactly one
+# implementation, here, next to the HTTP rules it must stay identical to
+# (`_payload_from_credentials` + `_tenant_from_payload`).
+
+
+class WebSocketAuthError(Exception):
+    """Raised by `authenticate_websocket_token` when a connection must be
+    refused. Carries the HTTP-equivalent status (401 vs 403) so a caller that
+    wants distinct websocket close codes can map it, and a short `reason`
+    suitable for a close frame.
+
+    Nothing is closed by the raiser — the calling route owns the close frame,
+    because the four routes deliberately differ there: `/v1/fleet/live` uses
+    the 4401/4403 application close codes its dashboard client already
+    understands, while the other three use `WS_1008_POLICY_VIOLATION`.
+    """
+
+    def __init__(self, reason: str, status_code: int = status.HTTP_401_UNAUTHORIZED) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status_code = status_code
+
+
+class WebSocketAuth:
+    """The result of a successful websocket authentication: the decoded JWT
+    payload plus the tenant the connection is scoped to. Routes that need the
+    subject or the role read them off `payload`, exactly as they did when each
+    had its own auth block."""
+
+    __slots__ = ("payload", "tenant_id")
+
+    def __init__(self, payload: dict[str, Any], tenant_id: str) -> None:
+        self.payload = payload
+        self.tenant_id = tenant_id
+
+
+def _websocket_token(websocket) -> str | None:
+    """The token for a websocket connection, from either transport: a
+    `?token=` query param (browsers cannot set custom headers on a websocket
+    handshake) or an `Authorization: Bearer` header (non-browser clients)."""
+    token = websocket.query_params.get("token")
+    if not token:
+        auth_header = websocket.headers.get("authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1]
+    return token or None
+
+
+async def authenticate_websocket_token(websocket) -> WebSocketAuth:
+    """THE websocket auth rule. Applies the same checks the HTTP bearer
+    dependencies apply, in the same order:
+
+    1. a token is present (query param or bearer header),
+    2. its signature and expiry verify,
+    3. its `type` is `access` — NOT `refresh`, NOT `mfa_pending`,
+    4. its `jti` has not been revoked (logout, refresh rotation, MFA burn),
+    5. a tenant resolves, honouring the platform-owner cross-tenant override
+       via a `tenant_id` query param (the websocket equivalent of
+       `_tenant_from_payload`'s `Request.query_params` lookup).
+
+    Raises `WebSocketAuthError` on every failure; the caller sends the close
+    frame. Returns a `WebSocketAuth` on success.
+    """
+    token = _websocket_token(websocket)
+    if not token:
+        raise WebSocketAuthError("Missing bearer token")
+
+    try:
+        payload = decode_token(token)
+    except JWTError as exc:
+        raise WebSocketAuthError("Invalid token") from exc
+
+    if payload.get("type") != TOKEN_TYPE_ACCESS:
+        # The MFA case is the dangerous one: POST /v1/auth/login hands out a
+        # TOKEN_TYPE_MFA token to an mfa_enabled account BEFORE the TOTP step,
+        # so accepting it here would let anyone holding only the password open
+        # a live feed for its 5-minute lifetime.
+        raise WebSocketAuthError("Not an access token")
+
+    jti = payload.get("jti")
+    if jti and await revocation_store.is_revoked(jti):
+        raise WebSocketAuthError("Token revoked")
+
+    token_tenant_id = payload.get("tenant_id")
+    if payload.get("role") == "owner" and token_tenant_id == PLATFORM_TENANT_ID:
+        override = websocket.query_params.get("tenant_id")
+        return WebSocketAuth(payload, override or token_tenant_id)
+
+    if not token_tenant_id:
+        raise WebSocketAuthError("Token has no tenant scope", status.HTTP_403_FORBIDDEN)
+
+    return WebSocketAuth(payload, token_tenant_id)
+
+
 def require_role(*roles: str):
     """Dependency factory for RBAC. Usage: Depends(require_role("owner", "admin"))."""
 
