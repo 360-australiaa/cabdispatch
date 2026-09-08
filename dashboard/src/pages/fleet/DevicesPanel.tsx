@@ -6,14 +6,13 @@ import {
   BatteryWarning,
   Lock,
   MapPin,
-  Pencil,
   Plus,
   RefreshCw,
   Trash2,
   RotateCw,
   Unlock,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Badge,
   Button,
@@ -37,7 +36,6 @@ import {
   useKioskLock,
   useLocateDevice,
   useRestartApp,
-  useUpdateDevice,
   useVehicleOptions,
   type DeviceFilters,
   PAGE_LIMIT,
@@ -85,6 +83,7 @@ function BatteryIcon({ battery }: { battery: number | null }) {
 }
 
 export function DevicesPanel() {
+  const navigate = useNavigate();
   // Row actions here report nothing inline at all beyond the table re-rendering
   // on refetch, which is invisible if the row is off-screen.
   const toast = useToast();
@@ -126,14 +125,12 @@ export function DevicesPanel() {
   );
 
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<Device | null>(null);
   const [formValues, setFormValues] = useState<DeviceFormValues>(EMPTY_DEVICE_FORM);
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Device | null>(null);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
 
   const createDevice = useCreateDevice();
-  const updateDevice = useUpdateDevice();
   const deleteDevice = useDeleteDevice();
   const kioskLock = useKioskLock();
   const forceUpdate = useForceUpdate();
@@ -155,43 +152,20 @@ export function DevicesPanel() {
   }
 
   function openCreate() {
-    setEditing(null);
     setFormValues(EMPTY_DEVICE_FORM);
-    setFormError(null);
-    setFormOpen(true);
-  }
-
-  function openEdit(d: Device) {
-    setEditing(d);
-    setFormValues({
-      android_id: d.android_id,
-      model: d.model ?? "",
-      app_version: d.app_version ?? "",
-      vehicle_id: d.vehicle_id ?? "",
-      kiosk_locked: d.kiosk_locked,
-    });
     setFormError(null);
     setFormOpen(true);
   }
 
   async function submitForm() {
     setFormError(null);
-    const wasEditing = editing;
     try {
-      if (wasEditing) {
-        await updateDevice.mutateAsync({ id: wasEditing.id, values: formValues });
-      } else {
-        await createDevice.mutateAsync(formValues);
-      }
+      await createDevice.mutateAsync(formValues);
       setFormOpen(false);
-      toast.success(wasEditing ? "Device saved" : "Device registered", {
-        description: formValues.android_id.trim() || undefined,
-      });
+      toast.success("Device registered", { description: formValues.android_id.trim() || undefined });
     } catch (err) {
       setFormError(errorMessage(err));
-      toast.error(wasEditing ? "Failed to save device" : "Failed to register device", {
-        description: errorMessage(err),
-      });
+      toast.error("Failed to register device", { description: errorMessage(err) });
     }
   }
 
@@ -442,17 +416,6 @@ export function DevicesPanel() {
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`Edit ${d.android_id}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              openEdit(d);
-            }}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
             aria-label={`Delete ${d.android_id}`}
             onClick={(e) => {
               e.stopPropagation();
@@ -524,7 +487,7 @@ export function DevicesPanel() {
             data={devicesQuery.data?.items ?? []}
             rowKey={(d) => d.id}
             isLoading={devicesQuery.isLoading}
-            onRowClick={openEdit}
+            onRowClick={(d) => navigate(`/devices/${d.id}`)}
             emptyState="No devices match these filters."
           />
           {/* Hidden while the whole list fits on one page. */}
@@ -546,17 +509,14 @@ export function DevicesPanel() {
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title={editing ? `Edit ${editing.android_id}` : "Register device"}
+        title="Register device"
         footer={
           <>
             <Button variant="outline" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={submitForm}
-              disabled={!formValues.android_id.trim() || createDevice.isPending || updateDevice.isPending}
-            >
-              {editing ? "Save changes" : "Register device"}
+            <Button onClick={submitForm} disabled={!formValues.android_id.trim() || createDevice.isPending}>
+              Register device
             </Button>
           </>
         }
@@ -567,15 +527,9 @@ export function DevicesPanel() {
             <Input
               value={formValues.android_id}
               onChange={(e) => setFormValues((f) => ({ ...f, android_id: e.target.value }))}
-              disabled={!!editing}
               maxLength={100}
               required
             />
-            {editing && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Android ID identifies the physical unit and can't be changed — re-pair the device instead.
-              </p>
-            )}
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Model</label>

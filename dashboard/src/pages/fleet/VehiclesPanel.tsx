@@ -20,13 +20,11 @@ import {
   useDeleteVehicle,
   useDeviceOptions,
   useGeneratePairingCode,
-  useUpdateVehicle,
   useVehicleLiveOptions,
   useVehicles,
   type VehicleFilters,
   PAGE_LIMIT,
 } from "./api";
-import { VehicleReportsModal } from "./VehicleReportsModal";
 import { errorMessage, formatDateTime } from "./format";
 import {
   EMPTY_VEHICLE_FORM,
@@ -103,16 +101,13 @@ export function VehiclesPanel() {
   }, [vehicleLiveOptionsQuery.data]);
 
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<Vehicle | null>(null);
   const [formValues, setFormValues] = useState<VehicleFormValues>(EMPTY_VEHICLE_FORM);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
   const [pairingTarget, setPairingTarget] = useState<Vehicle | null>(null);
-  const [reportsTarget, setReportsTarget] = useState<Vehicle | null>(null);
 
   const createVehicle = useCreateVehicle();
-  const updateVehicle = useUpdateVehicle();
   const deleteVehicle = useDeleteVehicle();
   const generatePairingCode = useGeneratePairingCode();
 
@@ -132,49 +127,20 @@ export function VehiclesPanel() {
   }
 
   function openCreate() {
-    setEditing(null);
     setFormValues(EMPTY_VEHICLE_FORM);
-    setFormError(null);
-    setFormOpen(true);
-  }
-
-  function openEdit(v: Vehicle) {
-    setEditing(v);
-    setFormValues({
-      rego: v.rego,
-      vin: v.vin ?? "",
-      make: v.make ?? "",
-      model: v.model ?? "",
-      vehicle_class: v.vehicle_class,
-      camera_serial: v.camera_serial ?? "",
-      tracking_device_id: v.tracking_device_id ?? "",
-      meter_device_id: v.meter_device_id ?? "",
-      status: v.status,
-      registration_expiry: v.registration_expiry ?? "",
-      insurance_expiry: v.insurance_expiry ?? "",
-    });
     setFormError(null);
     setFormOpen(true);
   }
 
   async function submitForm() {
     setFormError(null);
-    const wasEditing = editing;
     try {
-      if (wasEditing) {
-        await updateVehicle.mutateAsync({ id: wasEditing.id, values: formValues });
-      } else {
-        await createVehicle.mutateAsync(formValues);
-      }
+      await createVehicle.mutateAsync(formValues);
       setFormOpen(false);
-      toast.success(wasEditing ? "Vehicle saved" : "Vehicle created", {
-        description: formValues.rego.trim() || undefined,
-      });
+      toast.success("Vehicle created", { description: formValues.rego.trim() || undefined });
     } catch (err) {
       setFormError(errorMessage(err));
-      toast.error(wasEditing ? "Failed to save vehicle" : "Failed to create vehicle", {
-        description: errorMessage(err),
-      });
+      toast.error("Failed to create vehicle", { description: errorMessage(err) });
     }
   }
 
@@ -261,7 +227,7 @@ export function VehiclesPanel() {
             title="Shift history — every driver who has had this vehicle, and when"
             onClick={(e) => {
               e.stopPropagation();
-              navigate(`/shifts?vehicle_id=${v.id}`);
+              navigate(`/vehicles/${v.id}?tab=shifts`);
             }}
           >
             <History className="h-4 w-4" />
@@ -272,7 +238,7 @@ export function VehiclesPanel() {
             aria-label={`Operations reports for ${v.rego}`}
             onClick={(e) => {
               e.stopPropagation();
-              setReportsTarget(v);
+              navigate(`/vehicles/${v.id}?tab=reports`);
             }}
           >
             <BarChart3 className="h-4 w-4" />
@@ -296,7 +262,7 @@ export function VehiclesPanel() {
             aria-label={`Edit ${v.rego}`}
             onClick={(e) => {
               e.stopPropagation();
-              openEdit(v);
+              navigate(`/vehicles/${v.id}`);
             }}
           >
             <Pencil className="h-4 w-4" />
@@ -384,7 +350,7 @@ export function VehiclesPanel() {
             data={vehiclesQuery.data?.items ?? []}
             rowKey={(v) => v.id}
             isLoading={vehiclesQuery.isLoading}
-            onRowClick={openEdit}
+            onRowClick={(v) => navigate(`/vehicles/${v.id}`)}
             emptyState="No vehicles match these filters."
           />
           {/* Hidden while the whole list fits on one page. */}
@@ -406,19 +372,14 @@ export function VehiclesPanel() {
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title={editing ? `Edit ${editing.rego}` : "Add vehicle"}
+        title="Add vehicle"
         footer={
           <>
             <Button variant="outline" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={submitForm}
-              disabled={
-                !formValues.rego.trim() || createVehicle.isPending || updateVehicle.isPending
-              }
-            >
-              {editing ? "Save changes" : "Create vehicle"}
+            <Button onClick={submitForm} disabled={!formValues.rego.trim() || createVehicle.isPending}>
+              Create vehicle
             </Button>
           </>
         }
@@ -605,7 +566,6 @@ export function VehiclesPanel() {
           </p>
         )}
       </Modal>
-      <VehicleReportsModal vehicle={reportsTarget} onClose={() => setReportsTarget(null)} />
     </div>
   );
 }

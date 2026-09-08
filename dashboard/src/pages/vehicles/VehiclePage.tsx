@@ -47,17 +47,16 @@ function vehicleStatusBadgeVariant(status: VehicleStatus) {
 /**
  * `/vehicles/:vehicleId` -- dashboard command-centre plan §5.
  *
- * Ports `VehicleDetailModal`'s live status/device/driver/shift-history/
+ * Ported `VehicleDetailModal`'s live status/device/driver/shift-history/
  * position-history-replay/driving-signals content and `VehicleReportsModal`'s
  * two report tabs into this page's tabs (see `tabs/LiveTab.tsx` and
  * `tabs/ReportsTab.tsx` for exactly what each ports vs. leaves alone).
- * Neither modal is deleted or repointed yet -- the map-dot click and the
- * Fleet vehicles-list row click still open them, per the plan's own
- * "don't repoint yet, a later workstream does that once this page is
- * proven" instruction. TODO(vehicle-page-cutover): once this page is
- * proven, repoint `FleetMapCanvas`'s non-duress marker click and
- * `VehiclesPanel`'s row click here, and delete `VehicleDetailModal` /
- * `VehicleReportsModal`.
+ * `VehiclesPanel`'s row click, its "Edit"/"Shift history"/"Reports" row
+ * actions, and its own edit-form modal now all point here instead --
+ * `VehicleReportsModal` had zero other importers once that repointing
+ * landed, so it's deleted. `VehicleDetailModal` stays: the live-map
+ * vehicle-dot click still opens it, a deliberately separate, map-embedded
+ * context this pass leaves alone (see `live-map/index.tsx`).
  *
  * Maintenance (plan §5.7) is NOT built here -- it needs a new
  * `vehicle_maintenance` backend table/migration, out of scope for a

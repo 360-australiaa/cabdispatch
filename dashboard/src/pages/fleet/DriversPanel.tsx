@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { Camera, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Plus } from "lucide-react";
 import {
   Badge,
   Button,
@@ -13,22 +14,10 @@ import {
   useToast,
   type TableColumn,
 } from "@/components/ui";
-import { useAuth } from "@/lib/auth";
-import {
-  useCreateDriver,
-  useDriverCompliance,
-  useDrivers,
-  useUpdateDriverCompliance,
-  useUploadDriverPhoto,
-  useVehicleOptions,
-  type DriverFilters,
-  PAGE_LIMIT,
-} from "./api";
+import { useCreateDriver, useDrivers, useVehicleOptions, type DriverFilters, PAGE_LIMIT } from "./api";
 import { DriverAvatar } from "./DriverAvatar";
 import { errorMessage, formatDateTime, truncateId, vehicleLabel } from "./format";
 import type { Driver } from "./types";
-
-const PHOTO_UPLOAD_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 const ON_SHIFT_OPTIONS = [
   { value: "true", label: "On shift" },
@@ -60,49 +49,17 @@ const EMPTY_CREATE_DRIVER_FORM: CreateDriverFormValues = {
   driver_authority_expiry: "",
 };
 
-/** Controlled form state for editing an existing driver's compliance dates
- * (PATCH /v1/users/{id}) -- the only fields editable from this panel today.
- * Separate from CreateDriverFormValues since it's a different mutation
- * against a different, per-user endpoint (see useDriverCompliance's own doc
- * comment in api.ts for why). */
-interface DriverComplianceFormValues {
-  driver_license_expiry: string;
-  driver_authority_expiry: string;
-}
-
-const EMPTY_COMPLIANCE_FORM: DriverComplianceFormValues = {
-  driver_license_expiry: "",
-  driver_authority_expiry: "",
-};
-
 export function DriversPanel() {
-  const { user } = useAuth();
-  // The inline "Saved." / error text below sits at the bottom of a long modal
-  // on a long page; the toast is the copy the operator actually sees.
+  const navigate = useNavigate();
   const toast = useToast();
-  const canUploadPhoto = Boolean(user && PHOTO_UPLOAD_ROLES.has(user.role));
-  // PATCH /v1/users/{id} is owner/admin-gated server-side (see _require_admin
-  // in backend/app/api/v1/users.py) -- narrower than the photo-upload roles
-  // above, which also allow dispatcher.
-  const canEditCompliance = Boolean(user && (user.role === "owner" || user.role === "admin"));
   const [skip, setSkip] = useState(0);
   const [statusSearch, setStatusSearch] = useState("");
   const [onShiftFilter, setOnShiftFilter] = useState("");
-  const [selected, setSelected] = useState<Driver | null>(null);
-  const [photoError, setPhotoError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const uploadPhoto = useUploadDriverPhoto();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateDriverFormValues>(EMPTY_CREATE_DRIVER_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
   const createDriver = useCreateDriver();
-
-  const [complianceForm, setComplianceForm] = useState<DriverComplianceFormValues>(EMPTY_COMPLIANCE_FORM);
-  const [complianceError, setComplianceError] = useState<string | null>(null);
-  const [complianceSaved, setComplianceSaved] = useState(false);
-  const driverComplianceQuery = useDriverCompliance(selected?.id ?? null);
-  const updateDriverCompliance = useUpdateDriverCompliance();
 
   const filters: DriverFilters = useMemo(
     () => ({
@@ -122,52 +79,6 @@ export function DriversPanel() {
   const rangeStart = total === 0 ? 0 : skip + 1;
   const rangeEnd = Math.min(total, skip + PAGE_LIMIT);
   const vehicleOptionsQuery = useVehicleOptions();
-
-  // Reset to the freshly-fetched compliance dates whenever a different driver
-  // is opened (or their record refetches) -- mirrors openEdit's pattern in
-  // VehiclesPanel.tsx of seeding form state from the loaded record.
-  useEffect(() => {
-    if (driverComplianceQuery.data) {
-      setComplianceForm({
-        driver_license_expiry: driverComplianceQuery.data.driver_license_expiry ?? "",
-        driver_authority_expiry: driverComplianceQuery.data.driver_authority_expiry ?? "",
-      });
-    }
-  }, [driverComplianceQuery.data]);
-
-  async function submitCompliance() {
-    if (!selected) return;
-    setComplianceError(null);
-    setComplianceSaved(false);
-    try {
-      await updateDriverCompliance.mutateAsync({
-        id: selected.id,
-        values: {
-          driver_license_expiry: complianceForm.driver_license_expiry || null,
-          driver_authority_expiry: complianceForm.driver_authority_expiry || null,
-        },
-      });
-      setComplianceSaved(true);
-      toast.success("Compliance dates saved", { description: selected.name });
-    } catch (err) {
-      setComplianceError(errorMessage(err));
-      toast.error("Failed to save compliance dates", { description: errorMessage(err) });
-    }
-  }
-
-  async function handlePhotoSelected(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !selected) return;
-    setPhotoError(null);
-    try {
-      await uploadPhoto.mutateAsync({ userId: selected.id, file });
-      toast.success("Driver photo uploaded", { description: selected.name });
-    } catch (err) {
-      setPhotoError(errorMessage(err));
-      toast.error("Failed to upload driver photo", { description: errorMessage(err) });
-    }
-  }
 
   function openCreate() {
     setCreateForm(EMPTY_CREATE_DRIVER_FORM);
@@ -272,7 +183,7 @@ export function DriversPanel() {
             data={driversQuery.data?.items ?? []}
             rowKey={(d) => d.id}
             isLoading={driversQuery.isLoading}
-            onRowClick={setSelected}
+            onRowClick={(d) => navigate(`/drivers/${d.id}`)}
             emptyState="No drivers match these filters."
           />
           {/* Hidden while the whole list fits on one page. */}
@@ -290,157 +201,6 @@ export function DriversPanel() {
           )}
         </>
       )}
-
-      <Modal
-        open={selected !== null}
-        onClose={() => {
-          setSelected(null);
-          setPhotoError(null);
-          setComplianceError(null);
-          setComplianceSaved(false);
-        }}
-        title={selected?.name}
-        description="Driver detail — most fields are read-only; compliance dates below are editable."
-        footer={
-          <Button
-            variant="outline"
-            onClick={() => {
-              setSelected(null);
-              setPhotoError(null);
-              setComplianceError(null);
-              setComplianceSaved(false);
-            }}
-          >
-            Close
-          </Button>
-        }
-      >
-        {selected && (
-          <>
-            <div className="mb-4 flex items-center gap-4">
-              <DriverAvatar userId={selected.id} name={selected.name} size="h-16 w-16" />
-              {canUploadPhoto && (
-                <div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handlePhotoSelected}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={uploadPhoto.isPending}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Camera className="h-3.5 w-3.5" />
-                    {uploadPhoto.isPending ? "Uploading..." : "Upload photo"}
-                  </Button>
-                  {photoError && <p className="mt-1 text-xs text-destructive">{photoError}</p>}
-                </div>
-              )}
-            </div>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-            {/* Driver code first: it is the one thing an operator opens this
-              * modal needing, since it's half of the driver's meter sign-in
-              * (code + PIN) and appears nowhere else in the dashboard. Shown
-              * monospace because it gets read off this screen and typed into a
-              * tablet keypad. Falls back to an honest "—" rather than a
-              * placeholder while the per-user fetch is in flight or if this
-              * user genuinely has no code (non-driver roles). */}
-            <div>
-              <dt className="text-xs text-muted-foreground">Driver code (meter login)</dt>
-              <dd className="font-mono">{driverComplianceQuery.data?.driver_code || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Phone</dt>
-              <dd>{selected.phone || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Status</dt>
-              <dd>{selected.user_status}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">On shift</dt>
-              <dd>{selected.on_shift ? "Yes" : "No"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Vehicle</dt>
-              <dd>{vehicleLabel(selected.vehicle_id, vehicleRegoById)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Shift started</dt>
-              <dd>{formatDateTime(selected.shift_start_at)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Current trip</dt>
-              <dd>{truncateId(selected.current_trip_id, 12)}</dd>
-            </div>
-            </dl>
-
-            <div className="mt-4 border-t border-border pt-4">
-              <h4 className="text-sm font-semibold text-foreground">Compliance dates</h4>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Required under NSW Point to Point Transport regulation to keep this driver
-                compliant. Cab Dispatch reminds you when these are expiring but does not verify or
-                enforce them.
-              </p>
-              {driverComplianceQuery.isLoading ? (
-                <p className="mt-3 text-xs text-muted-foreground">Loading…</p>
-              ) : driverComplianceQuery.isError ? (
-                <p className="mt-3 text-xs text-destructive">
-                  Failed to load compliance dates: {errorMessage(driverComplianceQuery.error)}
-                </p>
-              ) : (
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                      Driver licence expiry
-                    </label>
-                    <Input
-                      type="date"
-                      value={complianceForm.driver_license_expiry}
-                      onChange={(e) =>
-                        setComplianceForm((f) => ({ ...f, driver_license_expiry: e.target.value }))
-                      }
-                      disabled={!canEditCompliance}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                      Driver authority expiry
-                    </label>
-                    <Input
-                      type="date"
-                      value={complianceForm.driver_authority_expiry}
-                      onChange={(e) =>
-                        setComplianceForm((f) => ({ ...f, driver_authority_expiry: e.target.value }))
-                      }
-                      disabled={!canEditCompliance}
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      NSW Point to Point driver authority — separate from the driving licence above.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {canEditCompliance && !driverComplianceQuery.isLoading && !driverComplianceQuery.isError && (
-                <div className="mt-3 flex items-center gap-3">
-                  <Button size="sm" onClick={submitCompliance} disabled={updateDriverCompliance.isPending}>
-                    {updateDriverCompliance.isPending ? "Saving..." : "Save compliance dates"}
-                  </Button>
-                  {complianceSaved && !updateDriverCompliance.isPending && (
-                    <span className="text-xs text-emerald-600 dark:text-emerald-400">Saved.</span>
-                  )}
-                </div>
-              )}
-              {complianceError && <p className="mt-2 text-xs text-destructive">{complianceError}</p>}
-            </div>
-          </>
-        )}
-      </Modal>
 
       <Modal
         open={createOpen}
