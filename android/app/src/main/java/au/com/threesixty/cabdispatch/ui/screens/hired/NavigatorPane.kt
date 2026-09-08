@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
@@ -46,6 +47,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +61,7 @@ import au.com.threesixty.cabdispatch.data.remote.GeocodeResult
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -126,7 +132,11 @@ internal fun MapDestinationSearchBar(
     Row(
         modifier = modifier
             .widthIn(min = 220.dp, max = 340.dp)
-            .height(46.dp)
+            // 46dp -> 48dp (A4, 2026-09-08). Two dp, and the only reason it is worth a line of
+            // comment: at 46 this bar was *below* the Material minimum touch target while looking
+            // for all the world like it met it, which is precisely the kind of near-miss that
+            // never gets caught by eye.
+            .height(48.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(CaptainPalette.panel.copy(alpha = 0.92f))
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
@@ -134,7 +144,7 @@ internal fun MapDestinationSearchBar(
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Search, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))
+        Icon(Icons.Rounded.Search, contentDescription = "Search for a destination", tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))
         Text(
             destinationLabel ?: "Enter destination (optional)",
             fontFamily = InterFamily,
@@ -146,12 +156,24 @@ internal fun MapDestinationSearchBar(
             modifier = Modifier.padding(start = 10.dp).weight(1f),
         )
         if (onClear != null) {
-            Icon(
-                Icons.Rounded.Close,
-                contentDescription = "Clear destination",
-                tint = CaptainPalette.textMuted,
-                modifier = Modifier.size(15.dp).padding(start = 6.dp).clickable(onClick = onClear),
-            )
+            // 15dp -> a 48dp target (A4, 2026-09-08). This was the single smallest hit area in the
+            // app: a 15dp glyph with the clickable ON the glyph, and 6dp of that was padding
+            // inside the hit rect. The icon is unchanged at 15dp; the box around it is the target.
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onClear)
+                    .semantics { role = Role.Button },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "Clear destination",
+                    tint = CaptainPalette.textMuted,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
         }
     }
 }
@@ -213,7 +235,7 @@ internal fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modif
                 modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(CaptainPalette.hudAccent.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(28.dp))
+                Icon(icon, contentDescription = "Next turn", tint = CaptainPalette.hudAccent, modifier = Modifier.size(28.dp))
             }
             Text(
                 navState.currentInstruction ?: "Continue on route",
@@ -242,12 +264,18 @@ internal fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modif
 @Composable
 private fun NavStopLine(icon: ImageVector, tone: Color, address: String, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+        // and Compose merges this node's semantics into one announcement -- a description here
+        // would make TalkBack read the same words twice. The audit's finding was unlabelled
+        // *controls*; every control on this screen now carries a real name. This is a reviewed
+        // null, not an overlooked one.
         Icon(icon, contentDescription = null, tint = tone, modifier = Modifier.size(13.dp))
         Text(
             address,
             fontFamily = InterFamily,
             fontWeight = FontWeight.Medium,
-            fontSize = 11.sp,
+            // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+            style = Type.tiny,
             color = CaptainPalette.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -301,7 +329,8 @@ internal fun NavBottomBar(
                         "CHANGE",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 9.sp,
+                        // 9sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         color = CaptainPalette.hudSweepMid,
                         modifier = Modifier.padding(start = 8.dp).clickable(onClick = onChange),
                     )
@@ -322,7 +351,8 @@ internal fun NavBottomBar(
                             "Finding route…",
                             fontFamily = InterFamily,
                             fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
+                            // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                            style = Type.tiny,
                             color = CaptainPalette.textSecondary,
                             modifier = Modifier.padding(start = 8.dp),
                         )
@@ -332,13 +362,16 @@ internal fun NavBottomBar(
                             navState.routeError,
                             fontFamily = InterFamily,
                             fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
+                            // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                            style = Type.tiny,
                             color = CaptainPalette.danger,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = 110.dp).padding(end = 6.dp),
                         )
-                        CaptainButton(text = "RETRY", outline = true, heightDp = 32, fontSize = 11.sp, widthDp = 68, onClick = onRetryRoute)
+                        // 11sp -> 12sp and 32dp -> 48dp (A4): CaptainButton takes its own fontSize/heightDp
+                        // rather than a TextStyle, so the floor is applied by value here.
+                        CaptainButton(text = "RETRY", outline = true, heightDp = 48, fontSize = 12.sp, widthDp = 68, onClick = onRetryRoute)
                     }
                     navState.route != null -> {
                         MiniEtaStat("DISTANCE", formatDistanceM(navState.remainingDistanceM))
@@ -351,7 +384,8 @@ internal fun NavBottomBar(
                         "No route yet",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Medium,
-                        fontSize = 11.sp,
+                        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         color = CaptainPalette.textMuted,
                     )
                 }
@@ -440,6 +474,11 @@ internal fun DestinationSearchDialog(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+                // and Compose merges this node's semantics into one announcement -- a description here
+                // would make TalkBack read the same words twice. The audit's finding was unlabelled
+                // *controls*; every control on this screen now carries a real name. This is a reviewed
+                // null, not an overlooked one.
                 Icon(Icons.Rounded.Search, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))
                 Text(
                     nav.query.ifEmpty { "Search an address…" },
@@ -550,6 +589,11 @@ private fun SuggestionRow(result: GeocodeResult, onClick: () -> Unit) {
             .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+        // and Compose merges this node's semantics into one announcement -- a description here
+        // would make TalkBack read the same words twice. The audit's finding was unlabelled
+        // *controls*; every control on this screen now carries a real name. This is a reviewed
+        // null, not an overlooked one.
         Icon(Icons.Rounded.Place, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.padding(start = 12.dp)) {
             Text(result.shortName, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)

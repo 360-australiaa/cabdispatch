@@ -1115,6 +1115,60 @@ fun HudStatTile(
     modifier: Modifier = Modifier,
     valueFontSize: TextUnit = 24.sp,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
+) = HudStatTile(
+    icon = icon,
+    label = label,
+    sub = sub,
+    ring = ring,
+    tone = tone,
+    modifier = modifier,
+    footer = footer,
+    value = {
+        Text(
+            value,
+            fontFamily = ChakraPetch,
+            fontWeight = FontWeight.Bold,
+            fontSize = valueFontSize,
+            color = CaptainPalette.textPrimary,
+            maxLines = 1,
+        )
+    },
+)
+
+/**
+ * [HudStatTile] with the value as a **composable slot** rather than a `String` (A4, 2026-09-08).
+ *
+ * WHY THE SLOT EXISTS. A3's home-screen rebuild needed three stat cells whose value is not a
+ * static string: EARNINGS rolls per digit through [RollingMoneyText] when a fare closes, TRIPS
+ * carries a one-shot scale pop the moment the count increments, and SHIFT TIME renders its elapsed
+ * clock on the shared [Type] scale. The `value: String` overload above cannot express any of them.
+ * Because `ui/theme/Hud.kt` belongs to this workstream and not to A3's, that pass could not reach
+ * across the ownership boundary and instead took a **local copy** — `HomeStatTile` in
+ * `ShiftStatsBar.kt` — with a doc that said, verbatim, *"when A3 and A4 have both merged, fold this
+ * back into HudStatTile and delete it"*. This is that fold: the slot lands here, the three call
+ * sites move onto it, and the local copy is gone. There is now one stat tile in the app again.
+ *
+ * The `String` overload above is kept and delegates here, so the fifteen-odd existing call sites
+ * that genuinely do just want a static numeral are untouched.
+ *
+ * Two details carried over from A3's copy rather than from the older shared one, because both were
+ * fixes rather than preferences:
+ * - the icon's `contentDescription` is the tile's own [label], not `null`. The audit (§6) counted
+ *   85 `null` descriptions across `ui/` and called the result "a wall of unlabelled buttons"; the
+ *   label is available right here and is the correct spoken name for the glyph beside it.
+ * - the label renders at [Type.tiny] — **12sp**, the accessibility floor — where the older shared
+ *   tile hardcoded 11sp.
+ */
+@Composable
+fun HudStatTile(
+    icon: ImageVector,
+    label: String,
+    value: @Composable () -> Unit,
+    sub: String? = null,
+    ring: Float? = null,
+    tone: HudTone = HudTone.Accent,
+    modifier: Modifier = Modifier,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val toneColor = tone.color()
     GlassCard(modifier = modifier, cornerRadiusDp = 18) {
@@ -1124,32 +1178,20 @@ fun HudStatTile(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(icon, contentDescription = null, tint = toneColor, modifier = Modifier.size(16.dp))
+                    Icon(icon, contentDescription = label, tint = toneColor, modifier = Modifier.size(16.dp))
                     Text(
                         label.uppercase(),
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
+                        style = Type.tiny,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(start = 6.dp),
                     )
                 }
-                Text(
-                    value,
-                    fontFamily = ChakraPetch,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = valueFontSize,
-                    color = CaptainPalette.textPrimary,
-                    maxLines = 1,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
+                Box(modifier = Modifier.padding(top = 4.dp)) { value() }
                 if (sub != null) {
                     Text(
                         sub,
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 12.sp,
+                        style = Type.tiny,
                         color = CaptainPalette.textSecondary,
                         maxLines = 1,
                         modifier = Modifier.padding(top = 2.dp),

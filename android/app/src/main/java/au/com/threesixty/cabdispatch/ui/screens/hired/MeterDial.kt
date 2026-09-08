@@ -2,11 +2,7 @@ package au.com.threesixty.cabdispatch.ui.screens.hired
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +29,7 @@ import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ConfirmationNumber
 import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.GpsOff
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Sell
 import androidx.compose.material.icons.rounded.WbSunny
@@ -51,6 +48,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,7 +70,9 @@ import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.GlowingSpeedometer
 import au.com.threesixty.cabdispatch.ui.theme.rememberSpeedBand
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Radius
 import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import au.com.threesixty.cabdispatch.ui.theme.hudSpring
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
@@ -90,6 +93,15 @@ import kotlin.math.roundToInt
 /** The circular glass disc inside the speedometer ring, as a fraction of the ring's diameter —
  * sized so it sits just inside the kit's tick-label radius (`tickOuter − 11dp − 9dp`). */
 private const val DIAL_INNER_FRACTION = 0.70f
+
+/** RUNNING's glow radius at a standstill — the floor, and the value a stationary running meter
+ * sits at permanently. Non-zero on purpose: a running meter must still read as live when the cab
+ * is stopped at a light. It simply does not *move* there. See the call site's own doc. */
+private const val RUNNING_GLOW_MIN_BLUR = 12f
+
+/** RUNNING's glow radius at or above the distance-rate threshold. The old looping animation's
+ * upper bound, kept — the range is unchanged, only what drives position within it. */
+private const val RUNNING_GLOW_MAX_BLUR = 28f
 
 /** Real night-rate uplift, not a fabricated multiplier — same ratio-of-signed-tariff computation
  * [au.com.threesixty.cabdispatch.ui.screens.dashboard.DeckHomeScreen]'s `NightFareTile` uses (that
@@ -131,15 +143,14 @@ internal fun NightFareTile(timeClass: TimeClass, tariff: TariffDto?) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (night) Icons.Rounded.Bedtime else Icons.Rounded.WbSunny,
-                    contentDescription = null,
+                    contentDescription = if (night) "Night fare" else "Day fare",
                     tint = if (night) CaptainPalette.hudAccent else CaptainPalette.warning,
                     modifier = Modifier.size(15.dp),
                 )
                 Text(
                     if (night) "NIGHT FARE" else "DAY FARE",
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp,
+                    // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                    style = Type.tiny,
                     letterSpacing = 1.sp,
                     color = CaptainPalette.textSecondary,
                     modifier = Modifier.padding(start = 6.dp),
@@ -156,9 +167,8 @@ internal fun NightFareTile(timeClass: TimeClass, tariff: TariffDto?) {
             )
             Text(
                 if (night) "10:00 PM – 6:00 AM" else "6:00 AM – 10:00 PM",
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 10.sp,
+                // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                style = Type.tiny,
                 color = CaptainPalette.textSecondary,
                 modifier = Modifier.padding(top = 3.dp),
             )
@@ -276,7 +286,7 @@ internal fun MeterDial(
                 ) {
                     Icon(
                         Icons.Rounded.DirectionsCar,
-                        contentDescription = null,
+                        contentDescription = "Active fare",
                         tint = stateColor,
                         modifier = Modifier.size(26.dp),
                     )
@@ -314,17 +324,36 @@ internal fun MeterDial(
                             .padding(top = 2.dp)
                             .scale(tickScale.value),
                     )
-                    // Slow "breathing" glow while actually ticking (RUNNING only, real amber-
-                    // static when PAUSED — a paused meter shouldn't look alive) — the second half
-                    // of the "high level animation" request, distinct from the fare figure's own
-                    // per-tick pop above.
-                    val glowPulse = rememberInfiniteTransition(label = "running-glow")
-                    val pulseBlur by glowPulse.animateFloat(
-                        initialValue = 12f,
-                        targetValue = 28f,
-                        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-                        label = "running-glow-blur",
-                    )
+                    // RUNNING's glow, driven by SPEED rather than by a clock (A4, 2026-09-08).
+                    //
+                    // WHAT THIS REPLACED, and why it had to go. This was a
+                    // `rememberInfiniteTransition` breathing the blur radius 12 → 28px on a 900ms
+                    // `RepeatMode.Reverse` loop, and it was **unconditional** — it kept pulsing
+                    // while the meter was PAUSED, and it kept pulsing while the cab sat at a rank
+                    // with the engine off. The 2026-09-08 UI audit (§2) singled it out as "the one
+                    // loop contradicting the calm rule inside the fare dial", and the calm-motion
+                    // rule it contradicts is committed in this repo's own words at
+                    // `ui/theme/Hud.kt:437-455`: *"this circle is moving continuously, its doing
+                    // pain in my head... calm animations"*. A decorative loop in the driver's
+                    // direct eyeline, running for an entire twelve-hour shift, is exactly the
+                    // thing that feedback was about.
+                    //
+                    // WHAT DRIVES IT NOW. The same input [GlowingSpeedometer]'s own ember and
+                    // brightness already use — the engine's real `currentSpeedKmh`, normalised
+                    // against the band threshold and smoothed through the shared [hudSpring] so it
+                    // tracks the ring rather than flickering on the raw 1 Hz GPS staircase. The
+                    // result is the property the rule actually asks for:
+                    // - moving: the glow is brighter the faster the cab is going, and every frame
+                    //   it changes, it changes because the vehicle's speed changed;
+                    // - stationary but running: a **still** glow at the floor radius — the meter
+                    //   still reads as live, it simply is not animating;
+                    // - PAUSED: no speed term at all, a flat amber static — a paused meter must
+                    //   not look alive.
+                    // Nothing here animates on a timer, so a parked cab is a still screen.
+                    val speedFraction = (smoothedSpeed.value / fareState.speedThresholdKmh.toFloat().coerceAtLeast(1f))
+                        .coerceIn(0f, 1f)
+                    val runningBlur = RUNNING_GLOW_MIN_BLUR +
+                        (RUNNING_GLOW_MAX_BLUR - RUNNING_GLOW_MIN_BLUR) * speedFraction
                     Text(
                         if (isPaused) "PAUSED" else "RUNNING",
                         fontFamily = InterFamily,
@@ -332,7 +361,13 @@ internal fun MeterDial(
                         fontSize = 16.sp,
                         letterSpacing = 3.sp,
                         color = stateColor,
-                        style = glowStyle(stateColor, if (isPaused) 20f else pulseBlur),
+                        style = glowStyle(stateColor, if (isPaused) 20f else runningBlur),
+                        modifier = Modifier.semantics {
+                            // The dial's single most important piece of state, and previously
+                            // spoken as a bare word with no context. TalkBack now says which meter
+                            // this is describing.
+                            contentDescription = if (isPaused) "Meter paused" else "Meter running"
+                        },
                     )
                     Text(
                         // "Set Price" fix (product-reported, 2026-09): a fixed-fare trip's dial
@@ -347,10 +382,61 @@ internal fun MeterDial(
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(top = 2.dp),
                     )
+                    // GPS LOST — the honest half of A1's F3 fix (A4, 2026-09-08).
+                    //
+                    // The engine now *stops accruing distance* when the newest fix is older than
+                    // `MAX_FIX_AGE_MS` (FareEngine.kt#tick) — the tunnel that used to bill phantom
+                    // kilometres at the last known speed now bills waiting time only. That change
+                    // is invisible without this pill, and an invisible fare change is the worst
+                    // kind: the driver sees the distance figure stop moving and has no way to tell
+                    // a correct hold from a frozen meter. So this states exactly what is and is
+                    // not being charged, in the words of the rule being applied.
+                    //
+                    // PERSISTENT, not a self-dismissing banner like METER STARTED or TOLL ADDED:
+                    // it is a live condition, not an event, and it must stay on screen for as long
+                    // as it is true. It carries no animation of its own — it appears and it sits
+                    // there, which is also what the calm-motion rule requires of it.
+                    if (fareState.gpsLost) {
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .clip(RoundedCornerShape(Radius.pill))
+                                .background(CaptainPalette.warning.copy(alpha = 0.18f))
+                                .border(1.dp, CaptainPalette.warning, RoundedCornerShape(Radius.pill))
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+                            // and Compose merges this node's semantics into one announcement -- a description here
+                            // would make TalkBack read the same words twice. The audit's finding was unlabelled
+                            // *controls*; every control on this screen now carries a real name. This is a reviewed
+                            // null, not an overlooked one.
+                            Icon(
+                                Icons.Rounded.GpsOff,
+                                contentDescription = null,
+                                tint = CaptainPalette.warning,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                "GPS LOST — WAITING TIME ONLY",
+                                style = Type.tiny,
+                                letterSpacing = 1.sp,
+                                color = CaptainPalette.warning,
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
+                    }
                     // The dial OWNS these three live readouts (dedupe pass) — they appear nowhere
                     // else on the screen. WAITING goes amber while actually accruing.
                     Row(modifier = Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DialReadout("DISTANCE", fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM")
+                        // DISTANCE dims while the fix is stale, because it is the one readout that
+                        // has genuinely stopped moving. Dimming it says "this number is holding on
+                        // purpose" in the same glance that the pill above says why.
+                        DialReadout(
+                            "DISTANCE",
+                            fareState.distanceKm.setScale(1, RoundingMode.HALF_UP).toPlainString() + " KM",
+                            valueColor = if (fareState.gpsLost) CaptainPalette.textMuted else CaptainPalette.textPrimary,
+                        )
                         DialReadout("TIME", "%d:%02d".format(fareState.movingSeconds / 60, fareState.movingSeconds % 60))
                         DialReadout(
                             "WAITING",
@@ -369,15 +455,25 @@ internal fun MeterDial(
                         modifier = Modifier.padding(top = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        // 44dp -> 56dp (A4, 2026-09-08). The audit (§6) listed both of these under
+                        // "touch targets below the 48dp minimum"; 56dp is the size the rest of
+                        // this app's chips already use for the elderly-driver standard the home
+                        // screen's class doc commits to (see [HudStatusPill], also 56dp), so this
+                        // brings the two most-tapped controls on the meter into line with it
+                        // rather than just scraping over the Material minimum.
                         Box(
                             modifier = Modifier
                                 .width(96.dp)
-                                .height(44.dp)
+                                .height(56.dp)
                                 .neonGlow(stateColor, 18.dp, strength = 0.7f, spread = 3.dp)
                                 .clip(RoundedCornerShape(18.dp))
                                 .background(CaptainPalette.hudGlass)
                                 .border(1.dp, stateColor.copy(alpha = 0.9f), RoundedCornerShape(18.dp))
-                                .gameClick(onClick = onTogglePause, shape = RoundedCornerShape(18.dp)),
+                                .gameClick(onClick = onTogglePause, shape = RoundedCornerShape(18.dp))
+                                .semantics {
+                                    role = Role.Button
+                                    contentDescription = if (isPaused) "Resume fare" else "Pause fare"
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -392,15 +488,23 @@ internal fun MeterDial(
                         // END FARE — inside the dial, per the mockup. Same
                         // endTrip { navigate(CLOSE_PAY) } call the old full-width END TRIP bar made
                         // (see the caller).
+                        // 44dp -> 56dp (A4, 2026-09-08). This is the single most consequential
+                        // control in the app — it ends the hiring and commits the fare the
+                        // passenger is about to be charged — and it was the same 44dp as
+                        // everything else. A mis-tap here is not a cosmetic problem.
                         Box(
                             modifier = Modifier
                                 .width(150.dp)
-                                .height(44.dp)
+                                .height(56.dp)
                                 .neonGlow(CaptainPalette.primary, 18.dp, strength = 0.9f, spread = 4.dp)
                                 .clip(RoundedCornerShape(18.dp))
                                 .background(Brush.horizontalGradient(listOf(CaptainPalette.primary, CaptainPalette.hudAccent)))
                                 .border(1.dp, CaptainPalette.hudSweepMid.copy(alpha = 0.9f), RoundedCornerShape(18.dp))
-                                .gameClick(onClick = onEndFare, shape = RoundedCornerShape(18.dp)),
+                                .gameClick(onClick = onEndFare, shape = RoundedCornerShape(18.dp))
+                                .semantics {
+                                    role = Role.Button
+                                    contentDescription = "End fare and go to payment"
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -450,9 +554,8 @@ internal fun MeterDial(
                 if (fareState.negotiatedTotal == null) {
                     Text(
                         if (band == SpeedBand.WAITING) "WAITING TIME" else "DISTANCE RATE",
-                        fontFamily = InterFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
+                        // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         letterSpacing = 2.sp,
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(top = 2.dp),
@@ -468,7 +571,8 @@ private fun DialReadout(label: String, value: String, valueColor: Color = Captai
     // Bumped alongside the rest of MeterDial (2026-09-06 passenger-readability pass) — width grown
     // to match so three of these in a Row don't crowd the bigger value text.
     Column(modifier = Modifier.width(80.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+        Text(label, style = Type.tiny, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
         Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, color = valueColor, maxLines = 1)
     }
 }
@@ -538,7 +642,10 @@ private fun MeterActionTile(
         label = "tile-label",
     )
     GlassCard(
-        modifier = modifier.fillMaxWidth().gameClick(onClick = onClick, shape = shape, glowColor = accentColor),
+        modifier = modifier
+            .fillMaxWidth()
+            .gameClick(onClick = onClick, shape = shape, glowColor = accentColor)
+            .semantics { role = Role.Button },
         cornerRadiusDp = 16,
         glow = if (active) accentColor else null,
     ) {
@@ -546,7 +653,7 @@ private fun MeterActionTile(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            IconSquare(icon = icon, tint = accentColor, size = 32.dp, lit = active)
+            IconSquare(icon = icon, tint = accentColor, size = 32.dp, lit = active, label = label)
             Text(
                 label,
                 fontFamily = InterFamily,
@@ -560,9 +667,10 @@ private fun MeterActionTile(
             )
             Text(
                 value,
-                fontFamily = InterFamily,
-                fontWeight = FontWeight.Medium,
-                fontSize = 9.5.sp,
+                // 9.5sp -> 12sp (A4: Type.tiny, the accessibility floor). This was the smallest
+                // type anywhere on the meter screen and it carried the tile's only real status
+                // line ("Fixed - $52.00", "3 tolls added").
+                style = Type.tiny,
                 color = CaptainPalette.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -574,7 +682,7 @@ private fun MeterActionTile(
 
 /** Icon in a tinted, rounded square — the mockup's action-tile / stop-card glyph treatment. */
 @Composable
-private fun IconSquare(icon: ImageVector, tint: Color, size: Dp, lit: Boolean = false) {
+private fun IconSquare(icon: ImageVector, tint: Color, size: Dp, lit: Boolean = false, label: String? = null) {
     Box(
         modifier = Modifier
             .size(size)
@@ -583,6 +691,6 @@ private fun IconSquare(icon: ImageVector, tint: Color, size: Dp, lit: Boolean = 
             .border(1.dp, tint.copy(alpha = if (lit) 0.9f else 0.4f), RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.6f))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(size * 0.6f))
     }
 }
