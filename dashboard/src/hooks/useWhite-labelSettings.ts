@@ -16,6 +16,16 @@ export interface TenantTheme {
   logo_url: string | null;
   primary_color: string | null;
   accent_color: string | null;
+  /** Tenant-configured default map centre as `[lng, lat]` (Mapbox's own order),
+   * with an optional zoom. Read by the live map to decide where to open when no
+   * vehicle has reported a position yet -- see `resolveInitialCamera` in
+   * `pages/live-map/mapInit.ts`. Optional because it is arbitrary server-stored
+   * JSON that older tenant rows simply do not carry; the map validates it
+   * itself rather than trusting this declaration. There is no editor for it in
+   * this page yet, so the branding form preserves whatever is stored instead of
+   * overwriting it. */
+  default_center?: [number, number] | null;
+  default_zoom?: number | null;
 }
 
 export interface TenantRead {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ImageOff, RotateCcw, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ImageOff, RotateCcw } from "lucide-react";
 import {
   Badge,
   Button,
@@ -33,13 +33,6 @@ const BRAND_DEFAULT: ThemeFormValues = {
   logo_url: "",
   primary_color: "#2A1C58",
   accent_color: "#F4C300",
-};
-
-/** Example alternate-brand preset for the "Lilly Cabs" demo tenant — pink-toned. */
-const LILLY_CABS_PRESET: ThemeFormValues = {
-  logo_url: "https://placehold.co/240x64/D6336C/ffffff?text=Lilly+Cabs",
-  primary_color: "#D6336C",
-  accent_color: "#FFB3C6",
 };
 
 function normalizeTheme(theme: TenantTheme | null | undefined): ThemeFormValues {
@@ -121,18 +114,15 @@ export default function WhiteLabelSettingsPage() {
     primaryColor !== savedTheme.primary_color ||
     accentColor !== savedTheme.accent_color;
 
-  function applyPreset(preset: ThemeFormValues) {
-    setLogoUrl(preset.logo_url);
-    setPrimaryColor(preset.primary_color);
-    setAccentColor(preset.accent_color);
-    setLogoFailed(false);
-    updateMutation.reset();
-  }
-
   function handleSave() {
     if (!colorsValid) return;
     updateMutation.mutate({
       theme_json: {
+        // Spread what is stored first: `theme_json` carries more than this form
+        // edits (the live map's `default_center`/`default_zoom`), and PATCH
+        // replaces the whole object -- saving branding must not silently drop
+        // fields this page has no editor for.
+        ...(tenantQuery.data?.theme_json ?? {}),
         logo_url: logoUrl.trim() || null,
         primary_color: primaryColor,
         accent_color: accentColor,
@@ -228,18 +218,6 @@ export default function WhiteLabelSettingsPage() {
                 onChange={setAccentColor}
                 disabled={!canEdit}
               />
-
-              {canEdit && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => applyPreset(LILLY_CABS_PRESET)}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  Fill with Lilly Cabs preset
-                </Button>
-              )}
 
               {updateMutation.isError && (
                 <p className="flex items-center gap-2 text-sm text-destructive">

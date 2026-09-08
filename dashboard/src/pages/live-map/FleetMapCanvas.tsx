@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { circlePolygon } from "@/lib/geoCircle";
+import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 import type { DuressEventRead } from "./types";
 import { useVehicleRoutes, type RoutableVehicle } from "./useVehicleRoutes";
 import { isBusyStatus } from "./utils";
@@ -18,6 +19,8 @@ import {
   fitToVehicles,
   haversineMetres,
   installMapLayers,
+  resolveInitialCamera,
+  type CameraSource,
 } from "./mapInit";
 import {
   buildHoverCardElement,
@@ -84,8 +87,9 @@ interface FleetMapCanvasProps {
 }
 
 /**
- * Live fleet map. Renders a real Mapbox GL JS map (custom global style, default-region-
- * centered or fit to the fleet's bounding box) when VITE_MAPBOX_TOKEN is configured;
+ * Live fleet map. Renders a real Mapbox GL JS map (custom global style, opened on
+ * the tenant's configured default centre, else the fleet's own last-known bounding
+ * box, else a world view -- see resolveInitialCamera) when VITE_MAPBOX_TOKEN is configured;
  * otherwise falls back to a plain-SVG lat/lng plot so the page never breaks
  * for anyone without a token set up (see PlainCanvasMap.tsx).
  */
@@ -186,6 +190,15 @@ export function FleetMapCanvas({
 // Mapbox GL JS rendering
 // ---------------------------------------------------------------------------
 
+/** What the empty state says about the region it is showing, per fallback.
+ * Each one names where the view came from -- a map showing somewhere the
+ * operator did not choose must say why it is showing it. */
+const EMPTY_VIEW_CAPTION: Record<CameraSource, string> = {
+  tenant: "showing your configured default map area.",
+  fleet: "showing the area this fleet last reported from.",
+  world: "showing a world view until a device reports a position.",
+};
+
 function MapboxFleetMap({
   plotted,
   duressByVehicleId,
@@ -214,15 +227,34 @@ function MapboxFleetMap({
   const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
   const [styleLoaded, setStyleLoaded] = useState(false);
 
-  // Init the map once. Initial framing (default region vs. fleet bounding box)
-  // uses whatever `plotted` this component mounted with — by the time it
-  // renders, the parent's vehicles query has already resolved (see LiveMapPage).
+  // The tenant's own record carries the configured default map centre (in
+  // `theme_json`, alongside the branding this dashboard already reads from
+  // there). It is the same cached react-query entry the app shell and sidebar
+  // already hold, so in practice this resolves synchronously; the init effect
+  // below still waits for it to settle rather than opening on a world view and
+  // jumping a moment later.
+  const tenantQuery = useTenantQuery();
+  const tenantSettled = !tenantQuery.isLoading;
+  const tenantTheme = tenantQuery.data?.theme_json;
+
+  // Which fallback the opening camera came from, so the empty state can say so
+  // rather than naming a region the code has no business asserting.
+  const [cameraSource, setCameraSource] = useState<CameraSource | null>(null);
+
+  // Init the map once, as soon as the tenant record has settled. Opening camera
+  // is the tenant's configured centre, else the bounding box of every position
+  // this fleet is known to have reported from (live vehicles and tablets' last
+  // locates alike), else a world view — see resolveInitialCamera. `plotted` and
+  // `devicePoints` are read as they were at mount, which by then is whatever the
+  // parent's queries had already resolved (see LiveMapPage).
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    if (!containerRef.current || mapRef.current || !tenantSettled) return;
 
     ensurePopupStyleInjected();
 
-    const map = createFleetMap(containerRef.current);
+    const { camera, source } = resolveInitialCamera(tenantTheme, [...plotted, ...devicePoints]);
+    setCameraSource(source);
+    const map = createFleetMap(containerRef.current, camera);
     mapRef.current = map;
 
     // Mapbox measures its canvas once and never notices the container changing
@@ -252,8 +284,8 @@ function MapboxFleetMap({
       map.remove();
       mapRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once; see comment above
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init once, after the tenant record settles; see comment above
+  }, [tenantSettled]);
 
   // Keep the unpaired-device points in sync with the fetched list -- this is a
   // separate, much-less-frequent update than the marker-sync effect below,
@@ -472,8 +504,8 @@ function MapboxFleetMap({
       <div ref={containerRef} className="h-[460px] w-full rounded-md border border-border" />
       {plotted.length === 0 && (
         <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow">
-          No live vehicle positions yet — showing the default region (Karachi, currently, for field
-          testing). Positions appear here once a device publishes via POST /v1/fleet/positions.
+          No live vehicle positions yet — {EMPTY_VIEW_CAPTION[cameraSource ?? "world"]} Positions
+          appear here once a device publishes via POST /v1/fleet/positions.
         </div>
       )}
     </div>
