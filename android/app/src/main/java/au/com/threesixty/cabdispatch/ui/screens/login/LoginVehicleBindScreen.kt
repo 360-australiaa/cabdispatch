@@ -58,6 +58,7 @@ import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
+import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPanel
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
@@ -167,7 +168,12 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
     // 110dp top inset plus a 60dp bottom one is taller than what remains with the keyboard up,
     // so without a scroller the field being typed into could sit under the keys. Scrolling is
     // the honest answer: nothing rescales, the driver can always reach the field.
-    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
+    // top inset from CaptainChromeMetrics (2026-09-08): this screen has no header, so the
+    // app-level banners (UPDATE PENDING, FLEET LOCKED) are placed at their fallback lane -- and a
+    // fixed 110dp put the headline and the keypad's top row directly under UPDATE PENDING. The
+    // content now starts below that lane wherever the metric says it is, so a banner can never
+    // cover a key a driver has to press to sign in.
+    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = CaptainChromeMetrics.topOverlayInset + 104.dp, bottom = 60.dp)) {
         // Left — brand row, fields, hint, error, Cancel.
         Column(modifier = Modifier.width(420.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -312,7 +318,12 @@ private fun MfaStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindV
     // 110dp top inset plus a 60dp bottom one is taller than what remains with the keyboard up,
     // so without a scroller the field being typed into could sit under the keys. Scrolling is
     // the honest answer: nothing rescales, the driver can always reach the field.
-    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
+    // top inset from CaptainChromeMetrics (2026-09-08): this screen has no header, so the
+    // app-level banners (UPDATE PENDING, FLEET LOCKED) are placed at their fallback lane -- and a
+    // fixed 110dp put the headline and the keypad's top row directly under UPDATE PENDING. The
+    // content now starts below that lane wherever the metric says it is, so a banner can never
+    // cover a key a driver has to press to sign in.
+    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = CaptainChromeMetrics.topOverlayInset + 104.dp, bottom = 60.dp)) {
         Column(modifier = Modifier.width(460.dp)) {
             Text("Two-factor check", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.height(24.dp))
