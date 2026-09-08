@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { BarChart3, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -15,6 +15,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useDeleteIncentiveMutation, useIncentivesQuery, type Incentive } from "./hooks";
 import { IncentiveFormModal } from "./IncentiveFormModal";
+import { IncentiveProgressModal } from "./IncentiveProgressModal";
 import { extractErrorMessage, formatDateTime, formatMoney, windowStatus } from "./format";
 
 const PAGE_SIZE = 15;
@@ -39,6 +40,7 @@ export default function IncentivesPage() {
   const [editing, setEditing] = useState<Incentive | null>(null);
   const [deleting, setDeleting] = useState<Incentive | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [progressFor, setProgressFor] = useState<Incentive | null>(null);
 
   const query = useIncentivesQuery({
     active: activeFilter === "" ? "" : activeFilter === "true",
@@ -77,25 +79,31 @@ export default function IncentivesPage() {
       key: "actions",
       header: "",
       className: "text-right",
-      render: (row) =>
-        canWrite ? (
-          <div className="flex justify-end gap-1">
-            <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditing(row)}>
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              title="Delete"
-              onClick={() => {
-                setDeleteError(null);
-                setDeleting(row);
-              }}
-            >
-              <Trash2 className="h-4 w-4 text-destructive" />
-            </Button>
-          </div>
-        ) : null,
+      render: (row) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="icon" title="Driver progress" onClick={() => setProgressFor(row)}>
+            <BarChart3 className="h-4 w-4" />
+          </Button>
+          {canWrite && (
+            <>
+              <Button variant="ghost" size="icon" title="Edit" onClick={() => setEditing(row)}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete"
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeleting(row);
+                }}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -168,6 +176,12 @@ export default function IncentivesPage() {
           }
         />
       )}
+
+      <IncentiveProgressModal
+        open={progressFor != null}
+        onClose={() => setProgressFor(null)}
+        incentive={progressFor}
+      />
 
       <IncentiveFormModal open={createOpen} onClose={() => setCreateOpen(false)} mode="create" />
       <IncentiveFormModal
