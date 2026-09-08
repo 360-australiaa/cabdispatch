@@ -304,6 +304,14 @@ dependencies {
     // jdk18on (not the older jdk15on) is the currently-maintained artifact line. --
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
+    // -- Encrypted credential storage (security finding X3) ---------------------------------------
+    // Backs TokenStore / DevicePairingStore / the offline PIN cache with an Android Keystore
+    // AES key instead of plaintext SharedPreferences XML — see domain/SecurePrefs.kt for what was
+    // exposed and how the one-time migration off the plain files works. 1.1.0-alpha06 rather than
+    // 1.0.0 because 1.0.0's MasterKeys API is deprecated and its Tink dependency misbehaves on
+    // API 31+; alpha06 is the build every current androidx sample uses and is stable in practice.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     testImplementation("junit:junit:4.13.2")
     // JVM unit tests for the offline sync engine (OutboxDrainerTest) — pure
     // Kotlin/coroutines, no Android framework classes, so these run without

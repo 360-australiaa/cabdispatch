@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ApiVehicleUuidResolver
 import au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository
+import au.com.threesixty.cabdispatch.sync.TariffRefresh
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -160,6 +161,13 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
     }
 
     private fun onLoggedIn(user: UserDto) {
+        // S5: login is the third tariff-refresh trigger (with reconnect and the periodic backstop).
+        // It is the one moment we know the tablet is online AND about to start billing, so it is
+        // the last chance to notice the depot changed the rates since this tablet last looked.
+        // Best-effort and non-blocking — see [TariffRefresh]; a failure just means the existing
+        // cached tariff stays in use, exactly as before.
+        viewModelScope.launch { TariffRefresh.refreshBestEffort() }
+
         _uiState.update {
             it.copy(
                 isLoggingIn = false,

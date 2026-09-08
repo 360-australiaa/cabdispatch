@@ -96,7 +96,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TollPointEntity::class,
         TollGantryEntity::class,
     ],
-    version = 10,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -202,5 +202,51 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         db.execSQL("ALTER TABLE trips ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE trips ADD COLUMN autoTolledRoadsJson TEXT NOT NULL DEFAULT '{}'")
         db.execSQL("ALTER TABLE trips ADD COLUMN unpricedTollRoadIdsJson TEXT NOT NULL DEFAULT '[]'")
+    }
+}
+
+/**
+ * **Placeholder for the version A1 owns.**
+ *
+ * The global-meter program assigns Room versions across the two concurrent Android workstreams:
+ * A1 (fare-engine blockers) takes 11, A2 (auth/sync blockers) takes 12. A1's migration had not
+ * landed on the integration trunk this branch is based on (`529793f`), so a 10 -> 11 step does not
+ * exist yet — and without one, Room finds no path from a v10 device to [MIGRATION_11_12] below and
+ * crashes on launch with exactly the `IllegalStateException` [AppDatabase]'s doc describes.
+ *
+ * So this branch ships a deliberate no-op to keep the chain continuous and self-contained. It does
+ * nothing because A2 changes nothing at version 11.
+ *
+ * **On merge with A1, delete this object** and register A1's real `MIGRATION_10_11` in its place.
+ * The duplicate declaration will make the conflict impossible to miss, which is the point. Nothing
+ * has shipped at v11 or v12, so redefining what 11 means at merge time is safe.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) = Unit
+}
+
+/**
+ * Real migration for the 11 -> 12 bump (A2 auth/sync blockers) — two new
+ * [au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity] columns supporting the outbox
+ * retry policy:
+ *
+ * - `nextAttemptAt` (finding S1) — epoch-millis before which a row must not be retried. Defaults to
+ *   `0` = "eligible now", which is the right answer for every row already queued on an upgrading
+ *   device: they have done nothing wrong and should drain on the next trigger exactly as before.
+ * - `deadLettered` (findings S1/S2) — terminal state for a row that can never succeed. Defaults to
+ *   `0`, again correct for existing rows.
+ *
+ * Both defaults mean an upgrading tablet's pending trips keep their current behaviour, and no
+ * offline trip data is touched. Boolean is `INTEGER NOT NULL` in Room's SQLite mapping, matching
+ * how `simulated`/`airportRankRequestedMaxi` are declared in the migrations above.
+ *
+ * Verified against Room's own generated `createAllTables` per [MIGRATION_9_10]'s "How to check this
+ * SQL is right" note — `./gradlew kaptDebugKotlin`, then read the `sync_outbox` CREATE TABLE line in
+ * `app/build/generated/source/kapt/debug/au/com/threesixty/cabdispatch/data/local/AppDatabase_Impl.java`.
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE sync_outbox ADD COLUMN nextAttemptAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE sync_outbox ADD COLUMN deadLettered INTEGER NOT NULL DEFAULT 0")
     }
 }

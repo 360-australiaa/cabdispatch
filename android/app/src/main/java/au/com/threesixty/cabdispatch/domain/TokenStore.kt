@@ -32,8 +32,14 @@ import android.content.SharedPreferences
  */
 class TokenStore internal constructor(private val prefs: SharedPreferences) {
 
+    /**
+     * Both tokens now live in an `EncryptedSharedPreferences` store, with a one-time migration off
+     * the plaintext `auth_tokens.xml` this class originally wrote — see [SecurePrefs] for the
+     * finding (X3) and the migration's mechanics. The prefs name is unchanged, so nothing else
+     * about this class or its callers moves.
+     */
     constructor(context: Context) : this(
-        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+        openPrefs(context),
     )
 
     fun getAccessToken(): String? = prefs.getString(KEY_ACCESS_TOKEN, null)
@@ -57,6 +63,11 @@ class TokenStore internal constructor(private val prefs: SharedPreferences) {
     }
 
     private companion object {
+        fun openPrefs(context: Context): SharedPreferences {
+            SecurePrefs.stashLegacyPlaintext(context, PREFS_NAME)
+            return SecurePrefs.open(context, PREFS_NAME)
+        }
+
         const val PREFS_NAME = "auth_tokens"
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_REFRESH_TOKEN = "refresh_token"

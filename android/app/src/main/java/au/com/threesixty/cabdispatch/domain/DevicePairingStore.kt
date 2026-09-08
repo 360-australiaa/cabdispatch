@@ -13,8 +13,16 @@ import android.content.Context
  * session state in this app, not a new persistence mechanism.
  */
 class DevicePairingStore(context: Context) {
-    private val prefs = context.applicationContext
-        .getSharedPreferences("device_pairing", Context.MODE_PRIVATE)
+    /**
+     * Encrypted as of the X3 pass — see [SecurePrefs]. This store is the highest-value of the four:
+     * [getDeviceSecret] is the credential that lets a parked tablet with nobody logged in receive
+     * fleet commands, so reading it off a lost device is enough to impersonate that tablet to the
+     * depot. The prefs name and every accessor below are unchanged; only the backing file is.
+     */
+    private val prefs = SecurePrefs.open(
+        context,
+        PREFS_NAME.also { SecurePrefs.stashLegacyPlaintext(context, it) },
+    )
 
     fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
 
@@ -96,6 +104,7 @@ class DevicePairingStore(context: Context) {
     }
 
     private companion object {
+        const val PREFS_NAME = "device_pairing"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_DEVICE_SECRET = "device_secret"
         const val KEY_KIOSK_LOCKED = "kiosk_locked"

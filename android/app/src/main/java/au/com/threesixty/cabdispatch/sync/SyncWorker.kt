@@ -14,6 +14,8 @@ import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
+import au.com.threesixty.cabdispatch.data.remote.ShiftDto
+import au.com.threesixty.cabdispatch.data.remote.ShiftStartDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResponseDto
 import java.util.concurrent.TimeUnit
@@ -41,18 +43,44 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        // S5: the periodic backstop is the natural place to keep the tariff fresh — it already runs
+        // on a schedule, already requires connectivity, and until this pass nothing outside the
+        // dashboard's own composition ever refreshed the tariff at all. Best-effort and first, so a
+        // tariff refresh failing never affects whether the outbox drains.
+        TariffRefresh.refreshBestEffort()
+
         val result = OutboxDrainer(appContainerPorts()).drainOnce()
         // WorkManager's own retry uses the BackoffCriteria configured below —
         // exponential backoff, so a flaky connection doesn't hammer the API.
+        // Note `hadFailure` deliberately excludes dead-lettered rows (see its doc): retrying the
+        // worker for a row that is terminal by definition is what finding S1 was about.
         return if (result.hadFailure) Result.retry() else Result.success()
     }
 
     private fun appContainerPorts(): OutboxDrainer.Ports = object : OutboxDrainer.Ports {
-        override suspend fun fetchReadyBatch(limit: Int): List<SyncOutboxEntity> =
-            AppContainer.syncOutboxDao.getReadyBatch(limit)
+        override suspend fun fetchReadyBatch(limit: Int, now: Long, maxAttempts: Int): List<SyncOutboxEntity> =
+            AppContainer.syncOutboxDao.getReadyBatch(limit, now, maxAttempts)
 
         override suspend fun sendTrips(items: List<TripSyncItemDto>): TripSyncResponseDto =
             AppContainer.apiService.syncTrips(items)
+
+        override suspend fun sendShiftStart(payload: ShiftStartDto): ShiftDto =
+            AppContainer.apiService.startShift(payload)
+
+        /**
+         * Repoints the local trip rows and any queued trip payloads at the shift id the server
+         * actually issued (finding S3).
+         *
+         * The outbox half is a string substitution inside the stored JSON rather than a
+         * decode/patch/re-encode cycle. That is safe here specifically because a local shift id is
+         * a `local:<uuid>` token — 42 characters of prefix plus a random UUID, which cannot collide
+         * with anything else in a trip payload — and it keeps the rewrite a single atomic UPDATE
+         * rather than a read-modify-write race against a driver closing another trip.
+         */
+        override suspend fun rewriteShiftId(localShiftId: String, serverShiftId: String) {
+            AppContainer.tripDao.rewriteShiftId(localShiftId, serverShiftId)
+            AppContainer.syncOutboxDao.rewriteShiftIdInPayloads(localShiftId, serverShiftId)
+        }
 
         override suspend fun markTripSynced(clientUuid: String, serverId: String) {
             AppContainer.tripDao.markSynced(clientUuid, serverId)
@@ -60,8 +88,11 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
 
         override suspend fun deleteOutboxRow(id: Long) = AppContainer.syncOutboxDao.deleteById(id)
 
-        override suspend fun recordFailure(id: Long, error: String) =
-            AppContainer.syncOutboxDao.recordFailure(id, error)
+        override suspend fun recordFailure(id: Long, error: String, nextAttemptAt: Long) =
+            AppContainer.syncOutboxDao.recordFailure(id, error, nextAttemptAt)
+
+        override suspend fun markDeadLettered(id: Long, error: String) =
+            AppContainer.syncOutboxDao.markDeadLettered(id, error)
     }
 
     companion object {

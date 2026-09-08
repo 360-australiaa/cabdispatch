@@ -144,6 +144,18 @@ interface TripDao {
         status: String = TripStatus.SYNCED,
     )
 
+    /**
+     * Repoints trips from a not-yet-synced shift's local placeholder id to the real server id
+     * (finding S3).
+     *
+     * Called by [au.com.threesixty.cabdispatch.sync.OutboxDrainer] the moment a queued shift-start
+     * drains, before the trips closed under that shift are sent. Until this runs, those trips carry
+     * an id the server has never issued — which is precisely the orphaned-`shift_id` data loss S3
+     * describes.
+     */
+    @Query("UPDATE trips SET shiftId = :serverShiftId WHERE shiftId = :localShiftId")
+    suspend fun rewriteShiftId(localShiftId: String, serverShiftId: String)
+
     @Query("SELECT COUNT(*) FROM trips WHERE status != :syncedStatus")
     fun observeUnsyncedCount(syncedStatus: String = TripStatus.SYNCED): Flow<Int>
 }

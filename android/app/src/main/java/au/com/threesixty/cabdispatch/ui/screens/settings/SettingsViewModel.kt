@@ -117,6 +117,14 @@ data class SettingsUiState(
     val factoryResetError: String? = null,
     val factoryResetInProgress: Boolean = false,
     val factoryResetComplete: Boolean = false,
+
+    /** True once the admin PIN has been verified for the GPS simulator this session — see
+     * [SettingsViewModel.attemptUnlockSimulator]. Deliberately NOT persisted: the unlock lasts
+     * for the life of this ViewModel, so a technician who walks away doesn't leave the simulator
+     * open on a tablet that goes back into service. */
+    val simulatorUnlocked: Boolean = false,
+    val simulatorPinError: String? = null,
+    val simulatorPinVerifying: Boolean = false,
     val offlineMapDownload: OfflineMapDownloadState = OfflineMapDownloadState.NotStarted,
     val locateResponse: LocateResponseState = LocateResponseState.Idle,
     val pairMeter: PairMeterState = PairMeterState.Idle,
@@ -456,6 +464,74 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun clearFactoryResetError() = _uiState.update { it.copy(factoryResetError = null) }
+
+    // --- Admin-PIN-gated GPS simulator ---
+    //
+    // The simulator can drive the meter from a scripted route: it feeds synthetic speed and
+    // position into the same SpeedSource the fare engine bills from. It shipped as an always-open
+    // panel on the Settings ▸ About tab, gated on nothing at all — the reasoning being that it was
+    // a debug-build affordance. That reasoning does not hold on this project: the field tablet runs
+    // a DEBUG build against the production server, so in practice every driver had a one-tap way to
+    // make the meter bill a trip that never happened. It is now behind the same server-verified
+    // admin PIN as the factory reset, which is the control the depot already uses for
+    // "technicians only".
+    //
+    // Deliberately a separate unlock from attemptFactoryReset rather than a shared flag: the two
+    // are different actions with different consequences, and a technician who unlocked the
+    // simulator must not thereby be halfway into a data wipe.
+    fun attemptUnlockSimulator(pin: String) {
+        val deviceId = SessionHolder.deviceId
+        if (deviceId == null) {
+            _uiState.update {
+                it.copy(
+                    simulatorPinError = "This device isn't registered yet — cannot verify the admin " +
+                        "PIN. Pair it via Fleet & Vehicles first.",
+                )
+            }
+            return
+        }
+        _uiState.update { it.copy(simulatorPinError = null, simulatorPinVerifying = true) }
+        viewModelScope.launch {
+            runCatching {
+                AppContainer.apiService.verifyAdminPin(deviceId, VerifyAdminPinRequestDto(pin = pin))
+            }.fold(
+                onSuccess = { response ->
+                    when {
+                        // Same explicit `configured` check attemptFactoryReset makes, for the same
+                        // reason (see VerifyAdminPinResponseDto's doc): an unconfigured tenant PIN
+                        // must block, never be read as "any PIN works".
+                        !response.configured -> _uiState.update {
+                            it.copy(
+                                simulatorPinVerifying = false,
+                                simulatorPinError = "No admin PIN has been set up for this tenant yet " +
+                                    "— an owner must set one (Fleet & Vehicles) first.",
+                            )
+                        }
+                        !response.valid -> _uiState.update {
+                            it.copy(simulatorPinVerifying = false, simulatorPinError = "Incorrect admin PIN")
+                        }
+                        else -> _uiState.update {
+                            it.copy(simulatorPinVerifying = false, simulatorUnlocked = true)
+                        }
+                    }
+                },
+                onFailure = {
+                    // Fail closed, exactly like the factory-reset gate: no offline fallback to a
+                    // local check, because there isn't one that means anything. A tablet that
+                    // cannot reach the server cannot unlock the simulator.
+                    _uiState.update {
+                        it.copy(
+                            simulatorPinVerifying = false,
+                            simulatorPinError = "Couldn't verify the admin PIN (offline or server " +
+                                "error) — try again once connected.",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun clearSimulatorPinError() = _uiState.update { it.copy(simulatorPinError = null) }
 
     // --- Offline maps (spec: meter must keep working with zero connectivity; the wheel
     // dashboard's map background is part of that — see MapboxOfflineRegion's class doc) ---
