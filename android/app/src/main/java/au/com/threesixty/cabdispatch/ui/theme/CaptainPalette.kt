@@ -98,6 +98,8 @@ object CaptainPalette {
     /** Accent used for the meter-dial ring/ticks and active nav-rail highlight — Figma's `#a855f7`
      * in dark mode; deepened for light mode. See [primary]'s doc — same on-colour-text rule applies. */
     var accent: Color by mutableStateOf(DarkTokens.accent); private set
+    /** Pressed shade of [accent] -- an explicit darker step, never alpha. See CaptainButton. */
+    var accentPressed: Color by mutableStateOf(DarkTokens.accentPressed); private set
 
     var success: Color by mutableStateOf(DarkTokens.success); private set
     var warning: Color by mutableStateOf(DarkTokens.warning); private set
@@ -250,6 +252,7 @@ object CaptainPalette {
         textMuted = t.textMuted
         primary = t.primary
         accent = t.accent
+        accentPressed = t.accentPressed
         success = t.success
         warning = t.warning
         danger = t.danger
@@ -294,6 +297,8 @@ object CaptainPalette {
         val textMuted: Color
         val primary: Color
         val accent: Color
+        /** The pressed shade of [accent] -- one explicit step darker, never alpha. See CaptainButton. */
+        val accentPressed: Color
         val success: Color
         val warning: Color
         val danger: Color
@@ -331,11 +336,18 @@ object CaptainPalette {
         // bg deepened a hair further into a blue-black "slate" (2026-09-07 futuristic-HUD pass) —
         // was a near-neutral 0xFF05070D, now carries a touch more blue so it reads as "deep dark
         // slate" per the brief rather than plain near-black.
-        override val bg = Color(0xFF080B14)
-        override val panel = Color(0xFF12131C)
-        override val panelBorder = Color(0xFF222433)
-        override val raised = Color(0xFF171B2A)
-        override val inset = Color(0xFF181C2B)
+        // North-star tokens (owner reference render, 2026-09-08): the three surfaces the whole
+        // app is built from, applied universally so every screen reads as one ecosystem.
+        //   canvas  #080710   the deep-midnight ground everything sits on
+        //   card    #161524   every panel / tile / sheet surface
+        //   border  #26243C   the hairline that separates a card from the canvas
+        // raised/inset are derived one step either side of the card so stacked surfaces still
+        // read as stacked without introducing a fourth hue.
+        override val bg = Color(0xFF080710)
+        override val panel = Color(0xFF161524)
+        override val panelBorder = Color(0xFF26243C)
+        override val raised = Color(0xFF1C1B2E)
+        override val inset = Color(0xFF12111E)
         override val textPrimary = Color(0xFFF5F7FB)
         // A few points bluer (2026-09-07): the brief's "muted icy blue" for secondary labels — was
         // a neutral grey-blue 0xFF8D93A6.
@@ -352,22 +364,28 @@ object CaptainPalette {
         // HUD kit's own accent all agree; was 0xFF7C2CFF / 0xFFA855F7 (a lighter violet pair).
         override val primary = Color(0xFF5B3FD6)
         override val accent = Color(0xFF6E3FF3)
+        override val accentPressed = Color(0xFF5530C9)
         // success retinted to the brief's neon cyan (2026-09-07) — "bright neon cyan for active
         // states"; was green (0xFF39E27A). Cascades to every "good/active/online" surface that
         // already read this token (GPS/Wi-Fi/Printer status dots, AVAILABLE/VERIFIED pills, Trips/
         // Earnings stat tiles) — see class doc.
-        override val success = Color(0xFF00E5FF)
+        // GREEN, per the north-star render (2026-09-08): AVAILABLE, the online/OK status dots and
+        // the "12% vs yesterday" delta are all unmistakably green there. Was neon cyan
+        // (0xFF00E5FF) from the 2026-09-07 HUD pass; cyan stays the HUD *sweep/hot* colour on the
+        // dial, where it is decoration, and stops meaning "healthy", where it must be read at a
+        // glance from a moving car. 0xFF22C55E measures ~7.3:1 on the card surface.
+        override val success = Color(0xFF22C55E)
         override val warning = Color(0xFFFFB51B)
         override val danger = Color(0xFFEF4444)
         override val dialNeutral = Color(0xFF34384C)
-        override val cardTop = Color(0xFF15182A)
-        override val cardBottom = Color(0xFF0D0E18)
+        override val cardTop = Color(0xFF1A1930)
+        override val cardBottom = Color(0xFF161524)
         override val glowPurpleSoft = Color(0x2AA855F7)
         override val glowPurpleStrong = Color(0x55A855F7)
-        override val glowSuccessSoft = Color(0x2400E5FF)
+        override val glowSuccessSoft = Color(0x2422C55E)
         override val glowWarningSoft = Color(0x24FFB51B)
         override val glowDangerSoft = Color(0x24EF4444)
-        override val hudBg = Color(0xFF0B0B10)
+        override val hudBg = Color(0xFF080710)
         override val hudAccent = Color(0xFF6E3FF3)
         override val hudSweepStart = Color(0xFF5B3FD6)
         override val hudSweepMid = Color(0xFF9E77FF)
@@ -419,6 +437,7 @@ object CaptainPalette {
         override val textMuted = Color(0xFF82869B)
         override val primary = Color(0xFF6A1FE0)
         override val accent = Color(0xFF7C3AED)
+        override val accentPressed = Color(0xFF6528D1)
         override val success = Color(0xFF0E7A3E)
         override val warning = Color(0xFF92600A)
         override val danger = Color(0xFFC81E1E)

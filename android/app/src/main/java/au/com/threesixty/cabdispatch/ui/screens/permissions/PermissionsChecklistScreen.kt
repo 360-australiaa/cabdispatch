@@ -215,7 +215,7 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background((if (allOk) CaptainPalette.success else CaptainPalette.warning).copy(alpha = 0.14f))
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = if (allOk) "${cards.size} of ${cards.size} granted" else "$grantedCount of ${cards.size} granted",
@@ -363,7 +363,7 @@ private fun PermCardView(card: PermCard, modifier: Modifier = Modifier, onClick:
             .then(if (actionable) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Icon(card.icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(28.dp))
         Column(modifier = Modifier.weight(1f)) {

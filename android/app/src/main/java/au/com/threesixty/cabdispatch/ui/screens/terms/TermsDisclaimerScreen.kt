@@ -95,7 +95,7 @@ fun TermsDisclaimerScreen(onAccept: () -> Unit) {
                     .clip(RoundedCornerShape(10.dp))
                     .background(CaptainPalette.raised)
                     .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 val chipText = session?.let { "Driver ${it.driverName} · Vehicle ${it.vehicleId}" }
                     ?: "v${BuildConfig.VERSION_NAME} · first run on this tablet"
@@ -128,7 +128,7 @@ fun TermsDisclaimerScreen(onAccept: () -> Unit) {
                     lineHeight = 26.sp,
                     color = CaptainPalette.textSecondary,
                 )
-                Spacer(Modifier.padding(top = 18.dp))
+                Spacer(Modifier.padding(top = 16.dp))
                 Text(
                     DISCLAIMER_PARA_2,
                     fontFamily = InterFamily,

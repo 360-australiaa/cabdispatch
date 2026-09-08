@@ -92,7 +92,7 @@ fun NavigateOverlay(target: NavigationTarget, onDismiss: () -> Unit, modifier: M
             .fillMaxWidth()
             .background(WheelColors.surfaceRaised, RoundedCornerShape(16.dp))
             .border(1.dp, WheelColors.borderStrong, RoundedCornerShape(16.dp))
-            .padding(18.dp),
+            .padding(16.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -113,10 +113,10 @@ fun NavigateOverlay(target: NavigationTarget, onDismiss: () -> Unit, modifier: M
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 14.dp)
+                .padding(top = 16.dp)
                 .background(WheelColors.gold, RoundedCornerShape(12.dp))
                 .clickable { openInMaps(context, target) }
-                .padding(vertical = 14.dp),
+                .padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.Center,
         ) {
             Text("OPEN IN MAPS", color = WheelColors.surfaceRaised, fontSize = 14.sp, fontWeight = FontWeight.Black)

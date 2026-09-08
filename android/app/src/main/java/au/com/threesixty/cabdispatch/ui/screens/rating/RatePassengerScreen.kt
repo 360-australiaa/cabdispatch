@@ -24,6 +24,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -106,9 +108,9 @@ private fun NotSyncedCard(message: String, onRetry: () -> Unit, onSkip: () -> Un
 private fun ReadyToRateCard(state: RatePassengerUiState.ReadyToRate, vm: RatePassengerViewModel, onSkip: () -> Unit) {
     GlassCard(modifier = Modifier.width(520.dp), glow = CaptainPalette.hudAccent) {
         Column(
-            modifier = Modifier.padding(36.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(22.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Text("Rate this passenger", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
             Text(
@@ -158,7 +160,7 @@ private fun AlreadyRatedCard(rating: TripRatingDto, onContinue: () -> Unit) {
         Column(
             modifier = Modifier.padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Already rated", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
             StarRow(stars = rating.stars, onStarClick = null)
@@ -176,7 +178,7 @@ private fun SubmittedCard(rating: TripRatingDto, onContinue: () -> Unit) {
         Column(
             modifier = Modifier.padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Thanks!", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.success)
             StarRow(stars = rating.stars, onStarClick = null)

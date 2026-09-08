@@ -154,7 +154,7 @@ private fun MyTripsBody(
     Column(modifier = modifier.fillMaxWidth()) {
         LazyColumn(
             modifier = Modifier.heightIn(max = 360.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (activeTrip != null) {
                 item(key = "active-${activeTrip.clientUuid}") {
@@ -166,7 +166,7 @@ private fun MyTripsBody(
             }
         }
         if (activeTrip != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
             CaptainButton(
                 text = "OPEN ACTIVE TRIP",
                 modifier = Modifier.fillMaxWidth(),
@@ -196,9 +196,9 @@ private fun MyTripRow(trip: TripEntity, active: Boolean, onClick: () -> Unit) {
         cornerRadiusDp = 16,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
                 trip.startAt.asLocalTime(),
@@ -261,16 +261,16 @@ private fun TripHistoryBody(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
                 TripPeriod.entries.forEach { p ->
                     HistoryFilterPill(label = p.label, selected = p == period, onClick = { onPeriodChange(p) })
                 }
             }
             PeriodDateReadout(period)
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         HistoryTable(trips = trips, onTripClick = onTripClick)
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         HistoryTotalsBar(
             period = period,
             tripCount = trips.size,
@@ -417,7 +417,7 @@ private fun TripHistoryRow(trip: TripEntity, zebra: Boolean, last: Boolean, onCl
                 .fillMaxWidth()
                 .then(if (zebra) Modifier.background(CaptainPalette.raised.copy(alpha = 0.45f)) else Modifier)
                 .gameClick(onClick = onClick, shape = RoundedCornerShape(0.dp), glowColor = CaptainPalette.hudAccent, pressScale = 0.985f)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -523,9 +523,9 @@ private fun HistoryTotalsBar(
 ) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("${period.label.uppercase()} · $tripCount TRIPS", style = HeaderLabelStyle)

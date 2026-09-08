@@ -323,8 +323,8 @@ private fun TopUpInfoDialog(onDismiss: () -> Unit) {
                 .clip(RoundedCornerShape(24.dp))
                 .background(CaptainPalette.panel)
                 .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-                .padding(26.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Add funds", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
             Text(
@@ -510,7 +510,7 @@ private fun IncentiveRow(item: IncentiveProgressDto) {
                 color = if (done) CaptainPalette.success else CaptainPalette.textPrimary,
             )
         }
-        Column(modifier = Modifier.padding(start = 14.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(modifier = Modifier.padding(start = 16.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 item.title,
                 fontFamily = InterFamily,
@@ -594,7 +594,7 @@ private fun <T> SectionBody(
         data != null -> content(data)
         section.loading -> Row(verticalAlignment = Alignment.CenterVertically) {
             PulsingDot(color = CaptainPalette.hudAccent, animated = true)
-            Text("Loading…", fontFamily = InterFamily, fontSize = 15.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(start = 10.dp))
+            Text("Loading…", fontFamily = InterFamily, fontSize = 15.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(start = 8.dp))
         }
         section.error != null -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

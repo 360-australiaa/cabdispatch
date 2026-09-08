@@ -350,7 +350,7 @@ fun HiredScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 10.dp)
+                        .padding(bottom = 8.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(CaptainPalette.danger)
                         .padding(horizontal = 24.dp, vertical = 8.dp),
@@ -371,7 +371,7 @@ fun HiredScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 10.dp)
+                        .padding(bottom = 8.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(CaptainPalette.warning)
                         .padding(horizontal = 24.dp, vertical = 8.dp),
@@ -389,7 +389,7 @@ fun HiredScreen(
                 }
             }
             AnimatedVisibility(visible = fareState.wheelchairHiring, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
-                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp), cornerRadiusDp = 12) {
+                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), cornerRadiusDp = 12) {
                     Text(
                         "♿  Wheelchair hiring — meter should start once the passenger is safely secured, per NSW Reg cl 82. Ordinary (non-maxi) rate applies.",
                         fontFamily = InterFamily,
@@ -435,7 +435,7 @@ fun HiredScreen(
                     .neonGlow(CaptainPalette.success, 99.dp, strength = 0.8f)
                     .clip(RoundedCornerShape(99.dp))
                     .background(CaptainPalette.success)
-                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
             ) {
                 Text(
                     "● METER STARTED",
@@ -458,7 +458,7 @@ fun HiredScreen(
                     .neonGlow(CaptainPalette.hudAccent, 99.dp, strength = 0.8f)
                     .clip(RoundedCornerShape(Radius.pill))
                     .background(CaptainPalette.hudAccent)
-                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
@@ -509,7 +509,7 @@ fun HiredScreen(
                         // ADD TOLL — tapping the confirmation opens the exact dialog that lists it
                         // (with Remove), so "I heard a beep I think is wrong" is one tap away.
                         .clickable { showTollMenu = true }
-                        .padding(horizontal = 44.dp, vertical = 22.dp),
+                        .padding(horizontal = 44.dp, vertical = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Row(
@@ -609,7 +609,7 @@ fun HiredScreen(
                     .background(CaptainPalette.panel)
                     .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
                     .padding(32.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text("Extras", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
                 Text(
@@ -678,7 +678,7 @@ fun HiredScreen(
         )
         when (val d = duressState) {
             is DuressUiState.Active -> DuressActiveBanner(
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 10.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp),
             )
             is DuressUiState.Triggered -> DuressTriggeredOverlay(
                 secondsRemaining = d.secondsRemaining,
@@ -805,7 +805,7 @@ internal fun RowScope.MeterPaneLayout(
                 modifier = Modifier.fillMaxSize().padding(6.dp),
             )
         }
-        ControlsHandle(onClick = onOpenControls, modifier = Modifier.align(Alignment.TopEnd).padding(14.dp))
+        ControlsHandle(onClick = onOpenControls, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp))
     }
 
     Spacer(Modifier.width(COL_GAP))
@@ -833,7 +833,7 @@ internal fun RowScope.MeterPaneLayout(
             dimAlpha = 0.30f,
             modifier = Modifier.fillMaxSize(),
         )
-        Column(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HudStatusPill(
                     label = "Trip",

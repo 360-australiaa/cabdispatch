@@ -89,7 +89,7 @@ internal fun LiveDispatchCard(
                 val badgePulse by rememberInfiniteFloat(enabled = true, from = 0.7f, to = 1f, durationMs = 1000)
                 Box(
                     modifier = Modifier
-                        .padding(start = 14.dp)
+                        .padding(start = 16.dp)
                         .size(36.dp)
                         .clip(CircleShape)
                         .background(Brush.radialGradient(listOf(CaptainPalette.danger, CaptainPalette.danger.copy(alpha = 0.75f))))
@@ -113,7 +113,7 @@ internal fun LiveDispatchCard(
                 Text("VIEW ALL", style = Type.label, color = CaptainPalette.textSecondary)
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         when {
             dispatchState.loading && dispatchState.cards.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("Loading offers…", style = Type.body, color = CaptainPalette.textSecondary)
@@ -144,7 +144,7 @@ internal fun LiveDispatchCard(
                     Text("No live offers right now", style = Type.body, color = CaptainPalette.textSecondary)
                 }
             }
-            else -> LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            else -> LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 items(dispatchState.cards, key = { it.offer.id }) { card ->
                     DispatchOfferRow(
                         card = card,

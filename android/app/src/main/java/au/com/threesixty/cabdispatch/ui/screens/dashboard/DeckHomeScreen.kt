@@ -371,7 +371,7 @@ fun DeckHomeScreen(
                     // An overlay covering something is expected here (see FleetCommandOverlays'
                     // Placement doc); covering the text that says why the meter is refusing to
                     // work is not.
-                    .padding(start = 180.dp, end = 32.dp, top = 10.dp, bottom = 10.dp),
+                    .padding(start = 180.dp, end = 32.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.danger, modifier = Modifier.size(18.dp))
@@ -381,7 +381,7 @@ fun DeckHomeScreen(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
                     color = CaptainPalette.danger,
-                    modifier = Modifier.padding(start = 10.dp),
+                    modifier = Modifier.padding(start = 8.dp),
                 )
             }
         }

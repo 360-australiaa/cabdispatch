@@ -91,7 +91,7 @@ fun OfflineSyncScreen(
                         .border(1.dp, CaptainPalette.warning.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                         .padding(horizontal = 20.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(26.dp))
                     Text(
@@ -150,9 +150,9 @@ fun OfflineSyncScreen(
                     ),
                 ),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 cards.forEach { rowCards ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         rowCards.forEach { card -> SyncStatusCard(card, modifier = Modifier.weight(1f)) }
                     }
                 }
@@ -199,7 +199,7 @@ private fun FailedSyncSection(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(
                 Icons.Rounded.WarningAmber,
                 contentDescription = null,

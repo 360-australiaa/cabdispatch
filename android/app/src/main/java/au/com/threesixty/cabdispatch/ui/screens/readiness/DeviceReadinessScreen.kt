@@ -140,7 +140,7 @@ fun DeviceReadinessScreen(
                 fontSize = 40.sp,
                 color = CaptainPalette.textPrimary,
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
             Text(
                 if (state.commissioning) {
                     "Work down the list before handing this tablet to a driver. Everything with a " +
@@ -162,7 +162,7 @@ fun DeviceReadinessScreen(
                     .clip(RoundedCornerShape(10.dp))
                     .background(CaptainPalette.raised)
                     .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Text(
                     "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
@@ -243,13 +243,13 @@ fun DeviceReadinessScreen(
                     .clip(RoundedCornerShape(20.dp))
                     .background(CaptainPalette.panel)
                     .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 26.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 state.results.forEach { ReadinessRow(it) }
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
 
             val blockingChecks = state.blocking.map { it.check }
             when {
@@ -268,7 +268,7 @@ fun DeviceReadinessScreen(
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
 
             // Advisory fix, always offered: the map row is the one advisory check with an action a
             // driver can usefully take while they are standing here anyway.
@@ -281,7 +281,7 @@ fun DeviceReadinessScreen(
                         (context as? Activity)?.let { activity -> grantPermission(activity, permission) }
                     },
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             if (DeviceReadiness.ReadinessCheck.Kiosk in outstanding) {
@@ -306,7 +306,7 @@ fun DeviceReadinessScreen(
                         color = CaptainPalette.textSecondary,
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             if (DeviceReadiness.ReadinessCheck.BatteryOptimisation in outstanding) {
@@ -329,7 +329,7 @@ fun DeviceReadinessScreen(
                         color = CaptainPalette.textSecondary,
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             if (DeviceReadiness.ReadinessCheck.VehicleClass in outstanding) {
@@ -361,7 +361,7 @@ fun DeviceReadinessScreen(
                         color = CaptainPalette.textSecondary,
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             if (DeviceReadiness.ReadinessCheck.Location in outstanding) {
@@ -384,7 +384,7 @@ fun DeviceReadinessScreen(
                         color = CaptainPalette.textSecondary,
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             if (DeviceReadiness.ReadinessCheck.OfflineMaps in outstanding) {
@@ -425,8 +425,8 @@ private fun PermissionsPanel(
             .clip(RoundedCornerShape(18.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-            .padding(horizontal = 22.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         missing.forEach { permission ->
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -440,7 +440,7 @@ private fun PermissionsPanel(
                             color = CaptainPalette.textPrimary,
                         )
                         if (permission.critical) {
-                            Spacer(Modifier.width(10.dp))
+                            Spacer(Modifier.width(8.dp))
                             Text(
                                 "meter cannot work without this",
                                 fontFamily = InterFamily,
@@ -528,7 +528,7 @@ private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
             tint = tone,
             modifier = Modifier.size(22.dp),
         )
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(16.dp))
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -541,7 +541,7 @@ private fun ReadinessRow(result: DeviceReadiness.ReadinessResult) {
                 // Says out loud which rows can actually stop you, so a driver is not left guessing
                 // whether an amber line is the thing keeping them out.
                 if (!result.passed && result.severity == DeviceReadiness.Severity.ADVISORY) {
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         "does not block",
                         fontFamily = InterFamily,
@@ -611,7 +611,7 @@ private fun PairPanel(
             .clip(RoundedCornerShape(20.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-            .padding(horizontal = 26.dp, vertical = 16.dp),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
     ) {
         Text(
             "Pairing code",
@@ -714,7 +714,7 @@ private fun UpdatePanel(updateState: AppUpdateState, onAction: () -> Unit) {
             .clip(RoundedCornerShape(20.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-            .padding(horizontal = 28.dp, vertical = 22.dp),
+            .padding(horizontal = 28.dp, vertical = 24.dp),
     ) {
         val (message, action) = when (updateState) {
             is AppUpdateState.Available ->

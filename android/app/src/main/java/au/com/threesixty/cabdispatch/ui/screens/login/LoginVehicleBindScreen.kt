@@ -43,6 +43,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -160,7 +162,12 @@ private enum class LoginField { DRIVER_ID, PIN }
 private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
     var focusedField by remember { mutableStateOf(LoginField.DRIVER_ID) }
 
-    Row(modifier = Modifier.fillMaxSize().padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
+    // verticalScroll (keyboard pass, 2026-09-08): the window no longer resizes for the keyboard
+    // (adjustNothing, see AndroidManifest) -- the canvas content is padded instead. A fixed
+    // 110dp top inset plus a 60dp bottom one is taller than what remains with the keyboard up,
+    // so without a scroller the field being typed into could sit under the keys. Scrolling is
+    // the honest answer: nothing rescales, the driver can always reach the field.
+    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
         // Left — brand row, fields, hint, error, Cancel.
         Column(modifier = Modifier.width(420.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -205,7 +212,7 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
                 modifier = Modifier.width(420.dp),
             )
             state.loginError?.let {
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(16.dp))
                 Text(it, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.danger)
             }
             Spacer(Modifier.weight(1f))
@@ -248,9 +255,9 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
 @Composable
 private fun AlphaNumPad(onKey: (Char) -> Unit, onBackspace: () -> Unit, onClear: () -> Unit) {
     val rows = listOf("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ0123", "456789")
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         rows.forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { c ->
                     Box(
                         modifier = Modifier
@@ -267,7 +274,7 @@ private fun AlphaNumPad(onKey: (Char) -> Unit, onBackspace: () -> Unit, onClear:
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 modifier = Modifier
                     .width(219.dp)
@@ -300,7 +307,12 @@ private fun AlphaNumPad(onKey: (Char) -> Unit, onBackspace: () -> Unit, onClear:
 
 @Composable
 private fun MfaStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
-    Row(modifier = Modifier.fillMaxSize().padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
+    // verticalScroll (keyboard pass, 2026-09-08): the window no longer resizes for the keyboard
+    // (adjustNothing, see AndroidManifest) -- the canvas content is padded instead. A fixed
+    // 110dp top inset plus a 60dp bottom one is taller than what remains with the keyboard up,
+    // so without a scroller the field being typed into could sit under the keys. Scrolling is
+    // the honest answer: nothing rescales, the driver can always reach the field.
+    Row(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 96.dp, end = 96.dp, top = 110.dp, bottom = 60.dp)) {
         Column(modifier = Modifier.width(460.dp)) {
             Text("Two-factor check", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.height(24.dp))
@@ -551,7 +563,7 @@ private fun InspectionStep(
         )
         Spacer(Modifier.height(28.dp))
         PRE_SHIFT_CHECKLIST_ITEMS.chunked(3).forEach { rowItems ->
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 rowItems.forEach { (key, title) ->
                     val checked = state.checklist[key] == true
                     val (icon, sub) = CHECK_META[key] ?: (Icons.Rounded.Warning to "")
@@ -564,7 +576,7 @@ private fun InspectionStep(
                     ) { viewModel.toggleChecklistItem(key) }
                 }
             }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
         }
         state.shiftError?.let {
             Text(it, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = CaptainPalette.danger)
@@ -614,8 +626,8 @@ private fun ReportDefectDialog(visible: Boolean, onDismiss: () -> Unit) {
 
     CaptainDialogScrim(visible = visible, onDismissRequest = { reset(); onDismiss() }) {
         CaptainPanel(modifier = Modifier.width(480.dp), cornerRadiusDp = 20, raised = true) {
-            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
                     Text("Report a defect", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
                 }
@@ -698,8 +710,8 @@ private fun ReportDefectDialog(visible: Boolean, onDismiss: () -> Unit) {
 private fun DeviceMismatchWarningDialog(message: String?, onDismiss: () -> Unit) {
     CaptainDialogScrim(visible = message != null, onDismissRequest = onDismiss) {
         CaptainPanel(modifier = Modifier.width(480.dp), cornerRadiusDp = 20, raised = true) {
-            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
                     Text("Check tablet placement", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
                 }
@@ -732,8 +744,8 @@ private fun DeviceMismatchWarningDialog(message: String?, onDismiss: () -> Unit)
 private fun UnpairedDeviceNoticeDialog(visible: Boolean, onDismiss: () -> Unit) {
     CaptainDialogScrim(visible = visible, onDismissRequest = onDismiss) {
         CaptainPanel(modifier = Modifier.width(520.dp), cornerRadiusDp = 20, raised = true) {
-            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
                     Text("Tablet not registered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
                 }
@@ -776,7 +788,7 @@ private fun CheckCard(
             .background(CaptainPalette.panel)
             .border(1.5.dp, if (checked) CaptainPalette.success.copy(alpha = 0.45f) else CaptainPalette.panelBorder, shape)
             .clickable(onClick = onToggle)
-            .padding(start = 18.dp, end = 14.dp),
+            .padding(start = 16.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {

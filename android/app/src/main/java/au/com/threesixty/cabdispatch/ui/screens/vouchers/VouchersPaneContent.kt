@@ -117,7 +117,7 @@ fun VouchersPaneContent(modifier: Modifier = Modifier) {
                         VoucherTab.USED -> buckets.used
                         VoucherTab.EXPIRED -> buckets.expired
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         VoucherTabPill("Available", buckets.available.size, tab == VoucherTab.AVAILABLE) { tab = VoucherTab.AVAILABLE }
                         VoucherTabPill("Used", buckets.used.size, tab == VoucherTab.USED) { tab = VoucherTab.USED }
                         VoucherTabPill("Expired", buckets.expired.size, tab == VoucherTab.EXPIRED) { tab = VoucherTab.EXPIRED }
@@ -202,12 +202,12 @@ private fun VoucherCard(voucher: VoucherDto, tab: VoucherTab) {
         VoucherTab.EXPIRED -> (voucher.expiresAt?.let { "Expired ${formatVoucherDate(it)}" } ?: "Expired") to HudTone.Danger
     }
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
-        Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.padding(20.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(voucher.code, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
                 RollingMoneyText(amount = formatAud(voucher.valueAud), fontSize = 24.sp, color = CaptainPalette.hudAccent)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 HudStatusPill(label = tab.name.take(1) + tab.name.drop(1).lowercase(), value = statusLabel, tone = tone, pulsing = false)
                 // Real field, shown only when present — the backend never fabricates a trip link for a
                 // voucher that wasn't actually redeemed against one.
@@ -238,7 +238,7 @@ private fun CheckVoucherPanel(lookup: (String) -> VoucherDto?, listLoaded: Boole
     var notFound by remember { mutableStateOf(false) }
 
     GlassCard(modifier = modifier, cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
-        Column(modifier = Modifier.padding(20.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(modifier = Modifier.padding(20.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(
                 "CHECK A VOUCHER",
                 fontFamily = InterFamily,
@@ -297,7 +297,7 @@ private fun CheckedVoucherResult(voucher: VoucherDto) {
             .clip(RoundedCornerShape(14.dp))
             .background(CaptainPalette.hudTrack)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(voucher.code, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)

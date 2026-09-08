@@ -100,7 +100,7 @@ internal fun SetPriceInfoDialog(negotiatedTotal: String?, onDismiss: () -> Unit)
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
             .padding(32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Set Price", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
         Text(
@@ -226,7 +226,7 @@ private fun AutoTollRow(entry: AutoTollEntry, onRemove: () -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(CaptainPalette.raised)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -248,7 +248,7 @@ private fun UnpricedTollRow(road: UnpricedTollRoad, onAdd: () -> Unit, onDismiss
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(CaptainPalette.raised)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -295,11 +295,11 @@ internal fun MoreActionsSheet(
         Text("More", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
 
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onNavigate).padding(vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onNavigate).padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Rounded.Navigation, contentDescription = if (hasDestination) "Change destination" else "Set destination", tint = CaptainPalette.hudAccent, modifier = Modifier.size(24.dp))
-            Column(modifier = Modifier.padding(start = 14.dp)) {
+            Column(modifier = Modifier.padding(start = 16.dp)) {
                 Text(
                     if (hasDestination) "Change destination" else "Set destination",
                     fontFamily = InterFamily,
@@ -318,21 +318,21 @@ internal fun MoreActionsSheet(
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onExtras).padding(vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onExtras).padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Rounded.Receipt, contentDescription = "Extras", tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
-            Column(modifier = Modifier.padding(start = 14.dp)) {
+            Column(modifier = Modifier.padding(start = 16.dp)) {
                 Text("Extras", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
                 Text("No chargeable extras configured yet", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onEditPassengers).padding(vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onEditPassengers).padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Rounded.Person, contentDescription = "Passenger count", tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
-            Column(modifier = Modifier.padding(start = 14.dp)) {
+            Column(modifier = Modifier.padding(start = 16.dp)) {
                 Text("Passenger count", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
                 Text("$passengerCount — tap to correct", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
             }
@@ -365,7 +365,7 @@ internal fun PassengerEditDialog(initialCount: Int, onDismiss: () -> Unit, onCon
             .clip(RoundedCornerShape(24.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(30.dp),
+            .padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -406,7 +406,7 @@ internal fun PassengerEditDialog(initialCount: Int, onDismiss: () -> Unit, onCon
                 Text("+", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
             CaptainButton(text = "Update", modifier = Modifier.weight(1.4f)) { onConfirm(count) }
         }
@@ -425,12 +425,12 @@ internal fun CustomTollDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> 
             .clip(RoundedCornerShape(24.dp))
             .background(CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-            .padding(22.dp),
-        horizontalArrangement = Arrangement.spacedBy(22.dp),
+            .padding(24.dp),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         Column(
             modifier = Modifier.width(300.dp).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Add toll", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
             Box(

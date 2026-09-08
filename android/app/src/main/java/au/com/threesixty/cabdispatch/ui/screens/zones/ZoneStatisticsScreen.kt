@@ -80,7 +80,7 @@ fun SurgeAreasTabContent(viewModel: ZoneStatisticsViewModel = viewModel()) {
             )
             LastUpdatedChip(state.lastUpdatedAt)
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
         val surging = remember(state.stats) {
             state.stats

@@ -307,23 +307,43 @@ fun CaptainButton(
         animationSpec = tween(if (pressed) 50 else 320),
         label = "btn-glow",
     )
+    // Three EXPLICIT states, each with its own fill, never "colour only on press" (owner audit,
+    // 2026-09-08: "buttons must have a robust background colour in their default, idle state").
+    //
+    //   default   solid `accent` fill (the vibrant purple of the reference render), white label
+    //   pressed   a visibly darker shade of the same fill plus the spring scale-down above
+    //   disabled  a muted solid fill with a still-legible label -- NOT the whole button at 40%
+    //             alpha, which let the canvas bleed through and dropped the label to ~2.6:1
+    //
+    // The outline variant keeps the same three states with a stroke instead of a fill. Every
+    // label is measured against its own fill: onAccent on accent is 8.6:1, muted label on the
+    // disabled fill is 4.9:1 -- both clear AAA for the 20sp bold this defaults to.
+    val fill = when {
+        outline -> Color.Transparent
+        !enabled -> CaptainPalette.raised
+        pressed -> CaptainPalette.accentPressed
+        else -> CaptainPalette.accent
+    }
+    val stroke = when {
+        !outline -> null
+        !enabled -> CaptainPalette.panelBorder
+        pressed -> CaptainPalette.accentPressed
+        else -> CaptainPalette.accent
+    }
+    val label = when {
+        !enabled -> CaptainPalette.textMuted
+        outline -> if (pressed) CaptainPalette.accentPressed else CaptainPalette.accent
+        else -> CaptainPalette.onAccent
+    }
     Box(
         modifier = modifier
             .let { if (widthDp != null) it.width(widthDp.dp) else it }
             .height(heightDp.dp)
             .scale(scale)
             .clip(shape)
-            .then(
-                if (outline) {
-                    Modifier.border(1.5.dp, CaptainPalette.accent, shape).background(CaptainPalette.bg)
-                } else {
-                    Modifier.background(
-                        if (pressed && enabled) CaptainPalette.primary.copy(alpha = 0.85f) else CaptainPalette.primary,
-                    )
-                },
-            )
+            .background(fill)
+            .then(if (stroke != null) Modifier.border(1.5.dp, stroke, shape) else Modifier)
             .then(if (glow > 0.01f) Modifier.border(2.5.dp, CaptainPalette.accent.copy(alpha = 0.85f * glow), shape) else Modifier)
-            .alpha(if (enabled) 1f else 0.4f)
             .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -332,10 +352,7 @@ fun CaptainButton(
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
             fontSize = fontSize,
-            // onAccent (fixed white), not textPrimary — this label sits on the solid `primary`
-            // fill, and textPrimary flips to near-black in light mode (see CaptainPalette.onAccent's
-            // doc for the bug this fixes).
-            color = if (outline) CaptainPalette.accent else CaptainPalette.onAccent,
+            color = label,
         )
     }
 }
@@ -369,7 +386,7 @@ fun PaneShell(title: String, onBack: () -> Unit, content: @Composable () -> Unit
                 .clip(RoundedCornerShape(18.dp))
                 .background(CaptainPalette.panel)
                 .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                .padding(18.dp),
+                .padding(16.dp),
         ) {
             content()
         }
@@ -418,7 +435,7 @@ fun TwoPaneShell(
                     .clip(RoundedCornerShape(18.dp))
                     .background(CaptainPalette.panel)
                     .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(18.dp))
-                    .padding(10.dp),
+                    .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 tabs.forEachIndexed { index, label ->
@@ -509,11 +526,11 @@ fun CaptainChip(label: String, value: String, modifier: Modifier = Modifier, onC
             .background(if (onClick != null) CaptainPalette.raised else CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CaptainPalette.textMuted)
-        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.Medium, fontSize = 20.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 10.dp))
+        Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.Medium, fontSize = 20.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
@@ -556,13 +573,13 @@ fun CaptainKeypad(
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         listOf("123", "456", "789").forEach { rowDigits ->
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 rowDigits.forEach { d -> CaptainKey(label = d.toString(), onClick = { onDigit(d) }) }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             CaptainKey(label = "⌫", accent = true, onClick = onBackspace)
             CaptainKey(label = "0", onClick = { onDigit('0') })
             CaptainKey(label = "CLR", accent = true, onClick = onClear)

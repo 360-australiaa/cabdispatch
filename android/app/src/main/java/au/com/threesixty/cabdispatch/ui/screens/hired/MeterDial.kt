@@ -428,7 +428,7 @@ internal fun MeterDial(
                     }
                     // The dial OWNS these three live readouts (dedupe pass) — they appear nowhere
                     // else on the screen. WAITING goes amber while actually accruing.
-                    Row(modifier = Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         // DISTANCE dims while the fix is stale, because it is the one readout that
                         // has genuinely stopped moving. Dimming it says "this number is holding on
                         // purpose" in the same glance that the pill above says why.
@@ -452,7 +452,7 @@ internal fun MeterDial(
                     // already makes — one real toggle, now reachable from two places rather than a
                     // second, competing pause state.
                     Row(
-                        modifier = Modifier.padding(top = 10.dp),
+                        modifier = Modifier.padding(top = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         // 44dp -> 56dp (A4, 2026-09-08). The audit (§6) listed both of these under

@@ -142,7 +142,7 @@ internal fun MapDestinationSearchBar(
             .background(CaptainPalette.panel.copy(alpha = 0.92f))
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Rounded.Search, contentDescription = "Search for a destination", tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))
@@ -154,7 +154,7 @@ internal fun MapDestinationSearchBar(
             color = if (destinationLabel == null) CaptainPalette.textMuted else CaptainPalette.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 10.dp).weight(1f),
+            modifier = Modifier.padding(start = 8.dp).weight(1f),
         )
         if (onClear != null) {
             // 15dp -> a 48dp target (A4, 2026-09-08). This was the single smallest hit area in the
@@ -229,7 +229,7 @@ internal fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modif
     val icon = maneuverIcon(currentStep?.maneuverType, currentStep?.modifier) ?: Icons.Rounded.Straight
     GlassCard(modifier = modifier.fillMaxWidth(), cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -246,7 +246,7 @@ internal fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modif
                 color = CaptainPalette.textPrimary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 14.dp).weight(1f),
+                modifier = Modifier.padding(start = 16.dp).weight(1f),
             )
             Text(
                 formatDistanceM(navState.distanceToNextManeuverM),
@@ -254,7 +254,7 @@ internal fun NavTurnBanner(navState: MeterNavUiState, modifier: Modifier = Modif
                 fontWeight = FontWeight.Bold,
                 fontSize = 19.sp,
                 color = CaptainPalette.hudAccent,
-                modifier = Modifier.padding(start = 10.dp),
+                modifier = Modifier.padding(start = 8.dp),
             )
         }
     }
@@ -409,7 +409,7 @@ internal fun NavBottomBar(
                     )
                 }
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             CaptainButton(
                 text = "NAVIGATE",
                 heightDp = 42,
@@ -507,7 +507,7 @@ internal fun DestinationSearchDialog(
                     color = if (nav.query.isEmpty()) CaptainPalette.textMuted else CaptainPalette.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 10.dp).weight(1f),
+                    modifier = Modifier.padding(start = 8.dp).weight(1f),
                 )
                 if (nav.searching) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), color = CaptainPalette.hudAccent, strokeWidth = 2.dp)
@@ -595,7 +595,7 @@ private fun AddressKey(
 
 @Composable
 private fun SearchHintLine(text: String, color: Color = CaptainPalette.textSecondary) {
-    Text(text, fontFamily = InterFamily, fontSize = 13.sp, color = color, modifier = Modifier.padding(vertical = 10.dp))
+    Text(text, fontFamily = InterFamily, fontSize = 13.sp, color = color, modifier = Modifier.padding(vertical = 8.dp))
 }
 
 @Composable
@@ -605,7 +605,7 @@ private fun SuggestionRow(result: GeocodeResult, onClick: () -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 4.dp),
+            .padding(vertical = 8.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,

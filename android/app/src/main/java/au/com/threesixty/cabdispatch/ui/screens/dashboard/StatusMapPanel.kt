@@ -192,7 +192,7 @@ private fun MapHiddenPlaceholder() {
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp,
                 color = CaptainPalette.textMuted,
-                modifier = Modifier.padding(top = 10.dp),
+                modifier = Modifier.padding(top = 8.dp),
             )
             Text(
                 "Turn on \"Show Map in Background\" in Settings -> Display to bring it back.",

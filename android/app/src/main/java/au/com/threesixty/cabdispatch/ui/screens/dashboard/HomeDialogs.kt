@@ -71,7 +71,7 @@ internal fun VoucherInfoDialog(onDismiss: () -> Unit) {
                 .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
                 .clickable(enabled = false) {}
                 .padding(28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Vouchers", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = CaptainPalette.textPrimary)
             // Updated for Phase G (`squishy-herding-iverson.md`): a real voucher-ledger browse
@@ -118,7 +118,7 @@ internal fun DriverIdCard(
                 .clickable(enabled = false) {}
                 .padding(36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("DRIVER ID", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, letterSpacing = 4.sp, color = CaptainPalette.textMuted)
             DriverAvatar(driverId = session?.driverId, driverName = session?.driverName, onClick = onDismiss, sizeDp = 300)
@@ -138,12 +138,12 @@ internal fun DriverIdCard(
             if (verified == true) {
                 Box(
                     modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(CaptainPalette.primary)
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
                 ) {
                     Text("VERIFIED DRIVER", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.onAccent)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(top = 6.dp)) {
                 CaptainButton(text = "Close", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
                 CaptainButton(text = "View profile", modifier = Modifier.weight(1.3f), onClick = onOpenProfile)
             }
@@ -202,7 +202,7 @@ internal fun SetPriceDialogV2(onDismiss: () -> Unit, onConfirm: (String) -> Unit
                 onBackspace = { amount = amount.dropLast(1) },
                 onClear = { amount = "" },
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
                 CaptainButton(
                     text = "Start at fixed price",
@@ -272,7 +272,7 @@ internal fun TripDetailsDialog(
             )
 
             // --- Passenger count stepper (big, elderly-friendly touch targets) ---
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("PASSENGERS", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     StepperButton(label = "−", enabled = passengerCount > 1, onClick = { passengerCount = (passengerCount - 1).coerceIn(1, 11) })
@@ -313,7 +313,7 @@ internal fun TripDetailsDialog(
                 onCheckedChange = { airportRankRequestedMaxi = it },
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
                 CaptainButton(
                     text = "▶  Start meter",

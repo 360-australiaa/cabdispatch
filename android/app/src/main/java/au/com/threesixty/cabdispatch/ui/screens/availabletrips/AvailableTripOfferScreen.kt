@@ -217,7 +217,7 @@ fun AvailableTripOfferScreen(
 
                 val error = state.error
                 if (error != null) {
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(16.dp))
                     Text(error, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger)
                 }
 
@@ -303,8 +303,8 @@ private fun AddressCard(
             .clip(RoundedCornerShape(20.dp))
             .background(CaptainPalette.panel)
             .border(2.dp, borderColor, RoundedCornerShape(20.dp))
-            .padding(horizontal = 26.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 24.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(icon, contentDescription = null, tint = labelColor, modifier = Modifier.size(18.dp))
@@ -388,6 +388,6 @@ private fun OutlineOfferButton(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = tint, modifier = Modifier.padding(start = 10.dp))
+        Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = tint, modifier = Modifier.padding(start = 8.dp))
     }
 }

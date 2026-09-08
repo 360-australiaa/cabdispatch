@@ -169,7 +169,7 @@ fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -280,7 +280,7 @@ private fun UpdateActionChip(label: String, onClick: () -> Unit) {
             .clip(RoundedCornerShape(Deck.R_SM.dp))
             .background(Deck.yellow)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Text(
             text = label,
@@ -311,7 +311,7 @@ fun KioskLockedBanner(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .clip(RoundedCornerShape(Deck.R_SM.dp))
                 .background(Deck.panel.copy(alpha = 0.9f))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -363,7 +363,7 @@ fun DeviceUnpairedBanner(modifier: Modifier = Modifier) {
                 .clip(RoundedCornerShape(Deck.R_SM.dp))
                 .background(Deck.panel.copy(alpha = 0.9f))
                 .border(1.dp, Deck.stopped.copy(alpha = 0.6f), RoundedCornerShape(Deck.R_SM.dp))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

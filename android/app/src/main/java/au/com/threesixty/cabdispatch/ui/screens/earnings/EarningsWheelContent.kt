@@ -168,7 +168,7 @@ private val EyebrowStyle = TextStyle(
 
 @Composable
 private fun PeriodTabs(selected: TripPeriod, onSelect: (TripPeriod) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         // The mockup's pills are Today / This Week / This Month / Custom; ALL is this app's real
         // "no lower bound" query and stays reachable rather than being hidden behind a fake.
         TripPeriod.entries.forEach { p ->
@@ -289,9 +289,9 @@ private fun TotalEarningsCard(state: EarningsWheelUiState, modifier: Modifier = 
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
             // Fares/Tolls are already on TripEntity, Tips are real (`TripEntity.tip`), "Other" is
             // `extras` + `cleaningFee`. Rows sum exactly to totalEarnings — see
@@ -381,7 +381,7 @@ private fun EarningsTrendCard(trend: List<DailyEarnings>, modifier: Modifier = M
                 )
                 return@Column
             }
-            EarningsTrendChart(trend = trend, modifier = Modifier.padding(top = 18.dp))
+            EarningsTrendChart(trend = trend, modifier = Modifier.padding(top = 16.dp))
             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 val dayFormatter = DateTimeFormatter.ofPattern("EEE")
                 trend.forEach { d ->
@@ -516,7 +516,7 @@ private fun SummaryCard(state: EarningsWheelUiState, modifier: Modifier = Modifi
     GlassCard(modifier = modifier, cornerRadiusDp = 20) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("SUMMARY", style = EyebrowStyle, modifier = Modifier.padding(bottom = 4.dp))
             HudStatTile(

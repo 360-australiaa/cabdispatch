@@ -108,7 +108,7 @@ fun ShiftWheelContent(
                 color = CaptainPalette.textSecondary,
                 fontFamily = InterFamily,
                 fontSize = 16.sp,
-                modifier = Modifier.padding(start = 10.dp),
+                modifier = Modifier.padding(start = 8.dp),
             )
         }
         else -> ShiftWheelBody(state, viewModel, modifier)
@@ -135,7 +135,7 @@ private fun ShiftWheelBody(state: ShiftReportUiState, vm: ShiftReportViewModel, 
         )
 
         if (state.submitError != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp)) {
                 Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = CaptainPalette.danger, modifier = Modifier.size(18.dp))
                 Text(
                     state.submitError,
@@ -163,7 +163,7 @@ private fun ShiftWheelBody(state: ShiftReportUiState, vm: ShiftReportViewModel, 
 private fun ShiftStatGrid(items: List<Pair<String, String>>) {
     CaptainPanel(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 16) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 18.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             items.forEach { (value, label) -> ShiftStatBox(value, label) }
@@ -219,7 +219,7 @@ private fun EndShiftButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.Bold,
             fontSize = 18.sp,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(start = 10.dp),
+            modifier = Modifier.padding(start = 8.dp),
         )
     }
 }

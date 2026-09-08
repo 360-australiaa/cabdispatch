@@ -163,7 +163,7 @@ fun AvailableTripsWheelContent(
             else -> LazyColumn(
                 // Bounded on purpose: WheelDashboardScreen hosts this inside a verticalScroll.
                 modifier = Modifier.heightIn(max = 600.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(state.cards, key = { it.offer.id }) { card ->
                     JobOfferCard(
@@ -213,7 +213,7 @@ private fun EmptyOfferState() {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 24.dp),
         ) {
             Box(
                 modifier = Modifier
@@ -225,7 +225,7 @@ private fun EmptyOfferState() {
             ) {
                 Icon(Icons.Rounded.Inbox, contentDescription = null, tint = CaptainPalette.hudSweepMid, modifier = Modifier.size(18.dp))
             }
-            Column(modifier = Modifier.padding(start = 14.dp)) {
+            Column(modifier = Modifier.padding(start = 16.dp)) {
                 Text(
                     "No live offers right now",
                     color = CaptainPalette.textPrimary,
@@ -311,7 +311,7 @@ private fun JobOfferCard(
             // --- header: FARE PREVIEW · #ref · requested · countdown ring ------------------------
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("FARE PREVIEW", style = EyebrowStyle)
                         Text(
                             "#${card.job.id.takeLast(4)}",
@@ -325,7 +325,7 @@ private fun JobOfferCard(
                         label = "Requested",
                         value = formatOfferRelativeTime(card.offer.offeredAt),
                         tone = HudTone.Neutral,
-                        modifier = Modifier.padding(top = 10.dp),
+                        modifier = Modifier.padding(top = 8.dp),
                     )
                 }
                 OfferCountdownRing(secondsLeft = secondsLeft, remainingFraction = remainingFraction, urgency = urgency)
@@ -339,7 +339,7 @@ private fun JobOfferCard(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 FareEstimateColumn(job = card.job, modifier = Modifier.weight(1f).fillMaxHeight())
-                Column(modifier = Modifier.weight(1.15f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.weight(1.15f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (card.job.originLat != 0.0 || card.job.originLng != 0.0) {
                         OfferMapPreview(
                             lat = card.job.originLat,
@@ -347,7 +347,7 @@ private fun JobOfferCard(
                             modifier = Modifier.fillMaxWidth().height(132.dp),
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AddressCard(
                             icon = Icons.Rounded.Place,
                             label = "Pickup",
@@ -409,7 +409,7 @@ private fun FareEstimateColumn(job: JobDto, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(12.dp))
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Server-computed at job creation (straight-line + flat-speed heuristic per the
             // backend's own doc) — labelled "est." for that reason; `null` on older jobs => no row.
@@ -583,7 +583,7 @@ private fun MapPreviewNote(text: String) {
 @Composable
 private fun AddressCard(icon: ImageVector, label: String, address: String, tint: Color, modifier: Modifier = Modifier) {
     GlassCard(modifier = modifier, cornerRadiusDp = 14) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
                 Text(label.uppercase(), style = EyebrowStyle)
@@ -612,7 +612,7 @@ private fun SmallOutlineButton(label: String, enabled: Boolean, onClick: () -> U
             .clip(shape)
             .border(1.5.dp, CaptainPalette.hudGlassBorderPurple, shape)
             .gameClick(onClick = onClick, shape = shape, glowColor = CaptainPalette.danger, enabled = enabled)
-            .padding(horizontal = 22.dp),
+            .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Rounded.Close, contentDescription = null, tint = CaptainPalette.textSecondary.copy(alpha = alpha), modifier = Modifier.size(18.dp))
@@ -659,7 +659,7 @@ private fun AcceptJobButton(
                 },
             )
             .gameClick(onClick = onClick, shape = shape, glowColor = CaptainPalette.success, enabled = enabled)
-            .padding(horizontal = 22.dp),
+            .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {

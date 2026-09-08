@@ -43,6 +43,9 @@ import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.overlays.reportsChromeHeader
+import androidx.compose.material.icons.rounded.ExpandMore
+import au.com.threesixty.cabdispatch.domain.TenantBranding
+import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.Radius
 import au.com.threesixty.cabdispatch.ui.theme.Space
@@ -131,191 +134,192 @@ internal fun CaptainHeader(
     )
     val statusColor = status.tone.color()
     val statusNeutral = status.tone == HudTone.Neutral
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Publishes this header's real height to the app-level overlays, which are siblings of
-            // the nav host and would otherwise be sitting on top of it — see CaptainChromeMetrics.
-            .reportsChromeHeader()
-            .background(Brush.verticalGradient(listOf(CaptainPalette.glowPurpleSoft, Color.Transparent)))
-            // 20dp -> 10dp vertical (A3, 2026-09-08). With the avatar down from 88dp to 52dp in a
-            // 52dp box, this is what actually lands the header on 72dp: 52 + 10 + 10 = 72. The
-            // driver-UI audit measured the old header at ~128dp — 16% of the 800dp canvas spent
-            // before a single piece of content, and the owner's "the top bar should be compact".
-            .padding(horizontal = Space.xl, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        // Replaces the lone Spacer(weight(1f)) that used to sit between the status pill and the
-        // system strip leaving ~200dp of void mid-header: a uniform gap everywhere, plus ONE
-        // weighted spacer below that separates the identity group from the status group.
-        horizontalArrangement = Arrangement.spacedBy(Space.md),
-    ) {
-        // Avatar in a soft accent halo. Tap opens the large Driver ID card (passenger face-
-        // matching); the Profile route stays reachable via that card and the name tap below.
-        // 88dp -> 52dp (A3). The avatar was the single tallest thing in the header and therefore
-        // the thing setting its height; everything else here was already smaller than it.
-        //
-        // The "CAPTAIN / TAXIS" wordmark that used to sit beside it is DELETED, not shrunk. It was
-        // a permanent, unchanging label on a single-tenant kiosk device that is bolted to one
-        // operator's dashboard — the driver knows whose cab they are sitting in, and it was
-        // spending horizontal space on the one piece of information on this screen that can never
-        // change or be acted on.
-        Box(contentAlignment = Alignment.BottomEnd) {
-            Box(modifier = Modifier.neonGlow(CaptainPalette.hudAccent, 26.dp, strength = 0.7f)) {
-                DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 52)
-            }
-            // VERIFIED, merged into the avatar as a 16dp badge (A3) — was a standalone 40dp pill
-            // with a 14sp "VERIFIED" wordmark. Exactly the same real backend field and the same
-            // honesty rule as before: `null`/false (still loading, or suitabilityStatus is not
-            // "clear") draws NOTHING, never a false claim. A tick on the driver's own photo is
-            // also where a passenger-facing "this driver is cleared" mark actually belongs.
-            if (verified == true) {
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(CaptainPalette.hudBg),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Rounded.Verified,
-                        contentDescription = "Verified driver",
-                        tint = CaptainPalette.success,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        }
-        Column(
-            // 48dp minimum touch target (A3 a11y pass): this opens the Profile route and had no
-            // minimum size at all before — it was exactly as tall as two lines of text happened
-            // to be.
+    // Rebuilt against the owner's north-star render (2026-09-08). Three groups on ONE full-width
+    // dark card, left / centre / right, each on the 8pt grid:
+    //   left    avatar · operator wordmark · driver name + VERIFIED · rego
+    //   centre  the availability pill (a real toggle, so it reads as one: dot, state, chevron)
+    //   right   GPS · network · printer · battery  |  SOS  |  date + clock
+    // The card is a real `panel` surface with a `panelBorder` hairline underneath, not a gradient
+    // wash: the reference treats the header as a card in the same ecosystem as every other one.
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
             modifier = Modifier
-                .heightIn(min = 48.dp)
-                .clip(RoundedCornerShape(Radius.sm))
-                .clickable(onClick = onOpenProfile)
-                .padding(horizontal = Space.sm),
-            verticalArrangement = Arrangement.Center,
+                .fillMaxWidth()
+                .reportsChromeHeader()
+                .background(CaptainPalette.panel)
+                .padding(horizontal = Space.lg, vertical = Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
+            // ---- LEFT: identity -------------------------------------------------------------
+            Box(modifier = Modifier.neonGlow(CaptainPalette.hudAccent, 26.dp, strength = 0.6f)) {
+                DriverAvatar(driverId = state.session?.driverId, driverName = state.session?.driverName, onClick = onShowDriverId, sizeDp = 56)
+            }
+            // Operator wordmark, restored per the reference. Sourced from TenantBranding, the one
+            // place the operator name lives; that object documents whether the value is a
+            // compiled default or a fetched tenant record, so nothing here overstates it.
             Text(
-                state.session?.driverName ?: "No driver",
-                // 28sp -> 20sp (A3, Type.h2). Still the largest thing in the header and still
-                // comfortably legible at arm's length; 28sp was sized for a header twice this tall.
-                style = Type.h2,
+                TenantBranding.operatorName.uppercase(),
+                style = Type.tiny,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.5.sp,
                 color = CaptainPalette.textPrimary,
                 maxLines = 1,
             )
-            Text(
-                // The mockup shows "rego · make/model" (e.g. "CAP-5517 · Toyota Camry Hybrid") —
-                // no vehicle make/model field exists anywhere in this app's data model (VehicleDto
-                // is id+rego only, confirmed against ApiService.kt) or the backend it talks to, so
-                // this shows the real rego alone rather than fabricating a plausible-looking
-                // "Toyota Camry Hybrid". Flagged as a backend-requirements candidate in
-                // DASHBOARD_REDESIGN_2026.md. Driver-id is still real and shown elsewhere
-                // (DriverIdCard's "DRIVER # …") rather than crowding this line.
-                state.session?.vehicleId ?: "—",
-                // 15sp -> 13sp (A3, Type.mono — still monospaced, see that style's own doc for why
-                // a rego wants fixed advance width).
-                style = Type.mono,
-                color = CaptainPalette.textSecondary,
-                maxLines = 1,
-            )
-        }
-        // The standalone 40dp "VERIFIED" glass pill that used to sit here is GONE (A3). Same real
-        // backend field, same honesty rule, now drawn as the 16dp cyan tick on the avatar above -
-        // see that badge's own comment. This freed ~120dp of header width and one of the four
-        // competing pills the eye had to triage.
-        // ONE weighted spacer, and it sits here: identity on the left, live status on the right.
-        // The old layout put a Spacer(weight(1f)) between the status pill and the system strip,
-        // which pushed the two status readouts apart and left the void in the middle of the header.
-        Spacer(Modifier.weight(1f))
-        // Status pill — the same real toggle as before (WheelDashboardViewModel.setAvailable,
-        // tap-to-flip), now a glass pill whose halo/dot/title take the HeaderStatus tone. Tapping
-        // while HIRED still does exactly what it always did (flip availability); this pass changes
-        // no control's behaviour.
-        GlassCard(
-            modifier = Modifier
-                // 64dp -> 48dp (A3): exactly Android's minimum touch target, not more. This is a
-                // real control (tap flips availability), so it may not go below 48.
-                .height(48.dp)
-                .gameClick(
-                    onClick = onToggleAvailability,
-                    shape = RoundedCornerShape(32.dp),
-                    glowColor = if (statusNeutral) CaptainPalette.accent else statusColor,
-                ),
-            cornerRadiusDp = 32,
-            glow = if (statusNeutral) null else statusColor,
-        ) {
-            Row(modifier = Modifier.fillMaxHeight().padding(horizontal = Space.md), verticalAlignment = Alignment.CenterVertically) {
-                // SANCTIONED LOOP 1 OF 3 (A3 motion pass). This dot breathes only while the status
-                // is non-neutral - i.e. while the driver is genuinely AVAILABLE / HIRED / ON BREAK
-                // and the app is actually doing something on their behalf. OFF DUTY is neutral and
-                // therefore perfectly still. It is a live-state indicator, not decoration: see
-                // HomeMotion.kt for the rule and for the other two survivors.
-                PulsingDot(color = if (statusNeutral) CaptainPalette.textMuted else statusColor, animated = !statusNeutral, size = 12.dp)
-                Column(modifier = Modifier.padding(start = Space.sm)) {
-                    Text(
-                        status.title,
-                        // 21sp -> 16sp (A3, Type.h3).
-                        style = Type.h3,
-                        letterSpacing = 1.sp,
-                        color = if (statusNeutral) CaptainPalette.textSecondary else statusColor,
-                        maxLines = 1,
-                    )
-                    Text(
-                        status.sub,
-                        // 13sp -> 12sp (A3, Type.tiny - the floor, not below it).
-                        style = Type.tiny,
-                        color = CaptainPalette.textSecondary,
-                        maxLines = 1,
-                    )
-                }
-            }
-        }
-        // Real GPS/network/printer/battery — same DashboardStatusStrip WheelDashboardViewModel
-        // already polls every 4s, grouped into one glass strip. GPS shows the real fix-quality
-        // tier's tone (GpsQualityClassifier: GOOD/FAIR green, POOR amber, no fix/denied red) — the
-        // same mapping the SYSTEM STATUS card below uses, so the two never disagree. Network label
-        // is the real transport type (DeviceTelemetry.readNetworkType — "wifi"/"4g"/"offline") and
-        // deliberately carries no signal-strength adjective ("STRONG"), since no TelephonyManager/
-        // SignalStrength reading exists anywhere in this app to back one.
-        // 56dp -> 44dp, spacedBy 20dp -> 12dp (A3). Read-only status readouts, not touch
-        // targets, so 44dp is legitimate here - nothing in this strip is tappable.
-        GlassCard(modifier = Modifier.height(44.dp), cornerRadiusDp = 22) {
-            Row(
-                modifier = Modifier.fillMaxHeight().padding(horizontal = Space.smd),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.smd),
+            Column(
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .clickable(onClick = onOpenProfile)
+                    .padding(horizontal = Space.sm),
+                verticalArrangement = Arrangement.Center,
             ) {
-                StatusDot(Icons.Rounded.LocationOn, "GPS", gpsTone(state.status.gpsQuality))
-                StatusDot(networkIcon(state.status.networkType), networkStatusLabel(state.status.networkType), networkTone(state.status.networkType))
-                StatusDot(Icons.Rounded.Print, "PRINTER", if (state.status.printerOk) HudTone.Success else HudTone.Danger)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val batteryColor = if (state.status.batteryOk) CaptainPalette.success else CaptainPalette.danger
-                    Icon(
-                        Icons.Rounded.BatteryFull,
-                        // A3 a11y pass: every icon on this screen was contentDescription = null,
-                        // giving a TalkBack user a wall of unlabelled controls (audit section 6).
-                        contentDescription = state.status.batteryPercent?.let { "Battery $it percent" } ?: "Battery level unknown",
-                        tint = batteryColor,
-                        modifier = Modifier.size(16.dp),
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     Text(
-                        state.status.batteryPercent?.let { "$it%" } ?: "—",
-                        fontFamily = ChakraPetch,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        color = if (state.status.batteryOk) CaptainPalette.textPrimary else CaptainPalette.danger,
-                        modifier = Modifier.padding(start = 5.dp),
+                        state.session?.driverName ?: "No driver",
+                        style = Type.h2,
+                        color = CaptainPalette.textPrimary,
+                        maxLines = 1,
+                    )
+                    // VERIFIED as a solid purple pill beside the name, as the reference draws it.
+                    // Same real backend field and honesty rule as before: null/false (loading, or
+                    // suitability not "clear") draws NOTHING, never a false claim.
+                    if (verified == true) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(CaptainPalette.accent)
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Verified,
+                                contentDescription = "Verified driver",
+                                tint = CaptainPalette.onAccent,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text(
+                                "VERIFIED",
+                                style = Type.tiny,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                color = CaptainPalette.onAccent,
+                            )
+                        }
+                    }
+                }
+                // Rego only. The reference shows "rego · make/model" but no make/model field
+                // exists in this app's data model or its backend, so the real rego is shown and
+                // nothing is invented to fill the gap.
+                Text(
+                    state.session?.vehicleId ?: "—",
+                    style = Type.mono,
+                    color = CaptainPalette.textSecondary,
+                    maxLines = 1,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+
+            // ---- CENTRE: availability pill --------------------------------------------------
+            // A real toggle (WheelDashboardViewModel.setAvailable), so it carries a chevron: the
+            // reference's cue that this is something you press. The pill is a dark card with the
+            // state colour as halo and border rather than a filled block; green has to read from
+            // a moving car, and a green glow on dark does that better than green ink.
+            GlassCard(
+                modifier = Modifier
+                    .height(56.dp)
+                    .gameClick(
+                        onClick = onToggleAvailability,
+                        shape = RoundedCornerShape(28.dp),
+                        glowColor = if (statusNeutral) CaptainPalette.accent else statusColor,
+                    ),
+                cornerRadiusDp = 28,
+                glow = if (statusNeutral) null else statusColor,
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxHeight().padding(start = Space.md, end = Space.smd),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // SANCTIONED LOOP 1 OF 3 (A3 motion pass): breathes only while the status is
+                    // non-neutral. See HomeMotion.kt.
+                    PulsingDot(color = if (statusNeutral) CaptainPalette.textMuted else statusColor, animated = !statusNeutral, size = 12.dp)
+                    Column(modifier = Modifier.padding(start = Space.smd)) {
+                        Text(
+                            status.title,
+                            style = Type.h2,
+                            letterSpacing = 1.sp,
+                            color = if (statusNeutral) CaptainPalette.textSecondary else statusColor,
+                            maxLines = 1,
+                        )
+                        Text(status.sub, style = Type.tiny, color = CaptainPalette.textSecondary, maxLines = 1)
+                    }
+                    Icon(
+                        Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = CaptainPalette.textSecondary,
+                        modifier = Modifier.padding(start = Space.smd).size(20.dp),
                     )
                 }
             }
+            Spacer(Modifier.weight(1f))
+
+            // ---- RIGHT: system matrix, SOS, clock -------------------------------------------
+            // Real GPS/network/printer/battery, the same DashboardStatusStrip the ViewModel polls
+            // every 4s. Read-only readouts, so 44dp is legitimate: nothing here is tappable. No
+            // signal-strength adjective on the network label; nothing in this app measures one.
+            GlassCard(modifier = Modifier.height(44.dp), cornerRadiusDp = 22) {
+                Row(
+                    modifier = Modifier.fillMaxHeight().padding(horizontal = Space.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Space.md),
+                ) {
+                    StatusDot(Icons.Rounded.LocationOn, "GPS", gpsTone(state.status.gpsQuality))
+                    StatusDot(networkIcon(state.status.networkType), networkStatusLabel(state.status.networkType), networkTone(state.status.networkType))
+                    StatusDot(Icons.Rounded.Print, "PRINTER", if (state.status.printerOk) HudTone.Success else HudTone.Danger)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val batteryColor = if (state.status.batteryOk) CaptainPalette.success else CaptainPalette.danger
+                        Icon(
+                            Icons.Rounded.BatteryFull,
+                            contentDescription = state.status.batteryPercent?.let { "Battery $it percent" } ?: "Battery level unknown",
+                            tint = batteryColor,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            state.status.batteryPercent?.let { "$it%" } ?: "—",
+                            fontFamily = ChakraPetch,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            color = if (state.status.batteryOk) CaptainPalette.textPrimary else CaptainPalette.danger,
+                            modifier = Modifier.padding(start = 5.dp),
+                        )
+                    }
+                }
+            }
+            // Press-and-HOLD, never a tap. See SosControl's own doc. Unchanged.
+            SosControl(onTrigger = onSos, sizeDp = 56, inlineHoldLabel = false)
+            // Date over time, right-aligned, per the reference. rememberDeckClock already formats
+            // "EEE d MMM · h:mm a" and ticks once a second; it is split on the separator so the two
+            // lines can be styled independently rather than adding a second clock.
+            val clock = rememberDeckClock()
+            val sep = clock.indexOf(" · ")
+            val dateText = if (sep >= 0) clock.substring(0, sep) else clock
+            val timeText = if (sep >= 0) clock.substring(sep + 3) else ""
+            Column(horizontalAlignment = Alignment.End) {
+                Text(dateText, style = Type.tiny, color = CaptainPalette.textSecondary, maxLines = 1)
+                Text(
+                    timeText,
+                    fontFamily = ChakraPetch,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    color = CaptainPalette.textPrimary,
+                    maxLines = 1,
+                )
+            }
         }
-        // 72dp -> 56dp with the "HOLD" caption inline to the right rather than stacked beneath
-        // (A3) - the stacked caption was part of what made this control ~90dp tall in a header we
-        // are trying to land on 72. Still comfortably above the 48dp minimum, and the
-        // press-and-HOLD interaction model is completely untouched: see SosControl's own doc, that
-        // must never become a tap. Its always-on breathing glow is deleted in this same pass.
-        SosControl(onTrigger = onSos, sizeDp = 56, inlineHoldLabel = true)
+        // The hairline that separates the header card from the canvas. The reference's cards all
+        // carry it, and this is a card.
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
     }
 }
 

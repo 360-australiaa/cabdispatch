@@ -160,7 +160,7 @@ fun ProfileScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Driver profile", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = CaptainPalette.textPrimary)
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ProfileTabPill("Profile", selected = activeTab == ProfileTab.PROFILE) { activeTab = ProfileTab.PROFILE }
                 ProfileTabPill("Documents", selected = activeTab == ProfileTab.DOCUMENTS) { activeTab = ProfileTab.DOCUMENTS }
             }
@@ -248,7 +248,7 @@ private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
         Column(
             modifier = Modifier.fillMaxSize().padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Box(
                 modifier = Modifier
@@ -417,7 +417,7 @@ private fun ExpiryCard(item: ComplianceExpiryItemDto) {
         glow = accent,
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -459,9 +459,9 @@ private fun OverallBanner(compliant: Boolean) {
 /** 2-wide grid of compact dossier rows — `satisfied` null renders the neutral "—" fallback. */
 @Composable
 private fun ComplianceGrid(items: List<Pair<String, Boolean?>>) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.chunked(2).forEach { rowItems ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 rowItems.forEach { (label, satisfied) -> ComplianceCard(label, satisfied, modifier = Modifier.weight(1f)) }
                 if (rowItems.size == 1) Spacer(Modifier.weight(1f))
             }
@@ -568,7 +568,7 @@ private fun DocumentsPane(viewModel: ProfileViewModel, modifier: Modifier = Modi
     val userDetail by viewModel.userDetail.collectAsState()
     val vehicleDetail by viewModel.vehicleDetail.collectAsState()
 
-    Column(modifier = modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier = modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
             "REAL DOCUMENT STATUS — from the licence/registration/insurance expiry dates on file. " +
                 "Upload isn't available from this device (compliance-document upload is a staff-only " +

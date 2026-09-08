@@ -121,7 +121,7 @@ fun SplashScreen(navController: NavHostController) {
             fontSize = 14.sp,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 30.dp),
+                .padding(bottom = 32.dp),
         )
     }
 }

@@ -64,7 +64,7 @@ fun ZonesPaneContent() {
     var tab by remember { mutableStateOf(ZonesTab.HEAT_MAP) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ZonesTab.entries.forEach { t -> ZonesTabPill(t.label, tab == t) { tab = t } }
         }
         Spacer(Modifier.height(16.dp))

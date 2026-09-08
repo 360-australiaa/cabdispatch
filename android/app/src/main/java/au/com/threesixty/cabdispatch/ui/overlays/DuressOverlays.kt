@@ -119,7 +119,7 @@ fun DuressTriggeredOverlay(secondsRemaining: Int, onCancel: () -> Unit) {
                 .border(2.dp, Deck.hired, RoundedCornerShape(24.dp))
                 .padding(horizontal = 44.dp, vertical = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Box(
                 modifier = Modifier

@@ -216,7 +216,7 @@ private fun ActiveTripsPill(active: Int) {
             .clip(RoundedCornerShape(12.dp))
             .background(CaptainPalette.glowSuccessSoft)
             .border(1.dp, CaptainPalette.success.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PulsingDot(color = CaptainPalette.success, animated = true, size = 8.dp)
@@ -294,7 +294,7 @@ internal fun NextBreakTile(
                     )
                 }
             }
-            Column(modifier = Modifier.padding(start = 14.dp).weight(1f)) {
+            Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Coffee, contentDescription = null, tint = labelTint, modifier = Modifier.size(16.dp))
                     Text(

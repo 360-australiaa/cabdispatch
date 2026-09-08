@@ -80,14 +80,14 @@ fun AirportQueueTabContent(
             fontSize = 14.sp,
             color = CaptainPalette.textMuted,
         )
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
         when {
             zoneState is PlotZoneUiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = CaptainPalette.accent)
             }
             airportZones.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Rounded.FlightTakeoff, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(40.dp))
                     Text(
                         "No airport zone is configured for this operator yet.",

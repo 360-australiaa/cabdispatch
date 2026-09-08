@@ -253,7 +253,7 @@ internal fun MeterBackdropMap(
         if (followSuspended) {
             RecentreButton(
                 onClick = { followSuspended = false },
-                modifier = Modifier.align(Alignment.TopEnd).padding(14.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
             )
         }
     }

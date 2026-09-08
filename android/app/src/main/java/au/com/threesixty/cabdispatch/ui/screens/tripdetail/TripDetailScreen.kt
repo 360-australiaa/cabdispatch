@@ -43,6 +43,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -115,7 +117,7 @@ private fun TripDetailBody(state: TripDetailUiState.Loaded, vm: TripDetailViewMo
     Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
         // --- Left column: title, timeline, evidence pack ---
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     trip.type.asTripTypeLabel(),
                     fontFamily = InterFamily,
@@ -232,7 +234,7 @@ private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List<TelemetryPointDt
     val hasRealDropoff = endLat != null && endLng != null && !(endLat == 0.0 && endLng == 0.0)
 
     CaptainPanel(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Rounded.Map, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
                 Text(
@@ -541,7 +543,7 @@ private fun DisputeSection(state: TripDetailUiState.Loaded, vm: TripDetailViewMo
             val inProgress = state.disputeState == DisputeSubmitState.IN_PROGRESS
 
             CaptainPanel(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = state.disputeReason,
                         onValueChange = vm::setDisputeReason,
@@ -573,7 +575,7 @@ private fun DisputeSection(state: TripDetailUiState.Loaded, vm: TripDetailViewMo
                     state.disputeError?.let { error ->
                         Text(error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         DangerButton(
                             text = "Submit dispute",
                             enabled = !inProgress && !notSynced && state.disputeReason.isNotBlank(),

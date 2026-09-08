@@ -53,7 +53,7 @@ fun ShiftStartScreen(navController: NavHostController) {
             CaptainPanel(modifier = Modifier.width(700.dp), cornerRadiusDp = 24) {
                 Column(
                     modifier = Modifier.padding(horizontal = 40.dp, vertical = 36.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.DirectionsCar, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(30.dp))

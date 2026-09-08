@@ -302,7 +302,7 @@ private fun TotalCol(
         // breakdown — replacing this pass's previous hand-rolled inset/panel Columns and manual
         // `animateFloatAsState` count-up. Same fields, same order, nothing recomputed differently.
         GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
-            Column(modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)) {
                 Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
                 RollingMoneyText(
                     amount = state.totalDue.money(),
@@ -322,8 +322,8 @@ private fun TotalCol(
         }
         GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
             Column(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
             if (breakdown.negotiatedTotal != null) {
                 BreakdownRow("Agreed price (Set Price)", breakdown.negotiatedTotal.money())
@@ -446,7 +446,7 @@ private fun BreakdownRow(label: String, value: String) {
 private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick: () -> Unit) {
     GlassCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), cornerRadiusDp = 14) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -483,7 +483,7 @@ private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick
 private fun TipEntryRow(currentTip: BigDecimal, onClick: () -> Unit) {
     GlassCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), cornerRadiusDp = 14) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -528,8 +528,8 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
 
     GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
     Column(
-        modifier = Modifier.padding(30.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Report vehicle soiling", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
@@ -559,7 +559,7 @@ private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: (
             onBackspace = { cents = cents.dropLast(1) },
             onClear = { cents = "" },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
             CaptainButton(text = "Apply fee", modifier = Modifier.weight(1.4f)) { onConfirm(amount) }
         }
@@ -586,7 +586,7 @@ private fun TipPresetDialog(
     GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
         Column(
             modifier = Modifier.padding(28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
             Text(
@@ -597,7 +597,7 @@ private fun TipPresetDialog(
             )
             // GlassCard tip-preset row ($2/$5/$10/Custom) — the kit's payment-grid tile shape at
             // dialog scale, replacing this pass's previous stacked CaptainChip column.
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(BigDecimal("2.00"), BigDecimal("5.00"), BigDecimal("10.00")).forEach { preset ->
                     TipPresetTile(
                         label = "$${preset.toBigInteger()}",
@@ -646,8 +646,8 @@ private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Un
 
     GlassCard(modifier = Modifier.width(480.dp), cornerRadiusDp = 24, glow = CaptainPalette.hudAccent) {
     Column(
-        modifier = Modifier.padding(30.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Custom tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)
@@ -667,7 +667,7 @@ private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Un
             onBackspace = { cents = cents.dropLast(1) },
             onClear = { cents = "" },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
             CaptainButton(
                 text = "Add tip",
@@ -702,8 +702,8 @@ private fun MethodPickerScreen(
         Row(modifier = Modifier.fillMaxSize()) {
             TotalCol(state = state, onReportSoiling = { showCleaningDialog = true }, onAddTip = { showTipDialog = true })
             Spacer(Modifier.width(64.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     PayCard(
                         Icons.Rounded.Payments,
                         "CASH",
@@ -728,7 +728,7 @@ private fun MethodPickerScreen(
                         ) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     PayCard(
                         Icons.Rounded.LocalTaxi,
                         "CABCHARGE",
@@ -748,7 +748,7 @@ private fun MethodPickerScreen(
                     fontSize = 12.sp,
                     color = CaptainPalette.textMuted,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     PayCard(
                         Icons.Rounded.ConfirmationNumber,
                         "VOUCHER",
@@ -766,7 +766,7 @@ private fun MethodPickerScreen(
                         selected = state.paymentMethod == PaymentMethodOption.ACCOUNT,
                     ) { onSelect(PaymentMethodOption.ACCOUNT, PaymentSubScreen.ACCOUNT_ENTRY) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     PayCard(
                         Icons.Rounded.CallSplit,
                         "SPLIT FARE",
@@ -910,7 +910,7 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("Exact", "$20", "$50", "$100").forEach { preset ->
                     CaptainButton(
                         text = preset,
@@ -940,7 +940,7 @@ private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 onClear = { cents = ""; vm.setCashTendered("") },
             )
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.totalDue),
@@ -1028,7 +1028,7 @@ private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Close
                 onBackspace = { vm.setVoucherCode(state.voucherCode.dropLast(1)) },
             )
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
@@ -1109,7 +1109,7 @@ private fun LabeledEntryScreen(
                 CaptainKeypad(onDigit = { d -> onValueChar(d.toString()) }, onBackspace = onBackspace, onClear = onClear)
             }
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
                     text = if (inFlight) "Processing…" else confirmLabel,
@@ -1170,13 +1170,13 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
     var legBCents by remember { mutableStateOf("") }
 
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 88.dp, vertical = 24.dp)) {
-        Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(modifier = Modifier.width(480.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
             GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14, glow = CaptainPalette.hudAccent) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
                     RollingMoneyText(amount = state.breakdown.grandTotal.money(), fontSize = 44.sp, color = CaptainPalette.success)
@@ -1263,7 +1263,7 @@ private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clo
                 },
             )
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CaptainButton(text = "← Back", outline = true, widthDp = 180, onClick = onBack)
                 CaptainButton(
                     text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal),
@@ -1379,7 +1379,7 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                             .width(480.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFB3261E))
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
                     ) {
                         Column {
                             Text(
@@ -1523,13 +1523,13 @@ private fun PreviewCloseAndPaySampleLight() {
 private fun CloseAndPayPreviewSample() {
     Row(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
         GlassCard(modifier = Modifier.width(320.dp).fillMaxSize(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
-            Column(modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)) {
                 Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
                 RollingMoneyText(amount = "\$42.80", fontSize = 64.sp, color = CaptainPalette.success)
                 Text("Includes \$5.00 tip", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)
             }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             PayCard(icon = Icons.Rounded.Payments, label = "Cash", accent = CaptainPalette.success, subtitle = "Exact change or tender + calculate", selected = true, onClick = {})
             PayCard(icon = Icons.Rounded.CreditCard, label = "Card", accent = CaptainPalette.accent, subtitle = "Tap, insert or swipe", onClick = {})
             PayCard(icon = Icons.Rounded.ConfirmationNumber, label = "Voucher", accent = CaptainPalette.warning, subtitle = "CabCharge / TTSS / docket", onClick = {})

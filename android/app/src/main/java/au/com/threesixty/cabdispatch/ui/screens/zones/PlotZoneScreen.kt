@@ -104,12 +104,12 @@ fun PlotZoneTabContent(
                         value = "${plottedZone.number} — ${plottedZone.name}",
                         tone = HudTone.Success,
                         pulsing = false,
-                        modifier = Modifier.padding(bottom = 14.dp),
+                        modifier = Modifier.padding(bottom = 16.dp),
                     )
                 }
                 if (s.error != null) {
                     Text(s.error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -159,8 +159,8 @@ private fun ZoneCard(
         glow = if (plotted) CaptainPalette.success else null,
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(
@@ -285,7 +285,7 @@ private fun EmptyStateCard(
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Spacer(Modifier.weight(1f))
             Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(56.dp))

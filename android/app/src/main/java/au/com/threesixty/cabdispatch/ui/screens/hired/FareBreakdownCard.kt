@@ -93,7 +93,7 @@ internal fun FareBreakdownCard(
     negotiatedTotal: BigDecimal? = null,
 ) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 SectionLabel(title)
                 Spacer(Modifier.weight(1f))
@@ -180,7 +180,7 @@ private fun BreakdownRow(label: String, value: String, dotColor: Color) {
             fontWeight = FontWeight.Medium,
             fontSize = 12.sp,
             color = CaptainPalette.textSecondary,
-            modifier = Modifier.padding(start = 10.dp).weight(1f),
+            modifier = Modifier.padding(start = 8.dp).weight(1f),
         )
         Text(
             value,
@@ -219,7 +219,7 @@ private fun ColorDot(color: Color, size: Dp) {
 @Composable
 internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, startAtIso: String?) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 SectionLabel("TRIP DETAILS")
                 Spacer(Modifier.weight(1f))
@@ -232,7 +232,7 @@ internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, st
                     color = CaptainPalette.textMuted,
                 )
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             TimelineRow(
                 dotColor = CaptainPalette.success,
                 title = "PICKUP",
@@ -247,9 +247,9 @@ internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, st
                 time = "—",
                 connector = false,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             val avgSpeedKmh = if (fareState.movingSeconds > 0) {
                 (fareState.distanceKm.toDouble() / (fareState.movingSeconds / 3600.0)).roundToInt()
             } else {
@@ -272,7 +272,7 @@ private fun TimelineRow(dotColor: Color, title: String, address: String, time: S
                 Box(Modifier.padding(vertical = 3.dp).width(2.dp).height(20.dp).background(CaptainPalette.panelBorder))
             }
         }
-        Column(modifier = Modifier.padding(start = 10.dp).weight(1f)) {
+        Column(modifier = Modifier.padding(start = 8.dp).weight(1f)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, style = Type.tiny, letterSpacing = 1.sp, color = dotColor)
                 Text(time, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.SemiBold, style = Type.tiny, color = CaptainPalette.textSecondary)

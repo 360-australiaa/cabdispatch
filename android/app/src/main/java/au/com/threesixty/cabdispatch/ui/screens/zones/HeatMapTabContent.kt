@@ -226,7 +226,7 @@ private fun radiusPxFor(radiusM: Double): Double = max(24.0, min(90.0, radiusM /
 @Composable
 private fun SurgeLegendCard(modifier: Modifier = Modifier) {
     GlassCard(modifier = modifier, cornerRadiusDp = 14) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("SURGE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)
             listOf(1.0, 1.2, 1.6, 2.0).forEach { multiplier ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -1067,7 +1067,7 @@ fun HudStatusPill(
         glow = if (tone == HudTone.Neutral) null else toneColor,
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PulsingDot(color = toneColor, animated = pulsing, size = 10.dp)
@@ -1078,7 +1078,7 @@ fun HudStatusPill(
                 fontSize = 12.sp,
                 letterSpacing = 1.sp,
                 color = CaptainPalette.textMuted,
-                modifier = Modifier.padding(start = 10.dp),
+                modifier = Modifier.padding(start = 8.dp),
             )
             Text(
                 value,
@@ -1086,7 +1086,7 @@ fun HudStatusPill(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 18.sp,
                 color = toneColor,
-                modifier = Modifier.padding(start = 10.dp),
+                modifier = Modifier.padding(start = 8.dp),
             )
         }
     }

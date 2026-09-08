@@ -101,7 +101,7 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
                 fontSize = 14.sp,
                 color = CaptainPalette.danger,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             SimulatorButton(
                 text = "STOP SIMULATION · BACK TO REAL GPS",
                 danger = true,
@@ -148,7 +148,7 @@ private fun RouteRow(route: SimulatedRoute, onStart: () -> Unit) {
             .clip(RoundedCornerShape(12.dp))
             .background(CaptainPalette.panel)
             .clickable(onClick = onStart)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Text(
             route.name,
@@ -190,7 +190,7 @@ private fun SimulatorButton(text: String, danger: Boolean, onClick: () -> Unit) 
             .clip(RoundedCornerShape(12.dp))
             .background(if (danger) CaptainPalette.danger else CaptainPalette.panel)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
         Text(

@@ -337,7 +337,7 @@ private fun MainSettingsContent(
 private fun SettingsTabRail(selected: SettingsTab, onSelect: (SettingsTab) -> Unit, modifier: Modifier = Modifier) {
     GlassCard(modifier = modifier, cornerRadiusDp = 20) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(10.dp),
+            modifier = Modifier.fillMaxSize().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SettingsTab.values().forEach { t ->
@@ -382,12 +382,12 @@ private fun GeneralTabContent(
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SectionLabel("DIAGNOSTICS")
         Spacer(Modifier.height(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 GpsTile(state, Modifier.weight(1f))
                 NetworkTile(state, Modifier.weight(1f))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OfflineMapsTile(state, onDownloadOfflineMaps, Modifier.weight(1f))
                 DiagTile(
                     icon = Icons.Rounded.VerifiedUser,
@@ -414,13 +414,13 @@ private fun GeneralTabContent(
         Spacer(Modifier.height(24.dp))
         SectionLabel("PREFERENCES")
         Spacer(Modifier.height(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             LockedSettingRow(label = "Language", value = "English (Australia)")
             LockedSettingRow(label = "Units", value = "Kilometres")
         }
 
         Spacer(Modifier.height(24.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             val mapsLabel = when (state.offlineMapDownload) {
                 is OfflineMapDownloadState.Downloading -> "DOWNLOADING…"
                 is OfflineMapDownloadState.Failed -> "RETRY MAPS"
@@ -455,7 +455,7 @@ private fun ComingSoonTabContent(title: String, message: String) {
             fontWeight = FontWeight.Bold,
             fontSize = 20.sp,
             color = CaptainPalette.textPrimary,
-            modifier = Modifier.padding(top = 14.dp),
+            modifier = Modifier.padding(top = 16.dp),
         )
         Text(
             message,
@@ -607,7 +607,7 @@ private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewMod
         )
         Spacer(Modifier.height(20.dp))
 
-        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(state.discoveredPrinters) { device: PrinterDevice ->
                 GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 14) {
                     Row(
@@ -645,13 +645,13 @@ private fun AboutTabContent(
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SectionLabel("DEVICE")
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             AppVersionTile(state, Modifier.weight(1f))
             HeartbeatTile(state, onOpenPairMeter, Modifier.weight(1f))
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         LocateTile(state, Modifier.fillMaxWidth())
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         // A technician servicing an ALREADY-commissioned tablet needs the checklist back. Without
         // this the only route to it was a factory reset, which wipes the pairing and the driver's
         // session to answer a question as ordinary as "is the offline map still there?".
@@ -782,11 +782,11 @@ private fun LockedSettingRow(label: String, value: String) {
                 .clickable {
                     android.widget.Toast.makeText(context, "$label isn't available yet", android.widget.Toast.LENGTH_SHORT).show()
                 }
-                .padding(horizontal = 20.dp, vertical = 18.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))
-            Column(modifier = Modifier.weight(1f).padding(start = 14.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
                 Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
                 Text(value, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))
             }
@@ -944,7 +944,7 @@ private fun DiagTile(
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(20.dp))
@@ -954,7 +954,7 @@ private fun DiagTile(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
                     color = CaptainPalette.textPrimary,
-                    modifier = Modifier.padding(start = 10.dp),
+                    modifier = Modifier.padding(start = 8.dp),
                 )
             }
             HudStatusPill(label = "Status", value = sub, tone = hudTone, pulsing = false, modifier = Modifier.fillMaxWidth())
@@ -1153,7 +1153,7 @@ private fun FareScheduleNote(text: String) {
 @Composable
 private fun TaxiFareHotlineNotice() {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FareScheduleSectionTitle("TAXI FARE HOTLINE")
             Text(
                 "1800 500 410",
@@ -1368,7 +1368,7 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
                             Text(pairState.message, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.warning)
                             Spacer(Modifier.height(12.dp))
                         }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             CaptainButton(
                                 text = "SCAN QR",
                                 outline = true,

@@ -129,7 +129,7 @@ fun MessageThreadScreen(
                                 state = listState,
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(vertical = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
                             ) {
                                 items(state.messages, key = { it.id }) { message -> MessageBubble(message) }
                             }
@@ -219,7 +219,7 @@ private fun MessageBubble(message: MessageDto) {
                 .widthIn(max = 460.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(if (fromDriver) CaptainPalette.primary else CaptainPalette.raised)
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             // Driver bubbles sit on the solid `primary` fill -> onAccent (fixed white), not
             // textPrimary (see that token's doc); dispatch bubbles sit on the neutral `raised`
@@ -295,7 +295,7 @@ private fun QuickTapColumn(
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = template.label.uppercase() + if (isOther) "…" else "",
                             fontFamily = InterFamily,

@@ -140,10 +140,10 @@ internal fun ControlsDrawer(
                 )
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
             NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SetPriceTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
                 AddTollTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
@@ -153,7 +153,7 @@ internal fun ControlsDrawer(
                 PauseFareTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
                 MoreTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             FareBreakdownCard(
                 title = if (hasDestination) "FARE DETAILS" else "FARE BREAKDOWN",
                 breakdown = fareState.breakdown,
@@ -166,7 +166,7 @@ internal fun ControlsDrawer(
             // Dropped once the map panel already carries the same PICK UP/DESTINATION pair — the
             // two must never show the same address/time twice.
             if (!hasDestination) {
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 TripDetailsCard(tripContext = tripContext, fareState = fareState, startAtIso = startAtIso)
             }
             Spacer(Modifier.height(8.dp))

@@ -92,7 +92,7 @@ fun MessagesWheelContent(
                 val oldestFirst = state.messages.sortedBy { it.sentAt }
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(oldestFirst, key = { it.id }) { message ->
                         MessageBubbleRow(message = message, onClick = onOpenThread)
@@ -101,7 +101,7 @@ fun MessagesWheelContent(
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
         CaptainButton(
             text = if (state.unreadCount > 0) {
@@ -154,7 +154,7 @@ private fun MessageBubbleRow(message: MessageDto, onClick: () -> Unit) {
                             Modifier.background(CaptainPalette.primary, bubbleShape)
                         },
                     )
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = message.body,

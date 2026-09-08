@@ -161,7 +161,7 @@ private fun ShiftReportContent(state: ShiftReportUiState, vm: ShiftReportViewMod
         }
 
         if (state.unsyncedTripsCount > 0) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
                 "${state.unsyncedTripsCount} trip(s) still pending sync — will upload automatically once online.",
                 fontFamily = InterFamily,
@@ -170,7 +170,7 @@ private fun ShiftReportContent(state: ShiftReportUiState, vm: ShiftReportViewMod
             )
         }
         state.submitError?.let { error ->
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Text(error, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.danger)
         }
 
