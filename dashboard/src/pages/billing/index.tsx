@@ -20,6 +20,7 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 import {
   formatAud,
   formatDate,
@@ -585,14 +586,33 @@ function ChangePlanModal({
   );
 
   // Reset local plan/status selection whenever a new subscription is targeted.
-  const subId = subscription?.id;
-  useMemo(() => {
-    if (subscription) {
-      setPlan(subscription.plan);
-      setSubscriptionStatus(subscription.status);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subId]);
+  //
+  // BUG FIX (D5). This was a `useMemo`, not an effect: it called `setPlan` and
+  // `setSubscriptionStatus` *during render*, as a side effect of computing a
+  // value it then threw away. That is not a supported use of `useMemo` and it
+  // misbehaves in two concrete ways here:
+  //
+  //  - React makes no guarantee it will run the memo factory when it says it
+  //    will. It is free to discard memo caches (and does, under Strict Mode's
+  //    double-render and when reclaiming memory for offscreen content) and
+  //    re-run it — so the reset could fire on a render where `subId` had not
+  //    changed at all, silently discarding a plan the operator had just
+  //    picked but not yet saved.
+  //  - Conversely, setting state during another component's render phase is
+  //    exactly the pattern React logs "Cannot update a component while
+  //    rendering a different component" for. It only stayed quiet here
+  //    because the setters happen to target this same component.
+  //
+  // The intent was always "run this when the targeted subscription changes",
+  // which is an effect, and specifically the reset-on-change effect this
+  // dashboard has 20-odd copies of. So it becomes the shared hook rather than
+  // a `useEffect` with the same suppression re-applied: the state updates now
+  // happen in the commit phase, after render, where they belong.
+  useResetOnChange(subscription?.id ?? null, () => {
+    if (!subscription) return;
+    setPlan(subscription.plan);
+    setSubscriptionStatus(subscription.status);
+  });
 
   function handleClose() {
     updateMutation.reset();

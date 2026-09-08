@@ -38,6 +38,7 @@ import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 // sidebar count so an expiring licence/rego/insurance is visible from every
 // page, not just to a dispatcher who happens to open Fleet & Drivers.
 import { useComplianceExpiry } from "@/pages/fleet/api";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 interface NavItem {
   to: string;
@@ -212,12 +213,16 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
 
   // Navigating from the drawer should close it -- otherwise the operator taps a
   // link on a phone and the page they asked for is behind the panel.
-  useEffect(() => {
+  //
+  // Not a form reset, but exactly the same hazard `useResetOnChange` exists
+  // for: this must run on a route change *only*. Listing `mobileOpen` and
+  // `onMobileClose` as dependencies -- which is what the rule wants -- would
+  // close the drawer the instant it opened, because opening it is itself a
+  // change to `mobileOpen`. The hook keeps the callback in a ref, so the
+  // route is the only thing that can trigger it.
+  useResetOnChange(location.pathname, () => {
     if (mobileOpen) onMobileClose?.();
-    // Only on a route change; including onMobileClose/mobileOpen would close
-    // the drawer the instant it opened.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  });
 
   useEffect(() => {
     if (!mobileOpen) return;

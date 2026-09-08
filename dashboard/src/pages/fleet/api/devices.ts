@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
 import type { Device, DeviceFormValues, Page } from "../types";
 import { LOOKUP_LIMIT, PAGE_LIMIT } from "./constants";
+import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
 /**
  * Devices: full CRUD plus the remote kiosk-lock / force-update / restart /
@@ -32,8 +33,13 @@ export function useDevices(skip: number, filters: DeviceFilters, limit = PAGE_LI
     // operator refreshed by hand -- they pressed Locate, the tablet answered
     // within a minute, and the page never said so. Idle fleets still make no
     // requests, which is why this is conditional rather than a flat interval.
-    refetchInterval: (query) =>
-      query.state.data?.items?.some((d) => d.locate_requested || d.reboot_requested) ? 5000 : false,
+    ...pollingQueryOptions(
+      whileActive(
+        POLL.PENDING_ACTION,
+        (query: { state: { data?: { items?: Device[] } } }) =>
+          !!query.state.data?.items?.some((d) => d.locate_requested || d.reboot_requested),
+      ),
+    ),
   });
 }
 

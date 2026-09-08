@@ -50,6 +50,7 @@ import {
   networkBadgeVariant,
   statusBadgeVariant,
 } from "./utils";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 const TABLE_PAGE_SIZE = 10;
 const MAP_FETCH_LIMIT = 100; // GET /v1/vehicles caps `limit` at 100 server-side.
@@ -161,7 +162,7 @@ export default function LiveMapPage() {
       });
       return res.data;
     },
-    refetchInterval: 20000,
+    ...pollingQueryOptions(POLL.SUPPORTING),
   });
 
   // The socket sends no snapshot on connect: it only forwards publishes made while
@@ -247,7 +248,7 @@ export default function LiveMapPage() {
       });
       return res.data;
     },
-    refetchInterval: 5000,
+    ...pollingQueryOptions(POLL.LIVE_POSITIONS),
   });
 
   // --- data: geofences (rarely change -- see useGeofences.ts's staleTime) --

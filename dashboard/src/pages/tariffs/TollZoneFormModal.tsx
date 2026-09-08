@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button, Input, Modal } from "@/components/ui";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@/hooks/useGeofences";
 import { extractErrorMessage } from "./format";
 import { TollZoneMapPicker } from "./TollZoneMapPicker";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 export interface TollZoneFormModalProps {
   open: boolean;
@@ -52,13 +53,14 @@ export function TollZoneFormModal({ open, onClose, mode, zone }: TollZoneFormMod
   const updateMutation = useUpdateGeofenceMutation();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  useEffect(() => {
-    if (open) {
-      setForm(zone ? formFromZone(zone) : emptyForm());
-      setError(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, zone?.id]);
+  // Re-seed the form when the modal opens, and when it is re-pointed at a
+  // different row without closing. Keyed on the id alone, never the whole
+  // object: a background refetch produces a new-but-equal row, and resetting
+  // on that would wipe what the operator is part-way through typing.
+  useResetOnChange(open ? (zone?.id ?? "new") : null, () => {
+    setForm(zone ? formFromZone(zone) : emptyForm());
+    setError(null);
+  });
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));

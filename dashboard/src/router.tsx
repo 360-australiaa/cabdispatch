@@ -1,33 +1,48 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/components/NotFound";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { Spinner } from "@/components/ui";
 import { PlatformOwnerRoute } from "@/components/PlatformOwnerRoute";
 import LoginPage from "@/pages/login";
-import GettingStartedPage from "@/pages/getting-started";
-import LiveMapPage from "@/pages/live-map";
-import DispatchPage from "@/pages/dispatch";
-import MessagesPage from "@/pages/messages";
-import DuressPage from "@/pages/duress";
-import AuditLogPage from "@/pages/audit-log";
-import TripsPage from "@/pages/trips";
-import ShiftsPage from "@/pages/shifts";
-import TariffsPage from "@/pages/tariffs";
-import ZonesPage from "@/pages/zones";
-import PslPage from "@/pages/psl";
-import FleetPage from "@/pages/fleet";
-import CompliancePage from "@/pages/compliance";
-import BillingPage from "@/pages/billing";
-import VouchersPage from "@/pages/vouchers";
-import AnnouncementsPage from "@/pages/driver-engagement/AnnouncementsPage";
-import IncentivesPage from "@/pages/driver-engagement/IncentivesPage";
-import WalletPage from "@/pages/driver-engagement/WalletPage";
-import RatingsPage from "@/pages/driver-engagement/RatingsPage";
-import WhiteLabelPage from "@/pages/settings/white-label";
-import SecuritySettingsPage from "@/pages/settings/security";
-import PlatformConsolePage from "@/pages/platform";
-import PaymentReconciliationPage from "@/pages/payment-recon";
+
+// Every authenticated page is loaded on demand.
+//
+// These were 23 static imports, which is why the production bundle was a
+// single 3.1 MB chunk (audit sec 6): opening /login pulled in mapbox-gl and
+// recharts and all 22 other pages before it could render a username field.
+// `React.lazy` gives each route its own chunk, and `vite.config.ts`'s
+// `manualChunks` splits the heavy third-party libraries out so that the two
+// pages using mapbox share one copy of it rather than inlining it twice.
+//
+// `LoginPage` is deliberately NOT lazy: it is the first thing an
+// unauthenticated visitor sees, and making it a second round-trip would
+// trade the win back on the one route where latency is most visible.
+const GettingStartedPage = lazy(() => import("@/pages/getting-started"));
+const LiveMapPage = lazy(() => import("@/pages/live-map"));
+const DispatchPage = lazy(() => import("@/pages/dispatch"));
+const MessagesPage = lazy(() => import("@/pages/messages"));
+const DuressPage = lazy(() => import("@/pages/duress"));
+const AuditLogPage = lazy(() => import("@/pages/audit-log"));
+const TripsPage = lazy(() => import("@/pages/trips"));
+const ShiftsPage = lazy(() => import("@/pages/shifts"));
+const TariffsPage = lazy(() => import("@/pages/tariffs"));
+const ZonesPage = lazy(() => import("@/pages/zones"));
+const PslPage = lazy(() => import("@/pages/psl"));
+const FleetPage = lazy(() => import("@/pages/fleet"));
+const CompliancePage = lazy(() => import("@/pages/compliance"));
+const BillingPage = lazy(() => import("@/pages/billing"));
+const VouchersPage = lazy(() => import("@/pages/vouchers"));
+const AnnouncementsPage = lazy(() => import("@/pages/driver-engagement/AnnouncementsPage"));
+const IncentivesPage = lazy(() => import("@/pages/driver-engagement/IncentivesPage"));
+const WalletPage = lazy(() => import("@/pages/driver-engagement/WalletPage"));
+const RatingsPage = lazy(() => import("@/pages/driver-engagement/RatingsPage"));
+const WhiteLabelPage = lazy(() => import("@/pages/settings/white-label"));
+const SecuritySettingsPage = lazy(() => import("@/pages/settings/security"));
+const PlatformConsolePage = lazy(() => import("@/pages/platform"));
+const PaymentReconciliationPage = lazy(() => import("@/pages/payment-recon"));
 
 /**
  * Route table for the fleet-ops dashboard. Public: /login. Everything else
@@ -52,7 +67,31 @@ import PaymentReconciliationPage from "@/pages/payment-recon";
  *    `<Navigate to="/live-map" replace />`, which turned every mistyped or
  *    stale URL into a silent, un-undoable redirect to the map (see
  *    components/NotFound.tsx for the full reasoning).
+ *  - Every authenticated page is code-split (`React.lazy`) and rendered
+ *    inside a `Suspense` boundary that shows a centred spinner while its
+ *    chunk downloads. The boundary sits per-route rather than once around
+ *    `AppShell`, so a route change swaps only the content area and leaves the
+ *    sidebar on screen instead of blanking the whole shell on every
+ *    navigation.
  */
+/** Wraps a lazily-loaded page in its own Suspense boundary. Per-route rather
+ * than one boundary around the shell, so only the content area shows the
+ * fallback during a navigation -- the sidebar never flickers. */
+function lazyRoute(element: ReactNode): ReactNode {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-64 items-center justify-center p-8" role="status" aria-live="polite">
+          <Spinner />
+          <span className="sr-only">Loading page</span>
+        </div>
+      }
+    >
+      {element}
+    </Suspense>
+  );
+}
+
 export const router = createBrowserRouter([
   {
     path: "/login",
@@ -69,34 +108,32 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Navigate to="/live-map" replace /> },
-      { path: "getting-started", element: <GettingStartedPage /> },
-      { path: "live-map", element: <LiveMapPage /> },
-      { path: "dispatch", element: <DispatchPage /> },
-      { path: "messages", element: <MessagesPage /> },
-      { path: "duress", element: <DuressPage /> },
-      { path: "trips", element: <TripsPage /> },
-      { path: "shifts", element: <ShiftsPage /> },
-      { path: "tariffs", element: <TariffsPage /> },
-      { path: "zones", element: <ZonesPage /> },
-      { path: "psl", element: <PslPage /> },
-      { path: "fleet", element: <FleetPage /> },
-      { path: "compliance", element: <CompliancePage /> },
-      { path: "billing", element: <BillingPage /> },
-      { path: "payment-recon", element: <PaymentReconciliationPage /> },
-      { path: "vouchers", element: <VouchersPage /> },
-      { path: "announcements", element: <AnnouncementsPage /> },
-      { path: "incentives", element: <IncentivesPage /> },
-      { path: "wallet", element: <WalletPage /> },
-      { path: "ratings", element: <RatingsPage /> },
-      { path: "audit-log", element: <AuditLogPage /> },
-      { path: "settings/white-label", element: <WhiteLabelPage /> },
-      { path: "settings/security", element: <SecuritySettingsPage /> },
+      { path: "getting-started", element: lazyRoute(<GettingStartedPage />) },
+      { path: "live-map", element: lazyRoute(<LiveMapPage />) },
+      { path: "dispatch", element: lazyRoute(<DispatchPage />) },
+      { path: "messages", element: lazyRoute(<MessagesPage />) },
+      { path: "duress", element: lazyRoute(<DuressPage />) },
+      { path: "trips", element: lazyRoute(<TripsPage />) },
+      { path: "shifts", element: lazyRoute(<ShiftsPage />) },
+      { path: "tariffs", element: lazyRoute(<TariffsPage />) },
+      { path: "zones", element: lazyRoute(<ZonesPage />) },
+      { path: "psl", element: lazyRoute(<PslPage />) },
+      { path: "fleet", element: lazyRoute(<FleetPage />) },
+      { path: "compliance", element: lazyRoute(<CompliancePage />) },
+      { path: "billing", element: lazyRoute(<BillingPage />) },
+      { path: "payment-recon", element: lazyRoute(<PaymentReconciliationPage />) },
+      { path: "vouchers", element: lazyRoute(<VouchersPage />) },
+      { path: "announcements", element: lazyRoute(<AnnouncementsPage />) },
+      { path: "incentives", element: lazyRoute(<IncentivesPage />) },
+      { path: "wallet", element: lazyRoute(<WalletPage />) },
+      { path: "ratings", element: lazyRoute(<RatingsPage />) },
+      { path: "audit-log", element: lazyRoute(<AuditLogPage />) },
+      { path: "settings/white-label", element: lazyRoute(<WhiteLabelPage />) },
+      { path: "settings/security", element: lazyRoute(<SecuritySettingsPage />) },
       {
         path: "platform",
         element: (
-          <PlatformOwnerRoute>
-            <PlatformConsolePage />
-          </PlatformOwnerRoute>
+          <PlatformOwnerRoute>{lazyRoute(<PlatformConsolePage />)}</PlatformOwnerRoute>
         ),
       },
       { path: "*", element: <NotFound /> },

@@ -1,48 +1,14 @@
-import axios from "axios";
 import type { CappedRateField, Region, UncappedRateField } from "@/hooks/useTariffStudio";
+import { formatMoney } from "@/lib/format";
 
-/** All rate fields on a Tariff arrive as decimal strings. This is the one
- * place that turns them into a display string — never parsed for further
- * arithmetic. */
-export function formatMoney(value: string | null | undefined): string {
-  if (value == null || value === "") return "—";
-  const n = Number(value);
-  if (Number.isNaN(n)) return value;
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-}
-
-export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-/** `<input type="datetime-local">` wants "YYYY-MM-DDTHH:mm" in local time,
- * no timezone/seconds suffix. */
-export function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** Inverse of `toDatetimeLocalValue` — local wall-clock input value to an
- * ISO instant the backend can parse. Empty string -> undefined (caller
- * decides whether that means "omit" or "clear"). */
-export function fromDatetimeLocalValue(value: string): string | undefined {
-  if (!value) return undefined;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
-}
+/** Re-exported from the one shared implementation — see `@/lib/format`. */
+export {
+  formatMoney,
+  formatDateTime,
+  toDatetimeLocalValue,
+  fromDatetimeLocalValue,
+  extractErrorMessage,
+} from "@/lib/format";
 
 export const REGION_LABELS: Record<Region, string> = {
   urban: "Urban",
@@ -105,27 +71,6 @@ export function formatRateValue(value: string, unit: (typeof RATE_FIELD_META)[ke
     default:
       return value;
   }
-}
-
-/** Extracts a human-readable message from an axios error. Handles both
- * shapes the tariffs API returns on 4xx: a plain string `detail` (raised
- * directly by `HTTPException`, e.g. the Fares Order cap violation) and the
- * FastAPI/pydantic `HTTPValidationError` array shape (field-level 422s). */
-export function extractErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const detail = err.response?.data?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      return detail
-        .map((d) => {
-          const field = Array.isArray(d?.loc) ? d.loc.at(-1) : undefined;
-          return field ? `${field}: ${d.msg}` : (d?.msg ?? JSON.stringify(d));
-        })
-        .join("; ");
-    }
-    return err.message;
-  }
-  return err instanceof Error ? err.message : "Something went wrong";
 }
 
 /** True if the Fares Order 422 detail string names this specific field —

@@ -18,6 +18,7 @@ import {
   secondsUntil,
 } from "./format";
 import { isTerminalJobStatus } from "./types";
+import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
 /** Mirrors `DELETE /v1/jobs/{id}`'s `_DISPATCH_ROLES` restriction
  * (`app/api/v1/jobs.py`) — without this, a driver-role user viewing this
@@ -29,11 +30,17 @@ const CANCEL_ROLES = new Set(["owner", "admin", "dispatcher"]);
  * deliberately driver-scoped (see `app/api/v1/jobs.py::live`'s docstring: it
  * only pushes offers addressed to the connecting user's own id). A dispatch
  * desk watching an in-flight broadcast doesn't need sub-second push, so this
- * just polls both queries every 2s while the job is non-terminal — same
- * "keep it simple" call as everywhere else in this dashboard that isn't
+ * just polls both queries while the job is non-terminal — same "keep it
+ * simple" call as everywhere else in this dashboard that isn't
  * safety-critical (only Duress/Live Map use a real WS).
+ *
+ * D5: the interval used to be a local `const POLL_MS = 2000`. It is now the
+ * shared `POLL.REALTIME` band, the same one the jobs list on the parent page
+ * uses — the two surfaces watch the same job moving through the same states,
+ * and there was no reason for the detail panel to run a second faster than
+ * the list it was opened from. Both now also stop entirely while the tab is
+ * hidden (see `lib/pollIntervals.ts`).
  */
-const POLL_MS = 2000;
 
 export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
   const queryClient = useQueryClient();
@@ -43,15 +50,21 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
   const jobQuery = useQuery({
     queryKey: ["dispatch-job", jobId],
     queryFn: () => getJob(jobId),
-    refetchInterval: (query) =>
-      query.state.data && isTerminalJobStatus(query.state.data.status) ? false : POLL_MS,
+    ...pollingQueryOptions(
+      whileActive(
+        POLL.REALTIME,
+        (query: { state: { data?: { status: string } } }) =>
+          !query.state.data || !isTerminalJobStatus(query.state.data.status),
+      ),
+    ),
   });
 
   const offersQuery = useQuery({
     queryKey: ["dispatch-job-offers", jobId],
     queryFn: () => listJobOffers(jobId),
-    refetchInterval: (query) =>
-      jobQuery.data && isTerminalJobStatus(jobQuery.data.status) ? false : POLL_MS,
+    ...pollingQueryOptions(
+      !jobQuery.data || !isTerminalJobStatus(jobQuery.data.status) ? POLL.REALTIME : false,
+    ),
     enabled: !!jobQuery.data,
   });
 

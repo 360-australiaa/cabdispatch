@@ -7,6 +7,7 @@ import { listDriverOptions, listLatestThread, THREAD_LIMIT } from "./api";
 import { initials } from "./format";
 import { ThreadPanel } from "./ThreadPanel";
 import type { DriverOption } from "./types";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Messages — dispatch<->driver threads (`POST/GET /v1/messages`,
@@ -24,7 +25,7 @@ export default function MessagesPage() {
   const driversQuery = useQuery({
     queryKey: ["messages-driver-options"],
     queryFn: listDriverOptions,
-    refetchInterval: 30_000,
+    ...pollingQueryOptions(POLL.ROSTER),
   });
 
   const filtered = useMemo(() => {
@@ -49,7 +50,7 @@ export default function MessagesPage() {
       queryKey: ["messages-thread", driver.id] as const,
       queryFn: () => listLatestThread(driver.id, THREAD_LIMIT),
       staleTime: 20_000,
-      refetchInterval: 30_000,
+      ...pollingQueryOptions(POLL.ROSTER),
     })),
   });
 

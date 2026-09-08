@@ -8,6 +8,7 @@ import type {
   Page,
 } from "../types";
 import { LOOKUP_LIMIT, PAGE_LIMIT } from "./constants";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Drivers: the read-only live-status rollup, driver creation, the compliance
@@ -154,7 +155,7 @@ export function useOpenFatigueAlerts() {
       });
       return data;
     },
-    refetchInterval: 60_000,
+    ...pollingQueryOptions(POLL.AMBIENT),
   });
 }
 

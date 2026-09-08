@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
 import { listDuressSnapshots } from "./api";
 import { formatTime } from "./format";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Post-incident scrub bar over ALL captured cabin-camera frames for an
@@ -44,7 +45,7 @@ export function SnapshotGallery({
     // Fallback cadence for viewers with no live socket (mirrors
     // CameraSnapshotPanel's own pollIntervalMs fallback) -- cheap since this
     // is metadata-only, no image bytes.
-    refetchInterval: enabled ? 10_000 : false,
+    ...pollingQueryOptions(enabled ? POLL.INCIDENT_LIST : false),
   });
 
   // The list endpoint returns newest-first; reverse to oldest-first so the

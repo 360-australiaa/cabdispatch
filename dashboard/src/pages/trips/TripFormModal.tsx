@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import axios from "axios";
 import { Plus, Trash2 } from "lucide-react";
 import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
@@ -15,6 +15,7 @@ import {
   type VehicleLite,
 } from "@/hooks/useTrips";
 import { PAYMENT_METHOD_OPTIONS, TIME_CLASS_OPTIONS, TRIP_TYPE_OPTIONS } from "./format";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 /** Payment methods that need a supporting field beyond the plain total. */
 function needsVoucherCode(method: PaymentMethod) {
@@ -149,13 +150,14 @@ export function TripFormModal({
   const updateMutation = useUpdateTripMutation();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  useEffect(() => {
-    if (open) {
-      setForm(trip ? formFromTrip(trip) : emptyForm());
-      setError(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, trip?.id]);
+  // Re-seed the form when the modal opens, and when it is re-pointed at a
+  // different row without closing. Keyed on the id alone, never the whole
+  // object: a background refetch produces a new-but-equal row, and resetting
+  // on that would wipe what the operator is part-way through typing.
+  useResetOnChange(open ? (trip?.id ?? "new") : null, () => {
+    setForm(trip ? formFromTrip(trip) : emptyForm());
+    setError(null);
+  });
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));

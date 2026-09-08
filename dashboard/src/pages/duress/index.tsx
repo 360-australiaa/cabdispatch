@@ -22,6 +22,7 @@ import { EventDetailPanel } from "./EventDetailPanel";
 import { TriggerEventModal } from "./TriggerEventModal";
 import { formatDateTime, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 type ViewTab = "events" | "devices";
 
@@ -67,7 +68,7 @@ export default function DuressPage() {
     placeholderData: (prev) => prev,
     // This is a safety desk: a new incident (or a status change from another
     // dispatcher's action) must show up without anyone touching a filter.
-    refetchInterval: 10_000,
+    ...pollingQueryOptions(POLL.INCIDENT_LIST),
   });
 
   const total = eventsQuery.data?.total ?? 0;

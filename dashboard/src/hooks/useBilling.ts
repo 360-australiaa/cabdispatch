@@ -76,19 +76,10 @@ export interface ConnectOnboardResponse {
 /** ---- Formatting ---- */
 
 /** Money fields come back as decimal strings; format explicitly for display only. */
-export function formatAud(amount: string | null | undefined): string {
-  if (amount == null || amount === "") return "—";
-  const n = Number(amount);
-  if (Number.isNaN(n)) return amount;
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-}
-
-export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-AU", { year: "numeric", month: "short", day: "numeric" });
-}
+/** Money and date rendering for the billing screens. Both used to be local
+ * implementations here; they are now the shared ones (`@/lib/format`), which
+ * is where the `en-AU`/`AUD` pinning and the honest-null rule live. */
+export { formatAud, formatDateNumericDay as formatDate } from "@/lib/format";
 
 /** ---- Subscriptions ---- */
 

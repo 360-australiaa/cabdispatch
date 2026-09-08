@@ -9,6 +9,7 @@ import { CreateJobModal } from "./CreateJobModal";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { formatDateTime, formatMoney, jobStatusBadgeVariant } from "./format";
 import { isTerminalJobStatus, type Job } from "./types";
+import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
 const PAGE_SIZE = 20;
 
@@ -43,7 +44,11 @@ export default function DispatchPage() {
     queryFn: () =>
       listJobs({ limit: PAGE_SIZE, skip: page * PAGE_SIZE, status: statusFilter || undefined }),
     placeholderData: (prev) => prev,
-    refetchInterval: (query) => (anyActiveJob(query.state.data?.items) ? 3000 : false),
+    ...pollingQueryOptions(
+      whileActive(POLL.REALTIME, (query: { state: { data?: { items?: Job[] } } }) =>
+        anyActiveJob(query.state.data?.items),
+      ),
+    ),
   });
 
   const total = jobsQuery.data?.total ?? 0;

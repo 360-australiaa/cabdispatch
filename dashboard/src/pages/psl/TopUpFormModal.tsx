@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
+import { useState } from "react";
 import { Button, Input, Modal, Select } from "@/components/ui";
 import { useCreateTopUpMutation } from "@/hooks/usePSLCentre";
 import type { DriverLite } from "@/hooks/useTrips";
+import { extractErrorMessage } from "@/lib/format";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 import { currentPeriod, PAYMENT_METHOD_OPTIONS } from "./format";
 
 export interface TopUpFormModalProps {
@@ -12,18 +13,6 @@ export interface TopUpFormModalProps {
   /** Pre-fill from the current ledger filters when the modal is opened from the toolbar. */
   defaultDriverId?: string;
   defaultPeriod?: string;
-}
-
-function extractErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const detail = err.response?.data?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      return detail.map((d) => d.msg ?? JSON.stringify(d)).join("; ");
-    }
-    return err.message;
-  }
-  return err instanceof Error ? err.message : "Something went wrong";
 }
 
 /** Records a driver's PSL top-up payment (POST /v1/psl/topup). This is an
@@ -45,17 +34,17 @@ export function TopUpFormModal({
 
   const createMutation = useCreateTopUpMutation();
 
-  useEffect(() => {
-    if (open) {
-      setDriverId(defaultDriverId || "");
-      setPeriod(defaultPeriod || currentPeriod());
-      setAmount("");
-      setPaymentMethod("card");
-      setError(null);
-      setSuccess(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultDriverId, defaultPeriod]);
+  // Re-seed from the toolbar's current filters each time the modal opens, and
+  // if those filters change while it is open. Unlike the row-editing modals
+  // there is no id to key on, so the key is the pre-fill pair itself.
+  useResetOnChange(open ? `${defaultDriverId ?? ""}|${defaultPeriod ?? ""}` : null, () => {
+    setDriverId(defaultDriverId || "");
+    setPeriod(defaultPeriod || currentPeriod());
+    setAmount("");
+    setPaymentMethod("card");
+    setError(null);
+    setSuccess(null);
+  });
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

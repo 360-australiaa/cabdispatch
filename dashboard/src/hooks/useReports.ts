@@ -84,12 +84,8 @@ export interface ReportDateRange {
 }
 
 /** Money fields come back as decimal strings; format explicitly for display/chart use only. */
-export function formatAud(amount: string | null | undefined): string {
-  if (amount == null || amount === "") return "—";
-  const n = Number(amount);
-  if (Number.isNaN(n)) return amount;
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-}
+/** The shared money renderer — see `@/lib/format`. */
+export { formatAud } from "@/lib/format";
 
 export function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10);

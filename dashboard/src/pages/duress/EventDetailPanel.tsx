@@ -37,6 +37,7 @@ import {
 } from "./format";
 import { isTerminalStatus, ESCALATION_STAGES } from "./types";
 import { useDuressLiveGps } from "./useDuressLiveGps";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /** Roles allowed to watch the live GPS relay — mirrors the `owner`/`admin`/
  * `dispatcher` restriction noted on `WS /v1/duress/{id}/live` in
@@ -63,7 +64,7 @@ export function EventDetailPanel({
     queryFn: () => getDuressEvent(eventId),
     // A safety desk needs to see a Twilio call-status update or another
     // dispatcher's action land without anyone touching this panel.
-    refetchInterval: 8_000,
+    ...pollingQueryOptions(POLL.INCIDENT_DETAIL),
   });
 
   function invalidate() {
