@@ -349,6 +349,7 @@ fun DeckHomeScreen(
         CaptainHeader(
             state = state,
             verified = homeExtras.verified,
+            vehicleMakeModel = homeExtras.vehicleMakeModel,
             // Same Room open-trip read that gates the rail's METER item — drives the header
             // pill's HIRED state (see HeaderStatus' own doc for what is NOT derivable here).
             hasActiveTrip = hasActiveTrip,
@@ -775,6 +776,11 @@ internal data class HomeExtras(
     /** `kind` of the most recently triggered fatigue alert (by `triggeredAt`), or `null` if there
      * are none / not loaded yet. */
     val latestFatigueKind: String? = null,
+    /** "Make Model" of the bound vehicle from the real VehicleDto (`make`/`model`), or null when
+     * either is unset or the lookup failed. Read from the same list ProfileViewModel resolves
+     * its vehicle from, matched on the session's vehicleUuid. `null` renders the rego alone --
+     * never a placeholder model. */
+    val vehicleMakeModel: String? = null,
 )
 
 @Composable
@@ -787,6 +793,15 @@ internal fun rememberHomeExtras(driverId: String?, shiftId: String?): HomeExtras
             val verified = runCatching { AppContainer.apiService.me() }.getOrNull()
                 ?.suitabilityStatus?.equals("clear", ignoreCase = true)
             extras = extras.copy(verified = verified)
+            // Vehicle make/model for the header (owner reference render shows "rego · make
+            // model"). Same source and match ProfileViewModel.loadVehicleDetail uses.
+            val vehicleUuid = SessionHolder.session.value?.vehicleUuid
+            if (vehicleUuid != null) {
+                val vehicle = runCatching { AppContainer.apiService.listVehicles() }.getOrNull()
+                    ?.items?.firstOrNull { it.id == vehicleUuid }
+                val makeModel = vehicle?.let { v -> listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { null } }
+                extras = extras.copy(vehicleMakeModel = makeModel)
+            }
         }
         launch {
             val pctChange = runCatching { AppContainer.apiService.earningsToday(id) }.getOrNull()?.pctChange

@@ -369,6 +369,13 @@ fun CaptainButton(
 @Composable
 fun PaneShell(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
+        // Chip lane (tablet, 2026-09-08). The app-level status chips (FLEET LOCKED, TABLET NOT
+        // REGISTERED) sit top-start just under the home header -- over the empty edge of the meter
+        // dial on the dashboard, by design. Every rail pane puts its back arrow and title in
+        // exactly that spot, so on History the chip printed across "Trip history" and its back
+        // control. A fixed lane above the title row keeps every pane's title clear of the chips
+        // whatever their state; the panes all have the height to spare.
+        Spacer(Modifier.height(Space.xl))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
             Box(
                 modifier = Modifier.size(48.dp).clip(CircleShape).background(CaptainPalette.panel)

@@ -122,6 +122,8 @@ internal fun CaptainHeader(
     state: WheelDashboardUiState,
     verified: Boolean?,
     hasActiveTrip: Boolean,
+    /** "Make Model" from the real VehicleDto, or null -- see HomeExtras.vehicleMakeModel. */
+    vehicleMakeModel: String? = null,
     onShowDriverId: () -> Unit,
     onOpenProfile: () -> Unit,
     onToggleAvailability: () -> Unit,
@@ -209,11 +211,12 @@ internal fun CaptainHeader(
                         }
                     }
                 }
-                // Rego only. The reference shows "rego · make/model" but no make/model field
-                // exists in this app's data model or its backend, so the real rego is shown and
-                // nothing is invented to fill the gap.
+                // "rego · make model", exactly as the reference draws it, from the real
+                // VehicleDto.make/.model (this comment used to claim no such field existed; the
+                // Driver Profile screen was already resolving it). Rego alone when either is
+                // unset -- never a placeholder model.
                 Text(
-                    state.session?.vehicleId ?: "—",
+                    listOfNotNull(state.session?.vehicleId, vehicleMakeModel).joinToString(" · ").ifBlank { "—" },
                     style = Type.mono,
                     color = CaptainPalette.textSecondary,
                     maxLines = 1,
