@@ -2,6 +2,40 @@
 creation flows, the real-or-mock CabCharge authorization and TTSS subsidy
 claim flows, and the Stripe webhook receiver.
 
+*** DEPRECATED / UNWIRED — read before touching or trusting this router ***
+
+This entire surface is built but not called by any real client in this
+repo. Verified by grep (2026-09, Wave 4 B11) across `android/` and
+`dashboard/src/**`:
+  - Android's Close & Pay screen never calls any `/v1/payments/**` route —
+    `ApiService.kt` has no reference to `tap-to-pay`, `link`, `manual`,
+    `cabcharge/authorize`, or `ttss/claim`. The driver-facing payment flow
+    is entirely local `hardware/payments/*Gateway` mocks (owned by A5, see
+    `docs/audits/2026-09-08-android-architecture-audit.md` §5) writing
+    straight onto `Trip.payment_method`/`Trip.payment_status` — it never
+    creates a `Payment` row through this API at all.
+  - The dashboard reads this router (`GET /v1/payments`, for the
+    `payment-recon` reconciliation view of manually-entered CabCharge/TTSS
+    dockets) but never writes to it — no `POST`/`PATCH` call site exists in
+    `dashboard/src`.
+  - No STRIPE/CABCHARGE/TTSS credentials are configured anywhere in this
+    repo (`settings.STRIPE_SECRET_KEY` etc. default to the placeholder
+    values below), so every creation flow below has ALWAYS taken the mock
+    branch in every environment this app has run in. `mock: true` on every
+    response is not a fallback for an edge case — it is the only thing that
+    has ever actually happened.
+
+So: no money has ever moved through this router, in test or in the field.
+It exists as a complete, tested implementation of what a real integration
+would look like, deliberately left unwired pending an **owner decision**
+(program plan §5 item 4: is a real Stripe Terminal integration scheduled,
+or does Close & Pay stay cash/link/CabCharge-manual-entry only?). Per that
+decision's stated default ("mocks made honest; Tap-to-Pay hidden in release
+builds"), this code is kept, clearly marked, and NOT wired up — it is not
+deleted, and it is not connected to a real payment rail. See
+`docs/PAYMENTS_INTEGRATION.md` for exactly what a real Stripe Terminal
+integration would require to actually turn this on.
+
 Two routers are exported because `/v1/stripe/webhook` lives OUTSIDE the
 `/v1/payments` prefix (per the domain contract): `router` (prefix
 "/v1/payments") and `webhook_router` (prefix "/v1/stripe"). The integration
@@ -17,6 +51,20 @@ driver keying in a paper docket after the fact). List/get/update are
 generic. There is deliberately no DELETE: payments are a financial audit
 trail and must not be hard-deleted — transition to `refunded`/`canceled` via
 PATCH instead.
+
+`PATCH /v1/payments/{id}` deliberately REFUSES to set `status="succeeded"`
+(or "failed") on a Stripe-rail payment (`tap_to_pay`/`link`) — see
+`update_payment` below. Those two methods have a real settlement authority
+(the Stripe webhook) once Stripe is actually configured; letting any
+authenticated tenant user PATCH the generic endpoint straight to
+"succeeded" would let a client (or a stolen token) report money that never
+moved, which is exactly the fabricated-success failure mode this whole
+program exists to close. `cash` is created already `succeeded` (the driver
+holds the cash at creation time — nothing to defer). `cabcharge`/`ttss` are
+manual-docket rails with no live settlement webhook at all (see
+`ManualPaymentRequest`'s docstring) — an admin/staff PATCHing one to
+"succeeded" after reconciling the physical docket is the intended,
+documented workflow for those two methods only, not a gap.
 
 Tenant isolation: every endpoint below except the webhook resolves
 `tenant_id` via `get_current_tenant_id` and filters every query by it, per
@@ -133,6 +181,15 @@ async def get_payment(
     return await _get_owned_payment(session, tenant_id, payment_id)
 
 
+# Methods with a real settlement authority other than "an admin says so" —
+# tap-to-pay/link settle via the Stripe webhook (`stripe_webhook` below), the
+# only path allowed to move them to a terminal success/failure. See the
+# module docstring for why a generic client-facing PATCH must not be allowed
+# to fabricate a "succeeded" for these two.
+_STRIPE_SETTLED_METHODS = {METHOD_TAP_TO_PAY, METHOD_LINK}
+_CLIENT_FORBIDDEN_TERMINAL_STATUSES = {STATUS_SUCCEEDED, "failed"}
+
+
 @router.patch("/{payment_id}", response_model=PaymentRead)
 async def update_payment(
     payment_id: str,
@@ -141,7 +198,22 @@ async def update_payment(
     session: AsyncSession = Depends(get_session),
 ) -> Payment:
     payment = await _get_owned_payment(session, tenant_id, payment_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+
+    updates = body.model_dump(exclude_unset=True)
+    if (
+        payment.method in _STRIPE_SETTLED_METHODS
+        and updates.get("status") in _CLIENT_FORBIDDEN_TERMINAL_STATUSES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"'{payment.method}' payments settle only via the Stripe webhook — "
+                f"PATCH cannot set status={updates['status']!r} directly. "
+                "See app/api/v1/payments.py module docstring."
+            ),
+        )
+
+    for field, value in updates.items():
         setattr(payment, field, value)
     await session.commit()
     await session.refresh(payment)
