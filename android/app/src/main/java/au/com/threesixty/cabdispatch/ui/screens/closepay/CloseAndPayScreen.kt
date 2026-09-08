@@ -122,10 +122,45 @@ fun CloseAndPayScreen(
             CloseAndPayUiState.Loading -> CenterMessage("Loading trip…")
             CloseAndPayUiState.NoActiveTrip -> CenterMessage("No active trip to close.")
             is CloseAndPayUiState.LoadError -> CenterMessage(s.message, isError = true)
-            is CloseAndPayUiState.ReadyToClose -> ReadyToCloseFlow(s, viewModel, navController)
+            is CloseAndPayUiState.ReadyToClose -> {
+                ReadyToCloseFlow(s, viewModel, navController)
+                // F11: when no cached tariff row could be resolved, the fare below was computed
+                // from the built-in Fares Order card rather than this operator's own. Payment is
+                // no longer blocked (see ReadyToClose.usingDefaultRates' doc for why blocking was
+                // the worse harm) -- but it must never be silent either, so this sits over the
+                // flow rather than inside it, where no sub-screen of the payment flow can scroll
+                // it out of sight before the driver takes the money.
+                if (s.usingDefaultRates) DefaultRatesNotice()
+            }
             is CloseAndPayUiState.ReceiptStep -> ReceiptScreen(s, viewModel)
             CloseAndPayUiState.Done -> Unit
         }
+    }
+}
+
+/**
+ * The "this fare used default rates" banner -- F11's visible half.
+ *
+ * Deliberately loud (warning-coloured, top-anchored, unmissable) and deliberately not dismissible:
+ * it states a fact about the fare on screen that stays true for as long as that fare is on screen,
+ * and a driver who taps it away would be taking payment on a rate card they have no reason to think
+ * is not their operator's.
+ */
+@Composable
+private fun DefaultRatesNotice() {
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Text(
+            "DEFAULT RATES — this operator's tariff was not available on this device; " +
+                "the fare below was calculated from the standard NSW Fares Order rate card.",
+            fontFamily = InterFamily,
+            fontSize = 13.sp,
+            color = CaptainPalette.hudBg,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CaptainPalette.warning)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+        )
     }
 }
 

@@ -1,11 +1,10 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
+import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
+import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -14,16 +13,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigDecimal
 import java.math.RoundingMode
-
-/** Advances the fake fare-tick coroutine by exactly one real tick (its own `delay(1000)` cadence —
- * see [FareEngineImpl.startTicking]). Top-level so it's a plain single-receiver ([TestScope])
- * extension, callable straight from inside a `runTest { ... }` body where that's the implicit
- * receiver. */
-@OptIn(ExperimentalCoroutinesApi::class)
-private suspend fun TestScope.advanceOneTick() {
-    advanceTimeBy(1000)
-    runCurrent()
-}
 
 /**
  * 2026-09 product report, three requirements, pinned against [FareEngineImpl] — the UI-facing
@@ -46,18 +35,10 @@ private suspend fun TestScope.advanceOneTick() {
  */
 class FareEngineImplRunningDisplayTest {
 
-    /** Deterministic, test-controlled replacement for [RealLocationProvider][au.com.threesixty.cabdispatch.domain.location.RealLocationProvider] —
-     * mutable speed only; [locationFix] is never read by [FareEngineImpl] itself (only by
-     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s trace recording), so it
-     * stays a fixed `null`, same honest-null convention [StubSpeedSource] already uses. */
-    private class FakeSpeedSource(initialSpeedKmh: Double) : SpeedSource {
-        private val _speedKmh = MutableStateFlow(initialSpeedKmh)
-        override val speedKmh: StateFlow<Double> = _speedKmh
-        override val locationFix: StateFlow<LocationFix?> = MutableStateFlow(null)
-        fun setSpeed(kmh: Double) {
-            _speedKmh.value = kmh
-        }
-    }
+    // GPS comes from the shared [FakeMeterGps] (see its own doc). The file-local fake this
+    // replaced published a speed with a permanently-null locationFix — a combination the real
+    // provider cannot produce, and one that made every distance assertion below pass for the wrong
+    // reason once F2 started measuring ground covered rather than integrating speed.
 
     /** A real-shaped urban tariff DTO (2026 Order rate card, matching
      * [au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF] field-for-field) — decimal-as-string
@@ -86,8 +67,8 @@ class FareEngineImplRunningDisplayTest {
 
     @Test
     fun `running total at t=0 is flagfall plus PSL, not flagfall alone`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         val tariff = urbanTariffDto()
 
         engine.startTrip(tariff, startLat = -33.87, startLng = 151.21)
@@ -107,8 +88,8 @@ class FareEngineImplRunningDisplayTest {
         // pure snapshot (tickJob.cancel() + status flip, no recompute — see FareEngineImpl.close's
         // own body), so the closed total is definitionally identical, but this test exists to
         // document that fact explicitly rather than leave it implicit.
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         val atStart = engine.state.value.total
@@ -122,8 +103,8 @@ class FareEngineImplRunningDisplayTest {
 
     @Test
     fun `a toll added mid-trip appears in the running total immediately, on top of flagfall plus PSL`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         engine.addToll(TollPresets.M5) // $4.30
@@ -137,14 +118,14 @@ class FareEngineImplRunningDisplayTest {
     fun `waiting time accrues into the running total tick by tick, with PSL counted exactly once`() = runTest {
         // Speed pinned below the 26 km/h threshold the whole time -> every tick accrues via the
         // WAITING branch (real behaviour for a driver stopped at lights/a rank).
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         val atStart = engine.state.value.total
         val pslAtStart = engine.state.value.breakdown.psl
 
-        repeat(60) { advanceOneTick() } // 60s waiting @ 1.130 c/min -> 1 min * 1.13 = 1.13
+        repeat(60) { advanceOneTick(speedSource) } // 60s waiting @ 1.130 c/min -> 1 min * 1.13 = 1.13
 
         val afterWaiting = engine.state.value
         assertTrue(
@@ -168,8 +149,8 @@ class FareEngineImplRunningDisplayTest {
 
     @Test
     fun `a negotiated fixed price displays exactly the agreed amount immediately, not flagfall`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
 
         engine.startTrip(
             urbanTariffDto(),
@@ -195,8 +176,8 @@ class FareEngineImplRunningDisplayTest {
     fun `a negotiated fixed price does not grow as the meter accrues distance underneath it`() = runTest {
         // "the meter will keep running" (product's own words) — distance/time keep accruing for
         // the trip record/compliance evidence, but the DISPLAYED total must not follow them.
-        val speedSource = FakeSpeedSource(80.0) // >= 26 km/h -> DISTANCE mode every tick
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(80.0) // >= 26 km/h -> DISTANCE mode every tick
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -205,7 +186,7 @@ class FareEngineImplRunningDisplayTest {
         )
 
         val totalAtStart = engine.state.value.total
-        repeat(30) { advanceOneTick() } // 30s @ 80km/h -> ~0.667km accrued, a real, non-zero charge
+        repeat(30) { advanceOneTick(speedSource) } // 30s @ 80km/h -> ~0.667km accrued, a real, non-zero charge
         val afterDriving = engine.state.value
 
         assertTrue("distance should genuinely have accrued", afterDriving.distanceKm > BigDecimal.ZERO)
@@ -225,8 +206,8 @@ class FareEngineImplRunningDisplayTest {
         // assert 57.75 = 50.00 + 1.32 psl + 6.43 toll; see git history). The toll is still a real
         // cost the operator incurred, so it must still be RECORDED (breakdown.tolls) for
         // audit/reconciliation, even though the passenger is never charged more than $50 for it.
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -241,10 +222,99 @@ class FareEngineImplRunningDisplayTest {
         assertEquals(BigDecimal("6.43"), state.breakdown.tolls)
     }
 
+    // --- (D) F8: the dial IS the bill, maxi multiplier and all ------------------------------
+
+    @Test
+    fun `on a maxi trip the dial shows exactly what Close and Pay will bill`() = runTest {
+        // F8 (architecture audit 2026-09-08, §2.2), the audit's own words: "a maxi trip's live dial
+        // under-reads the actual bill by 50% of the metered base".
+        //
+        // The cause was structural rather than arithmetical. FareBreakdown carries the RAW
+        // cumulative flagfall/distance/waiting figures, because the pure engine applies the 150%
+        // maxi multiplier ONCE, wholesale, at close time — never per tick. FareState.total summed
+        // those raw components itself, so it could not have known about a multiplier that had not
+        // been applied yet. A driver on a maxi hiring watched a dial reading two-thirds of the
+        // metered fare for the whole trip and then saw it jump at Close & Pay.
+        //
+        // This test does not check the dial against a formula. It checks it against the OTHER CODE
+        // PATH — the one Close & Pay actually bills from — which is the only comparison that can
+        // prove the two agree.
+        val gps = FakeMeterGps(70.0)
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        engine.startTrip(
+            urbanTariffDto(),
+            startLat = -33.87,
+            startLng = 151.21,
+            isMaxiVehicle = true,
+            passengerCount = 7,
+        )
+        repeat(180) { advanceOneTick(gps) } // three minutes at 70 km/h — 3.5 km, a real fare
+
+        val dial = engine.state.value
+        assertTrue("this hiring must genuinely be on the maxi rate", dial.maxiRateApplied)
+        assertTrue("the meter must have accrued something real", dial.breakdown.distanceAmount > BigDecimal.ZERO)
+
+        // Rebuild the bill the way Close & Pay does: hand the accrued state to the pure,
+        // golden-vector-tested engine and close it. (CloseAndPayViewModel reaches this same
+        // close() via reconstructFareState off the persisted row; the accrued figures are the
+        // same either way, which is what F9 makes true to the cent.)
+        val billed = CalcFareEngine().close(
+            CalcFareState(
+                tariff = urbanTariffDto().toDomainTariff(),
+                timeClass = au.com.threesixty.cabdispatch.domain.fare.TimeClass.DAY,
+                isPeak = false,
+                isMaxiVehicle = true,
+                passengerCount = 7,
+                cumulativeDistanceKm = dial.distanceKm,
+                accruedDistanceCharge = dial.breakdown.distanceAmount,
+                accruedWaitingCharge = dial.breakdown.waitingAmount,
+                hired = true,
+            ),
+            includePsl = true,
+        )
+
+        assertEquals("the live dial must equal the bill, to the cent", billed.grandTotal, dial.total)
+        assertTrue("and the maxi rate must genuinely be in that figure", billed.maxiRateApplied)
+
+        // The regression guard, stated concretely: the naive breakdown sum the dial used to show is
+        // materially LOWER than the bill, because the maxi half of the metered fare is missing from
+        // it. If FareState.total ever falls back to that sum, this fails.
+        assertTrue(
+            "the old naive sum under-reads the maxi bill (sum ${dial.breakdown.total}, bill ${billed.grandTotal})",
+            dial.breakdown.total < billed.grandTotal,
+        )
+    }
+
+    @Test
+    fun `on an ordinary trip the dial also equals the bill`() = runTest {
+        // The non-maxi control for the test above: F8's fix must not have moved the ordinary case,
+        // which was already very nearly right (it differed only by the Act s76(5)/(6) round-down).
+        val gps = FakeMeterGps(50.0)
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+        repeat(120) { advanceOneTick(gps) }
+
+        val dial = engine.state.value
+        val billed = CalcFareEngine().close(
+            CalcFareState(
+                tariff = urbanTariffDto().toDomainTariff(),
+                timeClass = au.com.threesixty.cabdispatch.domain.fare.TimeClass.DAY,
+                isPeak = false,
+                cumulativeDistanceKm = dial.distanceKm,
+                accruedDistanceCharge = dial.breakdown.distanceAmount,
+                accruedWaitingCharge = dial.breakdown.waitingAmount,
+                hired = true,
+            ),
+            includePsl = true,
+        )
+
+        assertEquals(billed.grandTotal, dial.total)
+    }
+
     @Test
     fun `an ordinary metered trip never carries a negotiatedTotal`() = runTest {
-        val speedSource = FakeSpeedSource(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope)
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         assertNull(engine.state.value.negotiatedTotal)

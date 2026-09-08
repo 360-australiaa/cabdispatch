@@ -3,12 +3,55 @@ package au.com.threesixty.cabdispatch.domain
 import java.math.BigDecimal
 import java.math.RoundingMode
 
+/**
+ * The Fares Order urban distance/waiting changeover speed, and the single fallback used whenever a
+ * [au.com.threesixty.cabdispatch.data.remote.TariffDto] carries no usable
+ * `speedThresholdKmh` of its own (missing, zero, or negative).
+ *
+ * F7 (architecture audit 2026-09-08, §2.1): this literal `26.0` used to be written out by hand in
+ * three separate places -- `FareEngineImpl.startTrip`, `FareEngineImpl.tick`, and
+ * [FareState.speedThresholdKmh]'s own default -- so a correction to one was a silent, invisible
+ * disagreement with the other two. The dial bands on [FareState.speedThresholdKmh] while the meter
+ * charges on `tick`'s copy: if those two ever drifted apart, the ring would claim waiting-time
+ * character on exactly the speeds the meter was billing as distance, with nothing on screen to
+ * suggest anything was wrong. One constant, three readers.
+ *
+ * Note this is only ever a *fallback*. A real tariff row's own `speedThresholdKmh` always wins --
+ * a country tariff has a different changeover, and hardcoding this figure into the accrual
+ * decision (rather than into the "we have no tariff figure at all" branch) is precisely the
+ * NSW-hardcoding the audit's §2.4 catalogues.
+ */
+const val DEFAULT_SPEED_THRESHOLD_KMH: Double = 26.0
+
 enum class TripStatus { FOR_HIRE, HIRED, STOPPED, CLOSED }
 enum class AccrualMode { DISTANCE, WAITING }
 enum class TariffBand(val label: String) { BAND_1("Tariff 1"), BAND_2("Tariff 2") }
 enum class TimeClass(val label: String) { DAY("Day"), NIGHT("Night"), HOLIDAY("Holiday") }
 
-data class TollPreset(val id: String, val label: String, val amount: BigDecimal)
+data class TollPreset(
+    val id: String,
+    val label: String,
+    val amount: BigDecimal,
+    /**
+     * The id this preset's road carries in the NSW toll registry
+     * ([au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity.id]), or `null` when this
+     * preset is not a registry toll road at all.
+     *
+     * **T1 (architecture audit 2026-09-08, §2.3).** Manual presets and the automatic gantry
+     * detector reached [FareBreakdown.tolls] by two completely independent routes with no
+     * cross-check between them: [FareState.tollsApplied] (what the driver tapped) and
+     * [FareState.autoTollsApplied] (what the detector found). A driver who tapped M5 while driving
+     * the M5 -- the single most likely thing for a driver to do -- had the crossing charged twice,
+     * and neither list on screen made it obvious why the toll line was double what it should be.
+     * The two lists could not be reconciled because nothing connected `"m5"` to the registry's
+     * `"M5SW"`. This field is that connection.
+     *
+     * `null` for the airport preset, and correctly so: the $6.43 Sydney Airport figure is a
+     * regulated access fee levied at the rank, not a toll gantry, so there is no registry road it
+     * could ever double up with. A `null` here means "nothing to reconcile", never "not looked up".
+     */
+    val registryRoadId: String? = null,
+)
 
 /**
  * Fixed preset list per spec B5 S3: "toll add buttons (M5, Harbour southbound,
@@ -17,8 +60,12 @@ data class TollPreset(val id: String, val label: String, val amount: BigDecimal)
  * figures from tenant tariff/toll config server-side rather than hardcoding.
  */
 object TollPresets {
-    val M5 = TollPreset("m5", "M5", BigDecimal("4.30"))
-    val HARBOUR_SOUTHBOUND = TollPreset("harbour_sb", "Harbour (southbound)", BigDecimal("4.19"))
+    // registryRoadId values are the NSW registry's own natural keys (backend's
+    // `app/data/nsw_toll_roads.json`): the "M5" a Sydney driver means is the M5 South-West
+    // Motorway, "M5SW", not WestConnex's separate "M5E" (M5 East).
+    val M5 = TollPreset("m5", "M5", BigDecimal("4.30"), registryRoadId = "M5SW")
+    val HARBOUR_SOUTHBOUND =
+        TollPreset("harbour_sb", "Harbour (southbound)", BigDecimal("4.19"), registryRoadId = "SHB_SHT")
     // $6.43 Sydney Airport access fee (Point to Point Transport (Fares) Order 2026, effective 1
     // June 2026 — was $6.30 under the superseded Fares Order 2025 (no.2)).
     val AIRPORT = TollPreset("airport", "Airport", BigDecimal("6.43"))
@@ -90,7 +137,7 @@ data class FareState(
      * has to move both, or the dial would claim waiting-time character while the meter charged
      * distance. Defaults to the Fares Order urban figure, matching the fare engine's own fallback.
      */
-    val speedThresholdKmh: Double = 26.0,
+    val speedThresholdKmh: Double = DEFAULT_SPEED_THRESHOLD_KMH,
     /**
      * Cumulative whole seconds spent in [AccrualMode.DISTANCE] / [AccrualMode.WAITING]
      * respectively, since [status] became [TripStatus.HIRED]. Added so
@@ -170,6 +217,42 @@ data class FareState(
      * that would refire on every subsequent unrelated recomposition).
      */
     val lastAutoTollAlert: AutoTollAlert? = null,
+    /**
+     * True while the newest GPS fix is older than
+     * [au.com.threesixty.cabdispatch.domain.FareEngineImpl.MAX_FIX_AGE_MS], or while there is no
+     * fix at all -- i.e. the meter currently has no idea whether the vehicle is moving.
+     *
+     * F3 (architecture audit 2026-09-08, §2.1, rated **blocker**): before this existed,
+     * [au.com.threesixty.cabdispatch.domain.location.RealLocationProvider] only ever updated its
+     * speed when a fix was *accepted*, and only ever zeroed it when the location permission was
+     * lost. So in a tunnel the last speed simply froze and the meter kept accruing against it --
+     * enter the Sydney Harbour Tunnel at 80 km/h, lose GPS for four minutes, and the passenger is
+     * billed 5.3 km that nobody drove. (Frozen at zero is the mirror-image bug: billing waiting
+     * time at 100 km/h.)
+     *
+     * While this is true [au.com.threesixty.cabdispatch.domain.FareEngineImpl.tick] accrues **no
+     * distance at all**, and accrues waiting time only when the last *known* speed was below the
+     * threshold -- see that method's own doc for the full rule. It is published here rather than
+     * kept private because a meter that silently stops charging is exactly as dishonest as one
+     * that silently over-charges: the driver has to be told. A4 owns the dial treatment ("GPS LOST
+     * -- waiting time only"); this field is the engine's half of that contract.
+     */
+    val gpsLost: Boolean = false,
+    /**
+     * The authoritative running total -- literally
+     * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]`(...).grandTotal`, recomputed
+     * off the shadow calc state on every tick. `null` only before the first
+     * [au.com.threesixty.cabdispatch.domain.FareEngineImpl.startTrip] (a [FareState] that has
+     * never been near a tariff), in which case [total] falls back to the naive [breakdown] sum.
+     *
+     * F8 (architecture audit 2026-09-08, §2.2): [FareBreakdown.total] is a plain seven-way sum. It
+     * applies no `roundDownToCent` (Act s76(5)/(6)) and, far worse, **no maxi multiplier** -- so on
+     * a maxi hiring the live dial under-read the actual bill by a full 50% of the metered base for
+     * the whole trip, and only jumped to the real figure at Close & Pay. The driver quoting the
+     * dial to the passenger was quoting the wrong number. The pure engine already knew the right
+     * answer; nothing was asking it. Now something does, once per tick.
+     */
+    val runningTotal: BigDecimal? = null,
 ) {
     /**
      * The full amount the passenger will pay if the trip closed right now — see the class-level
@@ -192,9 +275,23 @@ data class FareState(
      * excluded here: a driver who agreed $50 must see $50 on the dial the whole trip, never a
      * bigger figure that isn't what the passenger will actually be charged (Act s79(3) — the
      * agreed amount is what's charged, full stop).
+     *
+     * **F8 (architecture audit 2026-09-08, §2.2) -- where this figure now actually comes from.**
+     * Both paragraphs above describe what this property must *mean*; they no longer describe how
+     * it is computed. Re-deriving the answer here, by hand, from [breakdown], was the bug: this
+     * getter had no `roundDownToCent` and no maxi multiplier, so a maxi trip's dial sat 50% of the
+     * metered base below the bill for the trip's whole duration. It now simply *reads*
+     * [runningTotal] -- the pure, golden-vector-tested engine's own
+     * `close(...).grandTotal`, recomputed each tick by [au.com.threesixty.cabdispatch.domain.FareEngineImpl.tick]
+     * -- which already implements every rule this doc describes (the negotiated-fare branch, the
+     * levy, the maxi multiplier, the round-down) and is the same code path Close & Pay bills off.
+     * One computation, two readers, no drift possible by construction.
+     *
+     * The two fallbacks behind it are for a [FareState] that has never been ticked -- a default
+     * instance, or a UI preview -- and preserve the old behaviour exactly for those.
      */
     val total: BigDecimal
-        get() = negotiatedTotal ?: breakdown.total
+        get() = runningTotal ?: negotiatedTotal ?: breakdown.total
 }
 
 /** Formats a decimal-as-string-contract money value for display. Never use

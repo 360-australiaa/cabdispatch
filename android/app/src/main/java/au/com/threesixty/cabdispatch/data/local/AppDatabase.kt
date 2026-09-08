@@ -96,7 +96,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TollPointEntity::class,
         TollGantryEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -145,6 +145,29 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
  * That is the exact SQL Room expects for the CURRENT version. Every statement a migration writes
  * must match its line there character-for-character in column names, types, nullability, primary
  * key, foreign-key clause and indices. Do this for any future migration too. */
+/**
+ * Real migration for the 10 -> 11 bump (F9, architecture audit §2.2): two defaulted decimal-string
+ * columns on `trips` carrying the accrued distance/waiting charges the live meter computed, so
+ * Close & Pay bills those figures directly instead of re-deriving them from the lossy integer-metre
+ * [TripEntity.distanceM] column. See [TripEntity.accruedDistanceCharge]'s own doc.
+ *
+ * A separate step rather than an in-place extension of [MIGRATION_9_10], unlike what that
+ * migration's own doc did for the toll-detection follow-up: v10 has since been built and installed,
+ * so a database at v10 genuinely exists and has something to migrate. Defaulting to `'0'` (not
+ * NULL) matches the entity's own default, so a row written before this bump reconstructs by exactly
+ * the pre-existing distanceM/waitingS path and its fare does not move by a cent.
+ *
+ * Verified the same way [MIGRATION_9_10]'s doc prescribes -- against Room's own generated
+ * `createAllTables` in `AppDatabase_Impl.java` -- since Room only checks a migration's result at
+ * runtime, on first open, where a mismatch is a launch crash rather than a build failure.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN accruedDistanceCharge TEXT NOT NULL DEFAULT '0'")
+        db.execSQL("ALTER TABLE trips ADD COLUMN accruedWaitingCharge TEXT NOT NULL DEFAULT '0'")
+    }
+}
+
 val MIGRATION_9_10 = object : Migration(9, 10) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(

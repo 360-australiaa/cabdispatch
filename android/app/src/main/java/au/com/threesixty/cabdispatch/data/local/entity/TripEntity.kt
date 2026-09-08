@@ -205,6 +205,31 @@ data class TripEntity(
      */
     val unpricedTollRoadIdsJson: String = "[]",
 
+    /**
+     * The distance and waiting charges the live meter actually accrued, as decimal strings -- this
+     * project's money-on-the-wire convention (never Float/Double; see ApiService.kt's header).
+     * `"0"` on a trip that has not ticked yet, and on every row written by a build older than
+     * schema v11.
+     *
+     * F9 (architecture audit 2026-09-08, §2.2). Close & Pay does not read the live engine's state
+     * -- that object dies with the screen -- it re-derives the fare from this persisted row via
+     * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState]. The only distance input
+     * the row carried was [distanceM]: an **Int, in metres**, rounded on every single persist. So
+     * every tick discarded sub-metre precision, permanently, and the closing fare was computed from
+     * the lossy remainder. The reconstruction's own doc argues -- correctly -- that re-deriving a
+     * charge from a cumulative total is mathematically exact; what that argument cannot recover is
+     * precision the column never had room to hold in the first place.
+     *
+     * Persisting the charges themselves removes the round-trip entirely: the figures the meter
+     * charged are the figures Close & Pay bills. [distanceM]/[movingS]/[waitingS] are untouched --
+     * the server's `recompute_from_trace` replay and every existing history/earnings reader still
+     * want them -- these two are purely additive, and [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState]
+     * falls back to the old derivation whenever they are absent (any pre-v11 row), so no historical
+     * trip changes value by a cent.
+     */
+    val accruedDistanceCharge: String = "0",
+    val accruedWaitingCharge: String = "0",
+
     /** On-device computed fare total; "0" until closeTrip(). Decimal-as-string. */
     val deviceTotal: String = "0",
 

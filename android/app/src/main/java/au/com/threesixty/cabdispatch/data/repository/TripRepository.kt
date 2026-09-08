@@ -215,6 +215,15 @@ class TripRepository(
         /** Real toll-road ids crossed this trip the registry couldn't auto-price — see
          * [TripEntity.unpricedTollRoadIdsJson]'s doc. Same "`null` = leave untouched" convention. */
         unpricedTollRoadIds: List<String>? = null,
+        /**
+         * The distance/waiting charges the live meter has accrued so far, as decimal strings --
+         * F9 (architecture audit §2.2). Same "`null` = leave the existing value untouched"
+         * convention as [tolls] above, so every pre-existing call site keeps behaving exactly as
+         * before. See [TripEntity.accruedDistanceCharge]'s doc for why persisting the charge beats
+         * re-deriving it from [distanceM]'s integer metres at close time.
+         */
+        accruedDistanceCharge: String? = null,
+        accruedWaitingCharge: String? = null,
     ): TripEntity {
         val existing = tripDao.getByClientUuid(clientUuid)
             ?: error("tick() called for unknown trip clientUuid=$clientUuid")
@@ -228,6 +237,8 @@ class TripRepository(
             distanceM = distanceM,
             movingS = movingS,
             waitingS = waitingS,
+            accruedDistanceCharge = accruedDistanceCharge ?: existing.accruedDistanceCharge,
+            accruedWaitingCharge = accruedWaitingCharge ?: existing.accruedWaitingCharge,
             tolls = tolls ?: existing.tolls,
             autoTolledRoadsJson = autoTolledRoads?.let { cabDispatchJson.encodeToString(it) } ?: existing.autoTolledRoadsJson,
             unpricedTollRoadIdsJson = unpricedTollRoadIds?.let { cabDispatchJson.encodeToString(it) } ?: existing.unpricedTollRoadIdsJson,

@@ -418,6 +418,29 @@ class TollDetectionState {
      * `apply_toll_detection`'s `(prev_lat, prev_lng)` contract ("the immediately preceding point
      * ... or the trip's last known position"). */
     var previousFix: Pair<Double, Double>? = null
+
+    /**
+     * Clears every per-trip accumulator back to a fresh-trip state.
+     *
+     * Added for F4's process-lifetime hoist (architecture audit 2026-09-08, §2.1). This object used
+     * to be created fresh alongside each [au.com.threesixty.cabdispatch.domain.FareEngineImpl],
+     * which was itself created fresh per nav entry -- so "new trip" and "new instance" were the
+     * same event and nothing ever needed resetting. Now the engine lives for the whole process, so
+     * a driver's second trip of the shift runs against the same instance as the first. Without this
+     * the second passenger would inherit the first's [chargedRoads] (an M7 crossing already charged
+     * would be silently suppressed as a duplicate) and their [dismissedRoadIds] (a false positive
+     * the previous driver corrected would stay permanently un-chargeable). Called from
+     * [au.com.threesixty.cabdispatch.domain.FareEngineImpl.startTrip], the one place that knows a
+     * genuinely new hiring has begun.
+     */
+    fun reset() {
+        chargedRoads.clear()
+        roadEntryDistanceKm.clear()
+        unpricedRoadIds.clear()
+        dismissedRoadIds.clear()
+        confirmedGantries.clear()
+        previousFix = null
+    }
 }
 
 /** What changed on one [onFix] call — [FareEngineImpl][au.com.threesixty.cabdispatch.domain.FareEngineImpl]

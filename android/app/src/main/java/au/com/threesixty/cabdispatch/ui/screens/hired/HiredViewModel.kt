@@ -9,19 +9,15 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
-import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
 import au.com.threesixty.cabdispatch.domain.AlertTone
 import au.com.threesixty.cabdispatch.domain.DuressUiState
-import au.com.threesixty.cabdispatch.domain.FareEngine
-import au.com.threesixty.cabdispatch.domain.FareEngineImpl
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ToneGeneratorAlertTone
 import au.com.threesixty.cabdispatch.domain.SpeechPriority
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
-import au.com.threesixty.cabdispatch.domain.TollRegistryProvider
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.TripStatus
 import au.com.threesixty.cabdispatch.domain.toMoneyString
@@ -35,22 +31,29 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
-import java.time.Instant
 import java.util.UUID
 
 class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
-    // TODO(integration agent): see FareEngine's doc comment — this instance
-    // is recreated per nav entry, not process-scoped.
-    private val fareEngine: FareEngine = FareEngineImpl(
-        AppContainer.speedSource,
-        viewModelScope,
-        // Real automatic NSW toll-road registry — a pure, fast local Room read (see
-        // TollRegistryCache.snapshot's own doc), never a network call from this hot path.
-        TollRegistryProvider { AppContainer.tollRegistryCache.snapshot() },
-    )
+    /**
+     * The running meter — **process-scoped**, owned by [AppContainer.meterController], not by this
+     * ViewModel.
+     *
+     * F4 (architecture audit 2026-09-08, §2.1, rated blocker) resolved the standing TODO that used
+     * to sit here. This class constructed its own [FareEngineImpl] on `viewModelScope`, which tied
+     * the fare's lifetime to a navigation entry: press Back and the tick loop was cancelled, let
+     * Doze suspend a backgrounded app and it stopped, lose the process and it was gone — each of
+     * them a trip that quietly stops being charged for with the passenger still in the car.
+     *
+     * This ViewModel is now what the audit asked for: a thin observer. It reads [fareState] and
+     * forwards driver actions. It owns no fare state, starts no tick loop, and persists nothing —
+     * [MeterController] does all three, for as long as the *hiring* lasts rather than as long as
+     * this screen does. Creating and destroying this class as often as navigation likes is now
+     * free.
+     */
+    private val meter = AppContainer.meterController
 
-    val fareState: StateFlow<FareState> = fareEngine.state
+    val fareState: StateFlow<FareState> = meter.state
 
     /**
      * True only when this ViewModel instance was created for a trip that's
@@ -90,7 +93,8 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     // read (see AppContainer.kt's note by [pureFareEngine] and the
     // now-resolved TODO that used to be in CloseAndPayViewModel.kt). Opens
     // the trip in Room the moment the live engine starts, then keeps it
-    // updated on every live-engine emission via [persistTick] so
+    // updated on every live-engine emission (by MeterController, which owns
+    // that subscription now) so
     // [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] has
     // real distanceM/movingS/waitingS to read once the trip reaches S4.
     private val tripRepository: TripRepository = AppContainer.tripRepository
@@ -105,28 +109,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
         val tripContext = SessionHolder.pendingTrip.value
         if (tripContext != null) {
-            fareEngine.startTrip(
-                tripContext.tariff,
-                tripContext.startLat,
-                tripContext.startLng,
-                isMaxiVehicle = tripContext.isMaxiVehicle,
-                passengerCount = tripContext.passengerCount,
-                wheelchairHiring = tripContext.wheelchairHiring,
-                airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
-                // "Set Price" fix (product-reported, 2026-09): this was already persisted to Room
-                // (openTripInRoom below) and already billed correctly at Close & Pay
-                // (reconstructFareState wires TripEntity.negotiatedTotal into the pure engine's
-                // close()) — but the LIVE engine never learned about it, so the dial kept showing
-                // the ordinary metered accrual for a trip the driver had already fixed a price on.
-                // See FareState.negotiatedTotal/.total's doc for what this changes (display only,
-                // never what gets billed).
-                negotiatedTotal = tripContext.negotiatedTotal?.let { runCatching { BigDecimal(it) }.getOrNull() },
-            )
+            // Opens the Room row and starts the process-scoped meter against it. The
+            // `fareState.onEach { ... }` Room-persistence subscription that used to be launched here on
+            // viewModelScope has moved into MeterController along with the engine — see that
+            // class's doc for why hoisting the accrual without its persistence would have been
+            // worse than hoisting neither.
             openTripInRoom(tripContext)
-
-            fareState
-                .onEach { state -> persistTick(state) }
-                .launchIn(viewModelScope)
         }
 
         fareState
@@ -182,9 +170,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         // disagree in the first place.
         val clientUuid = UUID.randomUUID().toString()
         SessionHolder.markTripLive(clientUuid)
+        // Started BEFORE the suspending Room write below, not after: startTrip() sets the
+        // initial FareState synchronously (status/timeClass/peak breakdown), and the `initial` read
+        // a few lines down depends on that having already happened — the same ordering the old
+        // code relied on when it called fareEngine.startTrip() from init.
+        meter.startTrip(tripContext, clientUuid)
         viewModelScope.launch {
-            // fareEngine.startTrip() above set the initial state synchronously
-            // (status/timeClass/peak breakdown), so this read is safe here.
             val initial = fareState.value
             val trip = tripRepository.openTrip(
                 clientUuid = clientUuid,
@@ -201,7 +192,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 timeClass = initial.timeClass.name.lowercase(),
                 // FareState has no standalone `isPeak` flag (see
                 // domain/TripModels.kt) — a non-zero peakAmount in the initial
-                // breakdown is exactly and only true when FareEngineImpl
+                // breakdown is exactly and only true when the fare engine
                 // applied the peak-hiring charge at startTrip() time.
                 isPeak = initial.breakdown.peakAmount.signum() > 0,
                 // "Set Price" entry point (2026-08-10 meter-polish pass) — see
@@ -227,105 +218,6 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Refreshes the Room row's cumulative counters from the live engine's
-     * current (not delta) totals — safe to call on every emission since
-     * [TripRepository.tick] overwrites, it doesn't append (see its doc).
-     * A no-op until [openTripInRoom]'s write completes (guarded by the
-     * nullable [persistedTripClientUuid]); the next emission after that
-     * catches Room up to the latest cumulative state, so nothing is lost.
-     *
-     * [nextTracePoint] is read synchronously here, not inside the launched coroutine below — it
-     * reads real, current state ([AppContainer.speedSource.locationFix]), so there's no reason to
-     * defer it into the coroutine, and doing it here keeps its read as close as possible to the
-     * exact moment [FareEngineImpl.tick] made its own accrual decision for this same emission.
-     */
-    private fun persistTick(state: FareState) {
-        val clientUuid = persistedTripClientUuid ?: return
-        val point = nextTracePoint()
-        viewModelScope.launch { doPersistTick(clientUuid, state, point) }
-    }
-
-    /**
-     * The one real GPS point this fare-engine tick appends to the persisted trace — see
-     * `POST /v1/trips/sync`'s server-side `recompute_from_trace` (`backend/app/services/trips.py`),
-     * which independently REPLAYS this exact trace through the same tick algorithm
-     * [FareEngineImpl.tick] runs on-device to validate `deviceTotal` within a 1% variance
-     * tolerance. This is NOT merely feeding the meter map's polyline.
-     *
-     * **Revision history, both real fare-integrity bugs found live, not in a lab:**
-     * 1. Originally this always passed `newPoints = emptyList()` — the trace never grew at all, so
-     *    the server replayed an empty trace and flagged every trip (14.08% variance, confirmed
-     *    live 2026-09-06/07).
-     * 2. The first fix recorded one point per tick but SKIPPED it whenever
-     *    [AppContainer.speedSource.locationFix] hadn't changed since the last recorded fix (real
-     *    GPS updates aren't locked to this engine's 1 Hz tick clock — a live device trace showed
-     *    consecutive fix gaps of 1.40s, 2.01s, 2.04s, 0.98s, 1.05s, 0.96s, not a clean 1.0s). That
-     *    got variance down to 3.12% (device $8.26 vs. server $8.01) but still over the 1%
-     *    tolerance — still flagged. The root cause, verified by construction in
-     *    `TripTraceReplayFidelityTest`'s "legacy" case (not merely asserted): a point was recorded
-     *    using the STALE FIX'S OWN timestamp, so the trace's temporal coverage tracked the GPS
-     *    receiver's jittery update cadence, not the fare engine's steady 1 Hz billing clock. Most
-     *    damaging at the very end of a trip: `recompute_from_trace` iterates only over recorded
-     *    trace points and never extends past the last one to the trip's real `endAt` — if GPS goes
-     *    stale right as the driver stops the meter, EVERY second of real elapsed (and billed)
-     *    waiting time between the last GPS fix and the actual close is invisible to the server,
-     *    permanently. The identical failure mode can also happen mid-trip during any stale-GPS
-     *    window, not only at the end.
-     *
-     * **Current design (fix 2):** record a point on EVERY tick, unconditionally (whenever there is
-     * ANY known fix, fresh or stale), carrying the last known REAL fix's lat/lng/speed forward and
-     * stamping it with `Instant.now()` — the tick's own real wall-clock time — rather than the
-     * fix's own (possibly much older) GPS timestamp. This makes the trace's temporal resolution
-     * track the fare engine's own tick clock instead of the GPS receiver's arrival cadence, so
-     * server and device now integrate elapsed time from structurally the same stream, closing both
-     * the mid-trip-jitter gap and the end-of-trip tail gap identically. Nothing about the POSITION
-     * is fabricated — it is always the last real fix this device actually received, exactly the
-     * position the fare engine's own [FareEngineImpl.tick] used for this same tick's speed/mode
-     * decision; only the point's timestamp is "now" rather than "whenever the position was last
-     * confirmed", which is the timestamp of the actual event being recorded — this tick firing.
-     *
-     * Returns `null` (append nothing this tick) only when there has never been a live fix at all
-     * (no permission, cold start, no signal yet) — an honest "nothing real to record" gap, never a
-     * fabricated point.
-     */
-    private fun nextTracePoint(): TelemetryPointDto? {
-        val fix = AppContainer.speedSource.locationFix.value ?: return null
-        return TelemetryPointDto(
-            lat = fix.lat,
-            lng = fix.lng,
-            speedKmh = fix.speedKmh,
-            ts = Instant.now().toString(),
-        )
-    }
-
-    private suspend fun doPersistTick(clientUuid: String, state: FareState, point: TelemetryPointDto?) {
-        runCatching {
-            tripRepository.tick(
-                clientUuid = clientUuid,
-                newPoints = listOfNotNull(point),
-                distanceM = state.distanceKm.movePointRight(3).setScale(0, RoundingMode.HALF_UP).toInt(),
-                movingS = state.movingSeconds,
-                waitingS = state.waitingSeconds,
-                // Real toll-wiring fix (see TripRepository.tick's doc): the
-                // live engine's cumulative toll total (from addToll() below)
-                // must reach the persisted TripEntity, not just this screen's
-                // own display, or S4/S5's reconstructFareState would silently
-                // charge $0 in tolls no matter how many chips the driver
-                // tapped. `.tolls` is the running total, not a delta — same
-                // overwrite convention as distanceM/movingS/waitingS above.
-                tolls = state.breakdown.tolls.toPlainString(),
-                // Local audit trail for the automatic NSW toll-road detector — see
-                // TripEntity.autoTolledRoadsJson's doc for why this never reaches the server (the
-                // sync path this app uses only takes the aggregate `tolls` figure above, already
-                // including every one of these amounts) but is still worth persisting locally for
-                // Close & Pay / History to show the driver which real roads it came from.
-                autoTolledRoads = state.autoTollsApplied.associate { it.roadId to it.amount.toPlainString() },
-                unpricedTollRoadIds = state.unpricedTollRoads.map { it.roadId },
-            )
-        }
-    }
-
     fun toggleBreakdown() {
         _breakdownExpanded.value = !_breakdownExpanded.value
     }
@@ -336,27 +228,27 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePause() {
         when (fareState.value.status) {
-            TripStatus.HIRED -> fareEngine.pause()
-            TripStatus.STOPPED -> fareEngine.resume()
+            TripStatus.HIRED -> meter.pause()
+            TripStatus.STOPPED -> meter.resume()
             else -> Unit
         }
     }
 
     fun addToll(preset: TollPreset) {
-        fareEngine.addToll(preset)
+        meter.addToll(preset)
     }
 
-    /** Driver-initiated correction of an auto-detected toll — see [FareEngine.removeAutoToll]'s
-     * doc. The next [persistTick] emission (driven by [fareState]'s own `onEach` in [init])
-     * durably reflects the correction, same "no separate persistence call needed" pattern
+    /** Driver-initiated correction of an auto-detected toll — see [au.com.threesixty.cabdispatch.domain.FareEngine.removeAutoToll]'s
+     * doc. The next state emission -- which MeterController's own Room subscription is watching
+     * -- durably reflects the correction, same "no separate persistence call needed" pattern
      * [addToll] already relies on. */
     fun removeAutoToll(roadId: String) {
-        fareEngine.removeAutoToll(roadId)
+        meter.removeAutoToll(roadId)
     }
 
-    /** Driver dismissal of a "needs manual toll" notice — see [FareEngine.dismissUnpricedToll]'s doc. */
+    /** Driver dismissal of a "needs manual toll" notice — see [au.com.threesixty.cabdispatch.domain.FareEngine.dismissUnpricedToll]'s doc. */
     fun dismissUnpricedToll(roadId: String) {
-        fareEngine.dismissUnpricedToll(roadId)
+        meter.dismissUnpricedToll(roadId)
     }
 
     /**
@@ -369,7 +261,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * original one — see [TripRepository.updatePassengerCount]'s doc.
      */
     fun updatePassengerCount(count: Int) {
-        fareEngine.updatePassengerCount(count)
+        meter.updatePassengerCount(count)
         val clientUuid = persistedTripClientUuid ?: return
         viewModelScope.launch {
             runCatching { tripRepository.updatePassengerCount(clientUuid, count) }
@@ -383,22 +275,43 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * meter" action, not S4's "finalize with a payment method" action;
      * CloseAndPayViewModel.finalizeClose() is what flips the TripEntity to
      * CLOSED, once the driver has picked a payment method. Awaiting the final
-     * persist before navigating (rather than a fire-and-forget [persistTick])
+     * persist before navigating (rather than a fire-and-forget one)
      * avoids a race where S4's [TripRepository.observeActiveTrip] Flow could
      * initialize from the second-to-last tick's counters and then never pick
      * up the final one — see [CloseAndPayViewModel]'s `loadTariffAndInit`
      * guard, which only reacts to the *first* qualifying emission.
      */
     fun endTrip(onClosed: () -> Unit) {
-        val closedState = fareEngine.close()
+        // Stops the engine, ends the persistence subscription, and takes the foreground service
+        // down — see MeterController.stopTrip's doc for why the service ends with the fare rather
+        // than with Close & Pay.
+        val closedState = meter.stopTrip()
         val clientUuid = persistedTripClientUuid
         if (clientUuid == null) {
             onClosed()
             return
         }
-        val point = nextTracePoint()
+        // One last synchronous persist of the final state before navigating. MeterController's own
+        // subscription has just been cancelled by stopTrip(), and awaiting this write (rather than
+        // firing and forgetting) is what stops S4's `observeActiveTrip` Flow from initialising off
+        // the second-to-last tick's counters and never seeing the final one — see
+        // CloseAndPayViewModel's `loadTariffAndInit` guard, which only reacts to the FIRST
+        // qualifying emission.
         viewModelScope.launch {
-            doPersistTick(clientUuid, closedState, point)
+            runCatching {
+                tripRepository.tick(
+                    clientUuid = clientUuid,
+                    newPoints = emptyList(),
+                    distanceM = closedState.distanceKm.movePointRight(3).setScale(0, RoundingMode.HALF_UP).toInt(),
+                    movingS = closedState.movingSeconds,
+                    waitingS = closedState.waitingSeconds,
+                    tolls = closedState.breakdown.tolls.toPlainString(),
+                    autoTolledRoads = closedState.autoTollsApplied.associate { it.roadId to it.amount.toPlainString() },
+                    unpricedTollRoadIds = closedState.unpricedTollRoads.map { it.roadId },
+                    accruedDistanceCharge = closedState.breakdown.distanceAmount.toPlainString(),
+                    accruedWaitingCharge = closedState.breakdown.waitingAmount.toPlainString(),
+                )
+            }
             SessionHolder.clearLiveTrip()
             onClosed()
         }

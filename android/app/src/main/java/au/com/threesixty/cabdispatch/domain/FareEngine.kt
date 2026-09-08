@@ -7,6 +7,7 @@ import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
 import au.com.threesixty.cabdispatch.domain.fare.onFix
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
+import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -20,6 +21,7 @@ import java.math.RoundingMode
 import au.com.threesixty.cabdispatch.domain.fare.AreaClass
 import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import java.time.DayOfWeek
+import kotlin.math.roundToInt
 import java.time.ZonedDateTime
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
 import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
@@ -61,6 +63,28 @@ data class LocationFix(
     val accuracyM: Float,
     val timestampMillis: Long,
     val heading: Double? = null,
+    /**
+     * The value of [System.nanoTime] at the instant this fix object was constructed -- i.e. when
+     * the device *received* it, on the monotonic clock, as opposed to [timestampMillis], which is
+     * when the GPS constellation says the fix was *taken*, on the wall clock.
+     *
+     * F3 (architecture audit 2026-09-08, §2.1): [FareEngineImpl.tick] needs to answer "is what I
+     * know about this vehicle's motion still true?", and that is a question about elapsed time on
+     * a clock that cannot jump. [timestampMillis] is unusable for it on both counts -- it is
+     * wall-clock (an NTP correction or a driver changing the tablet's date mid-shift moves it
+     * arbitrarily, in either direction) and it is the *receiver's* clock, not this device's, so
+     * differencing it against a local `System.currentTimeMillis()` measures clock skew as much as
+     * staleness. This field is differenced against [FareEngineImpl]'s own monotonic tick clock, so
+     * the age it yields is real elapsed time on one clock and nothing else.
+     *
+     * Defaulted to `System.nanoTime()` rather than to a sentinel: the default is evaluated at each
+     * construction, and every real construction site
+     * ([au.com.threesixty.cabdispatch.domain.location.RealLocationProvider.onNewFix]) builds the
+     * fix at the moment it arrives, so the default *is* the correct value there. That keeps the
+     * field additive -- every pre-existing call site (test fixtures included) that never names it
+     * keeps compiling and gets an honest answer -- while letting a test pin an explicit age.
+     */
+    val receivedAtNanos: Long = System.nanoTime(),
 )
 
 /**
@@ -172,6 +196,21 @@ interface FareEngine {
         airportRankRequestedMaxi: Boolean = false,
         negotiatedTotal: BigDecimal? = null,
     )
+    /**
+     * Re-enters a trip that is already under way, from a state rebuilt off the persisted trip row --
+     * the process-restart path. See [FareEngineImpl.resumeTrip]'s doc for the full reasoning; on
+     * this interface it exists so [au.com.threesixty.cabdispatch.domain.MeterController] can drive
+     * restoration without depending on the implementation type.
+     */
+    fun resumeTrip(
+        tariff: TariffDto,
+        restored: au.com.threesixty.cabdispatch.domain.fare.FareState,
+        movingSeconds: Int,
+        waitingSeconds: Int,
+        tollsApplied: List<TollPreset> = emptyList(),
+        autoTollsApplied: List<AutoTollEntry> = emptyList(),
+    )
+
     fun pause()
     fun resume()
     fun addToll(preset: TollPreset)
@@ -284,6 +323,19 @@ class FareEngineImpl(
      * pre-existing call site (this file's own tests included) keeps compiling/behaving exactly as
      * before — no toll auto-detection, manual [addToll] chips only, same as today. */
     private val tollRegistryProvider: TollRegistryProvider = TollRegistryProvider.EMPTY,
+    /**
+     * The monotonic clock [tick] measures its own elapsed time against, and the clock
+     * [LocationFix.receivedAtNanos] ages are computed on. Defaulted to the real
+     * [System.nanoTime], so every pre-existing call site keeps behaving exactly as in production.
+     *
+     * A seam rather than a direct `System.nanoTime()` call for one reason: this class's tests run
+     * on `kotlinx.coroutines.test`'s **virtual** time, where `advanceTimeBy(1000)` moves the
+     * scheduler a second forward without a nanosecond of real time passing. A [tick] that read the
+     * real clock would measure `dt ~= 0` under every such test and quietly assert nothing about
+     * the very accrual F1 is about. Tests pass `{ testScheduler.currentTime * 1_000_000L }` and
+     * get a clock that advances exactly as much as the coroutine machinery believes it did.
+     */
+    private val nanoTimeSource: () -> Long = { System.nanoTime() },
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -318,6 +370,51 @@ class FareEngineImpl(
      * distinct from the one before it. */
     private var autoTollAlertSeq = 0L
 
+    /**
+     * [nanoTimeSource] reading taken at the end of the previous [tick] (or at [startTicking], for
+     * the first one) -- the baseline the next tick's real elapsed time is measured from. `null`
+     * only before the meter has ever started ticking.
+     *
+     * F1 (architecture audit 2026-09-08, §2.1, rated **blocker**). See [tick]'s own doc.
+     */
+    private var lastTickNanos: Long? = null
+
+    /**
+     * The [SpeedSource.locationFix] value this class saw on the *previous* tick -- the other end of
+     * the haversine segment F2 charges for, and the identity check ("is this the same object I
+     * already billed for?") that decides whether a new fix arrived at all this tick.
+     *
+     * Deliberately compared by reference (`!==`), not by value: two genuinely distinct fixes taken
+     * a second apart at a red light can be field-for-field equal, and treating those as "no new
+     * fix" would silently drop back to the speed-integration fallback for the one case where the
+     * haversine is most obviously right (zero metres travelled). [SpeedSource.locationFix] hands
+     * out a new instance per accepted fix, so reference identity is exactly the question being
+     * asked.
+     */
+    private var lastTickFix: LocationFix? = null
+
+    /**
+     * Last speed this engine actually *knew*, from a fix that was fresh at the time -- retained
+     * across a GPS blackout so [tick] can answer F3's question: was this vehicle stationary when
+     * the sky closed over, or was it doing 80 into a tunnel? Those two need opposite treatment (see
+     * [tick]'s doc), and once the fixes stop arriving there is no other way to tell them apart.
+     */
+    private var lastKnownSpeedKmh: Double = 0.0
+
+    /**
+     * Fractional-second accumulators behind [FareState.movingSeconds]/[FareState.waitingSeconds].
+     *
+     * Those two are `Int` because [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
+     * stores whole seconds, and they used to be incremented by a flat `+1` per tick. Under F1's
+     * real `dt` that would throw the measured elapsed time away again at the very last step --
+     * and these counters are not cosmetic: the server replays the trip against them
+     * (`recompute_from_trace`) and flags a fare whose device total drifts past 1%. Accumulating
+     * in `Double` and rounding only at publish time keeps the whole-second contract for storage
+     * while making the underlying tally track real time rather than tick count.
+     */
+    private var movingSecondsAccum: Double = 0.0
+    private var waitingSecondsAccum: Double = 0.0
+
     override fun startTrip(
         tariff: TariffDto,
         startLat: Double,
@@ -344,6 +441,16 @@ class FareEngineImpl(
             negotiatedTotal = negotiatedTotal,
         )
         calcState = newCalcState
+        // Every per-trip tick accumulator starts clean. This class is process-scoped now (F4 --
+        // see AppContainer.fareEngine), so an instance genuinely does outlive a trip and a second
+        // startTrip() on the same object is the ordinary case, not a test-only one; leaving these
+        // carrying the previous trip's totals would bill the new passenger for the old one's time.
+        movingSecondsAccum = 0.0
+        waitingSecondsAccum = 0.0
+        lastTickFix = null
+        lastKnownSpeedKmh = 0.0
+        autoTollAlertSeq = 0L
+        tollDetectionState.reset()
 
         val peak = if (isPeak) domainTariff.peakCharge else BigDecimal.ZERO
 
@@ -355,7 +462,8 @@ class FareEngineImpl(
             // Set here as well as in tick(): the dial renders the instant the fare starts, a whole
             // second before the first tick, and would otherwise mark the default threshold on a
             // country tariff for that second.
-            speedThresholdKmh = domainTariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: 26.0,
+            speedThresholdKmh = domainTariff.speedThresholdKmh.toDouble().takeIf { it > 0 }
+                ?: DEFAULT_SPEED_THRESHOLD_KMH,
             // Point-to-Point Levy fix (product-reported, 2026-09): the live meter must start at
             // flagfall + PSL, not flagfall alone (the PSL is a mandatory Fares Order pass-through —
             // see CloseAndPayViewModel's own `includePsl = true` doc — never a driver-optional
@@ -378,9 +486,109 @@ class FareEngineImpl(
             // `.total`'s doc for how this changes what the dial shows without changing the close()
             // math (which already handled this correctly; only the live display didn't know).
             negotiatedTotal = newCalcState.negotiatedTotal,
+            // F8: the dial is authoritative from its very first frame, not only from the first
+            // tick a second later. Same close()-derived figure every subsequent tick republishes.
+            runningTotal = runningTotal(newCalcState),
         )
         // Load the cached toll registry in the background (see [tollRegistry]'s own doc) — never
         // awaited here, so a slow/empty cache can never delay the meter actually starting.
+        scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
+        startTicking()
+    }
+
+    /**
+     * Picks an already-running trip back up, mid-hiring, against a fare state rebuilt from the
+     * persisted [au.com.threesixty.cabdispatch.data.local.entity.TripEntity] row rather than
+     * started from flagfall.
+     *
+     * F4 (architecture audit 2026-09-08, §2.1, rated **blocker**). Before the process-lifetime
+     * hoist, the *only* way this engine ever entered a trip was [startTrip], because the engine
+     * itself could not outlive the screen: kill the app mid-fare and there was no engine left to
+     * restore into. Now that [au.com.threesixty.cabdispatch.domain.MeterForegroundService] keeps
+     * the meter alive for the whole hiring, the mirror case matters -- the OS killed the process
+     * anyway (low memory, a crash, a reboot) while a passenger was still in the car -- and the
+     * answer must not be a dial that resets to zero. The trip record survived in Room; this is how
+     * the live meter catches back up to it.
+     *
+     * [restored] is the pure engine's own state as rebuilt by
+     * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState], so every accrued figure
+     * here is the tested engine's, not a second guess at it. This method deliberately takes plain
+     * values rather than the `TripEntity` itself: the mapping from a Room row to a fare state
+     * already exists in exactly one place, and duplicating even part of it here would be a second
+     * place for the reconstruction rules to drift.
+     *
+     * The tick clock is re-baselined by [startTicking], so the wall time the process spent dead is
+     * never billed as motion -- and even if it were somehow not, [tick]'s own [MAX_TICK_SECONDS]
+     * clamp is the backstop. Time genuinely elapsed while the app was not running is simply not
+     * charged: the meter cannot attest to travel it did not observe, and a passenger must never be
+     * billed for a gap in our own record-keeping.
+     */
+    override fun resumeTrip(
+        tariff: TariffDto,
+        restored: CalcFareState,
+        movingSeconds: Int,
+        waitingSeconds: Int,
+        tollsApplied: List<TollPreset>,
+        autoTollsApplied: List<AutoTollEntry>,
+    ) {
+        this.tariff = tariff
+        calcState = restored
+
+        // Same clean-slate treatment [startTrip] gives these, for the same reason: this instance is
+        // process-scoped and may have been through other trips. The one difference is the two
+        // second-counters, which are restored rather than zeroed -- they are cumulative trip
+        // totals, and the passenger already owes the waiting time accrued before the crash.
+        movingSecondsAccum = movingSeconds.toDouble()
+        waitingSecondsAccum = waitingSeconds.toDouble()
+        lastTickFix = null
+        lastKnownSpeedKmh = 0.0
+        autoTollAlertSeq = 0L
+        // Deliberately NOT repopulated from the persisted per-road audit trail: [TollDetectionState]
+        // is in-memory dedup bookkeeping, and seeding it would require reconstructing gantry
+        // confirmation sets that were never persisted. The consequence is bounded and documented --
+        // a road already auto-charged before the crash could be charged a second time if the
+        // vehicle re-crosses one of its gantries after the restart -- and [addToll]/[removeAutoToll]
+        // leave the driver able to see and correct exactly that. A wrong suppression would be worse:
+        // it would silently drop a real toll with nothing on screen to notice.
+        tollDetectionState.reset()
+
+        val domainTariff = restored.tariff
+        val peak = if (restored.isPeak) domainTariff.peakCharge else BigDecimal.ZERO
+        val threshold = domainTariff.speedThresholdKmh.toDouble().takeIf { it > 0 }
+            ?: DEFAULT_SPEED_THRESHOLD_KMH
+
+        _state.value = FareState(
+            status = TripStatus.HIRED,
+            mode = AccrualMode.WAITING,
+            band = if (restored.cumulativeDistanceKm <= domainTariff.distKmThreshold) {
+                TariffBand.BAND_1
+            } else {
+                TariffBand.BAND_2
+            },
+            timeClass = restored.timeClass.toDisplayTimeClass(),
+            speedThresholdKmh = threshold,
+            distanceKm = restored.cumulativeDistanceKm,
+            movingSeconds = movingSeconds,
+            waitingSeconds = waitingSeconds,
+            breakdown = FareBreakdown(
+                flagFall = domainTariff.flagFall,
+                distanceAmount = restored.accruedDistanceCharge,
+                waitingAmount = restored.accruedWaitingCharge,
+                peakAmount = peak,
+                tolls = restored.tolls,
+                psl = domainTariff.pslAmount,
+                extras = restored.extras,
+            ),
+            tollsApplied = tollsApplied,
+            autoTollsApplied = autoTollsApplied,
+            passengerCount = restored.passengerCount,
+            wheelchairHiring = restored.wheelchairHiring,
+            maxiRateApplied = restored.maxiRateApplied,
+            negotiatedTotal = restored.negotiatedTotal,
+            // The whole point of the exercise: the dial shows the real running total the instant
+            // the meter comes back, not zero and not flagfall.
+            runningTotal = runningTotal(restored),
+        )
         scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
         startTicking()
     }
@@ -391,6 +599,10 @@ class FareEngineImpl(
         _state.value = _state.value.copy(
             passengerCount = cs.passengerCount,
             maxiRateApplied = cs.maxiRateApplied,
+            // A corrected count can flip maxi eligibility, and the maxi multiplier is exactly what
+            // F8 found missing from the old dial sum -- so the displayed total has to be recomputed
+            // here or the correction would be visible in the MAXI chip while the money stayed wrong.
+            runningTotal = runningTotal(cs),
         )
     }
 
@@ -406,7 +618,25 @@ class FareEngineImpl(
         startTicking()
     }
 
+    /**
+     * Adds a driver-tapped toll, and — **T1** — makes sure the same road is not also charged
+     * automatically.
+     *
+     * When this preset names a registry road ([TollPreset.registryRoadId]), any auto-detected
+     * charge already standing for that road is withdrawn here, and the road is marked dismissed so
+     * the detector will not charge it again for the rest of this trip
+     * ([au.com.threesixty.cabdispatch.domain.fare.dismissCharge] does both). Tapping M5 while
+     * driving the M5 used to bill the crossing twice, through two lists that never consulted each
+     * other.
+     *
+     * The driver's tap wins, deliberately. It is an explicit, deliberate act about a road they are
+     * physically on; the detector's is an inference from GPS proximity. Where the two disagree the
+     * human is the better authority, and — unlike suppressing the tap — this direction leaves a
+     * visible result: the amount the driver entered is the amount on the breakdown, which is what
+     * they will expect to see.
+     */
     override fun addToll(preset: TollPreset) {
+        preset.registryRoadId?.let { roadId -> supersedeAutoToll(roadId) }
         val current = _state.value
         // Mirrored into the shadow calc state too — harmless today (close() below still returns
         // the UI snapshot directly, matching pre-existing behaviour, not calcEngine.close()'s
@@ -416,6 +646,31 @@ class FareEngineImpl(
         _state.value = current.copy(
             breakdown = current.breakdown.copy(tolls = current.breakdown.tolls.add(preset.amount)),
             tollsApplied = current.tollsApplied + preset,
+            // Republished here, not left until the next tick: the driver taps the chip and the dial
+            // has to answer in that frame, not up to a second later. Same close()-derived figure
+            // [tick] publishes -- see [runningTotal].
+            runningTotal = calcState?.let(::runningTotal) ?: current.runningTotal,
+        )
+    }
+
+    /**
+     * Withdraws any standing auto-toll charge for [roadId] and blocks further auto-charging of it
+     * this trip, because the driver has just charged the same road by hand — T1's other half. A
+     * no-op when the detector never charged that road, which is the common case.
+     *
+     * Distinct from [removeAutoToll] only in intent (and in not being a driver-facing correction):
+     * both funnel through the same
+     * [au.com.threesixty.cabdispatch.domain.fare.dismissCharge] bookkeeping.
+     */
+    private fun supersedeAutoToll(roadId: String) {
+        val amount = dismissCharge(tollDetectionState, roadId) ?: return
+        calcState?.let { it.tolls = (it.tolls - amount).coerceAtLeast(BigDecimal.ZERO) }
+        val current = _state.value
+        _state.value = current.copy(
+            breakdown = current.breakdown.copy(
+                tolls = (current.breakdown.tolls - amount).coerceAtLeast(BigDecimal.ZERO),
+            ),
+            autoTollsApplied = current.autoTollsApplied.filterNot { it.roadId == roadId },
         )
     }
 
@@ -426,6 +681,7 @@ class FareEngineImpl(
         _state.value = current.copy(
             breakdown = current.breakdown.copy(tolls = (current.breakdown.tolls - amount).coerceAtLeast(BigDecimal.ZERO)),
             autoTollsApplied = current.autoTollsApplied.filterNot { it.roadId == roadId },
+            runningTotal = calcState?.let(::runningTotal) ?: current.runningTotal,
         )
     }
 
@@ -444,68 +700,198 @@ class FareEngineImpl(
         return _state.value
     }
 
+    /**
+     * Starts (or restarts, after [resume]) the accrual loop.
+     *
+     * [lastTickNanos] is re-baselined to *now* here, not left carrying whatever it held before.
+     * That is what makes a [pause]/[resume] cycle free: the wall time a driver spent stopped with
+     * the meter deliberately paused is never billed as motion when it restarts. The same
+     * re-baselining is what makes a foreground-service restart safe -- see
+     * [au.com.threesixty.cabdispatch.domain.MeterForegroundService].
+     */
     private fun startTicking() {
         tickJob?.cancel()
+        lastTickNanos = nanoTimeSource()
         tickJob = scope.launch {
             while (isActive && _state.value.status == TripStatus.HIRED) {
-                delay(1000)
+                delay(TICK_PERIOD_MS)
                 if (_state.value.status == TripStatus.HIRED) tick()
             }
         }
     }
 
     /**
-     * One second of the spec B6 tick loop — now a thin adapter: read the real-time speed, hand it
-     * to [calcEngine] (which owns mode/band/rate selection and distance-band splitting), then copy
-     * its updated totals onto the UI-facing [FareState]. `distanceDeltaKm` is still speed×1s (this
-     * class has never had an independent GPS-distance integration — a pre-existing simplification,
-     * not something this consolidation pass changes), but it is now fed into the SAME generic
-     * `(speed, distanceDelta, elapsedSeconds)` tick signature the tested engine's own golden
-     * vectors exercise, rather than duplicated inline.
+     * One iteration of the spec B6 meter loop. Four of this codebase's rated-blocker fare bugs
+     * lived in the eight lines this method used to be, so the reasoning is worth spelling out.
      *
-     * Accrued amounts are copied RAW (no per-tick rounding) — the tested engine only rounds at
-     * [CalcFareEngine.close] time; this class's own [FareBreakdown.total] used to round every
-     * single tick to 6 decimal places, a small compounding drift over a long trip. Display
-     * formatting ([toMoneyString]) already rounds to cents at render time, so nothing is lost.
+     * **F1 -- how much time just passed.** This used to bill a hardcoded `elapsedSeconds = 1` and
+     * `speed / 3600` km, on the reasoning that [startTicking] delays for exactly a second.
+     * `delay(1000)` guarantees *at least* a second: under GC pressure, a busy dispatcher, or a
+     * Doze-throttled wakeup, a tick can take 1.1-2.0s of wall clock and still bill one second of
+     * it. That is a systematic **under-charge**, it grows with device load, and nothing bounds it.
+     * Elapsed time is now measured against [nanoTimeSource], a monotonic clock, and the real delta
+     * is what gets billed.
+     *
+     * The delta is clamped to [MAX_TICK_SECONDS]. The clamp is not defensive tidiness -- it is the
+     * correctness half of F4's process-lifetime hoist. A resumed process, or a service the OS
+     * froze and thawed, can hand this method a `dt` of ten minutes; billing that as motion at the
+     * last known speed would invent kilometres out of a gap in which the app was not running. When
+     * the clamp bites, the unbilled remainder is deliberately *dropped*, never carried forward:
+     * the meter's duty is to charge for travel it observed, and it observed none of it.
+     *
+     * **F3 -- whether what we know about the vehicle is still true.** [SpeedSource] only ever
+     * revised its speed when a fix was *accepted*. In a tunnel no fix is ever accepted, so the last
+     * speed froze and this loop kept integrating against it: enter at 80 km/h, lose the sky for
+     * four minutes, get billed 5.3 km nobody drove. So a fix older than [MAX_FIX_AGE_MS] (and the
+     * no-fix-at-all case) is now treated as what it is -- the meter does not know whether this
+     * vehicle is moving -- and the rule is:
+     *
+     *  - **No distance accrues.** Ever, under any GPS-lost condition. Distance we cannot observe is
+     *    distance we cannot charge for.
+     *  - **Waiting time accrues only if the vehicle was already stationary** when the fixes stopped
+     *    ([lastKnownSpeedKmh] below the threshold). A cab stopped at a kerb under a bridge is still
+     *    genuinely waiting, and the passenger owes that. A cab doing 80 into a tunnel is not
+     *    waiting, and billing it waiting time is the same bug wearing the other hat.
+     *  - [FareState.gpsLost] is published so the driver is *told*, rather than left watching a dial
+     *    that has quietly stopped moving for reasons nobody explained.
+     *
+     * **F2 -- how far it actually went.** Distance was time-integrated instantaneous speed and
+     * never once a real position delta, which is what made F3 able to invent kilometres at all.
+     * When a genuinely new fix arrived this tick, distance is now the great-circle distance
+     * ([GeoMath.distanceKm]) between that fix and the previous tick's. Only when no new fix arrived
+     * (GPS updates are not locked to this loop's cadence -- a live trace showed gaps of 1.40s,
+     * 2.04s, 0.96s) does it fall back to `speed x dt`. Both paths are capped at
+     * `speed x dt x` [MAX_DISTANCE_OVERSHOOT_FACTOR] so a single fix that jumps -- multipath off a
+     * building, a provider switch -- cannot bill a kilometre in one second. The cap is also what
+     * bounds the error when a haversine leg happens to span a tick whose fallback was already
+     * billed.
+     *
+     * **F8 -- what the driver is shown.** [FareState.total] used to be a naive seven-way sum of
+     * [FareBreakdown], with no round-down and no maxi multiplier, so a maxi trip's dial under-read
+     * its own bill by 50% of the metered base. The running total is now
+     * [CalcFareEngine.close]'s `grandTotal` -- the same golden-vector-tested computation Close &
+     * Pay bills off -- recomputed here each tick. `close()` does not mutate the state it reads (see
+     * its own doc: it is explicitly checkpoint-safe), so calling it per tick is sound.
+     *
+     * Accrued amounts are still copied RAW, unrounded, between ticks; the tested engine rounds only
+     * at close, and rounding every tick compounds a real drift over a long trip. Only
+     * [FareState.runningTotal] -- which *is* a close() result -- carries cent rounding.
      */
     private fun tick() {
         val cs = calcState ?: return
-        val speed = speedSource.speedKmh.value
-        val threshold = cs.tariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: 26.0
 
-        val dKm = BigDecimal.valueOf(speed / 3600.0) // one tick = one second, per startTicking's delay(1000)
-        calcEngine.tick(cs, speedKmh = speed, distanceDeltaKm = dKm, elapsedSeconds = 1)
+        // --- F1: real elapsed time, on a clock that cannot jump ------------------------------
+        val nowNanos = nanoTimeSource()
+        val previousTickNanos = lastTickNanos
+        lastTickNanos = nowNanos
+        val dtSeconds = if (previousTickNanos == null) {
+            0.0
+        } else {
+            ((nowNanos - previousTickNanos) / NANOS_PER_SECOND).coerceIn(0.0, MAX_TICK_SECONDS)
+        }
 
-        // Auto-toll detection (see [detectTolls]'s own doc) — runs on the SAME real GPS fix
-        // [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.nextTracePoint] records
-        // into the trip's persisted trace, using [cs]'s just-updated cumulative distance (needed
-        // for the `distance` pricing model). Folds straight into `_state.value` before the final
-        // `current` read below, so [breakdown.tolls]/[autoTollsApplied] this tick already reflect
-        // any crossing detected THIS tick.
-        detectTolls(cs)
+        val threshold = cs.tariff.speedThresholdKmh.toDouble().takeIf { it > 0 } ?: DEFAULT_SPEED_THRESHOLD_KMH
+
+        // --- F3: is the newest fix recent enough to believe? ---------------------------------
+        val fix = speedSource.locationFix.value
+        val fixAgeNanos = fix?.let { nowNanos - it.receivedAtNanos }
+        val gpsLost = fixAgeNanos == null || fixAgeNanos > MAX_FIX_AGE_MS * NANOS_PER_MILLI
+        val previousFix = lastTickFix
+        // Only advance the haversine baseline while GPS is live. Holding the pre-blackout fix as
+        // the baseline through a tunnel would mean the first fix out the far end draws a segment
+        // across the entire tunnel and charges it in one tick -- exactly the phantom distance F3
+        // exists to stop, re-entering by the F2 door. The cap would blunt it; not relying on the
+        // cap for this is better.
+        lastTickFix = if (gpsLost) null else fix
+
+        if (!gpsLost) lastKnownSpeedKmh = speedSource.speedKmh.value
+
+        // The speed the accrual decision is actually made on. While GPS is lost we never claim
+        // motion: a vehicle we cannot see is either stationary (bill waiting) or unknown (bill
+        // nothing), and both of those are decided here, not by pretending to a speed.
+        val wasStationaryWhenLost = lastKnownSpeedKmh < threshold
+        val accrueThisTick = !gpsLost || wasStationaryWhenLost
+        val billedSpeedKmh = if (gpsLost) 0.0 else lastKnownSpeedKmh
+
+        // --- F2: distance from real positions, not integrated speed --------------------------
+        val speedCapKm = billedSpeedKmh * dtSeconds / SECONDS_PER_HOUR * MAX_DISTANCE_OVERSHOOT_FACTOR
+        val distanceDeltaKm = when {
+            gpsLost -> 0.0
+            // A genuinely new fix arrived since the last tick: charge the ground between them.
+            previousFix != null && fix != null && fix !== previousFix ->
+                GeoMath.distanceKm(previousFix.lat, previousFix.lng, fix.lat, fix.lng).coerceAtMost(speedCapKm)
+            // No new fix this tick (GPS cadence is not this loop's cadence), or the very first tick
+            // of the trip with no previous position to measure from: integrate speed, as before.
+            else -> (billedSpeedKmh * dtSeconds / SECONDS_PER_HOUR).coerceAtMost(speedCapKm)
+        }
+
+        if (accrueThisTick && dtSeconds > 0.0) {
+            calcEngine.tick(
+                cs,
+                speedKmh = billedSpeedKmh,
+                distanceDeltaKm = BigDecimal.valueOf(distanceDeltaKm),
+                elapsedSeconds = BigDecimal.valueOf(dtSeconds),
+            )
+        }
+
+        // Auto-toll detection (see [detectTolls]'s own doc) -- runs on the SAME real GPS fix
+        // [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel] records into the trip's
+        // persisted trace, using [cs]'s just-updated cumulative distance (needed for the `distance`
+        // pricing model). Skipped entirely while GPS is lost: detecting a gantry crossing needs a
+        // position we currently believe, and a stale one would charge a toll for a road the vehicle
+        // may have left minutes ago. Folds straight into `_state.value` before the final `current`
+        // read below.
+        if (!gpsLost) detectTolls(cs)
 
         val current = _state.value
-        val mode = if (speed >= threshold) AccrualMode.DISTANCE else AccrualMode.WAITING
-        // Computed off TRUE cumulative distance every tick (fix #3 above), not only while in the
-        // distance branch — a trip that crawls past 12km in traffic now switches band correctly.
+        val mode = if (billedSpeedKmh >= threshold) AccrualMode.DISTANCE else AccrualMode.WAITING
+        // Computed off TRUE cumulative distance every tick (fix #3 in this class's doc), not only
+        // while in the distance branch -- a trip that crawls past 12km in traffic now switches band
+        // correctly.
         val band = if (cs.cumulativeDistanceKm <= cs.tariff.distKmThreshold) TariffBand.BAND_1 else TariffBand.BAND_2
+
+        // Whole-second counters (TripEntity.movingS/.waitingS are Ints) fed from a fractional
+        // accumulator rather than a flat +1 per tick, so F1's real `dt` is not thrown away again at
+        // the last moment by the very counters the server replays the trip against.
+        if (accrueThisTick) {
+            if (mode == AccrualMode.DISTANCE) movingSecondsAccum += dtSeconds else waitingSecondsAccum += dtSeconds
+        }
 
         _state.value = current.copy(
             mode = mode,
             band = band,
             distanceKm = cs.cumulativeDistanceKm,
-            currentSpeedKmh = speed,
+            currentSpeedKmh = billedSpeedKmh,
             // The same threshold this tick just used to pick the accrual mode -- so the dial bands
             // on exactly the line the meter is charging on, not a constant that could drift.
             speedThresholdKmh = threshold,
-            movingSeconds = current.movingSeconds + if (mode == AccrualMode.DISTANCE) 1 else 0,
-            waitingSeconds = current.waitingSeconds + if (mode == AccrualMode.WAITING) 1 else 0,
+            movingSeconds = movingSecondsAccum.roundToInt(),
+            waitingSeconds = waitingSecondsAccum.roundToInt(),
+            gpsLost = gpsLost,
             breakdown = current.breakdown.copy(
                 distanceAmount = cs.accruedDistanceCharge,
                 waitingAmount = cs.accruedWaitingCharge,
             ),
+            runningTotal = runningTotal(cs),
         )
     }
+
+    /**
+     * The one authoritative "what does the passenger owe right now" figure -- F8. Delegates
+     * wholesale to the pure, golden-vector-tested engine's own [CalcFareEngine.close], which
+     * already applies the negotiated-fare branch, the maxi multiplier, the levy and the
+     * Act s76(5)/(6) round-down that this class's own [FareBreakdown.total] sum applies none of.
+     *
+     * `paymentMethod` is left at its `"cash"` default deliberately: the non-cash surcharge is a
+     * function of a payment method the driver has not chosen yet at meter time, so quoting a
+     * card-inclusive figure on the dial would overstate what a cash passenger will actually pay.
+     * Close & Pay adds it once a method is genuinely picked. `includePsl = true` matches
+     * [au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayViewModel]'s own unconditional
+     * levy -- the PSL is a mandatory Fares Order pass-through with no remaining toggle, so a live
+     * total that always shows it is always honest.
+     */
+    private fun runningTotal(cs: CalcFareState): BigDecimal =
+        calcEngine.close(cs, includePsl = true).grandTotal
 
     /**
      * Runs [au.com.threesixty.cabdispatch.domain.fare.onFix] against the latest known GPS fix and
@@ -524,6 +910,12 @@ class FareEngineImpl(
         if (registry.gantries.isEmpty()) return
         val fix = speedSource.locationFix.value ?: return
 
+        // T1: a road the driver has already added by hand is never also auto-charged. addToll
+        // dismisses the road as it goes, so onFix below skips it outright; this is the belt to that
+        // braces, covering a preset whose registryRoadId is added while a charge for it is already
+        // in flight this same tick.
+        val manuallyChargedRoadIds = _state.value.tollsApplied.mapNotNull { it.registryRoadId }.toSet()
+
         val result = onFix(
             tollDetectionState,
             registry,
@@ -540,6 +932,7 @@ class FareEngineImpl(
         var autoTolls = current.autoTollsApplied
         var alert: AutoTollAlert? = null
         for ((roadId, newAmount) in result.chargedRoadsChanged) {
+            if (roadId in manuallyChargedRoadIds) continue
             // `distance`-model roads REVISE the same entry (see onFix's doc) — subtract the amount
             // this trip previously showed for roadId before adding the new one, so a growing M7
             // charge updates in place rather than double-counting on every tick it changes.
@@ -581,12 +974,22 @@ class FareEngineImpl(
             autoTollsApplied = autoTolls,
             unpricedTollRoads = current.unpricedTollRoads + newUnpricedEntries,
             lastAutoTollAlert = alert ?: current.lastAutoTollAlert,
+            runningTotal = runningTotal(cs),
         )
     }
 
     /** [TimeClass] (this file's display-oriented enum, `domain.TimeClass`) -> [CalcTimeClass]
      * (`domain.fare.TimeClass`, the tested engine's own) — same three cases, different enum types
      * because [TimeClass] carries a display [TimeClass.label] the calc engine has no use for. */
+    /** [CalcTimeClass] -> [TimeClass], the inverse of [toCalcTimeClass] below. Needed by
+     * [resumeTrip], which receives the calc engine's own enum from the reconstruction and has to
+     * put this class's display-oriented one on [FareState]. */
+    private fun CalcTimeClass.toDisplayTimeClass(): TimeClass = when (this) {
+        CalcTimeClass.DAY -> TimeClass.DAY
+        CalcTimeClass.NIGHT -> TimeClass.NIGHT
+        CalcTimeClass.HOLIDAY -> TimeClass.HOLIDAY
+    }
+
     private fun TimeClass.toCalcTimeClass(): CalcTimeClass = when (this) {
         TimeClass.DAY -> CalcTimeClass.DAY
         TimeClass.NIGHT -> CalcTimeClass.NIGHT
@@ -629,6 +1032,46 @@ class FareEngineImpl(
     /** Peak Time Hiring Charge: urban, hiring commences 10pm-6am Fri/Sat/pre-holiday (spec B6) —
      * see [resolveIsPeakFor]'s doc for the actual rule. */
     private fun resolveIsPeak(): Boolean = resolveIsPeakFor(ZonedDateTime.now(NSW_FARE_ZONE))
+
+    companion object {
+        /** Nominal loop cadence. The meter no longer *bills* this figure -- see [tick]'s F1 note --
+         * it only decides how often the loop wakes up to measure what really elapsed. */
+        private const val TICK_PERIOD_MS = 1000L
+
+        /**
+         * How old the newest GPS fix may be before [tick] stops believing it knows whether this
+         * vehicle is moving (F3, architecture audit §2.1). Five seconds is comfortably longer than
+         * the 1 Hz cadence [au.com.threesixty.cabdispatch.domain.location.RealLocationProvider]
+         * requests (so ordinary jitter -- live traces show 0.96s-2.04s gaps -- never trips it) and
+         * short enough that a real blackout is caught within a few metres of travel rather than a
+         * few hundred.
+         */
+        const val MAX_FIX_AGE_MS = 5_000L
+
+        /**
+         * Upper bound on the elapsed time any single tick may bill, seconds (F1).
+         *
+         * A tick that genuinely took longer than this did not observe the intervening travel -- the
+         * process was frozen, Doze-throttled, or restarted -- so billing it as motion would invent
+         * distance. Five seconds is the same figure as [MAX_FIX_AGE_MS] and for the same reason: at
+         * that point the meter's information about the vehicle is stale regardless of which of the
+         * two clocks noticed first.
+         */
+        private const val MAX_TICK_SECONDS = 5.0
+
+        /**
+         * How far past `speed x dt` a single tick's distance may go before it is treated as a GPS
+         * jump rather than travel (F2). A haversine leg is real position data and normally the more
+         * trustworthy of the two paths, but multipath off a city building or a provider handover
+         * can move a "position" hundreds of metres in one sample. 1.5x leaves ordinary
+         * acceleration within a tick unclipped while making a fabricated kilometre impossible.
+         */
+        private const val MAX_DISTANCE_OVERSHOOT_FACTOR = 1.5
+
+        private const val NANOS_PER_SECOND = 1_000_000_000.0
+        private const val NANOS_PER_MILLI = 1_000_000L
+        private const val SECONDS_PER_HOUR = 3600.0
+    }
 }
 
 /**

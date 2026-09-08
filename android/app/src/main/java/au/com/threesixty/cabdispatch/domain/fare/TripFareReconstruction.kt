@@ -54,11 +54,35 @@ fun reconstructFareState(trip: TripEntity, tariff: Tariff): FareState {
     val threshold = tariff.distKmThreshold
     val band1Km = cumulativeDistanceKm.min(threshold)
     val band2Km = (cumulativeDistanceKm - threshold).coerceAtLeast(BigDecimal.ZERO)
-    val accruedDistanceCharge = band1Km * rate1 + band2Km * rate2
+
+    // F9 (architecture audit §2.2): prefer the charges the live meter actually accrued, and only
+    // re-derive them when they genuinely are not there.
+    //
+    // The derivation below is exact given its inputs -- see this file's own doc -- but its inputs
+    // are lossy: [TripEntity.distanceM] is integer metres, re-rounded on every persist, and
+    // `waitingS` is whole seconds. So the closing fare was reconstructed from a rounded shadow of
+    // what the meter charged, rather than from the charge itself. Since schema v11 the real figures
+    // travel on the row ([TripEntity.accruedDistanceCharge]), so the round-trip is simply skipped.
+    //
+    // A `"0"`/absent column means one of exactly two things, and the fallback is right for both: a
+    // row written before v11 (its distanceM/waitingS are the only record that exists), or a trip
+    // that genuinely accrued nothing yet. Neither can be distinguished from the other here, and
+    // neither needs to be -- the derivation returns zero for a zero-distance trip anyway.
+    val persistedDistanceCharge = trip.accruedDistanceCharge.toBigDecimalOrZero()
+    val accruedDistanceCharge = if (persistedDistanceCharge.signum() > 0) {
+        persistedDistanceCharge
+    } else {
+        band1Km * rate1 + band2Km * rate2
+    }
 
     val waitingMinutes = BigDecimal(trip.waitingS)
         .divide(BigDecimal(60), 10, RoundingMode.HALF_UP)
-    val accruedWaitingCharge = waitingMinutes * tariff.waitingRatePerMin
+    val persistedWaitingCharge = trip.accruedWaitingCharge.toBigDecimalOrZero()
+    val accruedWaitingCharge = if (persistedWaitingCharge.signum() > 0) {
+        persistedWaitingCharge
+    } else {
+        waitingMinutes * tariff.waitingRatePerMin
+    }
 
     val state = FareState(
         tariff = tariff,

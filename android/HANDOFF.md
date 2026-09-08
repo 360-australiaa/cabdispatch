@@ -1,7 +1,75 @@
 # Android meter — finish-it checklist (read this first)
 
 
-## 2026-08-27 (newest) -- Duress cabin-camera snapshot gallery: backend + dashboard DONE, Android capture NOT started
+## 2026-09-08 (newest) -- Wave-1 A1: the fare-engine blockers are closed
+
+Thirteen findings from `docs/audits/2026-09-08-android-architecture-audit.md` §2.1-§2.3, four of
+them rated blocker. Branch `wave1/a1-fare-engine`, based on the Phase-0 integration trunk. Verified
+with `./gradlew :app:testDebugUnitTest` (**288 passed, 0 failed** -- baseline was 256) and
+`:app:assembleDebug`. **No device verification** -- that is OWNER gate G1, below.
+
+### The four blockers
+
+- **F4 -- the fare loop no longer dies.** `FareEngineImpl` ticked in `HiredViewModel.viewModelScope`,
+  so a fare stopped accruing on Back, under Doze, and on process death -- each with a passenger in
+  the car. It is now process-scoped (`AppContainer.fareEngine`) behind a new
+  `domain/MeterForegroundService.kt` (`foregroundServiceType="location"`, ongoing notification
+  showing the live fare and a GPS-lost line). The Room persistence subscription moved with it into
+  `MeterController`: hoisting the accrual alone would have left a meter charging correctly on screen
+  into a trip record nobody was updating. `HiredViewModel` is now a thin observer. On process start
+  with an `OPEN` trip, `MeterController.restoreOpenTripIfAny()` rebuilds via `reconstructFareState`
+  and resumes -- the dial returns showing the real running total.
+  **The old standing TODO in `domain/FareEngine.kt` about this is resolved and removed.**
+- **F1 -- the tick bills real elapsed time.** `delay(1000)` guarantees *at least* a second; the loop
+  billed exactly one regardless. Now a `System.nanoTime` delta, clamped to `[0, 5s]`.
+- **F3 -- tunnels no longer bill phantom distance.** `LocationFix` carries `receivedAtNanos`; a fix
+  older than `MAX_FIX_AGE_MS` (5s) accrues no distance at all, accrues waiting time only if the
+  vehicle was already stationary, and publishes `FareState.gpsLost`.
+- **F8 -- the dial is the bill.** `FareState.total` now reads `calcEngine.close(...).grandTotal`
+  instead of summing `FareBreakdown` itself. A maxi trip's dial had been under-reading its own bill
+  by 50% of the metered base.
+
+### The rest
+
+F2 (haversine distance, capped at `speed x dt x 1.5`); F6 (reject fixes over 50m accuracy, clamp
+speed under 1.4 m/s to zero, `RealLocationProvider`'s private haversine folded onto `GeoMath`);
+F7 (one `DEFAULT_SPEED_THRESHOLD_KMH`); F9 (accrued charges persisted as decimals, **schema
+10 -> 11**, `MIGRATION_10_11`); F11 (Close & Pay falls back to the built-in Fares Order card behind
+a loud `DEFAULT RATES` banner instead of refusing payment); F12 (trip day-buckets on `NSW_FARE_ZONE`);
+T1 (`TollPreset` carries its registry road id; a road charged by hand is not also charged
+automatically); T2 (registry refreshes on reconnect and in `SyncWorker`).
+
+### Two display figures moved by one cent, deliberately
+
+`FareEngineImplAutoTollTest` expected 8.66 and 6.51; they are now 8.65 and 6.50. That is F8: the
+dial had been rounding half-up where the billed figure truncates per Act s76(5)/(6). The dial was
+previewing a fare one cent *higher* than what would be charged. **The golden vectors did not move**
+-- `domain/fare/FareEngine.kt` and `domain/fare/FareEngineTest.kt` have no diff against the branch
+point, checked explicitly.
+
+### Known gaps and what is left for someone else
+
+- **OWNER gate G1 (on-device) is NOT done** and cannot be done from an agent worktree -- no `adb`,
+  no APK install, no tablet. Someone must still: start a fare on the simulator, press Back, press
+  Home, kill the app from Recents, return, and confirm the fare is still running and the total
+  continuous; then run a tunnel profile (60 km/h -> no fixes for 90s -> 60 km/h) and confirm no
+  distance accrues during the gap. **The unit tests prove the logic, not the platform** -- notably
+  nothing here has exercised a real `startForeground` call, the notification, or Doze.
+- **`HiredScreen.kt`'s `BackHandler {}` swallow is still there.** Back is now *safe* (the fare
+  survives it), which was this workstream's half; removing the swallow and showing
+  `FareState.gpsLost` on the dial is A4's, per the plan's own split.
+- **On resume after a crash, `TollDetectionState` is not repopulated.** It is in-memory dedup
+  bookkeeping and the gantry-confirmation sets were never persisted. Consequence, bounded and
+  deliberate: a road already auto-charged before the crash could be charged again if the vehicle
+  re-crosses one of its gantries afterwards, and the driver can see and remove it. The alternative
+  -- guessing at suppression -- would silently drop a real toll instead, with nothing on screen.
+- **`TripEntity.autoTolledRoadsJson` still never reaches the server** (audit T5). Out of scope here.
+- A `MeterForegroundService.start()` that the OS refuses (API 31+ background-start restrictions) is
+  swallowed: the engine is process-scoped and ticks regardless, so the failure degrades to the old
+  behaviour rather than taking the fare down. It is not currently surfaced anywhere.
+
+
+## 2026-08-27 -- Duress cabin-camera snapshot gallery: backend + dashboard DONE, Android capture NOT started
 
 New feature, explicitly scoped by the owner: cabin-camera visibility on the dashboard during a
 duress incident. Scope decision already made (owner's own call, do not re-litigate it): frames
