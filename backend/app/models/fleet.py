@@ -243,7 +243,7 @@ class VehiclePositionHistory(Base, TenantScopedMixin):
     answer (a process restart or a second uvicorn worker loses it entirely).
 
     Retention is a lazily-enforced default, NOT a decided data-retention
-    policy -- see `app.services.live_ops.POSITION_HISTORY_RETENTION_HOURS`'s
+    policy -- see `app.services.live_ops.position_history_retention_hours`'s
     own doc comment for the full framing (mirrors this codebase's existing
     convention of flagging such numbers explicitly rather than presenting
     them as a business decision -- see docs/DURESS_DEVICE_INTEGRATION.md

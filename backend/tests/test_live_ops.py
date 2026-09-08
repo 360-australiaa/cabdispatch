@@ -32,7 +32,7 @@ from app.models.jobs import DriverAvailability
 from app.models.shift import Shift
 from app.models.trips import Trip
 from app.models.user import ROLE_DRIVER, User
-from app.services.live_ops import POSITION_HISTORY_RETENTION_HOURS, fleet_broadcaster
+from app.services.live_ops import fleet_broadcaster, position_history_retention_hours
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -861,55 +861,113 @@ async def test_publish_position_appends_durable_history_row(client, session):
     assert len(rows) == 2
 
 
-async def test_publish_position_prunes_only_this_vehicles_own_stale_history(client, session):
-    """The lazy prune in `_persist_position_history` deletes only THIS
-    vehicle's rows older than POSITION_HISTORY_RETENTION_HOURS, scoped by
-    vehicle_id -- a stale row for a different vehicle in the same tenant must
-    survive untouched, and a recent row for that other vehicle must also
-    survive."""
+async def test_publish_position_prunes_stale_history_across_the_whole_tenant(client, session):
+    """The prune in `_persist_position_history` is TENANT-wide, not
+    per-vehicle (workstream B6).
+
+    It used to also filter on vehicle_id, which meant a vehicle that had
+    stopped publishing — sold, deregistered, tablet dead — kept its GPS
+    history forever: the only thing that would have deleted it was its own
+    next publish, which was never coming. For driver location data that is a
+    privacy exposure, not just table bloat (backend audit §6). Now ANY vehicle
+    on the tenant still publishing sweeps the tenant's expired rows, while
+    rows inside the retention window survive regardless of whose they are.
+    """
     tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="History Tenant Prune")
-    stale_vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-HIST-STALE")
+    silent_vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-HIST-STALE")
     other_vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-HIST-OTHER")
 
-    old_recorded_at = datetime.now(UTC) - timedelta(hours=POSITION_HISTORY_RETENTION_HOURS + 1)
-    stale_row = VehiclePositionHistory(
-        tenant_id=tenant_id,
-        vehicle_id=stale_vehicle.id,
-        lat=-33.0,
-        lng=151.0,
-        status="offline",
-        recorded_at=old_recorded_at,
+    retention = position_history_retention_hours(tenant_id)
+    old_recorded_at = datetime.now(UTC) - timedelta(hours=retention + 1)
+    recent_recorded_at = datetime.now(UTC) - timedelta(hours=1)
+
+    session.add_all(
+        [
+            VehiclePositionHistory(
+                tenant_id=tenant_id,
+                vehicle_id=silent_vehicle.id,
+                lat=-33.0,
+                lng=151.0,
+                status="offline",
+                recorded_at=old_recorded_at,
+            ),
+            VehiclePositionHistory(
+                tenant_id=tenant_id,
+                vehicle_id=silent_vehicle.id,
+                lat=-33.05,
+                lng=151.05,
+                status="offline",
+                recorded_at=recent_recorded_at,
+            ),
+            VehiclePositionHistory(
+                tenant_id=tenant_id,
+                vehicle_id=other_vehicle.id,
+                lat=-33.1,
+                lng=151.1,
+                status="offline",
+                recorded_at=old_recorded_at,
+            ),
+        ]
     )
-    other_recent_row = VehiclePositionHistory(
-        tenant_id=tenant_id,
-        vehicle_id=other_vehicle.id,
-        lat=-33.1,
-        lng=151.1,
-        status="offline",
-        recorded_at=old_recorded_at,  # also old, but belongs to a DIFFERENT vehicle
-    )
-    session.add_all([stale_row, other_recent_row])
     await session.commit()
 
-    # Publishing for stale_vehicle triggers its own prune -- must delete the
-    # old row for stale_vehicle, but must NOT touch other_vehicle's old row.
+    # The silent vehicle never publishes again; the other one publishes once.
     resp = await client.post(
         "/v1/fleet/positions",
-        json={"vehicle_id": stale_vehicle.id, "lat": -33.2, "lng": 151.2, "status": "available"},
+        json={"vehicle_id": other_vehicle.id, "lat": -33.2, "lng": 151.2, "status": "available"},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
 
-    stale_rows = await _history_rows(session, vehicle_id=stale_vehicle.id)
-    assert len(stale_rows) == 1  # the old one is gone; only the fresh publish remains
+    # The silent vehicle's EXPIRED row is gone even though it published
+    # nothing — this is the privacy fix.
+    silent_rows = await _history_rows(session, vehicle_id=silent_vehicle.id)
+    assert len(silent_rows) == 1
     # sqlite round-trips DateTime(timezone=True) as a naive value -- strip
     # tzinfo from both sides for the comparison rather than relying on
     # driver-specific timezone-preservation behaviour.
-    assert stale_rows[0].recorded_at.replace(tzinfo=None) > old_recorded_at.replace(tzinfo=None)
+    assert silent_rows[0].recorded_at.replace(tzinfo=None) > old_recorded_at.replace(tzinfo=None)
+    assert silent_rows[0].lat == -33.05  # its in-window row survived
 
+    # The publisher's own expired row is gone too, leaving just the new one.
     other_rows = await _history_rows(session, vehicle_id=other_vehicle.id)
-    assert len(other_rows) == 1  # untouched -- this vehicle never published, so no prune ran for it
-    assert other_rows[0].lat == -33.1
+    assert len(other_rows) == 1
+    assert other_rows[0].lat == -33.2
+
+
+async def test_publish_position_prune_never_crosses_a_tenant_boundary(client, session):
+    """Tenant-wide is not platform-wide: one tenant publishing must never
+    delete another tenant's history, however stale."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Prune Tenant A")
+    other_tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Prune Tenant B")
+
+    publisher = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-PRUNE-A")
+    foreign_vehicle = await _make_vehicle(session, tenant_id=other_tenant_id, rego="TX-PRUNE-B")
+
+    old_recorded_at = datetime.now(UTC) - timedelta(
+        hours=position_history_retention_hours(tenant_id) + 1
+    )
+    session.add(
+        VehiclePositionHistory(
+            tenant_id=other_tenant_id,
+            vehicle_id=foreign_vehicle.id,
+            lat=-33.9,
+            lng=151.9,
+            status="offline",
+            recorded_at=old_recorded_at,
+        )
+    )
+    await session.commit()
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": publisher.id, "lat": -33.2, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    foreign_rows = await _history_rows(session, vehicle_id=foreign_vehicle.id)
+    assert len(foreign_rows) == 1, "another tenant's history was pruned"
 
 
 async def test_position_history_endpoint_returns_points_in_order(client, session):

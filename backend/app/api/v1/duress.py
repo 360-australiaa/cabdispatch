@@ -75,6 +75,7 @@ from app.schemas.duress import (
 from app.schemas.duress_snapshot import DuressSnapshotListResponse, DuressSnapshotRead
 from app.services.duress import (
     DuressAudioError,
+    advance_escalation_if_due,
     cancel_event,
     close_event,
     escalate_event,
@@ -94,6 +95,34 @@ router = APIRouter(prefix="/v1/duress", tags=["duress"])
 # perform admin CRUD corrections. Drivers trigger/cancel/stream GPS on their
 # own events but do not drive escalation.
 _DISPATCH_ROLES = ("owner", "admin", "dispatcher")
+
+
+async def _advance_escalation_lazily(session: AsyncSession, *events: DuressEvent) -> None:
+    """Runs the lazy duress-escalation cascade on the events a read just
+    loaded, and swallows anything it throws.
+
+    This backend has no scheduler (see `app.services.duress
+    .advance_escalation_if_due` for the full why), so the cascade only ever
+    advances because a read went past. That makes the read the ONLY moving
+    part, and it must therefore never be the thing that breaks: the ops
+    dashboard polling `GET /v1/duress?open_only=true` every 5 seconds must
+    still be shown the live duress list even if advancing the cascade itself
+    failed. Turning "we could not auto-escalate" into a 500 on the duress list
+    would blind the dispatcher to the incident entirely — strictly worse than
+    an incident that has not advanced a stage yet.
+
+    Logged at ERROR, not swallowed silently, precisely because a persistent
+    failure here means a safety control is not working.
+    """
+    try:
+        await advance_escalation_if_due(session, *events)
+    except Exception:  # broad on purpose — see docstring: a read must not 500 on this
+        logger.exception(
+            "lazy duress escalation advance failed for %d event(s); the read is "
+            "answered anyway, but the cascade has NOT advanced",
+            len(events),
+        )
+        await session.rollback()
 
 
 async def _get_owned_event(session: AsyncSession, *, tenant_id: str, event_id: str) -> DuressEvent:
@@ -665,6 +694,13 @@ async def list_events(
     )
     items = result.scalars().all()
 
+    # Lazy escalation, the closest thing this backend has to a duress timer:
+    # the ops dashboard polls this endpoint with open_only=true every 5
+    # seconds, so every non-terminal event in the page it just asked for gets
+    # its cascade checked on that cadence. Never raises — see
+    # `_advance_escalation_lazily`.
+    await _advance_escalation_lazily(session, *items)
+
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
@@ -699,7 +735,11 @@ async def get_event(
     _user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DuressEvent:
-    return await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+    """Reading one duress event also advances its escalation cascade if a
+    stage has fallen due — see `_advance_escalation_lazily`."""
+    event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
+    await _advance_escalation_lazily(session, event)
+    return event
 
 
 @router.patch("/{event_id}", response_model=DuressEventRead)

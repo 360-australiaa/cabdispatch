@@ -91,6 +91,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.fleet import Device, Vehicle, VehiclePositionHistory
 from app.models.jobs import DriverAvailability
 from app.models.shift import Shift
@@ -104,16 +105,32 @@ logger = logging.getLogger("cab_dispatch.live_ops")
 # to report -- it's simply not known to be doing anything right now).
 DEFAULT_LIVE_STATUS = "offline"
 
-# How long a `VehiclePositionHistory` row is kept before `_persist_position_history`
-# lazily prunes it on the next publish for that same vehicle. This is a
-# TECHNICAL DEFAULT (3 days), not a decided data-retention policy -- picked
-# because it comfortably covers "a dispatcher scrubs back through the last
-# few hours" (this pass's actual brief) with headroom, nothing more. Flag
-# this to the business owner before this table handles real driver location
-# data at scale -- same open-item framing this codebase already applies to
-# the duress-recordings retention question (docs/DURESS_DEVICE_INTEGRATION.md
-# sec 8: "a default, not a decided policy").
-POSITION_HISTORY_RETENTION_HOURS = 72
+def position_history_retention_hours(tenant_id: str) -> int:
+    """How long a `VehiclePositionHistory` row is kept before the next
+    position publish on this tenant prunes it.
+
+    OWNER DECISION OUTSTANDING, stated plainly because this is driver location
+    data: the 72-hour default is a TECHNICAL DEFAULT (3 days) picked because it
+    comfortably covers "a dispatcher scrubs back through the last few hours",
+    which was the brief this table was built for. It is NOT a data-retention
+    policy anybody has decided. The legally and contractually correct number is
+    a business-owner call that has not been made, and this function is not
+    making it — it is making the number a setting so that when the call IS
+    made it is a config change, not a code change. Same open-item framing this
+    codebase already applies to duress-recording retention
+    (docs/DURESS_DEVICE_INTEGRATION.md sec 8: "a default, not a decided policy").
+
+    DEVIATION on "tenant-configurable", identical in shape and rationale to
+    `app.services.fatigue.shift_duration_limit_hours`: there is still no
+    persisted per-tenant settings table in this codebase (`Tenant` carries
+    theme_json/plan/status/stripe_acct_id and nothing settings-shaped), and
+    adding one is another workstream's territory. The value therefore comes
+    from `Settings.POSITION_HISTORY_RETENTION_HOURS` — one env-overridable
+    value for the whole deployment. `tenant_id` is accepted, and threaded
+    through by the only call site, purely so a real per-tenant override slots
+    in HERE later without touching that call site.
+    """
+    return settings.POSITION_HISTORY_RETENTION_HOURS
 
 # Threshold used by `get_position_history` to flag a harsh-braking or
 # rapid-acceleration event between two consecutive recorded points. 8 km/h
@@ -339,16 +356,17 @@ async def _persist_position_history(
 ) -> None:
     """Best-effort durable side-write: appends one row to
     `app.models.fleet.VehiclePositionHistory` for every position published,
-    then lazily prunes this SAME vehicle's own rows older than
-    `POSITION_HISTORY_RETENTION_HOURS` -- see that constant's doc comment for
-    why the window is a technical default, not policy. See
+    then lazily prunes EVERY row on this tenant older than
+    `position_history_retention_hours(tenant_id)` -- see that function for why
+    the window is a technical default the owner has yet to decide on, and the
+    prune itself below for why it is no longer scoped to this one vehicle. See
     `VehiclePositionHistory`'s own docstring for why this table exists
     alongside (not instead of) the `_FleetBroadcaster` in-memory cache.
 
-    The prune is scoped to `vehicle_id` (`WHERE vehicle_id = ... AND
-    recorded_at < cutoff`), never a full-table scan -- cheap enough to run on
-    every single write given `recorded_at`/`vehicle_id` are both indexed
-    columns, and this is deliberately the SAME "lazy expiry performed inline
+    The prune is scoped to `tenant_id` (`WHERE tenant_id = ... AND
+    recorded_at < cutoff`), never a cross-tenant full-table scan -- cheap
+    enough to run on every single write given `recorded_at` is indexed, and
+    this is deliberately the SAME "lazy expiry performed inline
     on the next write" pattern this codebase already established for offer
     expiry (see `app.services.jobs.expire_stale_offers`'s own module-section
     comment: no scheduler/cron infrastructure exists anywhere in this
@@ -372,11 +390,25 @@ async def _persist_position_history(
     )
     session.add(row)
 
-    cutoff = datetime.now(UTC) - timedelta(hours=POSITION_HISTORY_RETENTION_HOURS)
+    # TENANT-WIDE prune, not per-vehicle (workstream B6). It used to also
+    # filter on `vehicle_id`, which meant retention was only ever enforced for
+    # vehicles that were still publishing: a vehicle that stopped reporting
+    # — sold, deregistered, tablet dead, driver left — kept its entire GPS
+    # history forever, because the only thing that would have deleted it was
+    # its own next position publish, which was never coming. For driver
+    # location data that is a privacy exposure, not merely table bloat
+    # (backend audit §6). Dropping the vehicle_id predicate means any vehicle
+    # on the tenant still publishing sweeps the whole tenant's expired rows.
+    #
+    # Still tenant-scoped, and still cheap: `recorded_at` is indexed, the
+    # predicate is a range delete, and on a tenant publishing at all normally
+    # every call after the first finds nothing to delete.
+    cutoff = datetime.now(UTC) - timedelta(
+        hours=position_history_retention_hours(tenant_id)
+    )
     await session.execute(
         delete(VehiclePositionHistory).where(
             VehiclePositionHistory.tenant_id == tenant_id,
-            VehiclePositionHistory.vehicle_id == vehicle_id,
             VehiclePositionHistory.recorded_at < cutoff,
         )
     )

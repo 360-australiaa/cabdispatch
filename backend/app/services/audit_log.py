@@ -59,18 +59,22 @@ it calls `verify_chain` to walk a tenant's chain and confirm it's intact.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.audit_log import AuditLog
 from app.models.user import User
+
+logger = logging.getLogger("cab_dispatch.audit_log")
 
 # Fixed previous_hash for the first row in a tenant's chain — there is no
 # preceding row to point at, so we point at a value that could never itself be
@@ -138,19 +142,163 @@ def compute_audit_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-async def _latest_hash(session: AsyncSession, *, tenant_id: str) -> str:
-    """The `hash` of the most recently written row in this tenant's chain, or
-    `GENESIS_HASH` if the tenant has no audit rows yet. Ordered by `at` (the
+def _chain_lock_key(tenant_id: str) -> int:
+    """Deterministic signed-64-bit key for `pg_advisory_xact_lock`, derived
+    from `tenant_id`.
+
+    Postgres advisory locks are keyed by a bigint, not a string, so the tenant
+    UUID is hashed down to one. blake2b (not Python's `hash()`) because
+    `hash()` of a str is salted per process — two uvicorn workers would derive
+    DIFFERENT keys for the same tenant and would therefore not exclude each
+    other, which is the entire point of the lock. Signed range, because
+    Postgres bigint is signed and a value above 2**63-1 is an error.
+    """
+    digest = hashlib.blake2b(tenant_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+# One asyncio lock per tenant, guarding the read-latest-then-append sequence
+# inside this process. See `_acquire_chain_lock` for why the database-level
+# lock alone is not enough. Unbounded in principle, bounded in practice by the
+# number of tenants a process serves; an `asyncio.Lock` with no waiters is two
+# small objects, so this is not worth evicting from.
+_tenant_append_locks: dict[str, asyncio.Lock] = {}
+
+# Ceiling on how long one append will wait for another append on the same
+# tenant. Reaching it means something is holding a transaction open for half a
+# minute, which is a bug elsewhere; we then proceed WITHOUT the lock and log
+# loudly, because a duress/fleet write hanging forever is worse than a small
+# risk of a chain fork, and a silent deadlock is worse than both.
+CHAIN_LOCK_TIMEOUT_SECONDS = 30.0
+
+# Key under which a held lock is parked on the session, so the same session
+# appending several audit rows in one transaction re-enters instead of
+# deadlocking against itself.
+_SESSION_LOCK_KEY = "_audit_chain_lock"
+
+
+def _chain_lock_key(tenant_id: str) -> int:
+    """Deterministic signed-64-bit key for `pg_advisory_xact_lock`, derived
+    from `tenant_id`.
+
+    Postgres advisory locks are keyed by a bigint, not a string, so the tenant
+    UUID is hashed down to one. blake2b (not Python's `hash()`) because
+    `hash()` of a str is salted per process — two uvicorn workers would derive
+    DIFFERENT keys for the same tenant and would therefore not exclude each
+    other, which is the entire point of the lock. Signed range, because
+    Postgres bigint is signed and a value above 2**63-1 is an error.
+    """
+    digest = hashlib.blake2b(tenant_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def _release_on_transaction_end(sync_session, transaction) -> None:
+    """Releases this session's held chain lock when its transaction ends —
+    commit, rollback or close, whichever comes first.
+
+    Transaction end, not "when record_audit returns", is the correct release
+    point: `record_audit` deliberately does not commit (see its docstring), so
+    the row it appended is not visible to any other connection until the
+    CALLER commits. Releasing any earlier would let the next appender read a
+    `previous_hash` that is about to be superseded — exactly the fork this
+    lock exists to prevent.
+    """
+    if transaction.parent is not None:  # nested/savepoint, not the real end
+        return
+    lock = sync_session.info.pop(_SESSION_LOCK_KEY, None)
+    if lock is not None and lock.locked():
+        lock.release()
+
+
+async def _acquire_chain_lock(session: AsyncSession, *, tenant_id: str) -> None:
+    """Serialises hash-chain appends for one tenant, so two concurrent audited
+    writes cannot both read the same `previous_hash` and permanently fork the
+    chain (backend audit §7: the "Concurrency — audit-chain fork" untested
+    gap). A forked chain can never pass `verify_chain` again, on the one
+    control this system has for tamper evidence.
+
+    TWO LAYERS, because neither covers the other's case.
+
+    1. Postgres (production): `pg_advisory_xact_lock` blocks any other backend
+       — any other worker PROCESS — asking for the same key, until this
+       transaction ends. This is the layer that matters in production, and it
+       is the only one that can work across processes. Transaction-scoped (the
+       `_xact_` variant) specifically so the caller's own commit/rollback
+       releases it, since `record_audit` has no commit of its own to hang a
+       release off.
+
+       Note this is deliberately NOT `SELECT ... FOR UPDATE` on the latest
+       row: a tenant writing its very FIRST audit row has no row to lock, so
+       two concurrent first-writes would both lock nothing, both take
+       GENESIS_HASH, and fork immediately. The lock has to exist independently
+       of whether there is a row to lock.
+
+    2. Every dialect, including SQLite (dev/tests): an in-process
+       `asyncio.Lock` per tenant, held until the same transaction end. SQLite
+       has no advisory locks at all, and its own write locking does not
+       serialise this sequence — measured, not assumed: a no-op write issued
+       before the read to force SQLite's RESERVED lock still let 8 concurrent
+       appends fork into 4 chains. Since this backend runs single-process by
+       policy (`--workers 1`; the in-memory broadcasters in
+       `app.services.live_ops` require it), an in-process lock is a real
+       guarantee here rather than a test-only convenience — and on Postgres
+       it simply sits underneath the advisory lock, costing nothing.
+
+    Re-entrant per session: a request that appends several audit rows in one
+    transaction acquires once and releases once, instead of deadlocking on its
+    own second call.
+    """
+    connection = await session.connection()
+    if connection.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _chain_lock_key(tenant_id)}
+        )
+
+    sync_session = session.sync_session
+    if sync_session.info.get(_SESSION_LOCK_KEY) is not None:
+        return  # already held by an earlier record_audit in this transaction
+
+    lock = _tenant_append_locks.setdefault(tenant_id, asyncio.Lock())
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=CHAIN_LOCK_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.error(
+            "audit chain append lock for tenant %s not obtained within %.0fs; appending "
+            "WITHOUT it. Something is holding a transaction open far too long, and this "
+            "row could fork the chain.",
+            tenant_id,
+            CHAIN_LOCK_TIMEOUT_SECONDS,
+        )
+        return
+
+    sync_session.info[_SESSION_LOCK_KEY] = lock
+    if not event.contains(sync_session, "after_transaction_end", _release_on_transaction_end):
+        event.listen(sync_session, "after_transaction_end", _release_on_transaction_end)
+
+
+async def _latest_row(session: AsyncSession, *, tenant_id: str) -> tuple[str, datetime] | None:
+    """The `hash` and `at` of the most recently written row in this tenant's
+    chain, or None if the tenant has no audit rows yet. Ordered by `at` (the
     chain's chronological axis) with `id` as a tiebreaker for same-instant
     writes."""
     result = await session.execute(
-        select(AuditLog.hash)
+        select(AuditLog.hash, AuditLog.at)
         .where(AuditLog.tenant_id == tenant_id)
         .order_by(AuditLog.at.desc(), AuditLog.id.desc())
         .limit(1)
     )
-    latest = result.scalar_one_or_none()
-    return latest if latest is not None else GENESIS_HASH
+    row = result.first()
+    if row is None:
+        return None
+    at = row[1]
+    return row[0], at if at.tzinfo is not None else at.replace(tzinfo=UTC)
+
+
+async def _latest_hash(session: AsyncSession, *, tenant_id: str) -> str:
+    """The `hash` of the most recently written row in this tenant's chain, or
+    `GENESIS_HASH` if the tenant has no audit rows yet."""
+    latest = await _latest_row(session, tenant_id=tenant_id)
+    return latest[0] if latest is not None else GENESIS_HASH
 
 
 async def record_audit(
@@ -188,9 +336,51 @@ async def record_audit(
     queries through THIS session — since record_audit flushes at the end,
     successive calls within the same session/transaction see each other's
     rows and chain correctly even before an outer commit.
+
+    ORDERING: `at` is forced strictly increasing per tenant (see the comment
+    at the nudge below) because the chain's order is `at`, and equal
+    timestamps make a row's predecessor ambiguous.
+
+    CONCURRENCY: the latest-row read and this row's insert are serialised
+    per tenant by `_acquire_chain_lock` — without it, two simultaneous audited
+    writes on one tenant both read the same `previous_hash` and the chain
+    forks permanently, which `verify_chain` can then never pass again. See
+    that function for the Postgres/SQLite split.
     """
     at_value = at or datetime.now(UTC)
-    previous_hash = await _latest_hash(session, tenant_id=tenant_id)
+    # Must come BEFORE the read, or the read it is protecting has already
+    # happened — see `_acquire_chain_lock`.
+    await _acquire_chain_lock(session, tenant_id=tenant_id)
+
+    latest = await _latest_row(session, tenant_id=tenant_id)
+    if latest is None:
+        previous_hash = GENESIS_HASH
+    else:
+        previous_hash, latest_at = latest
+        if at_value <= latest_at:
+            # STRICTLY INCREASING `at`, per tenant. The chain's order IS `at`
+            # (see `_latest_row` and `verify_chain`, which both walk by it),
+            # so two rows sharing an `at` make "the previous row" ambiguous:
+            # the `id DESC` tiebreaker is a random UUID, which means the
+            # appender and the verifier can pick DIFFERENT predecessors for
+            # the same row and the chain fails verification even though
+            # nothing was tampered with.
+            #
+            # This is not hypothetical. `datetime.now()` on Windows has
+            # roughly millisecond granularity (not microsecond), so a burst
+            # of audited writes — a fleet wipe closing a dozen shifts, a
+            # duress cascade advancing four stages — routinely produces rows
+            # with identical timestamps. Measured: 8 appends, fully
+            # serialised, still produced only 6 distinct `previous_hash`
+            # values before this.
+            #
+            # Nudging by one microsecond keeps the recorded time honest to
+            # the microsecond (it is never moved backwards, and never forward
+            # by more than the number of rows appended in the same tick)
+            # while making the ordering total. Applies to a caller-supplied
+            # `at` as well: a chain whose order is undefined is worse than a
+            # timestamp that is a microsecond late.
+            at_value = latest_at + timedelta(microseconds=1)
     row_hash = compute_audit_hash(
         tenant_id=tenant_id,
         actor_user_id=actor_user_id,

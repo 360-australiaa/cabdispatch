@@ -336,8 +336,10 @@ async def escalate_event(
 
     The first stage flips status open -> escalating; the last stage flips
     escalating -> dispatched. Each call is a discrete, manually-triggered step
-    (from a background job or a dispatcher action) — there is no server-side
-    timer in this pass.
+    (a dispatcher clicking Escalate). Since workstream B6 the cascade ALSO
+    advances by itself on any duress read, via `advance_escalation_if_due`
+    below — this endpoint is now the manual override on top of that, not the
+    only way an event ever moves.
 
     Reaching the final stage (`present_000_call_script`) ALSO fires the real
     Twilio Voice automated escalation call (blueprint 8.3) via
@@ -369,10 +371,38 @@ async def escalate_event(
             detail="All escalation stages have already been completed for this event",
         )
 
-    stage = ESCALATION_STAGES[next_stage_index]
-    now = datetime.now(UTC)
+    _apply_next_stage(event, note=note, emergency_contact_phone=emergency_contact_phone)
 
-    entry: dict = {"stage": stage, "at": now.isoformat(), "note": note}
+    await session.commit()
+    await session.refresh(event)
+    return event
+
+
+def _apply_next_stage(
+    event: DuressEvent,
+    *,
+    note: str | None,
+    emergency_contact_phone: str | None,
+    now: datetime | None = None,
+) -> str:
+    """Applies exactly ONE cascade stage to `event` in memory and returns the
+    stage name. Does not validate, does not commit — both callers do their own.
+
+    Split out of `escalate_event` so the lazy auto-advance below
+    (`advance_escalation_if_due`) can run the identical state transition
+    several times inside one transaction, instead of duplicating the
+    status-flip/call-firing rules and letting the two drift apart. Everything
+    that makes escalation *meaningful* — the open->escalating flip on the first
+    stage, escalating->dispatched plus the real Twilio call on the last —
+    happens here, so an automatically-advanced event is indistinguishable from
+    a manually-escalated one apart from the note on its log entry.
+    """
+    log = event.escalation_log_json or {}
+    next_stage_index = log.get("next_stage_index", 0)
+    stage = ESCALATION_STAGES[next_stage_index]
+    at = now or datetime.now(UTC)
+
+    entry: dict = {"stage": stage, "at": at.isoformat(), "note": note}
     bookkeeping: dict = {"next_stage_index": next_stage_index + 1}
 
     if stage == ESCALATION_STAGE_CANCEL_WINDOW_EXPIRED:
@@ -385,10 +415,135 @@ async def escalate_event(
         bookkeeping["escalation_call_result"] = call_result
 
     _append_log_entry(event, entry, **bookkeeping)
+    return stage
 
-    await session.commit()
-    await session.refresh(event)
-    return event
+
+# --- lazy automatic escalation --------------------------------------------------
+# WHY THIS IS NOT A SCHEDULED JOB: there is no scheduler, task queue, cron or
+# lifespan worker anywhere in this backend, deliberately (see
+# `app.services.live_ops`'s module docstring and `app.services.jobs
+# .expire_stale_offers`). Everything periodic here is performed lazily on the
+# next read or write that passes through the relevant path. Before this pass,
+# duress escalation had NO lazy path either — it advanced only when a human
+# POSTed `/{id}/escalate`, so a panic event nobody was watching sat at stage 1
+# forever. That is the worst possible failure mode for a safety feature whose
+# entire purpose is that somebody finds out.
+#
+# The ops dashboard polls `GET /v1/duress?open_only=true` every 5 seconds while
+# anyone has it open, and `advance_escalation_if_due` is called from that read
+# (and from a single-event read), so in practice the cascade advances on a ~5s
+# tick without any new infrastructure. The honest limitation, stated plainly
+# because this is a safety control: if NOBODY reads duress at all — no
+# dashboard open anywhere, no API client polling — nothing advances. This is
+# strictly better than "never advances", and strictly worse than a real timer.
+# A real timer is what a scheduler would buy, and adding one is a deliberate
+# out-of-scope decision for this workstream, not an oversight.
+
+
+def _due_stage_deadline(event: DuressEvent) -> datetime | None:
+    """When this event's NEXT cascade stage becomes due, or None if no stage
+    is outstanding.
+
+    Stage 0 (`cancel_window_expired`) is due at the event's own recorded
+    `cancel_deadline_at` — the wall-clock deadline written at trigger time,
+    the same value `cancel_event` refuses a cancel after. Reusing it rather
+    than recomputing from `opened_at` keeps "the driver can still cancel" and
+    "the cascade may now start" as exactly one boundary, so there is no window
+    in which both are true.
+
+    Every later stage is due `DURESS_AUTO_ESCALATION_INTERVAL_SECONDS` after
+    the most recent stage entry actually recorded — which means a manual
+    `POST /{id}/escalate` also resets the clock for the next automatic step,
+    rather than a dispatcher's intervention and the timer racing each other.
+    """
+    log = event.escalation_log_json or {}
+    next_stage_index = log.get("next_stage_index", 0)
+    if next_stage_index >= len(ESCALATION_STAGES):
+        return None
+
+    if next_stage_index == 0:
+        deadline_raw = log.get("cancel_deadline_at")
+        if not deadline_raw:
+            # An event with no recorded cancel deadline (hand-created via the
+            # generic `POST /v1/duress` CRUD route, which does not go through
+            # `trigger_event`) falls back to the standard window from opened_at.
+            opened = event.opened_at
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=UTC)
+            return opened + timedelta(seconds=CANCEL_WINDOW_SECONDS)
+        deadline = datetime.fromisoformat(deadline_raw)
+        return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+
+    entries = log.get("entries") or []
+    last_stage_at: datetime | None = None
+    for entry in reversed(entries):
+        if entry.get("stage") in ESCALATION_STAGES and entry.get("at"):
+            last_stage_at = datetime.fromisoformat(entry["at"])
+            break
+    if last_stage_at is None:
+        return None
+    if last_stage_at.tzinfo is None:
+        last_stage_at = last_stage_at.replace(tzinfo=UTC)
+    return last_stage_at + timedelta(seconds=settings.DURESS_AUTO_ESCALATION_INTERVAL_SECONDS)
+
+
+async def advance_escalation_if_due(
+    session: AsyncSession, *events: DuressEvent
+) -> list[str]:
+    """Advances each event's cascade by however many stages are now overdue,
+    and commits once for the whole batch. Returns the stage names applied,
+    across all events, in the order applied (empty when nothing was due).
+
+    Idempotent and cheap: for an event with nothing due it is pure in-memory
+    arithmetic over `escalation_log_json` and issues no SQL at all, which is
+    what makes it safe to hang off a 5-second dashboard poll.
+
+    Catches up rather than advancing one stage per read: if a process was down
+    (or nobody looked) for ten minutes, the first read afterwards walks the
+    cascade to where it should already be, firing the final Twilio call if
+    that stage is genuinely overdue. Advancing only one stage per read would
+    make the cascade's speed a function of how often somebody happens to look,
+    which for a safety control is worse than either extreme.
+
+    Terminal (`resolved`/`cancelled`) events are skipped — a cancelled event
+    must never resume escalating.
+    """
+    if not settings.DURESS_AUTO_ESCALATION_ENABLED:
+        return []
+
+    applied: list[str] = []
+    now = datetime.now(UTC)
+
+    for event in events:
+        if event.status not in (DURESS_STATUS_OPEN, DURESS_STATUS_ESCALATING):
+            continue
+
+        # Bounded by len(ESCALATION_STAGES): `_apply_next_stage` advances
+        # next_stage_index every pass, so this cannot spin.
+        while True:
+            deadline = _due_stage_deadline(event)
+            if deadline is None or now < deadline:
+                break
+            stage = _apply_next_stage(
+                event,
+                note="auto-advanced: no dispatcher action before this stage fell due",
+                emergency_contact_phone=None,
+                now=now,
+            )
+            applied.append(stage)
+            logger.warning(
+                "duress event %s auto-advanced to escalation stage '%s' (tenant %s) "
+                "— nobody had escalated it manually",
+                event.id,
+                stage,
+                event.tenant_id,
+            )
+
+    if applied:
+        await session.commit()
+        for event in events:
+            await session.refresh(event)
+    return applied
 
 
 # --- close --------------------------------------------------------------------

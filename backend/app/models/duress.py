@@ -76,8 +76,11 @@ DURESS_STATUSES = {
 DURESS_TERMINAL_STATUSES = {DURESS_STATUS_RESOLVED, DURESS_STATUS_CANCELLED}
 
 # The fixed escalation cascade. Each `POST /v1/duress/{id}/escalate` call
-# advances exactly one stage (manually — from a background job or a dispatcher
-# clicking a button in this pass, NOT a real server-side timer). The first
+# advances exactly one stage manually. Since workstream B6 the cascade also
+# advances LAZILY, on any read of the event or of the open-events list, via
+# `app.services.duress.advance_escalation_if_due` — still not a real
+# server-side timer (this backend has no scheduler), but no longer dependent
+# on a human noticing. The first
 # stage flips status open -> escalating; the last stage flips
 # escalating -> dispatched. See `app.services.duress.escalate_event`.
 ESCALATION_STAGE_CANCEL_WINDOW_EXPIRED = "cancel_window_expired"

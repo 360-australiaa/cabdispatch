@@ -74,6 +74,45 @@ class Settings(BaseSettings):
     # full deviation note.
     COMPLIANCE_EXPIRY_WARNING_DAYS: int = 30
 
+    # --- Lazy background work (workstream B6) ---------------------------------
+    # This backend has NO scheduler, task queue, or background worker of any
+    # kind, deliberately (see `app.services.live_ops`'s module docstring). Every
+    # periodic behaviour is performed lazily on the next read or write that
+    # happens to pass through the relevant code path. The three values below are
+    # the timings that pattern needs; they are env-overridable and
+    # DEPLOYMENT-WIDE, not per-tenant, for exactly the reason spelled out on
+    # FATIGUE_SHIFT_DURATION_LIMIT_HOURS above (no persisted per-tenant settings
+    # table exists in this codebase yet).
+
+    # How long a `VehiclePositionHistory` row is kept before the next position
+    # publish for ANY vehicle on the tenant prunes it (the prune is tenant-wide,
+    # not per-vehicle -- see `app.services.live_ops.position_history_retention_hours`).
+    #
+    # OWNER DECISION OUTSTANDING: 72 hours (3 days) is a TECHNICAL DEFAULT, not
+    # a decided data-retention policy. This table holds real driver location
+    # data; the retention period that data is legally and contractually allowed
+    # to have is a business-owner call that has not been made. This setting
+    # exists so making that call is a config change, not a code change.
+    POSITION_HISTORY_RETENTION_HOURS: int = 72
+
+    # Wall-clock gap between two consecutive automatic duress-escalation stages.
+    # The cascade's FIRST stage (`cancel_window_expired`) is instead gated on the
+    # event's own recorded cancel deadline (app.models.duress.CANCEL_WINDOW_SECONDS,
+    # 10s); this interval governs every stage after it. 60 seconds means an
+    # unattended panic event reaches `present_000_call_script` roughly three
+    # minutes after it was raised.
+    #
+    # OWNER DECISION OUTSTANDING: like the retention window above, this number is
+    # a defensible default, not a policy anyone has signed off. It controls how
+    # fast an unwatched duress event dials an emergency contact.
+    DURESS_AUTO_ESCALATION_INTERVAL_SECONDS: int = 60
+
+    # Master switch for the automatic cascade. When False, a duress event only
+    # ever advances via an explicit `POST /v1/duress/{id}/escalate` -- the
+    # pre-B6 behaviour, kept as an escape hatch for a deployment that genuinely
+    # wants escalation to be a human decision every time.
+    DURESS_AUTO_ESCALATION_ENABLED: bool = True
+
     # --- CabCharge ---
     # Authorization -> Docket creation -> Settlement batch (blueprint 5.2.5).
     CABCHARGE_API_KEY: str = "cabcharge_test_placeholder"

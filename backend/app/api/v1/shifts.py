@@ -32,6 +32,7 @@ from app.schemas.shift import (
     ShiftStart,
     ShiftUpdate,
 )
+from app.services import lazy_maintenance
 from app.services.shift import (
     ShiftConflictError,
     build_report,
@@ -291,6 +292,13 @@ async def list_shifts(
     )
     items = result.scalars().all()
 
+    # Lazy fatigue/compliance checks on the open shifts in this page
+    # (workstream B6): a driver who is on shift but not inside a fare ticks
+    # nothing, so before this the shift-duration and no-break alerts that
+    # exist specifically for that driver never fired. Never raises — see
+    # `app.services.lazy_maintenance`.
+    await lazy_maintenance.run_checks_for_shifts(session, *items)
+
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
@@ -317,7 +325,11 @@ async def get_shift(
     _user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
-    return await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    """Reading one shift also runs its fatigue/compliance checks if it is
+    still open — see `list_shifts` and `app.services.lazy_maintenance`."""
+    shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
+    await lazy_maintenance.run_checks_for_shifts(session, shift)
+    return shift
 
 
 @router.patch("/{shift_id}", response_model=ShiftRead)

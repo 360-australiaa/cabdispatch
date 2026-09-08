@@ -72,6 +72,7 @@ from app.models.tariffs import TariffChangeLog
 from app.models.user import ROLE_DRIVER, User
 from app.services import compliance as compliance_service
 from app.services.fleet import prepare_vehicle_for_deletion
+from app.services.shift import close_open_shifts_for_driver_deletion
 
 # _AUDIT_LOG_NEVER_DELETED (decision, not a TODO): `app.models.audit_log`'s own
 # module docstring is explicit that this table has "deliberately no
@@ -228,6 +229,18 @@ async def force_wipe_tenant_fleet_data(
         .all()
     )
     for driver in drivers:
+        # Closes any shift still open for this driver before the driver row
+        # goes — the driver-side counterpart of the vehicle pass above, which
+        # a force wipe previously skipped entirely, leaving open shifts
+        # pointing at a driver_id nothing could resolve. Runs BEFORE the
+        # evidence purge and the deletability check so the shift is closed and
+        # audited even in the case below where the driver survives the wipe:
+        # a driver who cannot be deleted still must not be left holding a
+        # shift that a wipe has torn the rest of the fleet out from under.
+        await close_open_shifts_for_driver_deletion(
+            session, tenant_id=tenant_id, driver_id=driver.id, actor_user_id=actor_user_id
+        )
+
         destroyed = await _purge_driver_evidence(session, driver_id=driver.id)
         for label, count in destroyed.items():
             result.evidence_rows_destroyed[label] += count
