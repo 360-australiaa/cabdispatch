@@ -16,7 +16,7 @@ apply_tick/resolve_tariff to succeed inside PATCH .../tick).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
