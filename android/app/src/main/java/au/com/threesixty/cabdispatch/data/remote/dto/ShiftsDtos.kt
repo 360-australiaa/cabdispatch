@@ -29,6 +29,23 @@ data class ShiftStartDto(
      * this DTO still encodes fine for callers (offline-fallback path in
      * [au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository]) that never read one. */
     @SerialName("device_android_id") val deviceAndroidId: String? = null,
+
+    /**
+     * Client-minted idempotency key for this shift start (finding S3).
+     *
+     * `POST /v1/shifts/start` treats this exactly as `POST /v1/trips/sync` treats its own
+     * `client_uuid`: unique per tenant, and a repeat of one it has already seen returns the
+     * original shift rather than opening a second one. That is what makes a queued, retried
+     * shift-start safe — the drainer can resend a row whose response never arrived without any risk
+     * of a driver ending up with two overlapping shifts.
+     *
+     * The field name is fixed by agreement with the backend workstream (B1), which has already
+     * landed the server half. Do not rename it.
+     *
+     * Nullable/defaulted because [au.com.threesixty.cabdispatch.domain.ShiftRepository.getShift]
+     * and any future caller that isn't going through the outbox has no need to mint one.
+     */
+    @SerialName("client_uuid") val clientUuid: String? = null,
 )
 
 @Serializable

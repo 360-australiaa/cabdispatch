@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.sync.SyncBackoff
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.PaneShell
@@ -165,8 +166,107 @@ fun OfflineSyncScreen(
                 modifier = Modifier.width(300.dp),
             )
 
+            // Rows that have given up (findings S1/S2). Rendered only when there are any — an
+            // empty "failed" section on a healthy tablet would be noise, and the pending-count
+            // card above already covers the normal case.
+            if (state.failedRows.isNotEmpty()) {
+                Spacer(Modifier.height(32.dp))
+                FailedSyncSection(rows = state.failedRows, onRetry = viewModel::retryDeadLettered)
+            }
+
             Spacer(Modifier.weight(1f))
         }
+    }
+}
+
+/**
+ * The dead-letter section (findings S1/S2) — rows the outbox has stopped retrying.
+ *
+ * This exists because the two bugs it reports used to be completely invisible. A permanently
+ * rejected trip was retried forever with nothing on screen ever saying so; a malformed one was
+ * skipped on every drain while still being counted in "trips pending sync", so the driver was shown
+ * a number that would never reach zero and never told why. Neither is acceptable on a meter that
+ * holds a shift's takings, and the repo's own rule is honesty over polish: if the app has given up
+ * on a trip, it has to say which trip, why, and how many times it tried.
+ *
+ * The retry button is the other half — a depot that has fixed whatever the server was rejecting
+ * needs a way to ask for one more attempt that isn't "reinstall the app and lose the trip".
+ */
+@Composable
+private fun FailedSyncSection(
+    rows: List<FailedSyncRow>,
+    onRetry: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(
+                Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                tint = CaptainPalette.danger,
+                modifier = Modifier.size(22.dp),
+            )
+            Text(
+                "FAILED — NOT SYNCED",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = CaptainPalette.danger,
+            )
+        }
+        Text(
+            "These stopped retrying after ${SyncBackoff.MAX_ATTEMPTS} attempts. They are still " +
+                "stored on this tablet and nothing has been deleted — but they have NOT reached " +
+                "the server. Tap RETRY once the problem has been fixed at the depot.",
+            fontFamily = InterFamily,
+            fontSize = 14.sp,
+            color = CaptainPalette.textSecondary,
+        )
+        rows.forEach { row -> FailedSyncRowCard(row = row, onRetry = { onRetry(row.id) }) }
+    }
+}
+
+@Composable
+private fun FailedSyncRowCard(row: FailedSyncRow, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(CaptainPalette.danger.copy(alpha = 0.10f))
+            .border(1.dp, CaptainPalette.danger.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                // The client uuid shortened to its first segment: enough for a depot tech to match
+                // this against a server-side record, without eating the row with 36 characters.
+                "${row.label} · ${row.clientUuid.take(8)}",
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                color = CaptainPalette.textPrimary,
+            )
+            Text(
+                row.lastError ?: "No error recorded",
+                fontFamily = InterFamily,
+                fontSize = 13.sp,
+                color = CaptainPalette.textSecondary,
+            )
+            Text(
+                "${row.attempts} attempt${if (row.attempts == 1) "" else "s"}",
+                fontFamily = InterFamily,
+                fontSize = 12.sp,
+                color = CaptainPalette.textSecondary,
+            )
+        }
+        SyncButton(
+            text = "RETRY",
+            icon = Icons.Rounded.Sync,
+            onClick = onRetry,
+            modifier = Modifier.width(180.dp),
+        )
     }
 }
 

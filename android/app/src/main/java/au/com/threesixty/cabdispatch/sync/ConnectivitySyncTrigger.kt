@@ -7,6 +7,10 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +50,12 @@ class ConnectivitySyncTrigger(context: Context) {
 
     private var satisfyingNetworkCount = 0
 
+    /** Process-lifetime scope for the best-effort tariff refresh below. `NetworkCallback` methods
+     * run on a binder thread with no scope of their own, and this object is held for the life of
+     * the process by [au.com.threesixty.cabdispatch.data.AppContainer], so a [SupervisorJob] here
+     * matches the lifetime of the class exactly — same shape as `AppContainer.startupScope`. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val _isOnline = MutableStateFlow(readCurrentConnectivitySnapshot())
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
@@ -61,6 +71,12 @@ class ConnectivitySyncTrigger(context: Context) {
             // Regaining connectivity is the obvious moment to fix that, and it is the same event
             // this callback already treats as "we can reach the server again".
             AppContainer.refreshTollRegistry()
+            // S5: reconnecting is also the single best moment to refresh the tariff — it is exactly
+            // when a tablet that has been offline (a shift in a dead-spot, a tablet left parked) is
+            // most likely to be holding a stale one. Best-effort and fire-and-forget; see
+            // [TariffRefresh]. Independent of the toll refresh above: either can fail without
+            // affecting the other, and neither may fail this callback.
+            scope.launch { TariffRefresh.refreshBestEffort() }
         }
 
         override fun onLost(network: Network) {

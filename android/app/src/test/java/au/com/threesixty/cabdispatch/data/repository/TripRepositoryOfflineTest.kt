@@ -59,6 +59,16 @@ class TripRepositoryOfflineTest {
             changes.value++
         }
 
+        // Added when A2's outbox-backed shift start (S3) landed: the drainer rewrites a
+        // provisional `local:<uuid>` shift id to the server's real one once the shift syncs.
+        // Mirrors the real @Query's UPDATE ... WHERE shiftId = :localShiftId.
+        override suspend fun rewriteShiftId(localShiftId: String, serverShiftId: String) {
+            rows.entries
+                .filter { it.value.shiftId == localShiftId }
+                .forEach { rows[it.key] = it.value.copy(shiftId = serverShiftId) }
+            changes.value++
+        }
+
         override suspend fun update(trip: TripEntity) {
             rows[trip.clientUuid] = trip
             changes.value++
@@ -125,8 +135,13 @@ class TripRepositoryOfflineTest {
             if (index >= 0) rows[index] = rows[index].copy(entityJson = entityJson, readyToSync = readyToSync)
         }
 
-        override suspend fun getReadyBatch(limit: Int): List<SyncOutboxEntity> =
-            rows.filter { it.readyToSync }.take(limit)
+        // A2's S1/S2 pass widened this: rows that are dead-lettered, still inside their
+        // backoff window, or past the attempts cap are no longer eligible. Replicated here
+        // rather than ignored, so a test that queues a backed-off row cannot silently pass.
+        override suspend fun getReadyBatch(limit: Int, now: Long, maxAttempts: Int): List<SyncOutboxEntity> =
+            rows.filter {
+                it.readyToSync && !it.deadLettered && it.nextAttemptAt <= now && it.attempts < maxAttempts
+            }.take(limit)
 
         override suspend fun getByClientUuid(entityType: String, clientUuid: String): SyncOutboxEntity? =
             rows.firstOrNull { it.entityType == entityType && it.clientUuid == clientUuid }
@@ -136,7 +151,43 @@ class TripRepositoryOfflineTest {
             size.value = rows.size
         }
 
-        override suspend fun recordFailure(id: Long, error: String) = Unit
+        // A2 added the backoff stamp. Recorded rather than discarded so the eligibility
+        // filter above is actually exercised by anything that drives a failure.
+        override suspend fun recordFailure(id: Long, error: String, nextAttemptAt: Long) {
+            val index = rows.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                rows[index] = rows[index].copy(
+                    attempts = rows[index].attempts + 1,
+                    lastError = error,
+                    nextAttemptAt = nextAttemptAt,
+                )
+            }
+        }
+
+        override suspend fun markDeadLettered(id: Long, error: String) {
+            val index = rows.indexOfFirst { it.id == id }
+            if (index >= 0) rows[index] = rows[index].copy(deadLettered = true, lastError = error)
+        }
+
+        override suspend fun rewriteShiftIdInPayloads(localShiftId: String, serverShiftId: String) {
+            rows.replaceAll { row ->
+                if (row.entityJson.contains(localShiftId)) {
+                    row.copy(entityJson = row.entityJson.replace(localShiftId, serverShiftId))
+                } else {
+                    row
+                }
+            }
+        }
+
+        override suspend fun resetForRetry(id: Long) {
+            val index = rows.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                rows[index] = rows[index].copy(deadLettered = false, attempts = 0, nextAttemptAt = 0L)
+            }
+        }
+
+        override fun observeDeadLettered(): Flow<List<SyncOutboxEntity>> =
+            size.map { rows.filter { row -> row.deadLettered } }
 
         override fun observeOutboxSize(): Flow<Int> = size
     }
@@ -264,7 +315,7 @@ class TripRepositoryOfflineTest {
         assertEquals(1, outboxDao.rows.size)
         assertTrue("closing is what makes the trip sendable", outboxDao.rows.single().readyToSync)
         assertEquals(OutboxEntityType.TRIP, outboxDao.rows.single().entityType)
-        assertEquals(1, outboxDao.getReadyBatch(10).size)
+        assertEquals(1, outboxDao.getReadyBatch(limit = 10, now = Long.MAX_VALUE, maxAttempts = 5).size)
     }
 
     @Test

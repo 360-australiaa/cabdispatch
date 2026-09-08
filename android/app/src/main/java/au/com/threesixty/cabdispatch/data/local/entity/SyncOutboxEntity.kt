@@ -43,16 +43,55 @@ import androidx.room.PrimaryKey
 )
 data class SyncOutboxEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val entityType: String, // "trip" (only type wired in this pass; "shift" reserved for a future sibling)
+    /** [OutboxEntityType.TRIP] or [OutboxEntityType.SHIFT] — both are live as of the S3 pass. */
+    val entityType: String,
     val clientUuid: String,
     val entityJson: String,
     val readyToSync: Boolean,
     val createdAt: Long,
     val attempts: Int = 0,
     val lastError: String? = null,
+
+    /**
+     * Epoch millis before which this row must not be retried (finding S1).
+     *
+     * `0` means "eligible now", which is the correct value for a freshly-queued row and is why it
+     * is also the migration's default for every existing row. [SyncOutboxDao.recordFailure] sets it
+     * forward on each failure per [au.com.threesixty.cabdispatch.sync.SyncBackoff].
+     *
+     * Without this the queue had no backoff of any kind at the row level: a row that failed
+     * retried on the very next trigger, and since a reconnect fires a trigger immediately, a flaky
+     * connection meant a tight retry loop against the API.
+     */
+    val nextAttemptAt: Long = 0,
+
+    /**
+     * Terminal state for a row that can never succeed (findings S1/S2).
+     *
+     * Set when the attempts cap is reached ([au.com.threesixty.cabdispatch.sync.SyncBackoff.MAX_ATTEMPTS])
+     * or when `entityJson` cannot be decoded at all. A dead-lettered row is excluded from
+     * [SyncOutboxDao.getReadyBatch] and from the "N pending sync" count, but is **not deleted** —
+     * it is surfaced in `OfflineSyncScreen` with a retry action, because the row is the only
+     * remaining record that this trip or shift ever needed to reach the server.
+     *
+     * This is the fix for two distinct silent-failure bugs. S1: with no cap, a permanently-rejected
+     * row (a 422 the server will refuse identically forever) was retried on every trigger for the
+     * life of the install, and because the batch is oldest-first and size-limited it occupied a
+     * slot ahead of newer, perfectly good trips — one poisoned row could starve the whole queue.
+     * S2: a row whose JSON failed to decode was counted and skipped on every single drain, forever,
+     * while still inflating the pending count the driver reads — the app reported work outstanding
+     * that it had silently decided never to attempt.
+     */
+    val deadLettered: Boolean = false,
 )
 
 object OutboxEntityType {
     const val TRIP = "trip"
+
+    /**
+     * Shift-start rows (finding S3). Reserved but unused until this pass — see
+     * [au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository] for what now writes them
+     * and [au.com.threesixty.cabdispatch.sync.OutboxDrainer] for why they must drain before trips.
+     */
     const val SHIFT = "shift"
 }

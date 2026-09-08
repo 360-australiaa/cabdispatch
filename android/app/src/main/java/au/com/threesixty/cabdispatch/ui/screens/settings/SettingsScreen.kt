@@ -92,7 +92,7 @@ import au.com.threesixty.cabdispatch.ui.theme.color
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 
-private enum class SettingsSubScreen { MAIN, FACTORY_RESET_PIN, PAIR_METER }
+private enum class SettingsSubScreen { MAIN, FACTORY_RESET_PIN, PAIR_METER, SIMULATOR_PIN }
 
 /**
  * Settings' left-rail tabs (Settings two-pane pass, 2026-09-03) — matches the mockup's fixed
@@ -187,6 +187,10 @@ fun SettingsScreen(
                 viewModel.clearPairMeterError()
                 subScreen = SettingsSubScreen.PAIR_METER
             },
+            onUnlockSimulatorClick = {
+                viewModel.clearSimulatorPinError()
+                subScreen = SettingsSubScreen.SIMULATOR_PIN
+            },
             onRerunSetup = onRerunSetup,
         )
         SettingsSubScreen.FACTORY_RESET_PIN -> AdminPinGateScreen(
@@ -204,6 +208,29 @@ fun SettingsScreen(
             viewModel = viewModel,
             onBack = { subScreen = SettingsSubScreen.MAIN },
         )
+        // Same server-verified admin PIN as the factory reset — see
+        // [SettingsViewModel.attemptUnlockSimulator] for why the simulator needs a gate at all
+        // (short version: the field tablet runs a debug build, so "debug-only" gated nothing).
+        SettingsSubScreen.SIMULATOR_PIN -> AdminPinGateScreen(
+            subtitle = "Enter the admin PIN to unlock the GPS simulator. It feeds synthetic " +
+                "position and speed into the meter — for technicians testing a tablet, never " +
+                "during a real fare.",
+            errorMessage = state.simulatorPinError,
+            verifying = state.simulatorPinVerifying,
+            onCancel = {
+                viewModel.clearSimulatorPinError()
+                subScreen = SettingsSubScreen.MAIN
+            },
+            onVerify = { pin -> viewModel.attemptUnlockSimulator(pin) },
+        )
+    }
+
+    // Drop back to the settings body the moment the PIN is accepted, so the newly unlocked panel
+    // is where the technician already expects it rather than behind another tap.
+    LaunchedEffect(state.simulatorUnlocked) {
+        if (state.simulatorUnlocked && subScreen == SettingsSubScreen.SIMULATOR_PIN) {
+            subScreen = SettingsSubScreen.MAIN
+        }
     }
 }
 
@@ -218,6 +245,7 @@ private fun MainSettingsContent(
     onOpenPermissions: () -> Unit,
     onOpenOfflineSync: () -> Unit,
     onOpenPairMeter: () -> Unit,
+    onUnlockSimulatorClick: () -> Unit,
     onRerunSetup: () -> Unit,
 ) {
     Box(
@@ -289,6 +317,7 @@ private fun MainSettingsContent(
                                 onOpenPairMeter = onOpenPairMeter,
                                 onRerunSetup = onRerunSetup,
                                 onFactoryResetClick = onFactoryResetClick,
+                                onUnlockSimulatorClick = onUnlockSimulatorClick,
                             )
                         }
                     }
@@ -611,6 +640,7 @@ private fun AboutTabContent(
     onOpenPairMeter: () -> Unit,
     onRerunSetup: () -> Unit,
     onFactoryResetClick: () -> Unit,
+    onUnlockSimulatorClick: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SectionLabel("DEVICE")
@@ -630,7 +660,20 @@ private fun AboutTabContent(
         Spacer(Modifier.height(24.dp))
         SectionLabel("GPS SIMULATOR (TESTING)")
         Spacer(Modifier.height(12.dp))
-        GpsSimulatorPanel(modifier = Modifier.fillMaxWidth())
+        // Admin-PIN gated. The panel drives synthetic speed/position into the same SpeedSource the
+        // fare engine bills from, so an ungated one is a one-tap way for any driver to make the
+        // meter run a trip that never happened — and "it's a debug build" is not a gate here,
+        // because the field tablet IS a debug build. See SettingsViewModel.attemptUnlockSimulator.
+        if (state.simulatorUnlocked) {
+            GpsSimulatorPanel(modifier = Modifier.fillMaxWidth())
+        } else {
+            ActionTile(
+                Icons.Rounded.Lock,
+                "UNLOCK SIMULATOR · ADMIN PIN",
+                onClick = onUnlockSimulatorClick,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
         SectionLabel("ADVANCED")

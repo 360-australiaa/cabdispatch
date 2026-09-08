@@ -78,7 +78,9 @@ import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
 import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import au.com.threesixty.cabdispatch.data.repository.TripRepository
+import au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.decodeFromString
@@ -192,7 +194,7 @@ class OutboxDrainerTest {
         assertEquals(TripStatus.CLOSED, relaunchedRepository.getTrip(opened.clientUuid)?.status)
 
         // 5. Outbox still has the row.
-        val readyBatchBeforeSync = outboxDao.getReadyBatch(20)
+        val readyBatchBeforeSync = outboxDao.getReadyBatch(20, Long.MAX_VALUE, SyncBackoff.MAX_ATTEMPTS)
         assertEquals(1, readyBatchBeforeSync.size)
         assertEquals(opened.clientUuid, readyBatchBeforeSync.single().clientUuid)
 
@@ -207,8 +209,14 @@ class OutboxDrainerTest {
         assertNotNull(afterFailedDrain.lastError)
 
         // 6b. Real reconnect: network comes back, SyncWorker's drain logic runs.
+        //
+        // The clock is advanced past the row's backoff window here (S1, 2026-09-08): a failed row
+        // is no longer eligible again immediately — `recordFailure` above pushed `nextAttemptAt`
+        // 30 s out. That is the intended new behaviour, not an obstacle to this test; the drain
+        // itself is unchanged, so this just skips forward to when the retry is genuinely due.
         fakeServer.networkUp = true
-        val drainResult = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)).drainOnce()
+        val afterBackoff = System.currentTimeMillis() + SyncBackoff.delayMsAfter(1) + 1
+        val drainResult = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)) { afterBackoff }.drainOnce()
         assertEquals(1, drainResult.sent)
         assertEquals(0, drainResult.failed)
         assertNull("row must be gone from the outbox once synced", outboxDao.getByClientUuid(OutboxEntityType.TRIP, opened.clientUuid))
@@ -345,6 +353,282 @@ class OutboxDrainerTest {
         assertEquals(151.30, closedWithFix.endLng!!, 0.0)
     }
 
+    // ========================================================================
+    // S1 — attempts cap and exponential backoff
+    // ========================================================================
+
+    @Test
+    fun `a permanently rejected row backs off, then dead-letters after five attempts`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+        val repository = TripRepository(tripDao, outboxDao, fakeServer)
+
+        val opened = openTestTrip(repository, shiftId = "shift-1")
+        closeTestTrip(repository, opened.clientUuid)
+
+        // The server is reachable but refuses this row every time — the "422 forever" case S1 is
+        // about, as opposed to simply being offline.
+        fakeServer.networkUp = true
+        fakeServer.rejectAllTrips = true
+
+        var clock = 1_000_000L
+        val drainer = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)) { clock }
+
+        // Attempts 1..4: each records a failure and pushes the row out by a DOUBLING delay.
+        val expectedDelays = listOf(30_000L, 60_000L, 120_000L, 240_000L)
+        for ((index, expectedDelay) in expectedDelays.withIndex()) {
+            val result = drainer.drainOnce()
+            assertEquals("attempt ${index + 1} is a retryable failure", 1, result.failed)
+            assertEquals(0, result.deadLettered)
+
+            val row = outboxDao.rowFor(OutboxEntityType.TRIP, opened.clientUuid)!!
+            assertEquals("attempts after failure ${index + 1}", index + 1, row.attempts)
+            assertEquals(
+                "backoff after failure ${index + 1} should double",
+                clock + expectedDelay,
+                row.nextAttemptAt,
+            )
+            assertFalse("must not dead-letter before the cap", row.deadLettered)
+
+            // Still inside the backoff window: the row must NOT be eligible yet. This is the half
+            // of S1 that stops a flapping connection hammering the API.
+            assertEquals(
+                "row must be ineligible during its backoff window",
+                0,
+                outboxDao.getReadyBatch(20, clock + expectedDelay - 1, SyncBackoff.MAX_ATTEMPTS).size,
+            )
+
+            clock += expectedDelay
+        }
+
+        // Attempt 5 is the last. It dead-letters rather than scheduling a sixth.
+        val final = drainer.drainOnce()
+        assertEquals(1, final.deadLettered)
+        assertEquals("a dead-lettered row is not a retryable failure", 0, final.failed)
+        assertFalse(
+            "the worker must not keep retrying for a terminal row — that is the S1 bug",
+            final.hadFailure,
+        )
+
+        val dead = outboxDao.rowFor(OutboxEntityType.TRIP, opened.clientUuid)!!
+        assertTrue(dead.deadLettered)
+        assertEquals(SyncBackoff.MAX_ATTEMPTS, dead.attempts)
+
+        // Never picked up again, however far the clock runs.
+        assertEquals(0, outboxDao.getReadyBatch(20, clock + 999_999_999L, SyncBackoff.MAX_ATTEMPTS).size)
+        // ...no longer counted as "pending sync" (S2's dishonest-count half)...
+        assertEquals(0, outboxDao.observeOutboxSize().first())
+        // ...but reported as failed, with the reason, for OfflineSyncScreen.
+        val surfaced = outboxDao.observeDeadLettered().first()
+        assertEquals(1, surfaced.size)
+        assertTrue(surfaced.single().lastError!!.contains("attempts"))
+    }
+
+    @Test
+    fun `a poisoned row does not block newer trips behind it`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+        val repository = TripRepository(tripDao, outboxDao, fakeServer)
+
+        // The poisoned row is the OLDEST, which is what made it so damaging: the batch is
+        // oldest-first, so before the cap it sat at the head of the queue forever.
+        val poisoned = openTestTrip(repository, shiftId = "s")
+        closeTestTrip(repository, poisoned.clientUuid)
+        outboxDao.markDeadLettered(
+            outboxDao.rowFor(OutboxEntityType.TRIP, poisoned.clientUuid)!!.id,
+            "422 unprocessable: voucher rejected",
+        )
+
+        val good = openTestTrip(repository, shiftId = "s")
+        closeTestTrip(repository, good.clientUuid)
+
+        val result = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)).drainOnce()
+
+        assertEquals("the healthy trip syncs despite the poisoned row ahead of it", 1, result.sent)
+        assertEquals(0, result.failed)
+        assertEquals(1, fakeServer.storedTripCount())
+        // The poisoned row is still there — reported, not deleted. Nothing is lost.
+        assertEquals(1, outboxDao.observeDeadLettered().first().size)
+    }
+
+    @Test
+    fun `a malformed row is dead-lettered, not skipped forever`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+
+        outboxDao.upsert(
+            SyncOutboxEntity(
+                entityType = OutboxEntityType.TRIP,
+                clientUuid = "corrupt-1",
+                entityJson = "{ this is not valid json",
+                readyToSync = true,
+                createdAt = 1L,
+            ),
+        )
+
+        val drainer = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer))
+        val first = drainer.drainOnce()
+        assertEquals(1, first.deadLettered)
+
+        // S2: before the fix this row was skipped and re-counted on EVERY drain, forever, while
+        // still inflating the pending count. Now it is terminal and reported once.
+        val second = drainer.drainOnce()
+        assertEquals("a dead-lettered row must not be re-examined", 0, second.deadLettered)
+        assertEquals(0, second.sent)
+        assertEquals(0, outboxDao.observeOutboxSize().first())
+        assertEquals(1, outboxDao.observeDeadLettered().first().size)
+    }
+
+    @Test
+    fun `retrying a dead-lettered row makes it eligible again`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+        val repository = TripRepository(tripDao, outboxDao, fakeServer)
+
+        val opened = openTestTrip(repository, shiftId = "s")
+        closeTestTrip(repository, opened.clientUuid)
+        val rowId = outboxDao.rowFor(OutboxEntityType.TRIP, opened.clientUuid)!!.id
+        outboxDao.markDeadLettered(rowId, "gave up after 5 attempts")
+
+        // What OfflineSyncScreen's RETRY button does, once the depot has fixed the cause.
+        outboxDao.resetForRetry(rowId)
+
+        val result = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)).drainOnce()
+        assertEquals(1, result.sent)
+        assertEquals(1, fakeServer.storedTripCount())
+    }
+
+    // ========================================================================
+    // S3 — an offline shift start is queued, drains BEFORE its trips, and its
+    //      trips have their shift_id rewritten to the real server id
+    // ========================================================================
+
+    @Test
+    fun `shift starts offline, then drains before its trips and rewrites their shift id`() = runTest {
+        val tripDao = FakeTripDao()
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+
+        // 1. Start the shift with no connectivity.
+        fakeServer.networkUp = false
+        val shiftRepo = OutboxBackedShiftRepository(
+            apiService = fakeServer,
+            outbox = fakeShiftOutboxPort(outboxDao),
+            now = { 1_000L },
+            newUuid = { "shift-uuid-1" },
+        )
+        val started = shiftRepo.startShift("driver-1", "vehicle-1", emptyMap()).getOrThrow()
+
+        // The driver is not blocked, but the id is honestly marked as not-yet-real...
+        assertEquals("local:shift-uuid-1", started.id)
+        assertTrue(OutboxBackedShiftRepository.isLocalShiftId(started.id))
+        // ...and unlike the old fabricated shift, it is PERSISTED and will be retried.
+        val queued = outboxDao.rowFor(OutboxEntityType.SHIFT, "shift-uuid-1")
+        assertTrue("the offline shift start must be queued, not orphaned", queued != null)
+        // The agreed idempotency field name must be on the wire payload.
+        assertTrue("payload must carry client_uuid", queued!!.entityJson.contains("client_uuid"))
+
+        // 2. Close two trips under that not-yet-real shift, still offline.
+        val repository = TripRepository(tripDao, outboxDao, fakeServer)
+        val tripA = openTestTrip(repository, shiftId = started.id)
+        closeTestTrip(repository, tripA.clientUuid)
+        val tripB = openTestTrip(repository, shiftId = started.id)
+        closeTestTrip(repository, tripB.clientUuid)
+        assertEquals(started.id, tripDao.shiftIdOf(tripA.clientUuid))
+
+        // 3. Reconnect and drain.
+        fakeServer.networkUp = true
+        val result = OutboxDrainer(fakeDrainerPorts(outboxDao, tripDao, fakeServer)).drainOnce()
+
+        // The shift went FIRST. This is the ordering the whole fix turns on: a trip sent before its
+        // shift exists carries a shift_id the server has never issued.
+        assertEquals(listOf("startShift", "syncTrips"), fakeServer.callLog)
+
+        assertEquals("one shift + two trips", 3, result.sent)
+        assertEquals(0, result.failed)
+
+        // Every trip that reached the wire carries the REAL shift id, never the placeholder.
+        val serverShiftId = fakeServer.startedShiftsByClientUuid.getValue("shift-uuid-1").id
+        assertTrue(fakeServer.tripPayloadLog.isNotEmpty())
+        for (payload in fakeServer.tripPayloadLog) {
+            assertEquals(serverShiftId, payload.shiftId)
+            assertFalse(
+                "no trip may reach the server carrying a local: shift id",
+                OutboxBackedShiftRepository.isLocalShiftId(payload.shiftId ?: ""),
+            )
+        }
+        // ...and the local trip rows were repointed too.
+        assertEquals(serverShiftId, tripDao.shiftIdOf(tripA.clientUuid))
+        assertEquals(serverShiftId, tripDao.shiftIdOf(tripB.clientUuid))
+
+        // Nothing left queued.
+        assertEquals(0, outboxDao.allRows().size)
+    }
+
+    @Test
+    fun `an online shift start never leaves a row behind`() = runTest {
+        val outboxDao = InMemorySyncOutboxDao()
+        val fakeServer = FakeApiService()
+
+        val shiftRepo = OutboxBackedShiftRepository(
+            apiService = fakeServer,
+            outbox = fakeShiftOutboxPort(outboxDao),
+            newUuid = { "shift-uuid-online" },
+        )
+        val started = shiftRepo.startShift("driver-1", "vehicle-1", emptyMap()).getOrThrow()
+
+        assertFalse(
+            "an online start returns the server's real id",
+            OutboxBackedShiftRepository.isLocalShiftId(started.id),
+        )
+        assertEquals("the queued row must be cleaned up on success", 0, outboxDao.allRows().size)
+    }
+
+    /** Opens a trip with the boilerplate these S1/S3 tests don't care about filled in — the
+     * trip's own fields are irrelevant to queue mechanics, only its shift id and uuid are. */
+    private suspend fun openTestTrip(repository: TripRepository, shiftId: String?) = repository.openTrip(
+        vehicleId = "vehicle-1",
+        driverId = "driver-1",
+        shiftId = shiftId,
+        tariffId = "tariff-1",
+        type = "rank_hail",
+        startLat = -33.8688,
+        startLng = 151.2093,
+    )
+
+    /** Closes a trip, which is what flips its outbox row to `readyToSync`. */
+    private suspend fun closeTestTrip(repository: TripRepository, clientUuid: String) = repository.closeTrip(
+        clientUuid = clientUuid,
+        endLat = -33.8700,
+        endLng = 151.2100,
+        deviceTotal = "25.00",
+    )
+
+    /** Mirrors the adapter [au.com.threesixty.cabdispatch.data.AppContainer] wires in production. */
+    private fun fakeShiftOutboxPort(outboxDao: InMemorySyncOutboxDao) =
+        object : OutboxBackedShiftRepository.ShiftOutboxPort {
+            override suspend fun queueShiftStart(clientUuid: String, payloadJson: String, createdAt: Long) {
+                outboxDao.upsert(
+                    SyncOutboxEntity(
+                        entityType = OutboxEntityType.SHIFT,
+                        clientUuid = clientUuid,
+                        entityJson = payloadJson,
+                        readyToSync = true,
+                        createdAt = createdAt,
+                    ),
+                )
+            }
+
+            override suspend fun deleteShiftStart(clientUuid: String) {
+                outboxDao.getByClientUuid(OutboxEntityType.SHIFT, clientUuid)
+                    ?.let { outboxDao.deleteById(it.id) }
+            }
+        }
+
     /**
      * Note the parameter types here are the DAO interfaces/base class
      * ([TripDao]/[SyncOutboxDao]), not the concrete fakes — exactly the
@@ -358,11 +642,19 @@ class OutboxDrainerTest {
         tripDao: TripDao,
         apiService: FakeApiService,
     ): OutboxDrainer.Ports = object : OutboxDrainer.Ports {
-        override suspend fun fetchReadyBatch(limit: Int): List<SyncOutboxEntity> = outboxDao.getReadyBatch(limit)
+        override suspend fun fetchReadyBatch(limit: Int, now: Long, maxAttempts: Int): List<SyncOutboxEntity> =
+            outboxDao.getReadyBatch(limit, now, maxAttempts)
         override suspend fun sendTrips(items: List<TripSyncItemDto>): TripSyncResponseDto = apiService.syncTrips(items)
+        override suspend fun sendShiftStart(payload: ShiftStartDto): ShiftDto = apiService.startShift(payload)
+        override suspend fun rewriteShiftId(localShiftId: String, serverShiftId: String) {
+            tripDao.rewriteShiftId(localShiftId, serverShiftId)
+            outboxDao.rewriteShiftIdInPayloads(localShiftId, serverShiftId)
+        }
         override suspend fun markTripSynced(clientUuid: String, serverId: String) = tripDao.markSynced(clientUuid, serverId)
         override suspend fun deleteOutboxRow(id: Long) = outboxDao.deleteById(id)
-        override suspend fun recordFailure(id: Long, error: String) = outboxDao.recordFailure(id, error)
+        override suspend fun recordFailure(id: Long, error: String, nextAttemptAt: Long) =
+            outboxDao.recordFailure(id, error, nextAttemptAt)
+        override suspend fun markDeadLettered(id: Long, error: String) = outboxDao.markDeadLettered(id, error)
     }
 }
 
@@ -388,8 +680,14 @@ private class InMemorySyncOutboxDao : SyncOutboxDao() {
         rowsById[existing.id] = existing.copy(entityJson = entityJson, readyToSync = readyToSync)
     }
 
-    override suspend fun getReadyBatch(limit: Int): List<SyncOutboxEntity> =
-        rowsById.values.filter { it.readyToSync }.sortedBy { it.createdAt }.take(limit)
+    // Mirrors the real @Query's WHERE/ORDER BY, including the S1 backoff/attempts gates and the
+    // S3 shift-before-trip ordering, so these tests exercise the same eligibility rules the
+    // device does.
+    override suspend fun getReadyBatch(limit: Int, now: Long, maxAttempts: Int): List<SyncOutboxEntity> =
+        rowsById.values
+            .filter { it.readyToSync && !it.deadLettered && it.attempts < maxAttempts && it.nextAttemptAt <= now }
+            .sortedWith(compareBy({ if (it.entityType == OutboxEntityType.SHIFT) 0 else 1 }, { it.createdAt }))
+            .take(limit)
 
     override suspend fun getByClientUuid(entityType: String, clientUuid: String): SyncOutboxEntity? =
         rowsById.values.firstOrNull { it.entityType == entityType && it.clientUuid == clientUuid }
@@ -398,13 +696,39 @@ private class InMemorySyncOutboxDao : SyncOutboxDao() {
         rowsById.remove(id)
     }
 
-    override suspend fun recordFailure(id: Long, error: String) {
-        rowsById[id]?.let { rowsById[id] = it.copy(attempts = it.attempts + 1, lastError = error) }
+    override suspend fun recordFailure(id: Long, error: String, nextAttemptAt: Long) {
+        rowsById[id]?.let {
+            rowsById[id] = it.copy(attempts = it.attempts + 1, lastError = error, nextAttemptAt = nextAttemptAt)
+        }
     }
 
-    override fun observeOutboxSize(): Flow<Int> = flowOf(rowsById.size)
+    override suspend fun markDeadLettered(id: Long, error: String) {
+        rowsById[id]?.let { rowsById[id] = it.copy(deadLettered = true, lastError = error) }
+    }
+
+    override suspend fun resetForRetry(id: Long) {
+        rowsById[id]?.let { rowsById[id] = it.copy(deadLettered = false, attempts = 0, nextAttemptAt = 0) }
+    }
+
+    override suspend fun rewriteShiftIdInPayloads(localShiftId: String, serverShiftId: String) {
+        for ((id, row) in rowsById.toMap()) {
+            if (row.entityType == OutboxEntityType.TRIP && row.entityJson.contains(localShiftId)) {
+                rowsById[id] = row.copy(entityJson = row.entityJson.replace(localShiftId, serverShiftId))
+            }
+        }
+    }
+
+    override fun observeDeadLettered(): Flow<List<SyncOutboxEntity>> =
+        flowOf(rowsById.values.filter { it.deadLettered }.sortedBy { it.createdAt })
+
+    override fun observeOutboxSize(): Flow<Int> = flowOf(rowsById.values.count { !it.deadLettered })
 
     fun countForClientUuid(clientUuid: String): Int = rowsById.values.count { it.clientUuid == clientUuid }
+
+    fun rowFor(entityType: String, clientUuid: String): SyncOutboxEntity? =
+        rowsById.values.firstOrNull { it.entityType == entityType && it.clientUuid == clientUuid }
+
+    fun allRows(): List<SyncOutboxEntity> = rowsById.values.toList()
 }
 
 /** In-memory stand-in for Room's generated `TripDao` impl. */
@@ -415,6 +739,14 @@ private class FakeTripDao : TripDao {
         check(trip.clientUuid !in rows) { "duplicate clientUuid=${trip.clientUuid}" }
         rows[trip.clientUuid] = trip
     }
+
+    override suspend fun rewriteShiftId(localShiftId: String, serverShiftId: String) {
+        for ((uuid, trip) in rows.toMap()) {
+            if (trip.shiftId == localShiftId) rows[uuid] = trip.copy(shiftId = serverShiftId)
+        }
+    }
+
+    fun shiftIdOf(clientUuid: String): String? = rows[clientUuid]?.shiftId
 
     override suspend fun update(trip: TripEntity) {
         rows[trip.clientUuid] = trip
@@ -467,10 +799,15 @@ private class FakeTripDao : TripDao {
  */
 private class FakeApiService : ApiService {
     var networkUp: Boolean = true
+    var rejectAllTrips: Boolean = false
     var callCount: Int = 0
         private set
 
     private val storedByClientUuid = mutableMapOf<String, TripDto>()
+
+    /** Every trip payload the drainer has actually put on the wire, so a test can assert what the
+     * server would have seen — specifically, that no trip arrived carrying a `local:` shift id. */
+    val tripPayloadLog = mutableListOf<TripSyncItemDto>()
 
     fun storedTripCount(): Int = storedByClientUuid.size
 
@@ -478,7 +815,13 @@ private class FakeApiService : ApiService {
         // Offline calls never "reach" the fake server at all, matching real
         // network semantics — callCount is a count of successful contacts.
         if (!networkUp) throw IOException("simulated offline")
+        // Reachable, but refusing. Distinct from `networkUp = false` on purpose: S1 is about the
+        // row the server ANSWERS about and rejects identically every time, which is what made
+        // unbounded retry so useless.
+        if (rejectAllTrips) throw IllegalStateException("422 unprocessable")
+        callLog += "syncTrips"
         callCount++
+        tripPayloadLog += body
         val results = body.map { item ->
             val existing = storedByClientUuid[item.clientUuid]
             if (existing != null) {
@@ -570,7 +913,42 @@ private class FakeApiService : ApiService {
     override suspend fun acceptJobOffer(jobId: String, offerId: String): JobOfferDto = notUsed()
     override suspend fun tickTrip(tripId: String, body: TripTickRequestDto): TripDto = notUsed()
     override suspend fun closeTrip(tripId: String, body: TripCloseRequestDto): TripDto = notUsed()
-    override suspend fun startShift(body: ShiftStartDto): ShiftDto = notUsed()
+    /** Records the shift starts the drainer posts, and answers with a server-issued id, so the S3
+     * ordering test can assert both that the shift went first and what the trips were rewritten to.
+     * Honours `client_uuid` idempotency: a repeat returns the same shift, as the real endpoint does. */
+    val startedShiftsByClientUuid = mutableMapOf<String, ShiftDto>()
+    var shiftStartFailure: Exception? = null
+    val callLog = mutableListOf<String>()
+
+    override suspend fun startShift(body: ShiftStartDto): ShiftDto {
+        // Same offline semantics as syncTrips: an offline call never reaches the fake server at
+        // all. Without this, a "shift started offline" test would silently start it online.
+        if (!networkUp) throw IOException("simulated offline")
+        callLog += "startShift"
+        shiftStartFailure?.let { throw it }
+        val key = body.clientUuid ?: error("drainer must send client_uuid")
+        return startedShiftsByClientUuid.getOrPut(key) {
+            fakeShiftDto(id = "srv-shift-${startedShiftsByClientUuid.size + 1}", body = body)
+        }
+    }
+
+    private fun fakeShiftDto(id: String, body: ShiftStartDto): ShiftDto = ShiftDto(
+        id = id,
+        tenantId = "tenant-1",
+        driverId = body.driverId,
+        vehicleId = body.vehicleId,
+        startAt = "2026-09-08T00:00:00Z",
+        endAt = null,
+        inspectionJson = body.inspectionJson,
+        tripsCount = 0,
+        kmTotal = "0",
+        cashTotal = "0",
+        cardTotal = "0",
+        pslOwed = "0",
+        reconciled = false,
+        createdAt = "2026-09-08T00:00:00Z",
+        updatedAt = "2026-09-08T00:00:00Z",
+    )
     override suspend fun endShift(shiftId: String, body: ShiftEndDto): ShiftDto = notUsed()
     override suspend fun shiftReport(shiftId: String): ShiftReportDto = notUsed()
     // Added 2026-08-10 (driver-photo pass) alongside the two new ApiService methods below --

@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.domain
 
 import android.content.Context
+import android.content.SharedPreferences
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.DriverLoginRequestDto
@@ -9,7 +10,8 @@ import au.com.threesixty.cabdispatch.data.remote.UserDto
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.security.MessageDigest
+import retrofit2.HttpException
+import java.io.IOException
 
 /**
  * Driver ID + PIN login with an offline fallback, per spec B5 S1: "local
@@ -56,19 +58,53 @@ sealed interface DriverLoginResult {
     data class Failure(val error: Throwable) : DriverLoginResult
 }
 
-class SharedPreferencesDriverAuthRepository(
-    context: Context,
+/**
+ * ### The offline fallback is a connectivity fallback, not a failure fallback (security finding X1)
+ *
+ * This class used to fall back to the cached PIN hash on **any** failure of the online call, and
+ * said so in its own comment: *"Offline (or backend rejected/unreachable/malformed) — fall back to
+ * the cached hash."* That is an authorisation bypass. The server's 401/403 is precisely how a depot
+ * revokes a driver — deactivating the account, suspending them, or pulling their authority — and
+ * treating that answer as interchangeable with "the tablet has no signal" meant a revoked driver
+ * kept logging in successfully, forever, on any tablet they had ever used. On a regulated meter the
+ * person operating it must be someone the operator still authorises.
+ *
+ * So [login] now branches on *why* the call failed:
+ *
+ * | Outcome | Meaning | Behaviour |
+ * |---|---|---|
+ * | [IOException] (incl. `SocketTimeoutException`) | we never got an answer | offline fallback runs |
+ * | [HttpException] 401/403 | the server answered "no" | cache **cleared**, login fails |
+ * | any other [HttpException] (5xx, 422, …) | the server answered something else | login fails, cache untouched |
+ * | 2xx with an unrecognised body | the server answered, malformed | login fails, cache untouched |
+ *
+ * Only the first row is a genuine "we cannot reach the authority" case, which is the only case the
+ * offline cache was ever meant to cover. The 401/403 row actively **clears** the cached hash: a
+ * driver whose authority was revoked while the tablet had signal must not keep an offline credential
+ * on that tablet afterwards, or airplane mode becomes the bypass.
+ *
+ * Note the deliberate asymmetry on the "some other error" rows — a 500 does not clear the cache
+ * (a server outage must not lock out a legitimate driver) but does not grant a login either
+ * (an outage is not evidence of authority). Failing closed without destroying state is the right
+ * answer for an answer we cannot interpret.
+ */
+class SharedPreferencesDriverAuthRepository internal constructor(
+    private val prefs: SharedPreferences,
     private val apiService: ApiService,
 ) : DriverAuthRepository {
 
-    private val prefs = context.applicationContext
-        .getSharedPreferences("driver_auth_cache", Context.MODE_PRIVATE)
+    constructor(context: Context, apiService: ApiService) : this(
+        AuthCachePrefs.open(context),
+        apiService,
+    )
+
     private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun login(driverId: String, pin: String): DriverLoginResult {
         val onlineResult = runCatching {
             apiService.driverLogin(DriverLoginRequestDto(driverCode = driverId, pin = pin))
         }
+
         onlineResult.onSuccess { response ->
             if (response.mfaRequired == true) {
                 return response.mfaToken?.let { DriverLoginResult.MfaRequired(it) }
@@ -87,18 +123,41 @@ class SharedPreferencesDriverAuthRepository(
                 cacheDriver(driverId, pin, user)
                 return DriverLoginResult.Success(user)
             }
-            // Neither shape matched (unexpected server response) — fall through to the offline
-            // fallback below exactly as a network failure would.
+            // The server answered 2xx with a body matching neither the success nor the MFA shape.
+            // Pre-X1 this fell through to the offline cache "exactly as a network failure would";
+            // it is not a network failure — we reached the authority and could not read its reply,
+            // which is a bug or a version skew, not evidence that this driver is authorised.
+            return DriverLoginResult.Failure(
+                IllegalStateException(
+                    "Driver login returned neither tokens nor an MFA challenge",
+                ),
+            )
         }
 
-        // Offline (or backend rejected/unreachable/malformed) — fall back to the cached hash
-        // from this driver's last successful login on this device. TODO(security review):
-        // SHA-256(driverId:pin) with no salt is adequate only because it's compared against a
-        // value stored in this app's private SharedPreferences, never transmitted; revisit if the
-        // cache is ever moved to a shared/exported store.
-        val cachedHash = prefs.getString(hashKey(driverId), null)
+        val error = onlineResult.exceptionOrNull()
+            ?: IllegalStateException("Driver login failed without an exception")
+
+        if (error is HttpException && error.code() in REVOCATION_CODES) {
+            // The depot has said no. Drop this driver's offline credential so the answer sticks
+            // even once the tablet goes offline again — see the class doc.
+            clearCachedDriver(driverId)
+            return DriverLoginResult.Failure(error)
+        }
+
+        if (error !is IOException) {
+            // Some other real answer from the server (5xx, 422, a decode failure on a non-2xx
+            // body...). Fail closed, but leave the cache alone — see the class doc's note on why
+            // an outage must neither authorise nor lock out.
+            return DriverLoginResult.Failure(error)
+        }
+
+        // Genuinely could not reach the server. This — and only this — is what the offline cache
+        // is for: fall back to the hash written by this driver's last successful login here.
+        val cachedRecord = prefs.getString(hashKey(driverId), null)
         val cachedUserJson = prefs.getString(userKey(driverId), null)
-        if (cachedHash != null && cachedUserJson != null && cachedHash == sha256(driverId, pin)) {
+        if (cachedRecord != null && cachedUserJson != null &&
+            OfflinePinHasher.verify(driverId, pin, cachedRecord)
+        ) {
             return runCatching { json.decodeFromString<UserDto>(cachedUserJson) }
                 .fold(
                     onSuccess = { DriverLoginResult.Success(it) },
@@ -106,10 +165,7 @@ class SharedPreferencesDriverAuthRepository(
                 )
         }
 
-        return DriverLoginResult.Failure(
-            onlineResult.exceptionOrNull()
-                ?: IllegalStateException("No cached credentials for offline login"),
-        )
+        return DriverLoginResult.Failure(error)
     }
 
     override suspend fun completeMfaLogin(
@@ -125,19 +181,62 @@ class SharedPreferencesDriverAuthRepository(
         token.user
     }
 
+    /**
+     * Writes (or rewrites) this driver's offline credential.
+     *
+     * Called only from the two **online** success paths ([login]'s 2xx branch and
+     * [completeMfaLogin]), which is what makes the X2 legacy migration lazy and automatic: any
+     * pre-X2 unsalted SHA-256 entry is overwritten with a PBKDF2 record the next time its owner
+     * logs in with a working network, without a migration pass, a version flag, or anything for the
+     * driver to do. See [OfflinePinHasher]'s "Legacy records" note for why there is deliberately no
+     * offline migration path.
+     */
     private fun cacheDriver(driverId: String, pin: String, user: UserDto) {
         prefs.edit()
-            .putString(hashKey(driverId), sha256(driverId, pin))
+            .putString(hashKey(driverId), OfflinePinHasher.hash(driverId, pin, deviceSalt()))
             .putString(userKey(driverId), json.encodeToString(user))
             .apply()
+    }
+
+    /** Drops one driver's offline credential — see the class doc's 401/403 row. Both keys go: a
+     * cached user record with no hash is unusable, and leaving the driver's name and id sitting on
+     * a tablet they are no longer authorised to operate serves no purpose. */
+    private fun clearCachedDriver(driverId: String) {
+        prefs.edit()
+            .remove(hashKey(driverId))
+            .remove(userKey(driverId))
+            .apply()
+    }
+
+    /**
+     * This tablet's PBKDF2 salt, generated once on first use and persisted alongside the hashes.
+     *
+     * Per-device rather than per-entry: the threat X2 is about is someone who has read this prefs
+     * file off one lost or rooted tablet, and a salt they can also read does not stop *that*
+     * attacker — what it stops is the fleet-wide attack, where one precomputed table of a million
+     * PINs cracks every tablet in the depot at once. A per-device salt is enough for that, and it
+     * is what the workstream brief specifies. (The salt is still written into every record by
+     * [OfflinePinHasher.hash], so records stay self-describing and a future move to per-entry salts
+     * needs no migration.)
+     */
+    private fun deviceSalt(): ByteArray {
+        prefs.getString(KEY_SALT, null)
+            ?.let { OfflinePinHasher.decodeSalt(it) }
+            ?.let { return it }
+
+        val salt = OfflinePinHasher.newSalt()
+        prefs.edit().putString(KEY_SALT, OfflinePinHasher.encodeSalt(salt)).apply()
+        return salt
     }
 
     private fun hashKey(driverId: String) = "hash_$driverId"
     private fun userKey(driverId: String) = "user_$driverId"
 
-    private fun sha256(driverId: String, pin: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val bytes = digest.digest("$driverId:$pin".toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
+    private companion object {
+        /** 401 Unauthorized / 403 Forbidden — the two ways `POST /v1/auth/driver-login` says
+         * "this driver may not log in", as opposed to failing to answer at all. */
+        val REVOCATION_CODES = setOf(401, 403)
+
+        const val KEY_SALT = "pin_salt"
     }
 }

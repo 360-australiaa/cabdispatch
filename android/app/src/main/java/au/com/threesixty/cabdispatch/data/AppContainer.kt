@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.local.AppDatabase
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_8_9
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_9_10
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_10_11
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_11_12
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -38,7 +39,9 @@ import au.com.threesixty.cabdispatch.domain.RealQrScanner
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDuressRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedJobsRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedMessagesRepository
-import au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository
+import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
+import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
+import au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.domain.FareEngine
 import au.com.threesixty.cabdispatch.domain.FareEngineImpl
@@ -251,15 +254,28 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
             .build()
 
+        // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
+        // project is not the "developer's laptop only" gate it looks like: the field tablet runs a
+        // DEBUG build against the production server, so every driver PIN (in the driver-login
+        // request body) and every bearer and refresh token (in the Authorization header and the
+        // refresh response body) was being written to logcat on a device sitting in a car, readable
+        // by any app with log access and by anyone who plugs in a cable.
+        //
+        // HEADERS drops the bodies — which is what carries the PINs and the refresh tokens — and
+        // the two redactHeader calls below replace the values of the two credential-bearing headers
+        // with "██" in what remains. What is left is method, URL, status and timing: enough to
+        // debug a failing call, with no credential in it.
         val loggingInterceptor = HttpLoggingInterceptor().apply {
             level = if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BODY
+                HttpLoggingInterceptor.Level.HEADERS
             } else {
                 HttpLoggingInterceptor.Level.NONE
             }
+            redactHeader("Authorization")
+            redactHeader("X-Device-Secret")
         }
 
         okHttpClient = OkHttpClient.Builder()
@@ -369,16 +385,59 @@ object AppContainer {
         val currentRefreshToken = refreshToken ?: return@Authenticator null
         val failedAccessToken = response.request.header("Authorization")?.removePrefix("Bearer ")
 
-        synchronized(this) {
+        synchronized(tokenRefreshLock) {
             val newAccessToken = if (accessToken != null && accessToken != failedAccessToken) {
                 accessToken
             } else {
                 runCatching { performBlockingTokenRefresh(currentRefreshToken) }.getOrNull()
             }
-            newAccessToken?.let {
-                response.request.newBuilder().header("Authorization", "Bearer $it").build()
+            if (newAccessToken == null) {
+                // Give-up path. Previously this just returned null and left the dead pair sitting
+                // in TokenStore, so every subsequent 401 anywhere in the app came back here, read
+                // the same expired refresh token, made the same doomed round-trip and gave up
+                // again — for the rest of the process's life, and across restarts, because the pair
+                // is persisted. Clearing both (and the session) makes the failure terminal and
+                // routes the driver to the login screen, which is the only thing that can actually
+                // fix it.
+                clearSessionAfterFailedRefresh()
+                return@Authenticator null
             }
+            response.request.newBuilder().header("Authorization", "Bearer $newAccessToken").build()
         }
+    }
+
+    /**
+     * Private monitor for [tokenAuthenticator]'s refresh critical section.
+     *
+     * It used to be `synchronized(this)` — i.e. the [AppContainer] object itself, which is a
+     * process-wide singleton every screen in the app can reach. Any other code that ever wrote
+     * `synchronized(AppContainer) { ... }` would therefore have been blocking on, and blocked by, a
+     * network round-trip it has nothing to do with; on the main thread that is an ANR, and with any
+     * second lock in the picture it is a deadlock. Nothing does that today, which is exactly why it
+     * is worth fixing now — the hazard is invisible at the would-be caller's site, since nothing
+     * about `AppContainer` advertises that it is also a lock held across HTTP calls.
+     */
+    private val tokenRefreshLock = Any()
+
+    /**
+     * Tears down the session after the refresh token itself was rejected — see [tokenAuthenticator]'s
+     * give-up path.
+     *
+     * Clears both tokens (through the [accessToken]/[refreshToken] setters, so [TokenStore] is
+     * cleared on disk too, not just the in-memory fields) and the session. Clearing
+     * [SessionHolder] is what actually routes the app back to login: the nav host's
+     * `postAuthDestination()` already branches on `SessionHolder.session.value` being null, so no
+     * navigation call is needed or possible from here — this runs on an arbitrary OkHttp thread.
+     *
+     * Deliberately does NOT touch [DevicePairingStore]: the driver's session is over, but the
+     * tablet is still this depot's paired device and must keep answering fleet commands (kiosk
+     * lock, locate) with nobody logged in. That is the whole reason the device secret exists
+     * separately from the driver's tokens.
+     */
+    private fun clearSessionAfterFailedRefresh() {
+        accessToken = null
+        refreshToken = null
+        SessionHolder.clear()
     }
 
     /** A bare, interceptor/authenticator-free client for [tokenAuthenticator]'s own refresh call —
@@ -588,7 +647,38 @@ object AppContainer {
     // tiles always rendered 0/$0 for every driver, always — see RemoteTripStatsRepository's own
     // doc and DASHBOARD_REDESIGN_2026.md. StubTripStatsRepository stays defined for tests/previews.
     val tripStatsRepository: TripStatsRepository by lazy { RemoteTripStatsRepository() }
-    val shiftRepository: ShiftRepository by lazy { RemoteBackedShiftRepository(apiService) }
+    /**
+     * Shift start now queues through the sync outbox instead of fabricating an orphaned shift on
+     * network failure — see [OutboxBackedShiftRepository] for finding S3 and what it replaces.
+     */
+    val shiftRepository: ShiftRepository by lazy {
+        OutboxBackedShiftRepository(apiService, shiftOutboxPort)
+    }
+
+    /** Adapts [syncOutboxDao] to the narrow port [OutboxBackedShiftRepository] takes, so that class
+     * stays unit-testable on a plain JVM with no Room. */
+    private val shiftOutboxPort by lazy {
+        object : OutboxBackedShiftRepository.ShiftOutboxPort {
+            override suspend fun queueShiftStart(clientUuid: String, payloadJson: String, createdAt: Long) {
+                syncOutboxDao.upsert(
+                    SyncOutboxEntity(
+                        entityType = OutboxEntityType.SHIFT,
+                        clientUuid = clientUuid,
+                        entityJson = payloadJson,
+                        // Unlike a trip (which is queued at open and only becomes sendable at
+                        // close), a shift start is complete and sendable the instant it is written.
+                        readyToSync = true,
+                        createdAt = createdAt,
+                    ),
+                )
+            }
+
+            override suspend fun deleteShiftStart(clientUuid: String) {
+                syncOutboxDao.getByClientUuid(OutboxEntityType.SHIFT, clientUuid)
+                    ?.let { syncOutboxDao.deleteById(it.id) }
+            }
+        }
+    }
 
     /**
      * Real fused-location GPS feed (see `domain/location/RealLocationProvider.kt`), replacing
