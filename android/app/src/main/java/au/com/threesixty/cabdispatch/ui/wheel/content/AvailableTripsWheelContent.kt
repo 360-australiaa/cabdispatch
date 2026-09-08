@@ -203,7 +203,13 @@ private val EyebrowStyle = TextStyle(
  */
 @Composable
 private fun EmptyOfferState() {
-    val breath by rememberInfiniteFloat(enabled = true, from = 0.2f, to = 0.6f, durationMs = 2200)
+    // STATIC (A3, 2026-09-08). This was `enabled = true` - a breathing halo that ran forever on a
+    // pane whose entire message is "there is nothing happening". Its own doc argued the motion
+    // said "still listening", but an empty-state glow that never stops is precisely the ambient
+    // decoration this repo's calm-motion rule exists to prevent, and it ran on a parked vehicle
+    // for as long as the driver left the pane open. The copy already says the thing the animation
+    // was trying to say, in words, honestly.
+    val breath = 0.45f
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

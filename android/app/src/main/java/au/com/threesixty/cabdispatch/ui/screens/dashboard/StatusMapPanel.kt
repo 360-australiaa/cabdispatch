@@ -112,12 +112,18 @@ internal fun StatusMapPanel(onPlotZone: () -> Unit) {
             IllustrativeStreetGrid()
         }
 
-        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "halo").animateFloat(
-            initialValue = 0.35f,
-            targetValue = 0.0f,
-            animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Restart),
-            label = "halo-a",
-        )
+        // STATIC (A3, 2026-09-08). This was an infinite 1.6s radar "ping" expanding out of the
+        // vehicle marker, running for as long as the Map pane was open. Two reasons it goes:
+        //
+        // 1. It is the always-on decorative loop this repo's calm-motion rule exists to prevent -
+        //    it pulsed identically whether the cab was doing 90 on the M5 or parked at a rank.
+        // 2. More importantly it was animating a marker drawn at a HARDCODED offset (360dp, 300dp)
+        //    on an illustrative grid, not at the vehicle's real position. A radar ping is a strong
+        //    visual claim of live tracking, and it was attached to a fixed decoration.
+        //
+        // The halo is kept as a static soft glow so the marker still reads as "you", without the
+        // motion implying a live fix this panel does not have.
+        val pulse = 0.22f
         Box(
             modifier = Modifier.offset(x = 360.dp, y = 300.dp).size(72.dp).clip(CircleShape)
                 .background(CaptainPalette.accent.copy(alpha = pulse)),
@@ -166,7 +172,7 @@ internal fun StatusMapPanel(onPlotZone: () -> Unit) {
                     color = CaptainPalette.accent,
                 )
             }
-            Text("Heartbeat 30 s · GPS live", fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)
+            Text("Heartbeat 30 s · GPS live", fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = CaptainPalette.textMuted)
         }
     }
 }

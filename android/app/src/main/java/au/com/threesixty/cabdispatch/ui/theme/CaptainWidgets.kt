@@ -39,6 +39,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -139,13 +143,24 @@ fun rememberInfiniteFloat(enabled: Boolean, from: Float, to: Float, durationMs: 
 }
 
 /**
- * SOS / emergency control — visually a glowing red-ringed circular badge, but keeps this app's
- * real duress safety property: press-and-**hold**, never a tap. A slow breathing glow (not a fast
- * alarm-style flash) signals "armed", not "already firing" — urgency is reserved for the real
- * `DuressUiState.Triggered` overlay once it actually fires. [label]/[holdLabel]/[sizeDp] are
+ * SOS / emergency control — visually a red-ringed circular badge, but keeps this app's real
+ * duress safety property: press-and-**hold**, never a tap. [label]/[holdLabel]/[sizeDp] are
  * cosmetic-only parameters added for reuse elsewhere (e.g. a differently-labelled duress control
  * on the meter screen); the interaction model (`combinedClickable(onLongClick = onTrigger)`, no
  * `onClick` action) must never be changed to a tap.
+ *
+ * THE BREATHING GLOW IS GONE (A3, 2026-09-08). This control used to call
+ * `rememberInfiniteFloat(enabled = true, ...)` — `enabled` hardcoded, never gated on anything,
+ * never stopping. The 2026-09-08 driver-UI audit named it as the clearest violation of this repo's
+ * own calm-motion rule: a permanently-animating red halo sitting in the driver's eyeline for an
+ * entire 12-hour shift, on a screen whose governing doctrine is that nothing moves while the
+ * vehicle is parked (see GlowingSpeedometer's `motion` doc for the incident that established it).
+ *
+ * The old justification was that the pulse signalled "armed". It does not need to: this control is
+ * ALWAYS armed, so a signal that is always on carries no information — it is decoration wearing a
+ * functional argument. A static red ring says "emergency control" perfectly well, and now real
+ * urgency (`DuressUiState.Triggered`) is the only thing on this screen that moves urgently, which
+ * is exactly where the attention should go.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -155,25 +170,59 @@ fun SosControl(
     label: String = "SOS",
     holdLabel: String = "HOLD",
     sizeDp: Int = 72,
+    /** Lays the [holdLabel] out to the RIGHT of the badge instead of beneath it (A3). The stacked
+     * caption added ~18dp of height, which the compacted 72dp home header cannot spend. */
+    inlineHoldLabel: Boolean = false,
 ) {
-    val glow by rememberInfiniteFloat(enabled = true, from = 0.35f, to = 0.85f, durationMs = 1400)
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    // Static, not breathing - see this composable's own doc for why the loop was removed.
+    val ringAlpha = 0.85f
+    val badge: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .size(sizeDp.dp)
                 .clip(CircleShape)
-                .border(2.5.dp, CaptainPalette.danger.copy(alpha = glow), CircleShape)
+                .border(2.5.dp, CaptainPalette.danger.copy(alpha = ringAlpha), CircleShape)
                 .background(
                     Brush.radialGradient(
-                        listOf(CaptainPalette.danger.copy(alpha = glow * 0.18f), CaptainPalette.panel),
+                        listOf(CaptainPalette.danger.copy(alpha = 0.16f), CaptainPalette.panel),
                     ),
                 )
+                // A3 a11y pass: a duress control a TalkBack user cannot identify is a safety gap,
+                // not a polish gap. Says explicitly that it is hold-to-fire.
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "Emergency duress alarm — press and hold"
+                }
                 .combinedClickable(onClick = {}, onLongClick = onTrigger),
             contentAlignment = Alignment.Center,
         ) {
             Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.danger)
         }
-        Text(holdLabel, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, letterSpacing = 0.5.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))
+    }
+    val caption: @Composable () -> Unit = {
+        Text(
+            holdLabel,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            letterSpacing = 0.5.sp,
+            color = CaptainPalette.textMuted,
+        )
+    }
+    if (inlineHoldLabel) {
+        Row(
+            modifier = modifier,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            badge()
+            caption()
+        }
+    } else {
+        Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+            badge()
+            Box(modifier = Modifier.padding(top = 2.dp)) { caption() }
+        }
     }
 }
 

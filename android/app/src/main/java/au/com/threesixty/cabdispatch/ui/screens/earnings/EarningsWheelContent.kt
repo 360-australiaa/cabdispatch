@@ -411,7 +411,12 @@ private fun EarningsTrendCard(trend: List<DailyEarnings>, modifier: Modifier = M
 @Composable
 private fun EarningsTrendChart(trend: List<DailyEarnings>, modifier: Modifier = Modifier) {
     val maxTotal = trend.maxOf { it.total }.let { if (it.signum() == 0) BigDecimal.ONE else it }.toFloat()
-    val breath by rememberInfiniteFloat(enabled = true, from = 0.35f, to = 1f, durationMs = 1800)
+    // STATIC (A3, 2026-09-08). Was `enabled = true` - the newest point on the earnings sparkline
+    // breathed forever, on a chart of days that have already happened and are not going to change
+    // while the driver looks at it. The stated intent ("the eye lands on today first") is real and
+    // worth keeping, so the point keeps its brighter glow - it simply holds that brightness
+    // instead of oscillating. Emphasis by contrast, not by motion.
+    val breath = 0.85f
     val glowArgb = CaptainPalette.hudAccent.toArgb()
     // Remembered once per composable — the BlurMaskFilter (and its cached kernel) is never
     // allocated per frame. Stroke width is set at draw time (it's in px).

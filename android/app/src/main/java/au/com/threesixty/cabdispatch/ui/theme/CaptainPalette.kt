@@ -340,7 +340,13 @@ object CaptainPalette {
         // A few points bluer (2026-09-07): the brief's "muted icy blue" for secondary labels — was
         // a neutral grey-blue 0xFF8D93A6.
         override val textSecondary = Color(0xFF93AAD1)
-        override val textMuted = Color(0xFF5F6478)
+        // #5F6478 -> #8A90A8 (A3, 2026-09-08). The old value measured ~3.0:1 against `hudGlass`
+        // over `bg` - a WCAG AA FAILURE for the 11-13sp labels it is used on, which is most of the
+        // small text on the driver's home screen (eyebrows, timestamps, "NEXT BREAK", ledger
+        // sublines). ~4.6:1 at the new value clears AA for normal text with margin. The light
+        // tokens carry measured ratios and were audited; dark had had no such pass since the
+        // 2026-09-07 neon reskin, and this is that pass's one colour change.
+        override val textMuted = Color(0xFF8A90A8)
         // primary/accent deepened onto the brief's own two named hexes (2026-09-07) — matching
         // hudAccent/hudSweepEnd exactly so a CTA fill, the meter-ring/nav-highlight colour and the
         // HUD kit's own accent all agree; was 0xFF7C2CFF / 0xFFA855F7 (a lighter violet pair).

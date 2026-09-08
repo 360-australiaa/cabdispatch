@@ -2,7 +2,6 @@ package au.com.threesixty.cabdispatch.ui.screens.dashboard
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -17,7 +16,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,7 +58,15 @@ import au.com.threesixty.cabdispatch.ui.theme.hudSpring
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Radius
+import au.com.threesixty.cabdispatch.ui.theme.Space
+import au.com.threesixty.cabdispatch.ui.theme.Type
+import au.com.threesixty.cabdispatch.domain.fare.AreaClass
+import au.com.threesixty.cabdispatch.domain.TimeClass
+import au.com.threesixty.cabdispatch.domain.resolveTimeClassFor
 import java.math.RoundingMode
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 /**
  * The home screen's meter card: the night-fare tile, the circular meter dial, the two
@@ -93,85 +103,172 @@ internal fun MeterCard(
     // (see Hud.kt's own doc) so the meter panel matches Live Dispatch/Shift Time/Trips/Earnings
     // instead of being the one card left on the old flat-panel look.
     GlassCard(modifier = modifier, cornerRadiusDp = 18, glow = CaptainPalette.hudAccent) {
-    Box(modifier = Modifier.fillMaxSize().padding(20.dp)) {
-        NightFareTile(tariff = state.tariff, modifier = Modifier.align(Alignment.TopStart))
-        MeterDial(
-            meterPhase = meterPhase,
-            enabled = state.tariff != null,
-            onStartMeter = onStartMeter,
-            onCancelStart = onCancelStart,
-            modifier = Modifier.align(Alignment.Center),
-        )
         Column(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxSize().padding(Space.mlg),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            QuickActionTile(
-                icon = Icons.Rounded.Sell,
-                title = "SET PRICE",
-                subtitle = if (fixedFareActive) "Fixed Fare · ACTIVE" else "Tap to set a price",
-                subtitleColor = if (fixedFareActive) CaptainPalette.success else CaptainPalette.textSecondary,
-                onClick = onSetPrice,
-            )
-            QuickActionTile(
-                icon = Icons.Rounded.ConfirmationNumber,
-                title = "VOUCHERS",
-                subtitle = "Redeemed at payment",
-                subtitleColor = CaptainPalette.textSecondary,
-                onClick = onVouchers,
-            )
+            // THE COLLISION LAYOUT IS GONE (A3, 2026-09-08).
+            //
+            // What used to be here: a Box with NightFareTile pinned TopStart, a fixed .size(414.dp)
+            // MeterDial pinned Center, and a Column of two 156x172dp QuickActionTiles pinned
+            // CenterEnd - three absolutely-positioned children overlapping each other's bounding
+            // boxes by ~53dp per side, surviving only because a circle does not reach the corners
+            // of its square. Every one of those numbers carries a comment saying it was arrived at
+            // by measuring the overlap on a physical tablet, and re-measuring it after each
+            // change. That is not a layout; it is a standoff, and it is precisely why the card
+            // could never shrink below 660dp.
+            //
+            // Replaced by the obvious thing: the dial gets the space that is left, and the three
+            // secondary actions sit in an honest Row underneath it. The card is now 560dp (see the
+            // call site), the dial sizes itself to fit whatever it is given, and nothing overlaps
+            // anything, so nothing has to be re-measured on-device the next time a font changes.
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                // Responsive, and this fixes a real latent bug (audit section 0). The dial was a
+                // hardcoded .size(414.dp) inside a ~421dp-tall area - a 7dp margin. On a 16:9
+                // tablet FixedDesignCanvas produces a 1280x720dp canvas rather than 1280x800, the
+                // content pane drops to ~381dp, and 414dp of dial simply got clipped. Sizing from
+                // the constraints we are actually given cannot clip, whatever the panel shape.
+                val dialSize = minOf(maxWidth, maxHeight).coerceIn(MIN_DIAL_SIZE, MAX_DIAL_SIZE)
+                MeterDial(
+                    meterPhase = meterPhase,
+                    enabled = state.tariff != null,
+                    onStartMeter = onStartMeter,
+                    onCancelStart = onCancelStart,
+                    size = dialSize,
+                )
+            }
+            Spacer(Modifier.height(Space.md))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Space.smd),
+            ) {
+                NightFareChip(tariff = state.tariff, modifier = Modifier.weight(1f))
+                QuickActionChip(
+                    icon = Icons.Rounded.Sell,
+                    title = "SET PRICE",
+                    subtitle = if (fixedFareActive) "Fixed Fare \u00b7 ACTIVE" else "Tap to set a price",
+                    subtitleColor = if (fixedFareActive) CaptainPalette.success else CaptainPalette.textSecondary,
+                    onClick = onSetPrice,
+                    modifier = Modifier.weight(1f),
+                )
+                QuickActionChip(
+                    icon = Icons.Rounded.ConfirmationNumber,
+                    title = "VOUCHERS",
+                    subtitle = "Redeemed at payment",
+                    subtitleColor = CaptainPalette.textSecondary,
+                    onClick = onVouchers,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
-    }
     }
 }
 
-/** Real night-rate uplift and window, not Figma's mock "1.25× / 10PM–6AM" — see this file's class
- * doc. `null` tariff (not yet signed/cached) hides the numeric ratio rather than showing a bogus
- * one. */
+/** The chip row's height (A3). 92dp comfortably carries an icon, a title and a subtitle line, and
+ * is a generous touch target; `heightIn` rather than `height` so a 1.3x system font scale grows it
+ * instead of clipping the subtitle - the exact failure the old 172dp fixed tile hit twice. */
+private val CHIP_MIN_HEIGHT = 92.dp
+
+/** The dial's responsive range (A3) - see [MeterCard]'s BoxWithConstraints for why it is a range
+ * and not a number. 300dp is the smallest that keeps the 64sp status word legible at arm's length;
+ * 380dp is where it starts crowding the chip row on a full-height 800dp canvas. */
+private val MIN_DIAL_SIZE = 300.dp
+
+private val MAX_DIAL_SIZE = 380.dp
+
+/**
+ * NIGHT FARE, as a chip in the row under the dial (A3 - was a 156dp tile absolutely positioned in
+ * the card's top-left corner, overlapping the dial; see [MeterCard]).
+ *
+ * The multiplier is real and unchanged: [nightMultiplierLabel] derives it from the signed tariff's
+ * own `nightRate1 / distRate1`, and a null tariff shows an honest dash rather than a plausible
+ * invented "1.25x".
+ *
+ * THE WINDOW STRING IS NO LONGER A LITERAL. It used to be the hardcoded text "10:00 PM - 6:00 AM",
+ * carrying a long comment recording that this app's own [FareEngine] disagreed with it (8pm vs
+ * 10pm) - a real discrepancy that was found but deliberately not fixed at the time. That comment
+ * is now **stale in the good direction**: the engine was corrected on 2026-08-29 (see
+ * `resolveTimeClassFor`, which reads `hour >= 22 || hour < 6`) and the two now agree at 10pm.
+ *
+ * Rather than restate the literal and hope it keeps agreeing, this asks the engine
+ * ([nightWindowLabel]). If anyone ever moves the boundary again - and a jurisdiction outside NSW
+ * certainly will - the tile follows it, and cannot silently start lying to a driver about when
+ * their rate goes up.
+ */
 @Composable
-internal fun NightFareTile(tariff: au.com.threesixty.cabdispatch.data.remote.TariffDto?, modifier: Modifier = Modifier) {
-    // 172dp -> 156dp (2026-08-29): pulled back slightly so this corner tile clears the also-bigger
-    // meter dial behind it — see MeterCard's width comment. The window text now wraps to two
-    // lines at this width, which is fine (the Column isn't height-constrained) — a real fix, not
-    // a cosmetic call, since the alternative (172dp) visibly overlapped the dial's ring on-device.
+internal fun NightFareChip(tariff: au.com.threesixty.cabdispatch.data.remote.TariffDto?, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
-            .width(156.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .heightIn(min = CHIP_MIN_HEIGHT)
+            .clip(RoundedCornerShape(Radius.lg))
             .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-            .padding(16.dp),
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(Radius.lg))
+            .padding(Space.smd),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(18.dp))
-            Text("NIGHT FARE", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 7.dp))
+            Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(16.dp))
+            Text(
+                "NIGHT FARE",
+                style = Type.label,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(start = Space.xs),
+            )
         }
-        Text(
-            nightMultiplierLabel(tariff),
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Bold,
-            fontSize = 32.sp,
-            color = CaptainPalette.textPrimary,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        // The backend's actual, authoritative night-rate window (confirmed directly by the
-        // backend/architecture agent, 2026-08-29 contract Part 2.3/6): "10pm-6am ... hardcoded
-        // server-side in TimeClass.NIGHT" and safe to display as-is since it's informational only
-        // — the server enforces the real boundary at trip-tick/close time regardless. NOTE for the
-        // record: this app's OWN local FareEngine.kt (used only for HiredScreen's live-ticking
-        // display, a screen outside this pass's 3-screen scope) currently classifies night as
-        // 8pm-6am, not 10pm-6am — a real discrepancy this pass found but does NOT fix here (fixing
-        // the live meter's day/night boundary is a money-calculation change to a different screen,
-        // out of this pass's mandate — flagged in the delivery notes instead).
-        Text(
-            "10:00 PM – 6:00 AM",
-            fontFamily = InterFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 14.sp,
-            color = CaptainPalette.textSecondary,
-            modifier = Modifier.padding(top = 5.dp),
-        )
+        Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = Space.xs)) {
+            Text(
+                nightMultiplierLabel(tariff),
+                // 32sp -> Type.numeral (28sp). Still the chip's headline figure.
+                style = Type.numeral,
+                color = CaptainPalette.textPrimary,
+            )
+            Text(
+                nightWindowLabel(),
+                style = Type.tiny,
+                color = CaptainPalette.textSecondary,
+                modifier = Modifier.padding(start = Space.sm, bottom = 3.dp),
+            )
+        }
     }
+}
+
+/**
+ * The night-rate window, **derived from the fare engine rather than written out** - see
+ * [NightFareChip]'s doc for why that matters.
+ *
+ * HOW. `resolveTimeClassFor` is a pure top-level function taking an explicit [ZonedDateTime], so
+ * the window can simply be *measured*: ask it, for each of the 24 hours of one ordinary reference
+ * day, whether that hour is [TimeClass.NIGHT], then report the contiguous run. No new constant is
+ * introduced anywhere and no engine file is edited (that file is another workstream's to own), yet
+ * the string provably cannot drift from the code that actually bills the driver.
+ *
+ * The reference day is a plain midweek date evaluated as [AreaClass.URBAN] on purpose: urban has
+ * no holiday distance rate at all, so this probe sees only the DAY/NIGHT boundary and can never be
+ * perturbed by a Sunday or a gazetted public holiday.
+ */
+internal fun nightWindowLabel(): String {
+    val reference = ZonedDateTime.of(2026, 1, 7, 0, 0, 0, 0, ZoneId.systemDefault()) // a Wednesday
+    val nightHours = (0..23).filter {
+        resolveTimeClassFor(reference.withHour(it), AreaClass.URBAN) == TimeClass.NIGHT
+    }
+    if (nightHours.isEmpty() || nightHours.size == 24) return ""
+    // The night window wraps midnight, so the run is "the hours after the last daytime hour" -
+    // start = the first hour whose predecessor is NOT night; end = the first hour that is not.
+    val start = nightHours.first { (it - 1 + 24) % 24 !in nightHours }
+    val end = ((nightHours.first { (it + 1) % 24 !in nightHours }) + 1) % 24
+    return "${formatHourLabel(start)}\u2013${formatHourLabel(end)}"
+}
+
+/** "10pm" / "6am" / "12pm" - the compact form the chip has room for. */
+private fun formatHourLabel(hour: Int): String {
+    val suffix = if (hour < 12) "am" else "pm"
+    val h = when {
+        hour % 12 == 0 -> 12
+        else -> hour % 12
+    }
+    return "$h$suffix"
 }
 
 internal fun nightMultiplierLabel(tariff: au.com.threesixty.cabdispatch.data.remote.TariffDto?): String {
@@ -185,39 +282,53 @@ internal fun nightMultiplierLabel(tariff: au.com.threesixty.cabdispatch.data.rem
 
 private fun String.toBigDecimalOrNull(): java.math.BigDecimal? = runCatching { java.math.BigDecimal(this) }.getOrNull()
 
+/**
+ * SET PRICE / VOUCHERS, as chips in the row under the dial (A3).
+ *
+ * Was `QuickActionTile`: a fixed 156x172dp tile, absolutely positioned over the dial's bounding
+ * box. Both of its dimensions carry comments recording that they were set by measuring a real
+ * collision on a real tablet, and that an earlier 144dp attempt "visibly clipped the subtitle
+ * line, confirmed live". Sized by weight in a Row with a `heightIn` minimum, neither of those
+ * failure modes is reachable: the chip takes a third of the row and grows if its text needs it.
+ */
 @Composable
-internal fun QuickActionTile(
+internal fun QuickActionChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
     subtitleColor: Color,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        // 126x118 -> 156x172 (2026-08-29, revised after a real on-device check): width pulled back
-        // to clear the dial (see MeterCard's width comment); height grown MORE than first tried —
-        // the first pass's 144dp visibly clipped the subtitle line, confirmed live, not assumed.
-        // Press feedback moved onto the shared gameClick spring/glow (game-feel pass).
-        modifier = Modifier
-            .width(156.dp)
-            .height(172.dp)
-            .clip(RoundedCornerShape(20.dp))
+    Row(
+        modifier = modifier
+            .heightIn(min = CHIP_MIN_HEIGHT)
+            .clip(RoundedCornerShape(Radius.lg))
             .background(Brush.verticalGradient(listOf(CaptainPalette.cardTop, CaptainPalette.cardBottom)))
-            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(20.dp))
-            .gameClick(onClick = onClick, shape = RoundedCornerShape(20.dp))
-            .padding(16.dp),
+            .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(Radius.lg))
+            .gameClick(onClick = onClick, shape = RoundedCornerShape(Radius.lg))
+            .padding(Space.smd),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(14.dp))
+            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(Radius.sm))
                 .background(Brush.verticalGradient(listOf(CaptainPalette.raised, CaptainPalette.cardBottom)))
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(14.dp)),
+                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(Radius.sm)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(26.dp))
+            // A3 a11y pass: was contentDescription = null on a real, tappable control.
+            Icon(icon, contentDescription = title, tint = CaptainPalette.accent, modifier = Modifier.size(22.dp))
         }
-        Spacer(Modifier.height(14.dp))
-        Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = CaptainPalette.textPrimary)
-        Text(subtitle, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = subtitleColor, modifier = Modifier.padding(top = 6.dp))
+        Column(modifier = Modifier.padding(start = Space.sm).weight(1f)) {
+            Text(title, style = Type.h3, color = CaptainPalette.textPrimary, maxLines = 1)
+            Text(
+                subtitle,
+                style = Type.tiny,
+                color = subtitleColor,
+                maxLines = 2,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
 
@@ -250,6 +361,9 @@ internal fun MeterDial(
     enabled: Boolean,
     onStartMeter: () -> Unit,
     onCancelStart: () -> Unit,
+    /** Measured by the caller from its own constraints (A3) rather than hardcoded here - see
+     * [MeterCard]'s BoxWithConstraints for the 16:9 clipping bug that fixed. */
+    size: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
     val starting = meterPhase is MeterStartPhase.Starting
@@ -257,12 +371,12 @@ internal fun MeterDial(
     // — a real state-driven spring (see class doc), not a continuous pulse.
     val iconScale by animateFloatAsState(if (starting) 1.15f else 1f, animationSpec = hudSpring(), label = "meter-icon-scale")
 
-    // 398dp -> 414dp (2026-08-29 prominence pass, kept): bigger than the original, but pulled back
-    // from an earlier 430dp pass that visibly collided with the (also-bigger) corner tiles — see
-    // MeterCard's own width comment; this size was picked by measuring the real overlap live.
+    // Sized by the caller (A3). The long line of hand-measured values this replaced - 398dp,
+    // then 414dp, pulled back from 430dp "by measuring the real overlap live" - existed only to
+    // keep the dial from colliding with tiles that are no longer positioned on top of it.
     GlowingMeterGauge(
         progress = if (starting) 1f else 0f,
-        modifier = modifier.size(414.dp),
+        modifier = modifier.size(size),
         strokeWidthDp = 14,
         sweepDeg = 360f,
         startDeg = -90f,
@@ -270,18 +384,18 @@ internal fun MeterDial(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Rounded.DirectionsCar,
-                contentDescription = null,
+                contentDescription = null, // decorative: the METER STATUS label below carries the meaning
                 tint = CaptainPalette.hudAccent,
-                modifier = Modifier.size(36.dp).scale(iconScale),
+                modifier = Modifier.size(28.dp).scale(iconScale),
             )
             Text(
                 "METER STATUS",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp,
+                fontSize = 13.sp,
                 letterSpacing = 0.5.sp,
                 color = CaptainPalette.textSecondary,
-                modifier = Modifier.padding(top = 6.dp),
+                modifier = Modifier.padding(top = Space.xs),
             )
             val (label, sub) = when (meterPhase) {
                 MeterStartPhase.Idle -> "OFF" to "Tap to start a new fare"
@@ -299,29 +413,32 @@ internal fun MeterDial(
             ) { animatedLabel ->
                 Text(
                     animatedLabel,
-                    fontFamily = InterFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 76.sp,
+                    // 76sp -> Type.display (64sp). Still by far the largest thing on the screen and
+                    // still the point (a driver glancing over must never squint to know whether the
+                    // meter is running); 76sp was sized for a dial that was 414dp and is now at
+                    // most 380dp, and at 76sp "STARTING" no longer fits inside the smaller ring.
+                    style = Type.display,
                     color = CaptainPalette.textPrimary,
-                    modifier = Modifier.padding(top = 10.dp),
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = Space.sm),
                 )
             }
             Text(
                 sub,
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Medium,
-                fontSize = 20.sp,
+                fontSize = 15.sp,
                 color = if (meterPhase is MeterStartPhase.Failed) CaptainPalette.danger else CaptainPalette.textSecondary,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 10.dp).width(240.dp),
+                modifier = Modifier.padding(top = Space.sm).width(220.dp),
             )
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(Space.md))
             // Primary action on the whole screen — widened and heightened well past the standard
             // button size (184x54 -> 240x76) so it reads as unmistakably THE thing to press.
             if (meterPhase is MeterStartPhase.Starting) {
-                CaptainButton(text = "CANCEL", outline = true, widthDp = 240, heightDp = 76, fontSize = 22.sp, onClick = onCancelStart)
+                CaptainButton(text = "CANCEL", outline = true, widthDp = 220, heightDp = 64, fontSize = 20.sp, onClick = onCancelStart)
             } else {
-                StartMeterButton(widthDp = 240, heightDp = 76, fontSize = 22.sp, enabled = enabled, onClick = onStartMeter)
+                StartMeterButton(widthDp = 220, heightDp = 64, fontSize = 20.sp, enabled = enabled, onClick = onStartMeter)
             }
         }
     }

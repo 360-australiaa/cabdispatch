@@ -112,10 +112,25 @@ private fun FixedDesignCanvas(content: @Composable () -> Unit) {
     ) {
         val systemDensity = LocalDensity.current
         val widthPx = constraints.maxWidth.toFloat()
-        // Width-driven scale: horizontal Figma dimensions stay exact (1280dp spans the panel);
-        // the status bar's ~32dp bite out of the 800dp height is absorbed by each screen's
-        // weighted spacers (every v2 screen pins its bottom CTAs with Spacer(weight)).
-        val scale = widthPx / DESIGN_W_DP
+        val heightPx = constraints.maxHeight.toFloat()
+        // LETTERBOX, don't clip (A3, 2026-09-08).
+        //
+        // This was `widthPx / DESIGN_W_DP` - width only. On the pilot SM-T575 (1920x1200, 16:10,
+        // kiosk-pinned so insets are zero) that is exactly right: both axes are 1.6x and 1280x800
+        // maps perfectly. On anything that is NOT 16:10 it silently lies. A 16:9 panel (1920x1080)
+        // scaled from width alone yields a canvas 1280 x **720**dp: every screen authored against
+        // 800dp of height loses 80dp off the bottom with no warning and no visual cue. The
+        // dashboard's content pane dropped to ~381dp and the meter dial - a hardcoded 414dp at the
+        // time - was simply cut off. A visible nav bar eating the safe area does the same thing.
+        //
+        // Taking the MINIMUM of the two scales means the design canvas always fits inside the real
+        // panel: on a shorter screen the layout gets slightly smaller and leaves unused margin at
+        // the sides (a letterbox), which is visible, harmless and honest, rather than confidently
+        // drawing content into pixels that do not exist.
+        //
+        // On the 16:10 pilot tablet the two scales are identical, so this changes nothing there -
+        // it only ever engages on a panel the old formula was already getting wrong.
+        val scale = minOf(widthPx / DESIGN_W_DP, heightPx / DESIGN_H_DP)
         CompositionLocalProvider(
             LocalDensity provides Density(density = scale, fontScale = systemDensity.fontScale),
         ) {
