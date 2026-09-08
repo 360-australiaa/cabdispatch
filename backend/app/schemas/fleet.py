@@ -27,6 +27,24 @@ class Page(BaseModel, Generic[T]):
 # --- Vehicle ----------------------------------------------------------------------
 
 
+def _plausible_expiry(value: date | None) -> date | None:
+    """Reject dates no document can carry (WRITE side only).
+
+    Seen on the tablet, 2026-09-08: a compliance card reading "EXPIRED
+    0028-02-09". `date` happily holds year 28, the API accepted it, and every
+    reader since faithfully displayed it. Years outside 1900-2200 are a typing
+    slip, not a document, and are refused at the one place they can be fixed.
+
+    Deliberately NOT on the Read models: a row already saved with a bad year
+    must still be readable (and therefore correctable), never turned into a
+    500 on every list that includes it -- which is exactly what putting this on
+    the shared Base did on first attempt.
+    """
+    if value is not None and not (1900 <= value.year <= 2200):
+        raise ValueError(f"expiry year {value.year} is not plausible; use a four-digit year between 1900 and 2200")
+    return value
+
+
 class VehicleBase(BaseModel):
     rego: str = Field(min_length=1, max_length=20)
     vin: str | None = Field(default=None, max_length=32)
@@ -54,8 +72,13 @@ class VehicleBase(BaseModel):
         return v
 
 
+
 class VehicleCreate(VehicleBase):
-    pass
+
+    @field_validator("registration_expiry", "insurance_expiry", mode="after")
+    @classmethod
+    def _check_expiry(cls, value: date | None) -> date | None:
+        return _plausible_expiry(value)
 
 
 class VehicleUpdate(BaseModel):
@@ -82,6 +105,11 @@ class VehicleUpdate(BaseModel):
         if not v:
             raise ValueError("rego must not be blank")
         return v
+
+    @field_validator("registration_expiry", "insurance_expiry", mode="after")
+    @classmethod
+    def _check_expiry(cls, value: date | None) -> date | None:
+        return _plausible_expiry(value)
 
 
 class VehicleRead(VehicleBase):

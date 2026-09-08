@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services import compliance_expiry as compliance_expiry_service
 
@@ -25,6 +25,24 @@ class Page(BaseModel, Generic[T]):
     total: int
     skip: int
     limit: int
+
+
+def _plausible_expiry(value: date | None) -> date | None:
+    """Reject dates no document can carry (WRITE side only).
+
+    Seen on the tablet, 2026-09-08: a compliance card reading "EXPIRED
+    0028-02-09". `date` happily holds year 28, the API accepted it, and every
+    reader since faithfully displayed it. Years outside 1900-2200 are a typing
+    slip, not a document, and are refused at the one place they can be fixed.
+
+    Deliberately NOT on the Read models: a row already saved with a bad year
+    must still be readable (and therefore correctable), never turned into a
+    500 on every list that includes it -- which is exactly what putting this on
+    the shared Base did on first attempt.
+    """
+    if value is not None and not (1900 <= value.year <= 2200):
+        raise ValueError(f"expiry year {value.year} is not plausible; use a four-digit year between 1900 and 2200")
+    return value
 
 
 class UserBase(BaseModel):
@@ -42,6 +60,7 @@ class UserBase(BaseModel):
     driver_authority_expiry: date | None = Field(default=None)
 
 
+
 class UserCreate(UserBase):
     # Plain str (not EmailStr) — matches app/schemas/auth.py's LoginRequest.email,
     # which avoids requiring the optional `email-validator` package.
@@ -57,6 +76,11 @@ class UserCreate(UserBase):
     # app/api/v1/auth.py).
     driver_code: str | None = Field(default=None, min_length=4, max_length=6)
 
+    @field_validator("driver_license_expiry", "driver_authority_expiry", mode="after")
+    @classmethod
+    def _check_expiry(cls, value: date | None) -> date | None:
+        return _plausible_expiry(value)
+
 
 class UserUpdate(BaseModel):
     """Partial update — every field optional."""
@@ -70,6 +94,11 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=128)
     driver_license_expiry: date | None = None
     driver_authority_expiry: date | None = None
+
+    @field_validator("driver_license_expiry", "driver_authority_expiry", mode="after")
+    @classmethod
+    def _check_expiry(cls, value: date | None) -> date | None:
+        return _plausible_expiry(value)
 
 
 class UserRead(UserBase):

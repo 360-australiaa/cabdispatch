@@ -1899,3 +1899,31 @@ async def test_pairing_tells_the_tablet_its_tenant_slug(client, session):
     resp = await client.get("/v1/fleet/devices/me", headers={"X-Device-Secret": secret})
     assert resp.status_code == 200
     assert resp.json()["tenant_slug"] == slug
+
+
+@pytest.mark.asyncio
+async def test_vehicle_expiry_dates_must_be_plausible(client, session):
+    """A two-digit-year slip is refused at write time, not shown for years.
+
+    Seen on the tablet, 2026-09-08: a compliance card reading "EXPIRED
+    0028-02-09". `date` happily holds year 28, the API accepted it, and every
+    reader since faithfully displayed it. The schema now refuses years outside
+    1900-2200 with a message that says what to type instead.
+    """
+    headers = await auth_headers(client, session, role="admin", tenant_name="Plausible Dates")
+
+    resp = await client.post(
+        "/v1/fleet/vehicles",
+        json={"rego": "YEAR28", "registration_expiry": "0028-02-09"},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "four-digit year" in resp.text
+
+    # The same slip on the other field, on update, is refused the same way.
+    resp = await client.post("/v1/fleet/vehicles", json={"rego": "YEAR27", "insurance_expiry": "2027-02-09"}, headers=headers)
+    assert resp.status_code == 201, resp.text
+    vehicle_id = resp.json()["id"]
+    assert resp.json()["insurance_expiry"] == "2027-02-09"
+    resp = await client.patch(f"/v1/fleet/vehicles/{vehicle_id}", json={"insurance_expiry": "0027-02-09"}, headers=headers)
+    assert resp.status_code == 422, resp.text
