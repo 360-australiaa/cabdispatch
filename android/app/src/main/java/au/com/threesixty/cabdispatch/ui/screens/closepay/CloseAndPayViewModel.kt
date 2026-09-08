@@ -16,6 +16,8 @@ import au.com.threesixty.cabdispatch.domain.fare.Tariff
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.domain.fare.reconstructFareState
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
+import au.com.threesixty.cabdispatch.hardware.SIMULATED_BANNER
+import au.com.threesixty.cabdispatch.hardware.TEST_RECEIPT_MARKER
 import au.com.threesixty.cabdispatch.hardware.receipt.Receipt
 import au.com.threesixty.cabdispatch.hardware.receipt.ReceiptLine
 import au.com.threesixty.cabdispatch.sync.SyncWorker
@@ -32,44 +34,48 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * S4 — Close & Pay (spec B5). Reads the single active trip straight from
- * [AppContainer.tripRepository] (Room-backed, offline-first — see that
- * class's doc), reconstructs a [FareBreakdown] via
- * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] (see
- * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] for why
- * that reconstruction from persisted totals is exact), and drives payment
- * collection through the S4-S6 agent's hardware gateway interfaces
- * ([AppContainer.cardPaymentGateway] etc.) — none of which require
- * connectivity to reach [confirmPayment] for cash/CabCharge, matching spec
- * B7.
- *
- * RESOLVED INTEGRATION GAP (integration pass): [TripEntity] used to never be
- * persisted at all — S3 (HIRED) drove its on-screen running fare entirely
- * through its own separate, in-memory `domain.FareEngineImpl`/`domain.FareState`
- * (a different pair of types from this package's, see the note in
- * AppContainer.kt) with no Room write anywhere, so this screen always showed
- * [CloseAndPayUiState.NoActiveTrip], even right after S3's "End trip" button
- * navigated here. Fixed upstream, per the plan this comment used to describe:
- * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel] now calls
- * `AppContainer.tripRepository.openTrip(...)` when the live engine starts and
- * `.tick(...)` on every live-engine emission (see `FareState.movingSeconds`/
- * `.waitingSeconds`), so this screen's
- * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] approach
- * now has real persisted totals to read by the time the driver lands here.
+ * The payment methods this screen offers. [persistedValue] is the exact string sent as
+ * `payment_method` on close/sync, and every value here is a member of the backend's
+ * authoritative `PaymentMethod` Literal — `cash | card | voucher | account | split_fare`
+ * (`backend/app/schemas/trips.py`, constraining `Trip.payment_method` in
+ * `backend/app/models/trips.py`). Adding a member here without a matching backend Literal
+ * member produces a 422 at close time, so keep the two in step. Note the *other*,
+ * unrelated payment-method set in `backend/app/models/payment.py` (`PAYMENT_METHODS =
+ * tap_to_pay | link | cash | cabcharge | ttss`) describes `Payment` rows, not `Trip`
+ * rows — it is not the enum this maps onto. That distinction is what the two TODOs
+ * resolved here were tangled in.
  */
 enum class PaymentMethodOption(val label: String, val persistedValue: String) {
     TAP_TO_PAY("Tap to Pay", "card"),
     PAYMENT_LINK("Payment Link / QR", "card"),
     CASH("Cash", "cash"),
 
-    // TODO(backend agent): TripEntity/TripCloseRequestDto.paymentMethod is
-    // documented as "cash | card" only — CabCharge/TTSS docket payments are
-    // persisted as "card" for now (they typically incur a merchant surcharge
-    // in the real world too, so this is the closer fit of the two), but the
-    // richer selection + docket number are captured only in the local
-    // Receipt, not synced to the server. Extend the backend enum before this
-    // needs to be reported distinctly (e.g. a CabCharge reconciliation
-    // report).
+    /**
+     * CabCharge / TTSS docket. Persists as `"card"`.
+     *
+     * RESOLVED (A5, against the authoritative set). The old TODO here described the
+     * backend enum as `"cash | card"` only and asked for it to be extended. It has since
+     * been extended, but not in that direction: `Trip.payment_method`
+     * (`backend/app/models/trips.py:256`) is constrained by
+     * `backend/app/schemas/trips.py`'s `PaymentMethod` Literal to exactly
+     * **`cash | card | voucher | account | split_fare`**. Every other entry in this enum
+     * now maps 1:1 onto one of those five. CabCharge/TTSS is the one that does not have a
+     * member of its own, and `"card"` is the right fit of the five available: it is a
+     * cashless rail that attracts the same non-cash surcharge treatment.
+     *
+     * What that costs, stated plainly rather than left implicit: the docket number and
+     * notes ([CloseAndPayUiState.ReadyToClose.docketNumber]/`.docketNotes`) reach the
+     * printed/emailed receipt via [CloseAndPayViewModel.buildReceipt] but are NOT synced —
+     * the server sees an ordinary card trip. A CabCharge reconciliation report is therefore
+     * not possible from server data today. Adding one needs a new `PaymentMethod` Literal
+     * member plus a `Trip.docket_reference` column and a migration; that is a backend
+     * change, not a client one, and this enum should gain a distinct `persistedValue` the
+     * same day it lands.
+     *
+     * A distinct member here (rather than folding CabCharge into TAP_TO_PAY) is still
+     * correct: the two present completely different sub-screens and different receipt
+     * lines, and only this one survives without a card reader.
+     */
     CABCHARGE("CabCharge / TTSS", "card"),
 
     /** Promo-code / prepaid voucher redemption — backend `payment_method="voucher"`
@@ -133,8 +139,10 @@ sealed interface CloseAndPayUiState {
         val cashTendered: String,
         val docketNumber: String,
         // CabCharge/TTSS manual entry — spec §8 row 22-27 sub-screen. Local-only, same as
-        // [docketNumber] (see the CABCHARGE enum entry's TODO — backend paymentMethod enum has
-        // no CabCharge-specific fields yet), surfaced on the receipt via [buildReceipt].
+        // [docketNumber]: the backend's Trip.payment_method Literal has no CabCharge member and
+        // Trip has no docket column, so these reach the receipt via [buildReceipt] but are not
+        // synced. See [PaymentMethodOption.CABCHARGE]'s doc for the full reasoning and what a
+        // backend change would need to look like.
         val docketNotes: String,
         /** [PaymentMethodOption.VOUCHER]'s entry field — see that enum entry's doc. */
         val voucherCode: String,
@@ -168,6 +176,23 @@ sealed interface CloseAndPayUiState {
         val paymentInFlight: Boolean,
         val paymentError: String?,
         val paymentLinkUrl: String?,
+        /**
+         * A5 · Hardware honesty. Whether a real card-payment gateway is present
+         * ([au.com.threesixty.cabdispatch.hardware.HardwareGateway.isReal]). When false —
+         * which is the case in every build today, because no Stripe Terminal SDK is a
+         * dependency of this app — [CloseAndPayScreen] does not render the "CARD · TAP"
+         * card at all. A missing button is honest; a button that fabricates "Payment
+         * received" for money that never moved is not, and that is what shipped before.
+         */
+        val cardPaymentIsReal: Boolean = false,
+        /**
+         * True once a payment has been taken through a *simulated* gateway (debug builds
+         * only). Drives the persistent [au.com.threesixty.cabdispatch.hardware.SIMULATED_BANNER]
+         * banner in the confirmation, and is carried onto [Receipt.simulated] so the receipt
+         * body itself is stamped [au.com.threesixty.cabdispatch.hardware.TEST_RECEIPT_MARKER].
+         * Never true in a release build: the simulated gateways are not constructed there.
+         */
+        val paymentSimulated: Boolean = false,
         /**
          * True when no cached tariff row could be resolved for this trip and the fare below was
          * computed from the built-in Fares Order rate card instead
@@ -243,6 +268,13 @@ sealed interface CloseAndPayUiState {
 
     data class ReceiptStep(
         val receipt: Receipt,
+        /**
+         * Whether a real printer gateway is present ([au.com.threesixty.cabdispatch.hardware
+         * .HardwareGateway.isReal]). False in every build today — no Bluetooth printer SDK or
+         * BLUETOOTH* permission exists — so the Print action is not rendered. See
+         * [ReadyToClose.cardPaymentIsReal] for the same rule applied to Tap to Pay.
+         */
+        val printerIsReal: Boolean = false,
         val printState: ActionState = ActionState.IDLE,
         val smsState: ActionState = ActionState.IDLE,
         val emailState: ActionState = ActionState.IDLE,
@@ -267,6 +299,32 @@ private val RECEIPT_TIME_FORMAT: DateTimeFormatter =
 
 fun BigDecimal.money(): String = "$" + this.setScale(2, RoundingMode.HALF_UP).toPlainString()
 
+/**
+ * S4 — Close & Pay (spec B5). Reads the single active trip straight from
+ * [AppContainer.tripRepository] (Room-backed, offline-first — see that
+ * class's doc), reconstructs a [FareBreakdown] via
+ * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close] (see
+ * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] for why
+ * that reconstruction from persisted totals is exact), and drives payment
+ * collection through the S4-S6 agent's hardware gateway interfaces
+ * ([AppContainer.cardPaymentGateway] etc.) — none of which require
+ * connectivity to reach [confirmPayment] for cash/CabCharge, matching spec
+ * B7.
+ *
+ * RESOLVED INTEGRATION GAP (integration pass): [TripEntity] used to never be
+ * persisted at all — S3 (HIRED) drove its on-screen running fare entirely
+ * through its own separate, in-memory `domain.FareEngineImpl`/`domain.FareState`
+ * (a different pair of types from this package's, see the note in
+ * AppContainer.kt) with no Room write anywhere, so this screen always showed
+ * [CloseAndPayUiState.NoActiveTrip], even right after S3's "End trip" button
+ * navigated here. Fixed upstream, per the plan this comment used to describe:
+ * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel] now calls
+ * `AppContainer.tripRepository.openTrip(...)` when the live engine starts and
+ * `.tick(...)` on every live-engine emission (see `FareState.movingSeconds`/
+ * `.waitingSeconds`), so this screen's
+ * [au.com.threesixty.cabdispatch.domain.fare.reconstructFareState] approach
+ * now has real persisted totals to read by the time the driver lands here.
+ */
 class CloseAndPayViewModel : ViewModel() {
 
     private val tripRepository = AppContainer.tripRepository
@@ -360,6 +418,7 @@ class CloseAndPayViewModel : ViewModel() {
             tip = BigDecimal.ZERO,
             voucherAvailableCount = null,
             corporateAccountActiveCount = null,
+            cardPaymentIsReal = AppContainer.cardPaymentGateway.isReal,
             paymentInFlight = false,
             paymentError = null,
             usingDefaultRates = usingDefaultRates,
@@ -513,11 +572,11 @@ class CloseAndPayViewModel : ViewModel() {
 
     /**
      * Ensures [block] appears to take at least [PROCESSING_MIN_MS] — spec §7 step 2: "Selecting a
-     * method → brief processing state (spinner + 'Processing [method]…')". The mock card gateway
-     * already runs long enough on its own (1.5s collect / 0.5s link — see
-     * [au.com.threesixty.cabdispatch.hardware.payments.MockCardPaymentGateway]) that this is a
-     * no-op there, but a real/fast implementation (or a fast network) must still show the spinner
-     * for a perceptible, consistent beat rather than flashing through instantly.
+     * method → brief processing state (spinner + 'Processing [method]…')". The debug-only
+     * [au.com.threesixty.cabdispatch.hardware.payments.SimulatedCardPaymentGateway] already runs
+     * long enough on its own (1.5s collect / 0.5s link) that this is a no-op there, but a
+     * real/fast implementation (or a fast network) must still show the spinner for a perceptible,
+     * consistent beat rather than flashing through instantly.
      */
     private suspend fun <T> withMinimumProcessingDelay(block: suspend () -> T): T {
         val start = System.currentTimeMillis()
@@ -533,8 +592,12 @@ class CloseAndPayViewModel : ViewModel() {
             val result = withMinimumProcessingDelay {
                 AppContainer.cardPaymentGateway.collectPayment(amountCents(state))
             }
-            result.onSuccess {
-                finalizeClose(state)
+            result.onSuccess { payment ->
+                // A5: a simulated gateway's result must never be laundered into a plain success.
+                // The flag rides through to the confirmation banner and onto Receipt.simulated,
+                // which stamps TEST RECEIPT into the receipt body itself.
+                updateReady { it.copy(paymentSimulated = payment.simulated) }
+                finalizeClose(state.copy(paymentSimulated = payment.simulated))
             }.onFailure { error ->
                 updateReady { it.copy(paymentInFlight = false, paymentError = error.message ?: "Payment failed") }
             }
@@ -548,7 +611,7 @@ class CloseAndPayViewModel : ViewModel() {
                 AppContainer.cardPaymentGateway.createPaymentLink(amountCents(state))
             }
             result.onSuccess { link ->
-                updateReady { it.copy(paymentInFlight = false, paymentLinkUrl = link.url) }
+                updateReady { it.copy(paymentInFlight = false, paymentLinkUrl = link.url, paymentSimulated = link.simulated) }
             }.onFailure { error ->
                 updateReady { it.copy(paymentInFlight = false, paymentError = error.message ?: "Could not create payment link") }
             }
@@ -612,7 +675,10 @@ class CloseAndPayViewModel : ViewModel() {
                 },
                 tip = state.tip.takeIf { it.signum() > 0 }?.setScale(2, RoundingMode.HALF_UP)?.toPlainString(),
             )
-            _uiState.value = CloseAndPayUiState.ReceiptStep(receipt = buildReceipt(closed, state))
+            _uiState.value = CloseAndPayUiState.ReceiptStep(
+                receipt = buildReceipt(closed, state),
+                printerIsReal = AppContainer.receiptPrinterGateway.isReal,
+            )
             fillPickupAddressBestEffort(closed)
             // Real bug found live, 2026-09-05: closing a trip never itself triggered a sync —
             // TripRepository.closeTrip only marks the outbox row ready, and nothing actually
@@ -665,6 +731,16 @@ class CloseAndPayViewModel : ViewModel() {
         val isAirportFixed = trip.type == "airport_fixed"
         val isAbsorbedFare = isAirportFixed || b.negotiatedTotal != null
         val lines = buildList {
+            // A5 · Hardware honesty. First and last thing on the docket when any part of this
+            // transaction ran through a simulated gateway (debug builds only). Deliberately a
+            // fare LINE, not screen chrome: this list is what gets printed and what the backend
+            // renders into the emailed PDF, so the marker survives onto paper and into the
+            // passenger's inbox. A passenger must never hold something that reads like a real
+            // receipt for a payment that did not occur.
+            if (state.paymentSimulated) {
+                add(ReceiptLine("*** $TEST_RECEIPT_MARKER ***", "NOT A VALID RECEIPT"))
+                add(ReceiptLine(SIMULATED_BANNER, ""))
+            }
             if (b.negotiatedTotal != null) {
                 add(ReceiptLine("Agreed price (Set Price, all-inclusive)", b.negotiatedTotal.money()))
             } else if (isAirportFixed) {
@@ -722,9 +798,17 @@ class CloseAndPayViewModel : ViewModel() {
             // only (see [total] below and Trip.tip_amount's backend doc, deviation #6): never
             // folded into fareTotal/gstComponent, which stay exactly the regulated-fare figures.
             if (state.tip.signum() > 0) add(ReceiptLine("Tip", state.tip.money()))
+            if (state.paymentSimulated) {
+                add(ReceiptLine("*** $TEST_RECEIPT_MARKER — NO MONEY MOVED ***", ""))
+            }
         }
         return Receipt(
             tripId = trip.clientUuid,
+            // The backend's receipt routes are keyed by the server trip id, which only exists
+            // once this trip has synced. Null until then, and the SMS/email gateways say so
+            // rather than posting a clientUuid the server cannot resolve.
+            serverTripId = trip.serverId,
+            simulated = state.paymentSimulated,
             vehicleId = trip.vehicleId,
             driverId = trip.driverId,
             startedAt = receiptTime(trip.startAt),

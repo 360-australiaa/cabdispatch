@@ -59,12 +59,14 @@ import au.com.threesixty.cabdispatch.domain.duress.DuressCameraCapture
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as PureFareEngine
 import au.com.threesixty.cabdispatch.domain.location.RealLocationProvider
 import au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway
-import au.com.threesixty.cabdispatch.hardware.payments.MockCardPaymentGateway
-import au.com.threesixty.cabdispatch.hardware.printing.MockReceiptPrinterGateway
+import au.com.threesixty.cabdispatch.hardware.payments.SimulatedCardPaymentGateway
+import au.com.threesixty.cabdispatch.hardware.payments.UnavailableCardPaymentGateway
 import au.com.threesixty.cabdispatch.hardware.printing.ReceiptPrinterGateway
+import au.com.threesixty.cabdispatch.hardware.printing.SimulatedReceiptPrinterGateway
+import au.com.threesixty.cabdispatch.hardware.printing.UnavailableReceiptPrinterGateway
+import au.com.threesixty.cabdispatch.hardware.receipt.ApiEmailReceiptGateway
+import au.com.threesixty.cabdispatch.hardware.receipt.ApiSmsReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.EmailReceiptGateway
-import au.com.threesixty.cabdispatch.hardware.receipt.MockEmailReceiptGateway
-import au.com.threesixty.cabdispatch.hardware.receipt.MockSmsReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.SmsReceiptGateway
 import au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger
 import au.com.threesixty.cabdispatch.sync.SyncWorker
@@ -613,17 +615,37 @@ object AppContainer {
         ).also { MeterController.publish(it) }
     }
 
-    // Hardware interfaces — see android/README.md "Real vs mocked". The rest are clearly-labeled
-    // mocks (no certified payment/printer/SMS/email hardware exists to integrate against in this
-    // sandbox). Signature verification is real too, but isn't a singleton here the way these
+    // Hardware interfaces — see android/README.md "Real vs mocked".
+    // Signature verification is real too, but isn't a singleton here the way these
     // gateways are — [tariffCache] constructs an `Ed25519TariffSignatureVerifier` itself, scoped
     // to whatever public key [tariffSigningKeyCache] hands it at verify time (the key is fetched/
     // cached, not a compile-time constant, so there's no single verifier instance to hold onto
     // for the process lifetime the way a gateway singleton implies) — see TariffCache.kt.
-    val cardPaymentGateway: CardPaymentGateway by lazy { MockCardPaymentGateway() }
-    val receiptPrinterGateway: ReceiptPrinterGateway by lazy { MockReceiptPrinterGateway() }
-    val smsReceiptGateway: SmsReceiptGateway by lazy { MockSmsReceiptGateway() }
-    val emailReceiptGateway: EmailReceiptGateway by lazy { MockEmailReceiptGateway() }
+    //
+    // A5 · Hardware honesty. SMS and email receipts are now REAL — they post to
+    // `POST /v1/trips/{id}/receipt/{sms,email}`, which the backend already serves.
+    //
+    // Card payment and printing have no honest implementation available here (the
+    // first needs Stripe Terminal hardware and an SDK that is not a dependency of
+    // this build; the second needs a physical Bluetooth thermal printer and a
+    // BLUETOOTH* permission this app does not declare). Rather than a mock wired
+    // into the only build path — which is what the audit found, and which let a
+    // driver hand over a receipt for money that never moved — the simulation is
+    // now DEBUG-ONLY and marks everything it touches, while a release build gets
+    // an implementation that can only fail. Both report `isReal = false`, and
+    // Close & Pay hides TAP TO PAY and PRINT on that basis.
+    val cardPaymentGateway: CardPaymentGateway by lazy {
+        if (BuildConfig.DEBUG) SimulatedCardPaymentGateway(debugBuild = true) else UnavailableCardPaymentGateway()
+    }
+    val receiptPrinterGateway: ReceiptPrinterGateway by lazy {
+        if (BuildConfig.DEBUG) SimulatedReceiptPrinterGateway(debugBuild = true) else UnavailableReceiptPrinterGateway()
+    }
+
+    // `{ apiService }` rather than `apiService`: these are constructed lazily but
+    // `apiService` is a `lateinit var` assigned during initialise(), so the
+    // gateway must resolve it per call, not capture it at construction time.
+    val smsReceiptGateway: SmsReceiptGateway by lazy { ApiSmsReceiptGateway { apiService } }
+    val emailReceiptGateway: EmailReceiptGateway by lazy { ApiEmailReceiptGateway { apiService } }
 
     // --- S1-S3 screen dependencies (integration pass) ---
     //
