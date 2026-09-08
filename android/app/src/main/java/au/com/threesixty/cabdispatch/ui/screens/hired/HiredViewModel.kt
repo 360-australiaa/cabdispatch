@@ -67,6 +67,29 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      */
     val isNewTripStart: Boolean = SessionHolder.pendingTrip.value != null
 
+    /**
+     * True when this screen has attached to a meter that was **already running** before it
+     * composed — i.e. A1's `restoreOpenTripIfAny()` rebuilt the fare from an `OPEN` Room row after
+     * the process died mid-hiring, and the driver is now looking at a dial that picked up where it
+     * left off rather than one that started here.
+     *
+     * Read once, at construction, and deliberately the exact complement of [isNewTripStart] over a
+     * live engine: a fresh hand-off has a `pendingTrip` and no engine yet; a restore has an engine
+     * and no hand-off. Both flags are `val`s captured before [init] runs `openTripInRoom`, so
+     * neither can be confused by this ViewModel's own side effects.
+     *
+     * WHY THIS IS DERIVED HERE RATHER THAN PUBLISHED BY THE ENGINE. A "was restored" flag on
+     * `FareState` would be the tidier contract, but the `domain` package is A1's and is already merged;
+     * this reads two values it already exposes rather than changing a merged fare contract to
+     * carry a presentation concern. It is used for exactly one thing — the transient "FARE
+     * RESUMED" banner in [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] — and a
+     * driver being told the meter *resumed* rather than silently restarted is the whole point:
+     * after a crash, a running total that simply appears is indistinguishable from a fresh fare
+     * that lost the first ten minutes.
+     */
+    val isRestoredFare: Boolean =
+        SessionHolder.pendingTrip.value == null && AppContainer.meterController.activeClientUuid != null
+
     private val _speechEnabled = MutableStateFlow(false)
     val speechEnabled: StateFlow<Boolean> = _speechEnabled.asStateFlow()
 

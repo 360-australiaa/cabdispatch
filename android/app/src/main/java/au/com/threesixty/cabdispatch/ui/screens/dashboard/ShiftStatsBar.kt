@@ -106,7 +106,7 @@ internal fun ShiftStatsBar(
     val pctChange = extras.earningsPctChange
 
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        HomeStatTile(
+        HudStatTile(
             icon = Icons.Rounded.Schedule,
             label = "Shift time",
             sub = state.session?.shiftStartAt?.let { "Started ${formatClockTime(it)}" } ?: "No active shift",
@@ -120,7 +120,7 @@ internal fun ShiftStatsBar(
         // finished should register as an event, not as a digit that quietly became a different
         // digit. Keyed on the value, so it costs nothing and animates nothing until one changes.
         val tripsPop = rememberValueChangePop(state.todayStats.tripsCount)
-        HomeStatTile(
+        HudStatTile(
             icon = Icons.Rounded.DirectionsCar,
             label = "Trips",
             sub = "Completed",
@@ -142,7 +142,7 @@ internal fun ShiftStatsBar(
         // of silently swapping. A completed trip should visibly LAND on the number it changed.
         // Value-driven, one shot, still the instant it stops.
         val earnings = "$" + state.todayStats.earningsTotal.setScale(0, RoundingMode.HALF_UP).toPlainString()
-        HomeStatTile(
+        HudStatTile(
             icon = Icons.Rounded.AttachMoney,
             label = "Earnings",
             sub = "Today",
@@ -177,73 +177,6 @@ internal fun ShiftStatsBar(
             onTakeBreak = onTakeBreak,
             modifier = Modifier.weight(1.55f).fillMaxHeight(),
         )
-    }
-}
-
-/**
- * The stat-bar cell (A3, 2026-09-08) - [au.com.threesixty.cabdispatch.ui.theme.HudStatTile] with
- * the value as a **slot** rather than a `String`.
- *
- * WHY THIS IS NOT JUST A CHANGE TO HudStatTile. It should be, and eventually it will be: the only
- * difference is `value: @Composable () -> Unit` in place of `value: String`, which is a strictly
- * additive, backwards-compatible improvement to the shared kit. But `ui/theme/Hud.kt` is owned by
- * workstream A4 for this wave, and the program's operating rules are explicit that a workstream
- * does not edit another's files - so this pass takes the local copy and flags the upstream in its
- * report rather than reaching across the boundary. **When A3 and A4 have both merged, fold this
- * back into HudStatTile and delete it.**
- *
- * What the slot buys, and why it was worth a local composable at all:
- * - EARNINGS renders through `RollingMoneyText`, so the money figure rolls per digit when a fare
- *   closes instead of silently swapping to a different number.
- * - TRIPS carries a one-shot scale pop (see [rememberValueChangePop]) the moment the count
- *   increments.
- *
- * Both are the "physics on value changes" half of this redesign's motion brief: reactions to real
- * state, one shot, still again the instant they finish. Neither is a loop.
- */
-@Composable
-private fun HomeStatTile(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    sub: String?,
-    value: @Composable () -> Unit,
-    modifier: Modifier = Modifier,
-    tone: HudTone = HudTone.Accent,
-    footer: (@Composable ColumnScope.() -> Unit)? = null,
-) {
-    val toneColor = tone.color()
-    GlassCard(modifier = modifier, cornerRadiusDp = 18) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = Space.smd, vertical = Space.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // A3 a11y pass: the shared tile hardcodes contentDescription = null on this
-                    // icon; here the label is available and is the correct spoken name.
-                    Icon(icon, contentDescription = label, tint = toneColor, modifier = Modifier.size(16.dp))
-                    Text(
-                        label.uppercase(),
-                        // 11sp -> 12sp (A3, Type.tiny - the floor).
-                        style = Type.tiny,
-                        letterSpacing = 1.sp,
-                        color = CaptainPalette.textMuted,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
-                Box(modifier = Modifier.padding(top = 4.dp)) { value() }
-                if (sub != null) {
-                    Text(
-                        sub,
-                        style = Type.tiny,
-                        color = CaptainPalette.textSecondary,
-                        maxLines = 1,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-                if (footer != null) footer()
-            }
-        }
     }
 }
 

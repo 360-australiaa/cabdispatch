@@ -1,6 +1,5 @@
 package au.com.threesixty.cabdispatch.ui.screens.hired
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -24,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ConfirmationNumber
 import androidx.compose.material3.Icon
@@ -75,6 +75,7 @@ import au.com.threesixty.cabdispatch.ui.theme.GlowingSpeedometer
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.Radius
 import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import java.math.BigDecimal
@@ -192,24 +193,33 @@ fun HiredScreen(
     val simulatingGps by AppContainer.gpsSimulator.active.collectAsState()
     val context = LocalContext.current
 
-    // Real correctness fix (fare-reset-on-renavigation bug): this pane is reached only while
-    // CabDispatchRoutes.HIRED is on the back stack (DeckHomeScreen's `when (pane)` — see that
-    // file's own comment on CaptainPane.METER: deliberately no PaneShell/back-arrow here, "never a
-    // literal back out of the meter", since every other rail item is reachable via a same-entry
-    // pane swap that leaves this composable's NavBackStackEntry — and therefore [viewModel]'s
-    // ViewModelStore — untouched). The one path that comment never actually closed off is the
-    // system/gesture back button: with no BackHandler, it popped the HIRED entry, destroying this
-    // [HiredViewModel] instance (cancelling its live-ticking FareEngineImpl) mid-fare. Because
-    // [au.com.threesixty.cabdispatch.domain.SessionHolder.pendingTrip] is never cleared once a
-    // trip starts, the next "METER" tap (the nav rail's `hasActiveTrip` alias, reachable from
-    // wherever back landed) then created a BRAND NEW HiredViewModel that re-ran startTrip()/
+    // BACK IS NOW ALLOWED (A4, 2026-09-08) — the `BackHandler(enabled = true) {}` that used to sit
+    // here is gone.
+    //
+    // WHY IT WAS THERE. Back popped the HIRED entry, destroying this [HiredViewModel] and with it
+    // the live-ticking `FareEngineImpl` it owned in its `viewModelScope`. Because
+    // [au.com.threesixty.cabdispatch.domain.SessionHolder.pendingTrip] is never cleared once a trip
+    // starts, the next "METER" tap built a BRAND NEW HiredViewModel that re-ran startTrip()/
     // openTripInRoom() against that same stale pending context — resetting the on-screen fare to
-    // $0/0:00 and opening a second, orphaned TripEntity row in Room alongside the still-OPEN
-    // original. Swallowing back here (matching the design this screen already documents) closes
-    // that path: every other way to leave this pane (a rail tap, or any `navController.navigate`
-    // to a screen layered on top, e.g. Profile/Messages/Trip Detail) already pushes/pops without
-    // ever popping the HIRED entry itself, so this is the only gap.
-    BackHandler(enabled = true) {}
+    // $0/0:00 and opening a second, orphaned TripEntity row alongside the still-OPEN original.
+    // Swallowing back was the only thing standing between a driver's thumb and a destroyed fare.
+    //
+    // WHY IT IS NO LONGER NEEDED. A1 hoisted the fare engine out of this ViewModel entirely: it now
+    // lives in `AppContainer.meterController`, driven by a `MeterForegroundService`, for the
+    // lifetime of the *process* rather than of this composable. Destroying this ViewModel no longer
+    // stops the meter — it stops an observer of it. `restoreOpenTripIfAny()` covers the harder case
+    // (the process itself dying) by rebuilding the engine from the OPEN Room row. Back is safe.
+    //
+    // WHY REMOVING IT IS A FIX AND NOT JUST A TIDY-UP. A control that silently does nothing is its
+    // own bug. A driver pressing the tablet's back button and getting no response at all cannot
+    // tell a deliberate design from a frozen app, and the honest answer to "can I leave this
+    // screen?" is now yes: back returns to the dashboard, the fare keeps running in the service,
+    // the persistent "Fare running · $X.XX" notification stays up, and the nav rail's METER item
+    // glows (A3 wired that off `hasActiveTrip`) as the way back in.
+    //
+    // Deliberately NOT a `BackHandler` that navigates somewhere itself: the default pop already
+    // lands on the dashboard, and re-implementing it here would be a second, competing definition
+    // of where back goes.
 
     // Best-effort read of the same hand-off payload HiredViewModel.init already reads once — see
     // TripContext.originAddress/.destAddress/.negotiatedTotal's docs. A screen-local read (same
@@ -260,6 +270,26 @@ fun HiredScreen(
             showStartedBanner = true
             kotlinx.coroutines.delay(2000)
             showStartedBanner = false
+        }
+    }
+
+    // "FARE RESUMED" — the driver-facing half of A1's restart recovery (A4, 2026-09-08).
+    //
+    // When the process died mid-hiring, `restoreOpenTripIfAny()` rebuilds the engine from the OPEN
+    // Room row and the dial comes back showing the correct running total. Silently. From the
+    // driver's side that is indistinguishable from a meter that just restarted and lost the first
+    // ten minutes of the trip — and a driver who believes that is a driver who stops the fare and
+    // argues with a passenger about it. This says which of the two actually happened.
+    //
+    // Longer than METER STARTED's 2s (5s): this one is read after an unexpected event, by someone
+    // who was not necessarily looking at the tablet when it happened. Still self-dismissing, still
+    // a single delayed reset rather than a loop.
+    var showResumedBanner by remember { mutableStateOf(false) }
+    LaunchedEffect(viewModel.isRestoredFare) {
+        if (viewModel.isRestoredFare) {
+            showResumedBanner = true
+            kotlinx.coroutines.delay(5000)
+            showResumedBanner = false
         }
     }
 
@@ -418,6 +448,44 @@ fun HiredScreen(
         }
 
         AnimatedVisibility(
+            visible = showResumedBanner,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+            enter = fadeIn(),
+            exit = fadeOut(animationSpec = tween(400)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .neonGlow(CaptainPalette.hudAccent, 99.dp, strength = 0.8f)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(CaptainPalette.hudAccent)
+                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+                // and Compose merges this node's semantics into one announcement -- a description here
+                // would make TalkBack read the same words twice. The audit's finding was unlabelled
+                // *controls*; every control on this screen now carries a real name. This is a reviewed
+                // null, not an overlooked one.
+                Icon(
+                    Icons.Rounded.Restore,
+                    contentDescription = null,
+                    tint = CaptainPalette.bg,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    // Says the two things a driver needs after a crash, in order: the fare did not
+                    // restart, and this figure is the real running total.
+                    "FARE RESUMED after restart",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.bg,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
+
+        AnimatedVisibility(
             visible = autoTollBanner != null,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
             enter = fadeIn(),
@@ -448,6 +516,11 @@ fun HiredScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
+                        // Decorative (A4 a11y pass, reviewed): the text beside this glyph already IS its label,
+                        // and Compose merges this node's semantics into one announcement -- a description here
+                        // would make TalkBack read the same words twice. The audit's finding was unlabelled
+                        // *controls*; every control on this screen now carries a real name. This is a reviewed
+                        // null, not an overlooked one.
                         Icon(
                             Icons.Rounded.ConfirmationNumber,
                             contentDescription = null,

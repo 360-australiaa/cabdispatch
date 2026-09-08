@@ -52,6 +52,7 @@ import au.com.threesixty.cabdispatch.ui.theme.CaptainChip
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
@@ -70,8 +71,8 @@ import java.math.BigDecimal
 internal fun AccrualNote() {
     Text(
         "One of distance or waiting accrues at a time — switches automatically at 26 km/h",
-        fontFamily = InterFamily,
-        fontSize = 10.sp,
+        // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+        style = Type.tiny,
         color = CaptainPalette.textMuted,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
     )
@@ -182,7 +183,8 @@ internal fun TollPresetDialog(
                         "AUTO-DETECTED",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
+                        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.textMuted,
                     )
@@ -193,7 +195,8 @@ internal fun TollPresetDialog(
                         "NEEDS A MANUAL TOLL",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
+                        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         letterSpacing = 1.sp,
                         color = CaptainPalette.warning,
                     )
@@ -295,7 +298,7 @@ internal fun MoreActionsSheet(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onNavigate).padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Navigation, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(24.dp))
+            Icon(Icons.Rounded.Navigation, contentDescription = if (hasDestination) "Change destination" else "Set destination", tint = CaptainPalette.hudAccent, modifier = Modifier.size(24.dp))
             Column(modifier = Modifier.padding(start = 14.dp)) {
                 Text(
                     if (hasDestination) "Change destination" else "Set destination",
@@ -318,7 +321,7 @@ internal fun MoreActionsSheet(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onExtras).padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Receipt, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
+            Icon(Icons.Rounded.Receipt, contentDescription = "Extras", tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
             Column(modifier = Modifier.padding(start = 14.dp)) {
                 Text("Extras", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
                 Text("No chargeable extras configured yet", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
@@ -328,7 +331,7 @@ internal fun MoreActionsSheet(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onEditPassengers).padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Person, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
+            Icon(Icons.Rounded.Person, contentDescription = "Passenger count", tint = CaptainPalette.accent, modifier = Modifier.size(24.dp))
             Column(modifier = Modifier.padding(start = 14.dp)) {
                 Text("Passenger count", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
                 Text("$passengerCount — tap to correct", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)

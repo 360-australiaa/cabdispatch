@@ -44,6 +44,7 @@ import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
 import au.com.threesixty.cabdispatch.domain.toMoneyString
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -109,12 +110,13 @@ internal fun FareBreakdownCard(
                         if (expanded) "HIDE" else "SHOW",
                         fontFamily = InterFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
+                        // 11sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                        style = Type.tiny,
                         color = CaptainPalette.hudSweepMid,
                     )
                     Icon(
                         Icons.Rounded.ChevronRight,
-                        contentDescription = null,
+                        contentDescription = if (expanded) "Hide fare breakdown" else "Show fare breakdown",
                         tint = CaptainPalette.hudSweepMid,
                         modifier = Modifier.size(16.dp).padding(start = 2.dp).rotate(chevronRotation),
                     )
@@ -225,7 +227,8 @@ internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, st
                     tripContext?.clientUuid?.take(8)?.uppercase() ?: "—",
                     fontFamily = RobotoMonoFamily,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 10.sp,
+                    // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+                    style = Type.tiny,
                     color = CaptainPalette.textMuted,
                 )
             }
@@ -253,7 +256,7 @@ internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, st
                 0
             }
             Column {
-                Text("AVG SPEED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+                Text("AVG SPEED", fontFamily = InterFamily, fontWeight = FontWeight.Bold, style = Type.tiny, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
                 Text("$avgSpeedKmh km/h", fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(top = 2.dp))
             }
         }
@@ -271,8 +274,8 @@ private fun TimelineRow(dotColor: Color, title: String, address: String, time: S
         }
         Column(modifier = Modifier.padding(start = 10.dp).weight(1f)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.sp, color = dotColor)
-                Text(time, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = CaptainPalette.textSecondary)
+                Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, style = Type.tiny, letterSpacing = 1.sp, color = dotColor)
+                Text(time, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.SemiBold, style = Type.tiny, color = CaptainPalette.textSecondary)
             }
             Text(
                 address,

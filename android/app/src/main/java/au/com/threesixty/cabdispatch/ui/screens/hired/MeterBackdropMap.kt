@@ -37,6 +37,7 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.createGlowLine
 import au.com.threesixty.cabdispatch.ui.theme.toMapboxHex
@@ -440,7 +441,8 @@ private fun RecentreButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             "RECENTRE",
             fontFamily = InterFamily,
             fontWeight = FontWeight.Bold,
-            fontSize = 10.sp,
+            // 10sp -> 12sp (A4: Type.tiny, the accessibility floor).
+            style = Type.tiny,
             letterSpacing = 1.sp,
             color = CaptainPalette.textSecondary,
             modifier = Modifier.padding(start = 6.dp),
