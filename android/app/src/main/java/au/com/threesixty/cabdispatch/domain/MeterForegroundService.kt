@@ -338,6 +338,10 @@ class MeterController(
                 tolls = fareState.breakdown.tolls.toPlainString(),
                 autoTolledRoads = fareState.autoTollsApplied.associate { it.roadId to it.amount.toPlainString() },
                 unpricedTollRoadIds = fareState.unpricedTollRoads.map { it.roadId },
+                // Names the airport fee inside `tolls` for the receipt — see
+                // TripEntity.airportAccessFeeJson's doc. Null (= leave untouched) on a trip whose
+                // ledger has no airport entry.
+                airportAccessFee = AirportAccessFeeRecord.fromLedger(fareState.tollsApplied),
                 // F9: the charges themselves, not only the lossy integer-metre counters they used
                 // to have to be re-derived from. See TripEntity.accruedDistanceCharge's doc.
                 accruedDistanceCharge = fareState.breakdown.distanceAmount.toPlainString(),

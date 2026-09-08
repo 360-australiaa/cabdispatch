@@ -262,7 +262,7 @@ class RoomMigrationTest {
      * lands, per [AppDatabase]'s own "confirmed live, 2026-09-05" doc).
      */
     @Test
-    fun migrate8To12_preservesDataAndEndsAtTheRealSchema() {
+    fun migrate8To13_preservesDataAndEndsAtTheRealSchema() {
         createV8Database()
         // NOT `helper.createDatabase(dbName, 8)` -- that method resolves version 8's schema from
         // a bundled asset JSON ([MigrationTestHelper]'s normal, asset-backed path), which does
@@ -291,14 +291,18 @@ class RoomMigrationTest {
         // Run the real migrations, in order, and validate the result against Room's own
         // compiled expectation for v12 -- this is where a wrong hand-built v8 schema OR a wrong
         // migration (e.g. the no-op placeholder the plan calls out) would fail loudly.
+        // 13, not 12: MIGRATION_12_13 (airport zones + trips.airportAccessFeeJson) joins the
+        // chain, and its end-state schema is app/schemas/.../13.json, copied to main/assets per
+        // this class's doc.
         helper.runMigrationsAndValidate(
             dbName,
-            12,
+            13,
             true,
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
             MIGRATION_11_12,
+            MIGRATION_12_13,
         )
 
         // Re-open through the real Room database (not the raw helper) so Room's own onOpen
@@ -311,7 +315,7 @@ class RoomMigrationTest {
         // method to a production DAO interface.
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
             .build()
         try {
             val raw = db.openHelper.readableDatabase
@@ -336,6 +340,19 @@ class RoomMigrationTest {
                 }
                 check(c.getString(c.getColumnIndexOrThrow("accruedWaitingCharge")) == "0") {
                     "MIGRATION_10_11 default wrong (accruedWaitingCharge)"
+                }
+                // MIGRATION_12_13: nullable, no default -- an old trip honestly has no airport
+                // fee record, rather than a fabricated one.
+                check(c.isNull(c.getColumnIndexOrThrow("airportAccessFeeJson"))) {
+                    "MIGRATION_12_13 default wrong (airportAccessFeeJson should be NULL)"
+                }
+            }
+
+            // The airport-zone cache table from MIGRATION_12_13 exists and starts empty (the
+            // fare engine's compiled-fallback state -- see AirportZoneCache's doc).
+            raw.query("SELECT COUNT(*) FROM airport_zones").use { c ->
+                check(c.moveToFirst() && c.getInt(0) == 0) {
+                    "airport_zones should start empty after a migration, not seeded"
                 }
             }
 

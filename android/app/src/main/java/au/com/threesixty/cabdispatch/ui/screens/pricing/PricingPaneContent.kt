@@ -28,6 +28,7 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_STANDARD
+import au.com.threesixty.cabdispatch.domain.JurisdictionConfig
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
@@ -76,11 +77,24 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 fun PricingPaneContent(modifier: Modifier = Modifier) {
     var tariff by remember { mutableStateOf<TariffDto?>(null) }
     var loading by remember { mutableStateOf(true) }
+    // The airport access fee as the meter will actually charge it: the cached terminal-rank
+    // zones' fee (see AirportZoneCache), or the compiled JurisdictionConfig constant while nothing
+    // has synced — exactly the same fallback FareEngineImpl.startTrip applies, so this pane never
+    // displays a figure the meter would not charge.
+    var airportAccessFee by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
         tariff = runCatching { AppContainer.tariffCache.getActiveTariff(region = region) }.getOrNull()
         loading = false
+        // Opening the rate card is one of the refresh points the zone cache rides (same as the
+        // toll registry's) — best-effort, and the cached copy serves either way.
+        runCatching { AppContainer.airportZoneCache.refresh() }
+        val zones = runCatching { AppContainer.airportZoneCache.snapshot() }.getOrNull().orEmpty()
+        airportAccessFee = airportAccessFeeLabel(
+            cachedFees = zones.map { it.fee },
+            fallback = JurisdictionConfig.NSW.airportAccessFee,
+        )
     }
 
     Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -102,7 +116,7 @@ fun PricingPaneContent(modifier: Modifier = Modifier) {
                 color = CaptainPalette.textSecondary,
             )
             else -> Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                FareStructureCard(tariff!!)
+                FareStructureCard(tariff!!, airportAccessFee)
                 DistanceTiersCard(tariff!!)
             }
         }
@@ -127,7 +141,7 @@ private val EyebrowStyle = TextStyle(
  * Fixed Fare (regulated flat constants, unchanged by tariff) is read live off [TariffDto], never a
  * hardcoded literal — same sourcing discipline `SettingsScreen.kt`'s `FareScheduleBody` uses. */
 @Composable
-private fun FareStructureCard(tariff: TariffDto) {
+private fun FareStructureCard(tariff: TariffDto, airportAccessFee: String?) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 20, glow = CaptainPalette.hudAccent) {
         Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)
@@ -148,6 +162,17 @@ private fun FareStructureCard(tariff: TariffDto) {
             Divider()
             PricingRow("Sydney Airport Fixed Fare — Standard", "$${AIRPORT_FIXED_FARE_STANDARD.toPlainString().money()}")
             PricingRow("Sydney Airport Fixed Fare — Maxi", "$${AIRPORT_FIXED_FARE_MAXI.toPlainString().money()}")
+            if (airportAccessFee != null) {
+                Divider()
+                PricingRow("Airport access fee (pickup at T1/T2/T3)", airportAccessFee)
+                Text(
+                    "Charged once at pickup, never on drop-off, included in the airport fixed fare.",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    color = CaptainPalette.textMuted,
+                )
+            }
         }
     }
 }
@@ -220,6 +245,22 @@ private fun PricingRow(label: String, value: String) {
 @Composable
 private fun Divider() {
     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.hudTrack))
+}
+
+/**
+ * The rate card's airport-fee figure. One distinct cached fee -> "$6.43"; several (terminals
+ * priced differently) -> "from $<lowest>", honestly, rather than picking one; nothing cached ->
+ * the compiled [fallback] (what the meter charges in that state too); no fallback either ->
+ * `null`, and the row is not shown at all rather than showing "$0.00".
+ */
+internal fun airportAccessFeeLabel(cachedFees: List<java.math.BigDecimal>, fallback: java.math.BigDecimal?): String? {
+    val distinct = cachedFees.map { it.setScale(2, java.math.RoundingMode.HALF_UP) }.distinct().sorted()
+    return when {
+        distinct.size == 1 -> "$" + distinct.single().toPlainString()
+        distinct.size > 1 -> "from $" + distinct.first().toPlainString()
+        fallback != null -> "$" + fallback.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString()
+        else -> null
+    }
 }
 
 /** Same formatting rule `SettingsScreen.kt`'s private `formatMaxiPercent` uses — duplicated rather

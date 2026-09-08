@@ -1,5 +1,7 @@
 package au.com.threesixty.cabdispatch.domain.location
 
+import au.com.threesixty.cabdispatch.domain.JurisdictionConfig
+import au.com.threesixty.cabdispatch.domain.isInsideAirportPrecinct
 import au.com.threesixty.cabdispatch.domain.fare.TOLL_GANTRY_DETECTION_RADIUS_M
 import au.com.threesixty.cabdispatch.domain.fare.TollGantryRef
 import au.com.threesixty.cabdispatch.domain.fare.TollPriceRef
@@ -191,6 +193,61 @@ class SimulatedRouteTest {
         }
 
         assertTrue("plain route passed within ${closest}m of a gantry", closest > TOLL_GANTRY_DETECTION_RADIUS_M)
+    }
+
+    // --- the airport pickup route ------------------------------------------------------------
+
+    @Test
+    fun `the airport pickup route starts ON the T1 rank, inside the airport precinct`() {
+        val r = SimulatedRoutes.airportPickupToCbd()
+        val start = r.positionAt(0.0).point
+
+        // The first fix IS the rank: the fee is decided on the trip's start position, and a
+        // route that started a street away would demonstrate nothing.
+        assertTrue(haversineM(start, LatLng(-33.9361, 151.1656)) < 5.0)
+        assertTrue(JurisdictionConfig.NSW.isInsideAirportPrecinct(start.lat, start.lng))
+        // ...and it ends well clear of it (a drop-off elsewhere, so no fee could be argued at the end).
+        val end = r.positionAt(r.durationSeconds + 60.0).point
+        assertTrue(!JurisdictionConfig.NSW.isInsideAirportPrecinct(end.lat, end.lng))
+    }
+
+    @Test
+    fun `the airport pickup route drives the real Eastern Distributor gantries northbound`() {
+        // The two ED gantries as the NSW registry carries them (backend nsw_toll_gantries.csv):
+        // the road is northbound_only, so passing them southbound would charge nothing.
+        val gantries = listOf(
+            "ED:m1_william_street" to LatLng(-33.87583, 151.217257),
+            "ED:m1_woolloomooloo" to LatLng(-33.869775, 151.218413),
+        )
+        val r = SimulatedRoutes.airportPickupToCbd()
+
+        for ((id, gantry) in gantries) {
+            var closest = Double.MAX_VALUE
+            var closestT = 0.0
+            var t = 0.0
+            while (t <= r.durationSeconds + 1.0) {
+                val d = haversineM(r.positionAt(t).point, gantry)
+                if (d < closest) { closest = d; closestT = t }
+                t += 1.0
+            }
+            assertTrue("$id never approached within detection range (closest ${closest}m)", closest <= TOLL_GANTRY_DETECTION_RADIUS_M)
+            val before = r.positionAt((closestT - 20.0).coerceAtLeast(0.0)).point
+            val at = r.positionAt(closestT).point
+            assertEquals("heading at $id", "north", classifyBearing(before.lat, before.lng, at.lat, at.lng))
+        }
+    }
+
+    @Test
+    fun `the airport pickup route has the shape the demo promises`() {
+        val r = SimulatedRoutes.airportPickupToCbd()
+        assertEquals("airport_t1_cbd", r.id)
+        assertTrue(r.waypoints.size in 8..15)
+        assertEquals(50.0, r.speedKmh, 0.0)
+        // "~12 km"
+        assertTrue("length ${r.lengthM}m", r.lengthM in 10_000.0..14_000.0)
+        // Distinct from every other hardcoded route.
+        val ids = listOf(SimulatedRoutes.bandSweep(), SimulatedRoutes.plainDrive(), SimulatedRoutes.stopAndGo(), r).map { it.id }
+        assertEquals(ids.size, ids.toSet().size)
     }
 
     @Test

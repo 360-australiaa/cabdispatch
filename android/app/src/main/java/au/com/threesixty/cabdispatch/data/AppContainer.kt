@@ -9,6 +9,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_8_9
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_9_10
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_10_11
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_11_12
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_12_13
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -52,6 +53,9 @@ import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
 import au.com.threesixty.cabdispatch.domain.location.SwitchableSpeedSource
 import au.com.threesixty.cabdispatch.domain.RemoteTripStatsRepository
 import au.com.threesixty.cabdispatch.domain.TripStatsRepository
+import au.com.threesixty.cabdispatch.domain.AirportZoneLookup
+import au.com.threesixty.cabdispatch.domain.GeofencesRepository
+import au.com.threesixty.cabdispatch.domain.RemoteBackedGeofencesRepository
 import au.com.threesixty.cabdispatch.domain.RemoteBackedZonesRepository
 import au.com.threesixty.cabdispatch.domain.ZonesRepository
 import au.com.threesixty.cabdispatch.domain.duress.DuressAudioRecorder
@@ -68,6 +72,7 @@ import au.com.threesixty.cabdispatch.hardware.receipt.ApiEmailReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.ApiSmsReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.EmailReceiptGateway
 import au.com.threesixty.cabdispatch.hardware.receipt.SmsReceiptGateway
+import au.com.threesixty.cabdispatch.sync.AirportZoneCache
 import au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger
 import au.com.threesixty.cabdispatch.sync.SyncWorker
 import au.com.threesixty.cabdispatch.sync.TariffCache
@@ -256,7 +261,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
             .build()
 
         // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
@@ -316,6 +321,14 @@ object AppContainer {
         // returns an honest empty registry (never throws) if this hasn't completed yet by the time
         // a trip starts — see [TollRegistryCache]'s own "offline-empty-cache" doc.
         startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+        // Airport-fee zones: load what Room already holds into memory FIRST (a pure local read,
+        // so a trip started seconds after boot with no signal still decides its pickup fee
+        // against the real ranks), then the same best-effort network warm-up as the registry.
+        // See AirportZoneCache's doc for the synchronous-lookup reasoning.
+        startupScope.launch {
+            runCatching { airportZoneCache.warmUp() }
+            runCatching { airportZoneCache.refresh() }
+        }
         // F4's restart half: a process that died mid-hiring left an OPEN trip row behind, and the
         // passenger is very likely still in the car. Rebuild the live meter from it and resume
         // ticking, so the dial comes back showing the real running total rather than zero. A no-op
@@ -495,6 +508,7 @@ object AppContainer {
     val syncOutboxDao by lazy { database.syncOutboxDao() }
     val tariffSigningKeyDao by lazy { database.tariffSigningKeyDao() }
     val tollRegistryDao by lazy { database.tollRegistryDao() }
+    val airportZoneDao by lazy { database.airportZoneDao() }
 
     val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService) }
 
@@ -509,6 +523,11 @@ object AppContainer {
      * per GPS fix. */
     val tollRegistryCache by lazy { TollRegistryCache(tollRegistryDao, apiService) }
 
+    /** Local cache of the tenant's airport-fee zones (terminal taxi ranks) — see
+     * [AirportZoneCache]'s own doc. [au.com.threesixty.cabdispatch.domain.FareEngineImpl] reads
+     * it (as an [AirportZoneLookup]) exactly once per trip, at `startTrip`, from memory. */
+    val airportZoneCache by lazy { AirportZoneCache(airportZoneDao, apiService) }
+
     /**
      * Fire-and-forget toll-registry refresh — T2 (architecture audit 2026-09-08, §2.3).
      *
@@ -522,6 +541,13 @@ object AppContainer {
      */
     fun refreshTollRegistry() {
         startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+    }
+
+    /** Fire-and-forget airport-zone refresh — same shape and same reasoning as
+     * [refreshTollRegistry], called from the same trigger points (login, reconnect). A failure
+     * leaves the previously cached zones (or the compiled precinct-circle fallback) in force. */
+    fun refreshAirportZones() {
+        startupScope.launch { runCatching { airportZoneCache.refresh() } }
     }
 
     // --- S4-S6 agent: fare-breakdown engine + hardware gateways ---
@@ -586,6 +612,9 @@ object AppContainer {
             // Real automatic NSW toll-road registry — a pure, fast local Room read (see
             // TollRegistryCache.snapshot's own doc), never a network call from this hot path.
             TollRegistryProvider { tollRegistryCache.snapshot() },
+            // Airport pickup fee: the cached terminal-rank zones, answered from memory (see
+            // AirportZoneCache's doc) — the engine never touches Room or the network for this.
+            airportZoneLookup = airportZoneCache,
         )
     }
 
@@ -829,6 +858,10 @@ object AppContainer {
     // Thin network-only, same reasoning as [jobsRepository] above (see [ZonesRepository]'s own
     // doc) — no Room/offline-queue story needed, just [apiService].
     val zonesRepository: ZonesRepository by lazy { RemoteBackedZonesRepository(apiService) }
+
+    /** Live geofence reads (`/v1/geofences`) — thin network-only, same reasoning as
+     * [zonesRepository]. NOT the fare path: that is [airportZoneCache]. */
+    val geofencesRepository: GeofencesRepository by lazy { RemoteBackedGeofencesRepository(apiService) }
 
     // --- Driver engagement (dashboard WALLET / RATING / ANNOUNCEMENTS / INCENTIVE tiles, backend
     // commit 58ccfcf's `/v1/me/{wallet,rating,announcements,incentives}` reads) --- thin network-only, same reasoning as [zonesRepository]

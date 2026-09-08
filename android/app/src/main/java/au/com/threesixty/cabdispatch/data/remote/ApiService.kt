@@ -269,6 +269,25 @@ interface ApiService {
     @GET("/v1/toll-roads/{roadId}")
     suspend fun tollRoadDetail(@Path("roadId") roadId: String): TollRoadDetailDto
 
+    // ---- Geofences (`backend/app/api/v1/geofences.py`). Today only `kind=airport` is read on
+    // this device: the terminal-rank zones whose PICKUP attracts the airport access fee. Same
+    // "fetched by a cache, never by the fare engine" rule as the toll registry above — see
+    // [au.com.threesixty.cabdispatch.sync.AirportZoneCache]. ----
+
+    /** `GET /v1/geofences?kind=airport&limit=200` — the tenant's geofences of one [kind], paged
+     * the same way [listZones] is. `kind = null` returns every kind (unused on-device today). */
+    @GET("/v1/geofences")
+    suspend fun listGeofences(
+        @Query("kind") kind: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): GeofenceListResponseDto
+
+    /** `GET /v1/geofences/presets/airport` — the backend's canonical Sydney Airport T1/T2/T3
+     * rank templates (no ids; not zones in force). See [GeofencePresetDto]. */
+    @GET("/v1/geofences/presets/airport")
+    suspend fun airportGeofencePresets(): List<GeofencePresetDto>
+
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
 

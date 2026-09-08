@@ -49,6 +49,9 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         // days. Deliberately not allowed to fail the work: a registry refresh that errors must
         // never turn an otherwise-successful outbox drain into a retry.
         runCatching { AppContainer.tollRegistryCache.refresh() }
+        // The airport-fee zones ride the same wakeup for the same reasons, and are equally not
+        // allowed to fail the drain — see AirportZoneCache's own doc.
+        runCatching { AppContainer.airportZoneCache.refresh() }
         // S5: the tariff rides the same wakeup for the same reasons — it already runs on a
         // schedule, already requires connectivity, and until this pass nothing outside the
         // dashboard's own composition ever refreshed the tariff at all. Also best-effort: neither

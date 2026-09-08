@@ -1,6 +1,9 @@
 package au.com.threesixty.cabdispatch.data.local.entity
 
 import androidx.room.Entity
+import au.com.threesixty.cabdispatch.data.cabDispatchJson
+import au.com.threesixty.cabdispatch.domain.AirportAccessFeeRecord
+import kotlinx.serialization.decodeFromString
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
@@ -206,6 +209,20 @@ data class TripEntity(
     val unpricedTollRoadIdsJson: String = "[]",
 
     /**
+     * The airport access fee inside [tolls], if one is on this trip's ledger — JSON-encoded
+     * [au.com.threesixty.cabdispatch.domain.AirportAccessFeeRecord] (`{"amount":"6.43",
+     * "zoneName":"T1 International"}`), or `null` when no airport fee was applied (the ordinary
+     * trip). Written by the meter's persist tick from the live ledger's `"airport"` entry — whether
+     * the engine added it from a cached airport zone at pickup, the compiled precinct-circle
+     * fallback did, or the driver tapped the manual chip (the last two carry no `zoneName`).
+     * Read by Close & Pay, Trip Detail and the printed receipt to print the indented
+     * "incl. Airport access fee $6.43 (T1 International)" sub-line under the "Tolls" total, which
+     * otherwise could not say what the toll figure contained. Same local-only, never-synced status
+     * as [autoTolledRoadsJson]: [tolls] already carries the amount to the server verbatim.
+     */
+    val airportAccessFeeJson: String? = null,
+
+    /**
      * The distance and waiting charges the live meter actually accrued, as decimal strings -- this
      * project's money-on-the-wire convention (never Float/Double; see ApiService.kt's header).
      * `"0"` on a trip that has not ticked yet, and on every row written by a build older than
@@ -246,3 +263,12 @@ object TripStatus {
     const val CLOSED = "closed"
     const val SYNCED = "synced"
 }
+
+/**
+ * The airport access fee recorded on this trip, decoded from [TripEntity.airportAccessFeeJson] —
+ * `null` when none was applied, and also on a corrupt blob (an honest "nothing to name", never a
+ * crash on a fare screen). See that column's doc.
+ */
+fun TripEntity.airportAccessFee(): AirportAccessFeeRecord? = airportAccessFeeJson
+    ?.takeIf { it.isNotBlank() }
+    ?.let { json -> runCatching { cabDispatchJson.decodeFromString<AirportAccessFeeRecord>(json) }.getOrNull() }

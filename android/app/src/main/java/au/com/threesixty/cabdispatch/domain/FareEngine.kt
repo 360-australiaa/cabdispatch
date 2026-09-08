@@ -336,6 +336,14 @@ class FareEngineImpl(
      * get a clock that advances exactly as much as the coroutine machinery believes it did.
      */
     private val nanoTimeSource: () -> Long = { System.nanoTime() },
+    /**
+     * Where the airport pickup fee is decided from — see [AirportZoneLookup]'s own doc. Defaulted
+     * to [AirportZoneLookup.UNSYNCED] ("no zone has ever been cached") so every pre-existing call
+     * site keeps charging exactly as before this seam existed: the compiled
+     * [JurisdictionConfig] precinct circle. Production passes
+     * [au.com.threesixty.cabdispatch.sync.AirportZoneCache].
+     */
+    private val airportZoneLookup: AirportZoneLookup = AirportZoneLookup.UNSYNCED,
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -494,16 +502,32 @@ class FareEngineImpl(
         // awaited here, so a slow/empty cache can never delay the meter actually starting.
         scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
         startTicking()
-        // AIRPORT PICKUP FEE (2026-09-08). Charged once per hiring that STARTS inside the airport
-        // precinct -- the passenger picked up at the airport pays it -- never for a drop-off that
-        // merely drives in. Same ledger line as the manual Airport preset, so the breakdown, the
-        // receipt and the server's auto_tolls_applied list all see one thing. Skipped if the driver
-        // already added the preset by hand, so it can never be charged twice.
+        // AIRPORT PICKUP FEE (2026-09-08; server-defined zones 2026-09-09). Charged once per
+        // hiring that STARTS inside an airport zone -- the passenger picked up at the rank pays it
+        // -- never for a drop-off that merely drives in, because only the start fix is ever
+        // tested (nothing in [tick] looks at these zones). Same ledger id as the manual Airport
+        // preset, so the breakdown, the receipt and the server's toll total all see one thing;
+        // [addToll]'s guard then makes a manual tap on the same trip a no-op, never a second fee.
+        //
+        // Three honest answers from the lookup (see AirportZoneLookup.zonesContaining):
+        //  - zones found  -> the SMALLEST containing zone's own fee, labelled with its terminal;
+        //  - empty list   -> synced, and this pickup is not at an airport rank: no fee;
+        //  - null         -> this tablet has never cached a zone: fall back to the compiled
+        //                    JurisdictionConfig precinct circle + constant, so an un-synced tablet
+        //                    still charges the regulated fee rather than silently nothing.
         airportFeeAutoApplied = false
-        val jurisdiction = JurisdictionConfig.NSW
-        if (jurisdiction.airportAccessFee != null && jurisdiction.isInsideAirportPrecinct(startLat, startLng)) {
-            addToll(TollPresets.AIRPORT)
-            airportFeeAutoApplied = true
+        val containingZones = airportZoneLookup.zonesContaining(startLat, startLng)
+        if (containingZones != null) {
+            containingZones.firstOrNull()?.let { zone ->
+                addToll(TollPresets.airportAccessFee(zone))
+                airportFeeAutoApplied = true
+            }
+        } else {
+            val jurisdiction = JurisdictionConfig.NSW
+            if (jurisdiction.airportAccessFee != null && jurisdiction.isInsideAirportPrecinct(startLat, startLng)) {
+                addToll(TollPresets.AIRPORT)
+                airportFeeAutoApplied = true
+            }
         }
     }
 

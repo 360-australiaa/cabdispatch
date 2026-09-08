@@ -1,11 +1,16 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
+import au.com.threesixty.cabdispatch.domain.fare.FareState as CalcFareState
+import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
+import au.com.threesixty.cabdispatch.domain.fare.airportFixedFare
 import au.com.threesixty.cabdispatch.domain.fare.TollGantryRef
 import au.com.threesixty.cabdispatch.domain.fare.TollPriceRef
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.TollRoadRef
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -230,5 +235,157 @@ class FareEngineImplAutoTollTest {
         assertEquals(BigDecimal.ZERO.setScale(2), engine.state.value.breakdown.tolls.setScale(2))
         engine.addToll(TollPresets.AIRPORT)
         assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+    }
+
+    // ---- Airport access fee from server-defined airport zones (AirportZoneLookup seam) -------
+
+    private val t1Rank = AirportZone("t1", "T1 International", -33.9361, 151.1656, radiusM = 300.0, fee = BigDecimal("6.43"))
+    private val t2Rank = AirportZone("t2", "T2 Domestic", -33.9330, 151.1800, radiusM = 250.0, fee = BigDecimal("6.43"))
+    /** A wider circle around the same domestic ranks, priced differently on purpose so the test
+     * can tell WHICH zone's fee was charged when both contain the start fix. */
+    private val domesticPrecinct = AirportZone("t23", "T2/T3 Domestic precinct", -33.9330, 151.1800, radiusM = 600.0, fee = BigDecimal("7.00"))
+
+    private fun TestScope.engineWith(
+        speedSource: FakeMeterGps,
+        lookup: AirportZoneLookup,
+    ) = FareEngineImpl(
+        speedSource,
+        backgroundScope,
+        TollRegistryProvider.EMPTY,
+        nanoTimeSource = virtualNanoTimeSource(),
+        airportZoneLookup = lookup,
+    )
+
+    @Test
+    fun `a hiring that starts inside a cached T1 zone is charged that zone's fee, labelled with the terminal`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(listOf(t1Rank, t2Rank, domesticPrecinct)))
+
+        engine.startTrip(urbanTariffDto(), startLat = -33.9361, startLng = 151.1656)
+        runCurrent()
+
+        val state = engine.state.value
+        assertEquals(BigDecimal("6.43"), state.breakdown.tolls)
+        val entry = state.tollsApplied.single()
+        assertEquals(TollPresets.AIRPORT.id, entry.id) // same ledger id as the manual chip
+        assertEquals("Airport access fee · T1 International", entry.label)
+        assertEquals("T1 International", entry.airportZoneName)
+        // ...and what the receipt will print from the persisted record of that entry.
+        assertEquals(
+            "incl. Airport access fee \$6.43 (T1 International)",
+            AirportAccessFeeRecord.fromLedger(state.tollsApplied)!!.subLine(),
+        )
+        // The manual chip afterwards is a no-op, never a second fee.
+        engine.addToll(TollPresets.AIRPORT)
+        assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+        assertEquals(1, engine.state.value.tollsApplied.size)
+    }
+
+    @Test
+    fun `overlapping T2 and T2-T3 zones charge the SMALLER zone's fee only, once`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(listOf(domesticPrecinct, t1Rank, t2Rank)))
+
+        // On the T2 rank: inside the 250m T2 circle AND the 600m precinct circle.
+        engine.startTrip(urbanTariffDto(), startLat = -33.9331, startLng = 151.1801)
+        runCurrent()
+
+        val state = engine.state.value
+        assertEquals(1, state.tollsApplied.size)
+        assertEquals("T2 Domestic", state.tollsApplied.single().airportZoneName)
+        assertEquals(BigDecimal("6.43"), state.breakdown.tolls) // not 7.00, and not 13.43
+    }
+
+    @Test
+    fun `an empty, never-synced zone cache falls back to the legacy 1,8 km precinct circle`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        // AirportZoneLookup.UNSYNCED is also the constructor default -- the pre-existing airport
+        // tests above exercise that path; this one names it explicitly.
+        val engine = engineWith(speedSource, AirportZoneLookup.UNSYNCED)
+
+        // ~1 km from the compiled precinct centre: inside the 1.8 km circle, but NOT inside any
+        // rank zone the tests above use -- the legacy circle is what charges here.
+        engine.startTrip(urbanTariffDto(), startLat = -33.9455, startLng = 151.1795)
+        runCurrent()
+
+        val state = engine.state.value
+        assertEquals(BigDecimal("6.43"), state.breakdown.tolls)
+        val entry = state.tollsApplied.single()
+        assertEquals(TollPresets.AIRPORT, entry) // the compiled preset, no terminal name
+        assertEquals("incl. Airport access fee \$6.43", AirportAccessFeeRecord.fromLedger(state.tollsApplied)!!.subLine())
+    }
+
+    @Test
+    fun `an empty zone LIST (of-empty) is treated as never synced, not as no-fee`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(emptyList()))
+        engine.startTrip(urbanTariffDto(), startLat = -33.9455, startLng = 151.1795)
+        runCurrent()
+        assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+    }
+
+    @Test
+    fun `with zones cached, a hiring that starts in the CBD pays nothing - even inside the old precinct circle`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(listOf(t1Rank, t2Rank, domesticPrecinct)))
+
+        engine.startTrip(urbanTariffDto(), startLat = -33.8688, startLng = 151.2093)
+        runCurrent()
+        assertTrue(engine.state.value.tollsApplied.isEmpty())
+        assertEquals(BigDecimal.ZERO.setScale(2), engine.state.value.breakdown.tolls.setScale(2))
+
+        // Inside the compiled 1.8 km circle but at no rank (the P2 car park side, say): once the
+        // real zones are cached they are authoritative, and the old circle no longer charges.
+        val engine2 = engineWith(FakeMeterGps(0.0), AirportZoneLookup.of(listOf(t1Rank, t2Rank, domesticPrecinct)))
+        engine2.startTrip(urbanTariffDto(), startLat = -33.9455, startLng = 151.1795)
+        runCurrent()
+        assertTrue(engine2.state.value.tollsApplied.isEmpty())
+    }
+
+    @Test
+    fun `a Set Price hiring from the T1 rank records the fee but bills exactly the agreed amount`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(listOf(t1Rank)))
+
+        engine.startTrip(urbanTariffDto(), startLat = -33.9361, startLng = 151.1656, negotiatedTotal = BigDecimal("60.00"))
+        runCurrent()
+
+        val state = engine.state.value
+        assertEquals(BigDecimal("6.43"), state.breakdown.tolls) // recorded for audit/remittance...
+        assertEquals(BigDecimal("60.00"), state.total) // ...never added on top of the agreed price
+    }
+
+    @Test
+    fun `the Sydney Airport fixed fare never carries the access fee - close() bills the flat figure and zero tolls`() {
+        // The fixed fare is applied at close time from the persisted trip type
+        // (TripFareReconstruction sets fixedFare for type == "airport_fixed"); the pure engine's
+        // fixedFare branch is what suppresses it. Pinned here with the fee's own figure.
+        val state = CalcFareState(tariff = URBAN_TARIFF)
+        state.tolls = BigDecimal("6.43")
+        state.fixedFare = airportFixedFare(state.maxiRateApplied)
+
+        val breakdown = CalcFareEngine().close(state, includePsl = true)
+
+        assertEquals(BigDecimal("60.00"), breakdown.grandTotal)
+        assertEquals(BigDecimal.ZERO, breakdown.tolls)
+    }
+
+    @Test
+    fun `driving INTO a zone mid-trip - a drop-off at the airport - never charges the fee`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = engineWith(speedSource, AirportZoneLookup.of(listOf(t1Rank, t2Rank, domesticPrecinct)))
+
+        engine.startTrip(urbanTariffDto(), startLat = -33.8688, startLng = 151.2093) // CBD pickup
+        runCurrent()
+
+        // Arrive on the T1 rank and sit there for a few ticks.
+        speedSource.emitFixAt(testScheduler.currentTime, -33.9361, 151.1656)
+        advanceOneTickWithNoNewFix()
+        speedSource.emitFixAt(testScheduler.currentTime, -33.9361, 151.1656)
+        advanceOneTickWithNoNewFix()
+
+        val state = engine.state.value
+        assertTrue(state.tollsApplied.isEmpty())
+        assertEquals(BigDecimal.ZERO.setScale(2), state.breakdown.tolls.setScale(2))
     }
 }

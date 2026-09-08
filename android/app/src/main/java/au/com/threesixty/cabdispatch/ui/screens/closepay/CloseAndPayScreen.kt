@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.local.entity.airportAccessFee
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TenantBranding
 import au.com.threesixty.cabdispatch.domain.RatePassengerHandoff
@@ -387,6 +388,13 @@ private fun TotalCol(
                 }
             }
             BreakdownRow("Tolls", breakdown.tolls.money())
+            // Names the airport pickup fee inside the Tolls total, so the passenger sees WHICH
+            // charge that is and from which terminal (TripEntity.airportAccessFeeJson's doc).
+            // Never under the Sydney Airport Fixed Fare: that branch zeroes tolls entirely, and a
+            // line naming a fee that was not charged would contradict the total above it.
+            if (!isAirportFixed) {
+                state.trip.airportAccessFee()?.let { fee -> BreakdownSubRow(fee.subLine()) }
+            }
             if (breakdown.extras.signum() > 0) BreakdownRow("Extras", breakdown.extras.money())
             if (breakdown.cleaningFee.signum() > 0) BreakdownRow("Cleaning fee", breakdown.cleaningFee.money())
             // Mandatory regulated levy — no toggle. Shown as a fixed line item exactly like
@@ -450,6 +458,19 @@ private fun closeButtonLabel(method: PaymentMethodOption, amount: BigDecimal): S
  * from the driver's view once they leave the method picker. Empty string when there's no tip. */
 private fun tipSeparateSuffix(tip: BigDecimal): String =
     if (tip.signum() > 0) " Plus a ${tip.money()} tip, collected separately." else ""
+
+/** Indented, muted explanatory line under a [BreakdownRow] — a component of the row above it,
+ * never an additive charge of its own (so no amount column: the figure is already counted). */
+@Composable
+private fun BreakdownSubRow(text: String) {
+    Text(
+        text,
+        fontFamily = InterFamily,
+        fontSize = 14.sp,
+        color = CaptainPalette.textMuted,
+        modifier = Modifier.padding(start = 16.dp),
+    )
+}
 
 @Composable
 private fun BreakdownRow(label: String, value: String) {

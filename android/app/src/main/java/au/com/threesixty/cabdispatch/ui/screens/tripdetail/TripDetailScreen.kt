@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.local.entity.airportAccessFee
 import au.com.threesixty.cabdispatch.data.remote.MapboxStaticImage
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.format.asLocalTime
@@ -413,7 +414,14 @@ private fun FareCard(state: TripDetailUiState.Loaded) {
                     FareLineRow("Maxi-cab rate (×$multiplierLabel, 5+ passengers)", b.maxiUplift.asMoney())
                 }
             }
-            if (b.tolls.signum() > 0) FareLineRow("Tolls", b.tolls.asMoney())
+            if (b.tolls.signum() > 0) {
+                FareLineRow("Tolls", b.tolls.asMoney())
+                // Same sub-line CloseAndPayScreen prints: which fee, from which terminal, sits
+                // inside that Tolls figure. Never under the fixed fare (its tolls are zero).
+                if (trip.type != "airport_fixed") {
+                    trip.airportAccessFee()?.let { fee -> FareLineSubRow(fee.subLine()) }
+                }
+            }
             if (b.psl.signum() > 0) FareLineRow("Point to Point Transport Levy", b.psl.asMoney())
             if (b.cleaningFee.signum() > 0) FareLineRow("Cleaning fee", b.cleaningFee.asMoney())
             if (b.extras.signum() > 0) FareLineRow("Extras", b.extras.asMoney())
@@ -462,6 +470,19 @@ private fun FareCard(state: TripDetailUiState.Loaded) {
             )
         }
     }
+}
+
+/** Indented, muted explanatory line under a [FareLineRow] — a component of the row above it,
+ * never an additive charge, so it carries no amount column. */
+@Composable
+private fun FareLineSubRow(text: String) {
+    Text(
+        text,
+        fontFamily = InterFamily,
+        fontSize = 14.sp,
+        color = CaptainPalette.textMuted,
+        modifier = Modifier.padding(start = 16.dp),
+    )
 }
 
 @Composable

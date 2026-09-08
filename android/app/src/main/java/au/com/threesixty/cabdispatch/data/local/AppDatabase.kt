@@ -4,12 +4,14 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import au.com.threesixty.cabdispatch.data.local.dao.AirportZoneDao
 import au.com.threesixty.cabdispatch.data.local.dao.ShiftDao
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
 import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.entity.AirportZoneEntity
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
@@ -62,6 +64,15 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * `Migration` per [MIGRATION_8_9]'s own precedent below — never `fallbackToDestructiveMigration`
  * for financial/compliance trip data.
  *
+ * Version bumped 12 -> 13 (airport access fee from server-defined airport zones, 2026-09-09)
+ * adding one new entity — [AirportZoneEntity], the local cache of `GET /v1/geofences?kind=airport`
+ * that lets [au.com.threesixty.cabdispatch.domain.FareEngineImpl.startTrip] charge the right
+ * terminal rank's pickup fee with zero connectivity (see
+ * [au.com.threesixty.cabdispatch.sync.AirportZoneCache]) — and one new nullable [TripEntity]
+ * column (`airportAccessFeeJson`) recording which airport fee, from which terminal, is inside the
+ * trip's `tolls` total, so Close & Pay / Trip Detail / the printed receipt can name it under the
+ * "Tolls" line (see [TripEntity.airportAccessFeeJson]). Real `Migration` ([MIGRATION_12_13]).
+ *
  * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
  * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
  * installed base to migrate)" — that assumption held only as long as every test device got a
@@ -95,8 +106,9 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TollRoadEntity::class,
         TollPointEntity::class,
         TollGantryEntity::class,
+        AirportZoneEntity::class,
     ],
-    version = 12,
+    version = 13,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -115,6 +127,39 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
     abstract fun tollRegistryDao(): TollRegistryDao
+    abstract fun airportZoneDao(): AirportZoneDao
+}
+
+/**
+ * 12 -> 13: the airport-zone cache table plus the trip row's airport-fee record — see
+ * [AppDatabase]'s doc for the pass. `airport_zones` starts empty, which is a safe state (the
+ * fare engine falls back to the compiled precinct circle until the first successful
+ * [au.com.threesixty.cabdispatch.sync.AirportZoneCache.refresh] — see that class's doc).
+ * `airportAccessFeeJson` is nullable with no default: every pre-existing row honestly reads as
+ * "no airport fee recorded" rather than pretending to know.
+ *
+ * Verified against Room's own generated `createAllTables` per [MIGRATION_9_10]'s "How to check
+ * this SQL is right" note (KSP output now: `app/build/generated/ksp/debug/java/.../AppDatabase_Impl.java`),
+ * and executed end to end by `RoomMigrationTest`.
+ */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `airport_zones` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `centerLat` REAL NOT NULL,
+                `centerLng` REAL NOT NULL,
+                `radiusM` REAL NOT NULL,
+                `feeAmount` TEXT NOT NULL,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("ALTER TABLE trips ADD COLUMN airportAccessFeeJson TEXT")
+    }
 }
 
 /**

@@ -141,6 +141,9 @@ class SharedPreferencesDriverAuthRepository internal constructor(
                 // no toll routes and auto-toll detection had no gantries (second tablet,
                 // 2026-09-08). The first authenticated moment is the right one to fetch it.
                 AppContainer.refreshTollRegistry()
+                // The airport-fee zones are tenant-scoped, so the first authenticated moment is
+                // the FIRST moment they can be fetched at all — see AirportZoneCache's doc.
+                AppContainer.refreshAirportZones()
                 // Real gap closed 2026-09-06: this field existed on the response the whole time
                 // and was simply never read — see AppContainer.refreshToken's doc for the 401s
                 // that went unrecovered without it.

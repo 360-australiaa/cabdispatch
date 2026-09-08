@@ -51,6 +51,15 @@ data class TollPreset(
      * could ever double up with. A `null` here means "nothing to reconcile", never "not looked up".
      */
     val registryRoadId: String? = null,
+    /**
+     * For an [TollPresets.AIRPORT]-id entry the fare engine added automatically from a cached
+     * airport zone ([au.com.threesixty.cabdispatch.domain.AirportZone]): the terminal rank the
+     * fee came from ("T1 International"), so the ledger — and, via
+     * [AirportAccessFeeRecord], the receipt — identifies WHICH rank, not merely "airport".
+     * `null` on the driver's manual chip and on the compiled precinct-circle fallback, neither
+     * of which knows a terminal. Never read for any other preset.
+     */
+    val airportZoneName: String? = null,
 )
 
 /**
@@ -70,6 +79,20 @@ object TollPresets {
     // June 2026 — was $6.30 under the superseded Fares Order 2025 (no.2)).
     val AIRPORT = TollPreset("airport", "Airport", BigDecimal("6.43"))
     val ALL = listOf(M5, HARBOUR_SOUTHBOUND, AIRPORT)
+
+    /**
+     * The automatic airport pickup fee for one cached zone — SAME id as the manual [AIRPORT]
+     * chip (so [FareEngineImpl.addToll]'s once-only guard, the breakdown and the server's toll
+     * total all see one thing), but the zone's own fee and a label naming the terminal:
+     * `"Airport access fee · T1 International"`. The zone's fee is authoritative over
+     * [AIRPORT]'s compiled $6.43 — a jurisdiction record can correct it without a build.
+     */
+    fun airportAccessFee(zone: AirportZone): TollPreset = TollPreset(
+        id = AIRPORT.id,
+        label = "Airport access fee · ${zone.name}",
+        amount = zone.fee,
+        airportZoneName = zone.name,
+    )
 }
 
 /**

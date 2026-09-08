@@ -1029,6 +1029,8 @@ private class FakeApiService : ApiService {
     // TollRegistryCache on its own schedule, never by the outbox drainer under test here.
     override suspend fun tollRoads(): List<au.com.threesixty.cabdispatch.data.remote.TollRoadDto> = notUsed()
     override suspend fun tollRoadDetail(roadId: String): au.com.threesixty.cabdispatch.data.remote.TollRoadDetailDto = notUsed()
+    override suspend fun listGeofences(kind: String?, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.GeofenceListResponseDto = notUsed()
+    override suspend fun airportGeofencePresets(): List<au.com.threesixty.cabdispatch.data.remote.GeofencePresetDto> = notUsed()
 
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }

@@ -6,6 +6,7 @@ import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.local.entity.airportAccessFee
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
@@ -762,6 +763,13 @@ class CloseAndPayViewModel : ViewModel() {
             }
             if (b.tolls.signum() > 0) {
                 add(ReceiptLine(if (isAbsorbedFare) "Tolls — included, not charged" else "Tolls", b.tolls.money()))
+                // Names the airport pickup fee inside that Tolls figure — "incl. Airport access
+                // fee $6.43 (T1 International)" — on the printed/SMS/emailed copy, same as the
+                // on-screen breakdown. Indented, no amount of its own: it is already counted in
+                // the line above. Never under the fixed fare (tolls are zero there anyway).
+                if (!isAirportFixed) {
+                    trip.airportAccessFee()?.let { fee -> add(ReceiptLine("  " + fee.subLine(), "")) }
+                }
             }
             if (b.psl.signum() > 0) {
                 val label = if (isAbsorbedFare) "Point to Point Transport Levy — included, not charged" else "Point to Point Transport Levy"

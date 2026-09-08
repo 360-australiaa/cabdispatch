@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
+import au.com.threesixty.cabdispatch.domain.AirportAccessFeeRecord
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.location.GpsSimulator
 import kotlinx.coroutines.flow.Flow
@@ -215,6 +216,11 @@ class TripRepository(
         /** Real toll-road ids crossed this trip the registry couldn't auto-price — see
          * [TripEntity.unpricedTollRoadIdsJson]'s doc. Same "`null` = leave untouched" convention. */
         unpricedTollRoadIds: List<String>? = null,
+        /** The airport access fee on the ledger, if any — see [TripEntity.airportAccessFeeJson]'s
+         * doc. Same "`null` = leave the existing value untouched" convention: the fee is applied
+         * once at pickup and never withdrawn, so a ledger that has it keeps re-sending the same
+         * record and a ledger that never had it simply never writes the column. */
+        airportAccessFee: AirportAccessFeeRecord? = null,
         /**
          * The distance/waiting charges the live meter has accrued so far, as decimal strings --
          * F9 (architecture audit §2.2). Same "`null` = leave the existing value untouched"
@@ -242,6 +248,7 @@ class TripRepository(
             tolls = tolls ?: existing.tolls,
             autoTolledRoadsJson = autoTolledRoads?.let { cabDispatchJson.encodeToString(it) } ?: existing.autoTolledRoadsJson,
             unpricedTollRoadIdsJson = unpricedTollRoadIds?.let { cabDispatchJson.encodeToString(it) } ?: existing.unpricedTollRoadIdsJson,
+            airportAccessFeeJson = airportAccessFee?.let { cabDispatchJson.encodeToString(it) } ?: existing.airportAccessFeeJson,
             updatedAt = System.currentTimeMillis(),
         )
         tripDao.update(updated)

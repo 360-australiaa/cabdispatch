@@ -358,4 +358,46 @@ object SimulatedRoutes {
         ),
         speedKmh = 3.0,
     )
+
+    /**
+     * An airport pickup: starts ON the T1 International taxi rank, leaves via Airport Drive and
+     * Southern Cross Drive, takes the M1 Eastern Distributor northbound (a real toll) and ends in
+     * the CBD. About 12 km at 50 km/h, ~14 minutes.
+     *
+     * The one hardcoded route that deliberately touches real Sydney roads (see this file's doc
+     * for why the toll routes are otherwise built from the registry): what it demonstrates is the
+     * combination the airport-fee feature is about -- the access fee charged ONCE at trip start,
+     * because the start fix is inside the T1 rank zone, plus an ordinary auto-detected toll later
+     * on the same trip -- and neither half can be shown by a registry-built route, whose start
+     * point is a lead-in 400m before a gantry. The two Eastern Distributor gantries the registry
+     * carries (M1 William Street, M1 Woolloomooloo) sit on the polyline itself, heading north,
+     * which `SimulatedRouteTest` pins so this route cannot quietly drift off them.
+     *
+     * Start the meter AFTER the simulator has parked the vehicle on the rank (the first fix), so
+     * the trip's start position is the rank, not wherever the real GPS last was.
+     */
+    fun airportPickupToCbd(speedKmh: Double = 50.0): SimulatedRoute = SimulatedRoute(
+        id = "airport_t1_cbd",
+        name = "Airport T1 pickup → CBD via Eastern Distributor",
+        description = "Starts on the T1 International taxi rank (airport access fee at trip " +
+            "start), Airport Dr → Southern Cross Dr → M1 Eastern Distributor northbound (toll) → CBD.",
+        waypoints = listOf(
+            LatLng(-33.9361, 151.1656), // T1 International taxi rank
+            LatLng(-33.9318, 151.1712), // Airport Drive, leaving T1
+            LatLng(-33.9292, 151.1792), // Airport Drive / Qantas Drive
+            LatLng(-33.9318, 151.1885), // Joyce Drive, north of the domestic terminals
+            LatLng(-33.9330, 151.1940), // General Holmes Drive junction, onto Southern Cross Drive
+            LatLng(-33.9250, 151.1985), // Southern Cross Drive at Gardeners Road
+            LatLng(-33.9150, 151.2040), // Southern Cross Drive, Eastlakes
+            LatLng(-33.9040, 151.2110), // Southern Cross Drive, Kensington
+            LatLng(-33.8975, 151.2160), // Moore Park -- onto the M1 Eastern Distributor northbound
+            LatLng(-33.8880, 151.2185), // Eastern Distributor tunnel, Paddington
+            LatLng(-33.87583, 151.217257), // registry gantry ED:m1_william_street
+            LatLng(-33.869775, 151.218413), // registry gantry ED:m1_woolloomooloo
+            LatLng(-33.8680, 151.2135), // Sir John Young Crescent exit
+            LatLng(-33.8640, 151.2118), // Macquarie Street
+            LatLng(-33.8612, 151.2108), // Circular Quay
+        ),
+        speedKmh = speedKmh,
+    )
 }

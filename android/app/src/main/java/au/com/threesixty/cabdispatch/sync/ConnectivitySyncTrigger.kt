@@ -71,6 +71,10 @@ class ConnectivitySyncTrigger(context: Context) {
             // Regaining connectivity is the obvious moment to fix that, and it is the same event
             // this callback already treats as "we can reach the server again".
             AppContainer.refreshTollRegistry()
+            // Same moment, same reasoning, for the airport-fee zones the pickup fee is decided
+            // against — a tablet that booted offline otherwise runs the shift on the compiled
+            // precinct-circle fallback (see AirportZoneCache's doc) instead of the real ranks.
+            AppContainer.refreshAirportZones()
             // S5: reconnecting is also the single best moment to refresh the tariff — it is exactly
             // when a tablet that has been offline (a shift in a dead-spot, a tablet left parked) is
             // most likely to be holding a stale one. Best-effort and fire-and-forget; see

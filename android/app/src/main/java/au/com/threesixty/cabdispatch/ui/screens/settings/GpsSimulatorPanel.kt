@@ -62,6 +62,9 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
         // instead of only the three plain ones. Best-effort: offline, the cached snapshot below
         // still serves whatever it has.
         runCatching { AppContainer.tollRegistryCache.refresh() }
+        // The airport-fee zones ride the same opportunistic refresh, so the airport pickup route
+        // below charges the real T1 zone's fee (not the compiled fallback) on a synced tablet.
+        runCatching { AppContainer.airportZoneCache.refresh() }
         val registry = runCatching { AppContainer.tollRegistryCache.snapshot() }.getOrNull()
         val tollRoutes = registry
             ?.roadsById
@@ -73,6 +76,7 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
             SimulatedRoutes.bandSweep(),
             SimulatedRoutes.plainDrive(),
             SimulatedRoutes.stopAndGo(),
+            SimulatedRoutes.airportPickupToCbd(),
         ) + tollRoutes
     }
 
@@ -134,7 +138,7 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
                 for (route in routes) {
                     RouteRow(route = route, onStart = { simulator.start(route) })
                 }
-                if (routes.size <= 2) {
+                if (routes.size <= 4) {
                     Text(
                         "Toll-road routes appear once the NSW toll registry has synced to this " +
                             "tablet. Nothing is invented in the meantime.",
