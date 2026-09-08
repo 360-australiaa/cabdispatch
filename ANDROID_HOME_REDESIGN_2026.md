@@ -1,4 +1,13 @@
-# Home Dashboard Redesign — 2026-09-02
+# Android Home Dashboard Redesign — 2026-09-02
+
+*(Renamed from `DASHBOARD_REDESIGN_2026.md` on 2026-09-08, Wave 4/B11 — this
+document is entirely about the Android driver app's home screen, not the web
+ops dashboard under `dashboard/`. The name was ambiguous next to that other
+surface; see `docs/DASHBOARD_WEB_OVERVIEW.md` for the actual web dashboard.
+Content below is unchanged from the original. Note: a handful of Kotlin
+comments in `android/` still refer to the old filename by name — they are
+outside this workstream's owned files (`ui/**`/`domain/**` belong to other
+workstreams) and were left as-is; the content they point to is unchanged.)*
 
 Rebuild of the Android driver app's Home dashboard (`DeckHomeScreen.kt`) to match a supplied
 premium mockup ("match this design, look how prominent it is, lot of shades, colors, content is

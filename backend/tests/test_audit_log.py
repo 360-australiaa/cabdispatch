@@ -10,6 +10,15 @@ The `AuditLog` model also is not yet imported into app/models/__init__.py
 to register its table on `Base.metadata` before the session-scoped
 `_test_database` fixture in conftest.py runs `create_all` — same pattern
 already used by the sibling fleet/compliance domain test files.
+
+There is no `POST /v1/audit-log` — it was removed (see
+app/api/v1/audit_log.py's module docstring): an audit trail that any
+authenticated client can write to via a plain HTTP call is not tamper-
+evident. Every entry in these tests is therefore created the same way every
+other domain's service layer creates one: by calling
+`app.services.audit_log.record_audit()` directly inside the test's own
+transaction, then committing. This is not a workaround — it is the one and
+only way any code, including this test file, is allowed to write a row.
 """
 from __future__ import annotations
 
@@ -20,68 +29,81 @@ from app.models.audit_log import AuditLog
 from app.services.audit_log import record_audit
 from tests.conftest import auth_headers
 
-# --- create ---------------------------------------------------------------
+
+async def _write_entry(
+    session,
+    *,
+    tenant_id: str,
+    actor_user_id: str,
+    action: str = "create",
+    entity_type: str = "trip",
+    entity_id: str = "trip-1",
+    before: dict | None = None,
+    after: dict | None = None,
+):
+    """Test helper standing in for "another domain's own mutation calling
+    record_audit()" — commits itself, mirroring the caller-commits contract
+    documented on `record_audit`."""
+    entry = await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        before=before,
+        after=after,
+    )
+    await session.commit()
+    return entry
 
 
-async def test_create_audit_log_entry_attributes_caller_as_actor(client, session):
+# --- record_audit writes a correct, attributed row --------------------------
+
+
+async def test_record_audit_attributes_caller_as_actor(client, session):
     headers = await auth_headers(client, session, role="admin")
+    resp = await client.get("/v1/auth/me", headers=headers)
+    actor_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
 
-    resp = await client.post(
-        "/v1/audit-log",
-        json={
-            "action": "update",
-            "entity_type": "trip",
-            "entity_id": "trip-123",
-            "before_json": {"status": "in_progress"},
-            "after_json": {"status": "completed"},
-        },
-        headers=headers,
+    entry = await _write_entry(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_id,
+        action="update",
+        entity_type="trip",
+        entity_id="trip-123",
+        before={"status": "in_progress"},
+        after={"status": "completed"},
     )
 
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["action"] == "update"
-    assert body["entity_type"] == "trip"
-    assert body["entity_id"] == "trip-123"
-    assert body["before_json"] == {"status": "in_progress"}
-    assert body["after_json"] == {"status": "completed"}
-    assert body["actor_user_id"] is not None
-    assert body["at"] is not None
+    assert entry.action == "update"
+    assert entry.entity_type == "trip"
+    assert entry.entity_id == "trip-123"
+    assert entry.before_json == {"status": "in_progress"}
+    assert entry.after_json == {"status": "completed"}
+    assert entry.actor_user_id == actor_id
+    assert entry.at is not None
 
 
-async def test_create_audit_log_entry_cannot_forge_actor(client, session):
-    """AuditLogCreate has no actor_user_id field — a client-supplied one (if
-    somehow smuggled in) must be ignored; the actor is always the caller."""
+async def test_record_audit_allows_null_before_and_after(client, session):
     headers = await auth_headers(client, session, role="admin")
+    resp = await client.get("/v1/auth/me", headers=headers)
+    actor_id = resp.json()["id"]
+    tenant_id = resp.json()["tenant_id"]
 
-    resp = await client.post(
-        "/v1/audit-log",
-        json={
-            "action": "create",
-            "entity_type": "vehicle",
-            "entity_id": "veh-1",
-            "actor_user_id": "someone-else",
-        },
-        headers=headers,
+    entry = await _write_entry(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=actor_id,
+        action="create",
+        entity_type="vehicle",
+        entity_id="veh-2",
     )
 
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["actor_user_id"] != "someone-else"
-
-
-async def test_create_audit_log_entry_allows_null_before_and_after(client, session):
-    headers = await auth_headers(client, session, role="admin")
-
-    resp = await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "vehicle", "entity_id": "veh-2"},
-        headers=headers,
-    )
-
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["before_json"] is None
-    assert body["after_json"] is None
+    assert entry.before_json is None
+    assert entry.after_json is None
 
 
 # --- list + filtering + pagination -----------------------------------------
@@ -89,21 +111,20 @@ async def test_create_audit_log_entry_allows_null_before_and_after(client, sessi
 
 async def test_list_audit_log_filters_by_entity_type_entity_id_actor_and_action(client, session):
     headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
 
-    await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "trip", "entity_id": "trip-a"},
-        headers=headers,
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+        entity_type="trip", entity_id="trip-a",
     )
-    await client.post(
-        "/v1/audit-log",
-        json={"action": "update", "entity_type": "trip", "entity_id": "trip-a"},
-        headers=headers,
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="update",
+        entity_type="trip", entity_id="trip-a",
     )
-    await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "vehicle", "entity_id": "veh-b"},
-        headers=headers,
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+        entity_type="vehicle", entity_id="veh-b",
     )
 
     all_resp = await client.get("/v1/audit-log", headers=headers)
@@ -120,7 +141,6 @@ async def test_list_audit_log_filters_by_entity_type_entity_id_actor_and_action(
     assert by_action.json()["total"] == 1
     assert by_action.json()["items"][0]["entity_id"] == "trip-a"
 
-    actor_id = all_resp.json()["items"][0]["actor_user_id"]
     by_actor = await client.get(f"/v1/audit-log?actor_user_id={actor_id}", headers=headers)
     assert by_actor.json()["total"] == 3
 
@@ -131,14 +151,14 @@ async def test_list_audit_log_filters_by_entity_type_entity_id_actor_and_action(
 
 async def test_list_audit_log_is_ordered_most_recent_first(client, session):
     headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
 
     for i in range(3):
-        resp = await client.post(
-            "/v1/audit-log",
-            json={"action": "create", "entity_type": "trip", "entity_id": f"trip-{i}"},
-            headers=headers,
+        await _write_entry(
+            session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+            entity_type="trip", entity_id=f"trip-{i}",
         )
-        assert resp.status_code == 201
 
     resp = await client.get("/v1/audit-log", headers=headers)
     entity_ids = [item["entity_id"] for item in resp.json()["items"]]
@@ -155,13 +175,12 @@ async def test_tenant_isolation_on_audit_log(client, session):
 
     headers_a = await auth_headers(client, session, role="admin", tenant_id=tenant_a.id)
     headers_b = await auth_headers(client, session, role="admin", tenant_id=tenant_b.id)
+    actor_a = (await client.get("/v1/auth/me", headers=headers_a)).json()["id"]
 
-    create = await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "trip", "entity_id": "isolated-trip"},
-        headers=headers_a,
+    await _write_entry(
+        session, tenant_id=tenant_a.id, actor_user_id=actor_a, action="create",
+        entity_type="trip", entity_id="isolated-trip",
     )
-    assert create.status_code == 201
 
     list_b = await client.get("/v1/audit-log", headers=headers_b)
     assert list_b.json()["total"] == 0
@@ -170,28 +189,38 @@ async def test_tenant_isolation_on_audit_log(client, session):
     assert list_a.json()["total"] == 1
 
 
-# --- append-only: no update/delete surface ---------------------------------
+# --- append-only: no create/update/delete surface over HTTP ----------------
 
 
-async def test_audit_log_has_no_update_or_delete_endpoints(client, session):
-    """Explicit, deliberate: an audit trail that can be edited or deleted
-    after the fact provides no tamper evidence. There is no id-scoped route
-    at all (`/v1/audit-log/{id}`) — every method against it 404s/405s."""
+async def test_audit_log_has_no_write_endpoints_at_all(client, session):
+    """Explicit, deliberate: an audit trail that any authenticated client can
+    write to (create, or later edit/delete) via a plain HTTP call provides no
+    tamper evidence. There is no `POST /v1/audit-log` and no id-scoped route
+    at all (`/v1/audit-log/{id}`) — every write method against this router
+    404s/405s. The only way to write a row is `record_audit()` called from
+    inside the server's own code."""
     headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
 
-    create = await client.post(
+    post_resp = await client.post(
         "/v1/audit-log",
         json={"action": "create", "entity_type": "trip", "entity_id": "no-mutation"},
         headers=headers,
     )
-    entry_id = create.json()["id"]
+    assert post_resp.status_code in (404, 405)
+
+    entry = await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+        entity_type="trip", entity_id="no-mutation",
+    )
 
     patch_resp = await client.patch(
-        f"/v1/audit-log/{entry_id}", json={"action": "tampered"}, headers=headers
+        f"/v1/audit-log/{entry.id}", json={"action": "tampered"}, headers=headers
     )
     assert patch_resp.status_code in (404, 405)
 
-    delete_resp = await client.delete(f"/v1/audit-log/{entry_id}", headers=headers)
+    delete_resp = await client.delete(f"/v1/audit-log/{entry.id}", headers=headers)
     assert delete_resp.status_code in (404, 405)
 
     # entry is unaffected, still present exactly as written
@@ -204,13 +233,11 @@ async def test_audit_log_has_no_update_or_delete_endpoints(client, session):
 
 
 async def test_record_audit_self_test_shows_up_in_list(client, session):
-    """Demonstrates the intended cross-domain usage: another domain's service
-    calls `record_audit(session, ...)` directly (no HTTP call to this
-    router's own POST endpoint) as part of its own mutation, commits, and the
-    resulting row is then visible through `GET /v1/audit-log` exactly like
-    any entry created via the API. Wiring this into the other 11 domains'
-    actual routers is out of scope for this domain agent — this test is the
-    demonstration that the helper itself works end-to-end."""
+    """Demonstrates the intended (and, since the removal of the POST
+    endpoint, the ONLY) usage: a domain's service calls
+    `record_audit(session, ...)` directly as part of its own mutation,
+    commits, and the resulting row is then visible through
+    `GET /v1/audit-log` exactly as any other entry."""
     tenant = Tenant(name="Self-Test Tenant")
     session.add(tenant)
     await session.commit()
@@ -265,14 +292,14 @@ async def test_verify_reports_valid_golden_chain(client, session):
     """Insert 3 rows for the same tenant, then confirm GET /verify walks the
     whole chain and reports it intact."""
     headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
 
     for i in range(3):
-        resp = await client.post(
-            "/v1/audit-log",
-            json={"action": "create", "entity_type": "trip", "entity_id": f"chain-trip-{i}"},
-            headers=headers,
+        await _write_entry(
+            session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+            entity_type="trip", entity_id=f"chain-trip-{i}",
         )
-        assert resp.status_code == 201, resp.text
 
     resp = await client.get("/v1/audit-log/verify", headers=headers)
     assert resp.status_code == 200, resp.text
@@ -293,16 +320,16 @@ async def test_verify_detects_tampered_row(client, session):
     admin or a compromised process might) and confirm /verify now reports the
     chain invalid at exactly that row's id."""
     headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
 
     created_ids = []
     for i in range(3):
-        resp = await client.post(
-            "/v1/audit-log",
-            json={"action": "create", "entity_type": "trip", "entity_id": f"tamper-trip-{i}"},
-            headers=headers,
+        entry = await _write_entry(
+            session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+            entity_type="trip", entity_id=f"tamper-trip-{i}",
         )
-        assert resp.status_code == 201, resp.text
-        created_ids.append(resp.json()["id"])
+        created_ids.append(entry.id)
 
     # Sanity check: untampered chain is valid before we touch anything.
     pre = await client.get("/v1/audit-log/verify", headers=headers)
@@ -334,20 +361,19 @@ async def test_verify_is_scoped_per_tenant(client, session):
 
     headers_a = await auth_headers(client, session, role="admin", tenant_id=tenant_a.id)
     headers_b = await auth_headers(client, session, role="admin", tenant_id=tenant_b.id)
+    actor_a = (await client.get("/v1/auth/me", headers=headers_a)).json()["id"]
+    actor_b = (await client.get("/v1/auth/me", headers=headers_b)).json()["id"]
 
-    resp_a = await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "trip", "entity_id": "a-trip"},
-        headers=headers_a,
+    entry_a = await _write_entry(
+        session, tenant_id=tenant_a.id, actor_user_id=actor_a, action="create",
+        entity_type="trip", entity_id="a-trip",
     )
-    assert resp_a.status_code == 201
-    await client.post(
-        "/v1/audit-log",
-        json={"action": "create", "entity_type": "trip", "entity_id": "b-trip"},
-        headers=headers_b,
+    await _write_entry(
+        session, tenant_id=tenant_b.id, actor_user_id=actor_b, action="create",
+        entity_type="trip", entity_id="b-trip",
     )
 
-    tampered_id = resp_a.json()["id"]
+    tampered_id = entry_a.id
     result = await session.execute(select(AuditLog).where(AuditLog.id == tampered_id))
     row = result.scalar_one()
     row.action = "tampered"

@@ -1,26 +1,17 @@
 """Pydantic v2 schemas for the Audit Log domain.
 
-No `AuditLogUpdate` schema — deliberately: the domain is append-only, there is
-no update endpoint (see app/api/v1/audit_log.py).
+No `AuditLogCreate`/`AuditLogUpdate` schema — deliberately: the domain is
+append-only and has no HTTP create or update endpoint. Rows are written only
+by the server's own `app.services.audit_log.record_audit()`, called from
+inside another domain's own mutation (see app/api/v1/audit_log.py's module
+docstring for why the API-writable version of this endpoint was removed).
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class AuditLogCreate(BaseModel):
-    """Body for `POST /v1/audit-log`. Note there is no `actor_user_id` field —
-    the endpoint always attributes the entry to the authenticated caller
-    (`get_current_user`); a client cannot forge another user as the actor."""
-
-    action: str = Field(..., min_length=1, max_length=100)
-    entity_type: str = Field(..., min_length=1, max_length=100)
-    entity_id: str = Field(..., min_length=1, max_length=36)
-    before_json: dict[str, Any] | None = None
-    after_json: dict[str, Any] | None = None
+from pydantic import BaseModel, ConfigDict
 
 
 class AuditLogRead(BaseModel):

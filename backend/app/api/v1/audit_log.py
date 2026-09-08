@@ -1,23 +1,38 @@
 """Audit Log domain API — `/v1/audit-log`.
 
-APPEND-ONLY BY DESIGN: this router deliberately exposes ONLY `POST` (create)
-and `GET` (list). There is intentionally NO update or delete endpoint of any
-kind — a tamper-evidence/audit trail that can be silently edited or removed
-after the fact isn't one; every row, once written, is permanent. (Same rule
-already established in this codebase for the sibling append-only
-`psl_topups` table — see app/models/psl_ledger.py.)
+APPEND-ONLY BY DESIGN: this router deliberately exposes ONLY `GET` (list,
+verify). There is intentionally NO create, update, or delete endpoint of any
+kind reachable over HTTP — a tamper-evidence/audit trail that can be written
+or edited by an arbitrary API client isn't one; every row must originate
+from the server's own code, and once written is permanent. (Same
+never-mutate rule already established in this codebase for the sibling
+append-only `psl_topups` table — see app/models/psl_ledger.py.)
+
+An earlier version of this router also exposed `POST /v1/audit-log`, letting
+ANY authenticated tenant user write an arbitrary, freeform entry into the
+hash chain via a plain API call. That defeated the point of an evidentiary,
+tamper-evident log: a write path reachable by a client is a write path a
+client (or anything holding a stolen token) can abuse to plant misleading
+entries, and it invited every future caller to log via HTTP instead of
+`record_audit()`, leaving those entries without the compile-time guarantee
+that `actor_user_id`/`tenant_id` came from the authenticated session rather
+than a client-controlled body. It has been removed. Verified before removal
+that nothing calls it: the dashboard's `pages/audit-log/**` only ever issues
+`GET /v1/audit-log` and `GET /v1/audit-log/verify` (grepped
+`dashboard/src/pages/audit-log/api.ts`); the Android app has no reference to
+`/v1/audit-log` anywhere in `android/` (grepped for the literal path and for
+`AuditLogCreate`); and the only caller in this repo was this domain's own
+test file, which posted to the endpoint purely as a stand-in for
+`record_audit()` — that file has been rewritten to call `record_audit()`
+directly, which is what every other domain's service layer already does.
 
 Every query below is filtered by `tenant_id` via `get_current_tenant_id` —
 the sole multi-tenancy isolation boundary in this system.
 
-For PROGRAMMATIC logging from other domains' routers/services, prefer
-importing `record_audit` (or the `get_audit_logger` Depends()-able
-convenience wrapper) from `app.services.audit_log` directly, rather than
-issuing an HTTP call to this router's own POST endpoint — see that module's
-docstring for the intended usage pattern. This router's `POST` endpoint
-exists for: (a) CRUD completeness / manual admin logging via the API, and
-(b) as the target endpoint the self-test in tests/test_audit_log.py checks
-a directly-recorded entry shows up in.
+For PROGRAMMATIC logging from other domains' routers/services: import
+`record_audit` (or the `get_audit_logger` Depends()-able convenience
+wrapper) from `app.services.audit_log` directly and call it as part of your
+own mutation's transaction. There is no other way to write a row.
 """
 from __future__ import annotations
 
@@ -31,41 +46,10 @@ from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.audit_log import AuditLog
 from app.models.user import User
-from app.schemas.audit_log import (
-    AuditLogCreate,
-    AuditLogListResponse,
-    AuditLogRead,
-    AuditLogVerifyResponse,
-)
-from app.services.audit_log import record_audit, verify_chain
+from app.schemas.audit_log import AuditLogListResponse, AuditLogVerifyResponse
+from app.services.audit_log import verify_chain
 
 router = APIRouter(prefix="/v1/audit-log", tags=["audit-log"])
-
-
-@router.post("", response_model=AuditLogRead, status_code=201)
-async def create_audit_log_entry(
-    body: AuditLogCreate,
-    tenant_id: str = Depends(get_current_tenant_id),
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> AuditLog:
-    """Any authenticated tenant user may write an audit entry. The entry
-    always records the CALLER (`get_current_user`) as `actor_user_id` — this
-    is not a client-supplied field on `AuditLogCreate`, precisely so a client
-    cannot forge an entry attributed to a different user."""
-    entry = await record_audit(
-        session,
-        tenant_id=tenant_id,
-        actor_user_id=user.id,
-        action=body.action,
-        entity_type=body.entity_type,
-        entity_id=body.entity_id,
-        before=body.before_json,
-        after=body.after_json,
-    )
-    await session.commit()
-    await session.refresh(entry)
-    return entry
 
 
 @router.get("", response_model=AuditLogListResponse)
