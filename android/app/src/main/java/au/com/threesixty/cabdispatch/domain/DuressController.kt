@@ -52,7 +52,7 @@ sealed interface DuressUiState {
  * and/or render [state] without owning this lifecycle logic itself. Per spec §2 ("hidden duress
  * gesture ... active throughout", not just during an active trip), the hidden hit-target is wired
  * on both [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] (S3/Hired) and
- * [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen] (the wheel-dashboard
+ * `WheelDashboardScreen` (deleted, P0.3) (the wheel-dashboard
  * shell) — see [au.com.threesixty.cabdispatch.ui.overlays.HiddenDuressGestureZone], the shared
  * gesture-detector composable both use. Each screen owns only the *gesture detector* + rendering
  * [state]; this class owns the actual state machine both share.

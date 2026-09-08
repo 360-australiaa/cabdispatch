@@ -114,9 +114,9 @@ import java.time.OffsetDateTime
  * a "tap card, then tap accept" two-step would burn meaningfully into that window on a slow
  * network — the fast path has to be one tap from the list itself.
  *
- * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
+ * Verified (reconciliation pass): `WheelDashboardScreen` (deleted, P0.3)
  * embeds this composable directly with the shared [NavHostController] for the
- * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.AVAILABLE_TRIPS] slot — see that screen's
+ * `WheelSlot.AVAILABLE_TRIPS` (deleted, P0.3) slot — see that screen's
  * `AvailableTripsSlotContent`; `DeckHomeScreen`'s DISPATCH pane does the same inside `PaneShell`.
  */
 @Composable

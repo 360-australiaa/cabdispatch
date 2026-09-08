@@ -72,7 +72,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 /**
- * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.EARNINGS] wheel-slot content — the
+ * `WheelSlot.EARNINGS` (deleted, P0.3) wheel-slot content — the
  * "EARNINGS OVERVIEW" screen, fed by [EarningsWheelViewModel] off the same real
  * [au.com.threesixty.cabdispatch.data.local.entity.TripEntity] rows as the History pane (see that
  * ViewModel's doc for the exact date-range query, shared with the History pane's filter pills).

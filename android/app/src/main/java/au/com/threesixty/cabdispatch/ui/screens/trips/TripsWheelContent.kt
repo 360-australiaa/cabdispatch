@@ -58,10 +58,10 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
- * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.TRIPS] wheel-slot content, per design spec
+ * `WheelSlot.TRIPS` (deleted, P0.3) wheel-slot content, per design spec
  * TCT-DRIVER-APP-01.md §4 ("Trips: trip history rows — route, time, payment method, fare
  * amount"). Reused for BOTH the "My Trips" and "History" dock destinations (this app has one real
- * trips data source, not two — see [au.com.threesixty.cabdispatch.ui.screens.dashboard.HomeDashboardV2ChromeOverlay]'s
+ * trips data source, not two — see `HomeDashboardV2ChromeOverlay` (deleted, P0.3)'s
  * `dockTiles` doc for why), presented with two different layouts per [TripsPaneVariant]: the
  * focused active/recent cards + "OPEN ACTIVE TRIP" CTA ([TripsPaneVariant.MY_TRIPS]) and the
  * filterable history table ([TripsPaneVariant.HISTORY], what the rail's TRIPS entry opens).
@@ -84,8 +84,8 @@ import java.time.format.DateTimeFormatter
  * still drive the same real date-range query, and no affordance was added or removed (the standing
  * no-decorative-controls rule). `PaneShell` supplies the "Trip history" title above this content.
  *
- * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
- * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.TRIPS], wiring
+ * Verified (reconciliation pass): `WheelDashboardScreen` (deleted, P0.3)
+ * renders this composable for `WheelSlot.TRIPS` (deleted, P0.3), wiring
  * [onTripClick] exactly as suggested below — see that screen's `TripsSlotContent`.
  */
 enum class TripsPaneVariant { MY_TRIPS, HISTORY }

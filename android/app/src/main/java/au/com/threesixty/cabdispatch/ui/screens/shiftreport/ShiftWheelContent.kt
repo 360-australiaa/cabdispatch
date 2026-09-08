@@ -47,7 +47,7 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.SHIFT] wheel-slot content, per design spec
+ * `WheelSlot.SHIFT` (deleted, P0.3) wheel-slot content, per design spec
  * TCT-DRIVER-APP-01.md §4 ("Shift: stat grid — hours on shift, trip count, cash to reconcile,
  * card settled, + Submit Shift action") — a direct Compose port of the reference prototype's
  * Shift `.stat-grid` + `.shift-btn` (docs/driver-dashboard-full-prototype.html lines ~367-374).
@@ -64,8 +64,8 @@ import java.time.Instant
  * Renders only the content-pane *body*, not eyebrow/hero title chrome — same convention as
  * [au.com.threesixty.cabdispatch.ui.screens.messages.MessagesWheelContent].
  *
- * Verified (reconciliation pass): [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardScreen]
- * renders this composable for [au.com.threesixty.cabdispatch.ui.wheel.WheelSlot.SHIFT], wiring
+ * Verified (reconciliation pass): `WheelDashboardScreen` (deleted, P0.3)
+ * renders this composable for `WheelSlot.SHIFT` (deleted, P0.3), wiring
  * [onSubmitted] exactly as suggested below — see that screen's `ShiftSlotContent`:
  * `ShiftWheelContent(onSubmitted = { summary -> ShiftSubmissionHandoff.set(summary); navController.navigate(CabDispatchRoutes.SHIFT_SUBMITTED) })`
  * (see [au.com.threesixty.cabdispatch.domain.ShiftSubmissionHandoff]'s doc for why the hand-off
