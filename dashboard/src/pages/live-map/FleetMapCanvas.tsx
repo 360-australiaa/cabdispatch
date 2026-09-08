@@ -373,9 +373,21 @@ function MapboxFleetMap({
     const map = mapRef.current;
     if (!map || !follow || !onFollowInterrupted) return;
     const onDragStart = () => onFollowInterrupted();
+    // Zoom too (owner, 2026-09-08: "when I zoom in it keeps moving the location"). Only drag
+    // interrupted follow, so a wheel / pinch / double-click zoom was answered ~1.2 s later by the
+    // next position frame's easeTo re-centring the camera -- the map appeared to slide away from
+    // wherever the operator had just zoomed. `originalEvent` is set only on user-initiated zooms;
+    // our own easeTo/flyTo fire zoomstart with no originalEvent and must not cancel follow.
+    const onZoomStart = (e: mapboxgl.MapboxEvent & { originalEvent?: Event }) => {
+      if (e.originalEvent) onFollowInterrupted();
+    };
     map.on("dragstart", onDragStart);
+    map.on("zoomstart", onZoomStart);
+    map.on("wheel", onFollowInterrupted);
     return () => {
       map.off("dragstart", onDragStart);
+      map.off("zoomstart", onZoomStart);
+      map.off("wheel", onFollowInterrupted);
     };
   }, [follow, onFollowInterrupted]);
 
