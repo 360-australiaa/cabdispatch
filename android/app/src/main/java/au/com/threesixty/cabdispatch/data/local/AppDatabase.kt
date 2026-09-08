@@ -97,7 +97,16 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TollGantryEntity::class,
     ],
     version = 12,
-    exportSchema = false,
+    // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
+    // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
+    // that produced no schema JSON at all on this project. This captures v12 onward under
+    // android/app/schemas/ -- it does NOT retroactively produce schema JSON for versions 8-11,
+    // which shipped with this flag off. `androidTest/.../RoomMigrationTest.kt` covers the
+    // 8->9->10->11->12 chain anyway, by constructing the v8 starting schema by hand (from the
+    // entity definitions as they stood at that version, reconstructed from git history) rather
+    // than from an exported asset -- see that file's doc for exactly what that does and does not
+    // prove, and why it is still a real, executing test rather than a placeholder.
+    exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tripDao(): TripDao
