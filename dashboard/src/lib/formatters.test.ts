@@ -63,9 +63,12 @@ const MONEY_HELPERS: [string, (v: string | null | undefined) => string][] = [
   ["driver-engagement", engagementMoney],
   ["billing (formatAud)", billingAud],
   ["reports (formatAud)", reportsAud],
-  // NOTE: `platform`'s formatAud is deliberately excluded -- it behaves
-  // differently from all eight above, and gets its own block at the bottom of
-  // this file documenting exactly how.
+  // D5: `platform`'s formatAud used to be excluded here because it behaved
+  // differently from all eight above. It no longer does -- the consolidation
+  // resolved all three of its divergences against it (see the block at the
+  // bottom of this file), so it now belongs in the shared table like the
+  // rest, and every assertion above covers it too.
+  ["platform (formatAud)", platformAud],
 ];
 
 const DATETIME_AU_HELPERS: [string, (v: string | null | undefined) => string][] = [
@@ -137,52 +140,59 @@ describe("formatMoney / formatAud", () => {
 });
 
 /**
- * KNOWN DEFECTS in `pages/platform/format.ts`'s `formatAud`, asserted as-is.
+ * RESOLVED by D5: `pages/platform/format.ts`'s `formatAud` was the odd one out
+ * among the nine money helpers in three ways, all of them visible to the
+ * platform owner on the console that shows tenant MRR. D1 asserted the three
+ * divergences as-is and noted that "whichever survives should be the en-AU
+ * eight, and this block should then fail and be deleted".
  *
- * It is the odd one out among the nine money helpers in three ways, and all
- * three are visible to the platform owner on the console that shows tenant
- * MRR:
+ * It did fail, and this is the deliberate update. All three were resolved
+ * *against* platform's variant, because on each point the majority behaviour
+ * was also the correct one:
  *
- *  1. It calls `n.toLocaleString(undefined, ...)` -- the *browser's* locale --
- *     where the other eight pin `Intl.NumberFormat("en-AU", ...)`. Outside an
- *     en-AU browser, AUD renders with the disambiguating "A$" symbol, so the
- *     platform console shows "A$49.00" for the same figure every other page
- *     shows as "$49.00". Its own doc comment claims it returns "$49.00".
- *  2. Empty string is not treated as missing: `""` coerces to 0 and renders
- *     as money, so a field the API never sent reads as a real zero -- the
- *     exact thing the repo's honesty rule forbids, and which the other eight
- *     handle correctly.
- *  3. A non-numeric value returns the em-dash instead of echoing the raw
- *     value, so a malformed figure is indistinguishable from a missing one.
+ *  1. **Locale.** It called `n.toLocaleString(undefined, ...)` -- the
+ *     *browser's* locale -- so outside an en-AU browser `Intl` disambiguated
+ *     AUD as "A$" and the platform console showed "A$49.00" for a figure
+ *     every other page showed as "$49.00". Its own doc comment claimed it
+ *     returned "$49.00", so this was a bug against its stated contract, not a
+ *     considered choice. The viewer's browser locale is not a statement about
+ *     the tenant's currency, and one figure must not have two spellings
+ *     inside one product. Now pinned to en-AU like the other eight.
+ *  2. **Empty string.** It coerced `""` to 0 and rendered it as real money,
+ *     so a field the API never sent read as "$0.00" -- precisely what the
+ *     repo's honest-null rule forbids ("never fake a count or a state").
+ *     `""` is now missing, like the other eight.
+ *  3. **Malformed values.** It returned the em-dash for a non-numeric value,
+ *     making a malformed figure indistinguishable from a missing one. It now
+ *     echoes the raw value, like the other eight, so a bad figure is visible
+ *     rather than silently swallowed.
  *
- * D5 consolidates these helpers; whichever survives should be the en-AU
- * eight, and this block should then fail and be deleted.
+ * There is now one implementation (`lib/format.ts`'s `formatMoney`, aliased
+ * as `formatAud`), so `platformAud` is in MONEY_HELPERS above and covered by
+ * every assertion in that block. What remains here is only the inverse of the
+ * three old assertions: proof the divergences are gone.
  */
-describe("platform formatAud (known divergences)", () => {
-  it("follows the browser locale instead of pinning en-AU", () => {
-    const platform = platformAud("1234.5");
-    const everyoneElse = tripsMoney("1234.5");
-    expect(everyoneElse).toBe("$1,234.50");
-    expect(platform).toBe(
-      (1234.5).toLocaleString(undefined, { style: "currency", currency: "AUD" }),
-    );
+describe("platform formatAud (divergences resolved by D5)", () => {
+  it("pins en-AU rather than following the browser locale", () => {
+    expect(platformAud("1234.5")).toBe(tripsMoney("1234.5"));
+    expect(platformAud("1234.5")).toBe("$1,234.50");
+    expect(platformAud("1234.5")).not.toContain("A$");
   });
 
-  it("treats an empty string as zero rather than as missing", () => {
-    expect(platformAud("")).not.toBe("—");
-    expect(tripsMoney("")).toBe("—");
+  it("treats an empty string as missing, not as a real zero", () => {
+    expect(platformAud("")).toBe("—");
+    expect(platformAud("0")).toBe("$0.00");
   });
 
-  it("dashes a non-numeric value instead of echoing it", () => {
-    expect(platformAud("not-a-number")).toBe("—");
-    expect(tripsMoney("not-a-number")).toBe("not-a-number");
+  it("echoes a non-numeric value instead of dashing it", () => {
+    expect(platformAud("not-a-number")).toBe("not-a-number");
   });
 
-  it("agrees with the others on null and on grouping/rounding", () => {
+  it("still agrees with the others on null and on grouping/rounding", () => {
     expect(platformAud(null)).toBe("—");
     expect(platformAud(undefined)).toBe("—");
-    expect(platformAud(1000000)).toContain("1,000,000.00");
-    expect(platformAud("10.005")).toContain("10.01");
+    expect(platformAud(1000000)).toBe("$1,000,000.00");
+    expect(platformAud("10.005")).toBe("$10.01");
   });
 });
 

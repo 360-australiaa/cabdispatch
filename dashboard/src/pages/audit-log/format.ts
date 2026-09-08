@@ -1,31 +1,12 @@
-import axios from "axios";
+/** Display formatting for the Audit log page.
+ *
+ * The `format*` helpers below are re-exported from `@/lib/format`, which is
+ * now the single implementation of each (see that module's header: this file
+ * used to carry its own copy, one of 12 near-identical ones across the
+ * per-page `format.ts` modules). Only the page-specific helpers below are local.
+ */
 
-/** Best-effort human message out of an Axios/FastAPI error -- same shape as
- * `pages/duress/format.ts`'s helper of the same name, duplicated here rather
- * than shared cross-domain (no shared error-formatting util exists yet). */
-export function errorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const detail = (err.response?.data as { detail?: unknown } | undefined)?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      const first = detail[0] as { msg?: string; loc?: unknown[] } | undefined;
-      if (first?.msg) {
-        const field = Array.isArray(first.loc) ? first.loc.at(-1) : undefined;
-        return field ? `${String(field)}: ${first.msg}` : first.msg;
-      }
-    }
-    if (err.response?.status) return `Request failed (${err.response.status}).`;
-    return err.message;
-  }
-  return err instanceof Error ? err.message : "Something went wrong.";
-}
-
-export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
-}
+export { errorMessage, formatDateTimeSeconds as formatDateTime, truncateId as shortId } from "@/lib/format";
 
 /** "vehicle.update" / "create" -> a badge variant that roughly buckets the
  * action by CRUD-ish verb, purely cosmetic (the backend imposes no fixed enum
@@ -38,9 +19,4 @@ export function actionBadgeVariant(
   if (a.includes("create") || a.includes("add") || a.includes("trigger")) return "success";
   if (a.includes("update") || a.includes("edit") || a.includes("rotate")) return "accent";
   return "outline";
-}
-
-/** Truncated id for compact display, full value available on hover via `title`. */
-export function shortId(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
 }

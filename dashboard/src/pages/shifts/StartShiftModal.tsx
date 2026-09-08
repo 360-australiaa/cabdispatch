@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import axios from "axios";
 import { Button, Input, Modal, Select } from "@/components/ui";
 import { useStartShiftMutation } from "./api";
 import { fromDatetimeLocalValue, formatDateTime } from "./format";
 import type { DriverLite, ShiftConflictDetail, VehicleLite } from "./types";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 function conflictDetail(err: unknown): ShiftConflictDetail | null {
   if (!axios.isAxiosError(err) || err.response?.status !== 409) return null;
@@ -33,18 +34,18 @@ export function StartShiftModal({
   const [conflict, setConflict] = useState<ShiftConflictDetail | null>(null);
   const startMutation = useStartShiftMutation();
 
-  useEffect(() => {
-    if (open) {
-      setDriverId("");
-      setVehicleId("");
-      setStartAt("");
-      setConflict(null);
-      startMutation.reset();
-    }
-    // Reset the form only when the modal opens/closes — `startMutation` is
-    // intentionally omitted, it's stable per-mount from useMutation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  // A blank form with no row behind it, so "opened" is the whole key. The
+  // suppression this replaces was there because `startMutation` is read in
+  // the body but must not be a dependency; `useResetOnChange` holds the
+  // callback in a ref, so that is now the hook's contract rather than a
+  // per-file exception.
+  useResetOnChange(open, () => {
+    setDriverId("");
+    setVehicleId("");
+    setStartAt("");
+    setConflict(null);
+    startMutation.reset();
+  });
 
   const driverOptions = drivers.map((d) => ({ value: d.id, label: d.name }));
   const vehicleOptions = vehicles.map((v) => ({ value: v.id, label: v.rego }));

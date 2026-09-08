@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, Sparkles } from "lucide-react";
 import { Badge, Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
@@ -25,6 +25,7 @@ import {
   toDatetimeLocalValue,
 } from "./format";
 import { ExtrasSection } from "./ExtrasSection";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 export interface TariffFormModalProps {
   open: boolean;
@@ -127,15 +128,16 @@ export function TariffFormModal({ open, onClose, mode, tariff }: TariffFormModal
   const faresOrderQuery = useFaresOrderQuery(regulated ? form.region : "");
   const reference = regulated ? faresOrderQuery.data : null;
 
-  useEffect(() => {
-    if (open) {
-      setForm(tariff ? formFromTariff(tariff) : emptyForm());
-      setError(null);
-      setFieldErrors(new Set());
-      setSelectedPreset("");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, tariff?.id]);
+  // Re-seed the form when the modal opens, and when it is re-pointed at a
+  // different row without closing. Keyed on the id alone, never the whole
+  // object: a background refetch produces a new-but-equal row, and resetting
+  // on that would wipe what the operator is part-way through typing.
+  useResetOnChange(open ? (tariff?.id ?? "new") : null, () => {
+    setForm(tariff ? formFromTariff(tariff) : emptyForm());
+    setError(null);
+    setFieldErrors(new Set());
+    setSelectedPreset("");
+  });
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));

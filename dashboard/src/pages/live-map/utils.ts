@@ -1,6 +1,12 @@
 import type { LivePosition } from "@/hooks/useLiveMap";
 import type { Geofence } from "@/hooks/useGeofences";
 import type { VehicleLiveRead } from "./types";
+import { formatDurationShort, formatRelativeTime } from "@/lib/format";
+
+// Both of these used to live in this file. They are shared implementations
+// now (see `@/lib/format`) but are still re-exported from here, because every
+// live-map call site imports them from "./utils".
+export { formatDurationShort, formatRelativeTime } from "@/lib/format";
 
 /**
  * Overlays a WS `/v1/fleet/live` position on top of a REST-fetched vehicle
@@ -65,21 +71,6 @@ export function statusBadgeVariant(status: string): "success" | "accent" | "outl
   if (s === "available") return "success";
   if (isBusyStatus(s)) return "accent";
   return "outline";
-}
-
-export function formatRelativeTime(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (diffSec < 5) return "just now";
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
 }
 
 export function formatLatLng(lat: number | null, lng: number | null): string {
@@ -222,18 +213,6 @@ export function idleLabel(info: IdleInfo): string | null {
   return `Idle ${formatDurationShort(info.idleSinceMs)}`;
 }
 
-/** Compact "Xh Ym" / "Ym" duration label for a millisecond span -- distinct
- * from formatRelativeTime above (that one always suffixes "ago" for a
- * point-in-time timestamp; this one labels a plain duration, e.g. "how long
- * has it been idle for"). */
-export function formatDurationShort(ms: number): string {
-  const totalMinutes = Math.max(0, Math.round(ms / 60_000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (totalMinutes < 1) return "<1m";
-  return `${minutes}m`;
-}
 
 // ---------------------------------------------------------------------------
 // Geofence containment -- a direct TS port of the backend's own

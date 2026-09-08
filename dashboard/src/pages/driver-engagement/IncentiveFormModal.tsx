@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import {
@@ -8,6 +8,7 @@ import {
   type IncentiveCreateInput,
 } from "./hooks";
 import { extractErrorMessage, fromDatetimeLocalValue, toDatetimeLocalValue } from "./format";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 export interface IncentiveFormModalProps {
   open: boolean;
@@ -63,13 +64,14 @@ export function IncentiveFormModal({ open, onClose, mode, incentive }: Incentive
   const updateMutation = useUpdateIncentiveMutation();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  useEffect(() => {
-    if (open) {
-      setForm(incentive ? formFromIncentive(incentive) : emptyForm());
-      setError(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, incentive?.id]);
+  // Re-seed the form when the modal opens, and when it is re-pointed at a
+  // different row without closing. Keyed on the id alone, never the whole
+  // object: a background refetch produces a new-but-equal row, and resetting
+  // on that would wipe what the operator is part-way through typing.
+  useResetOnChange(open ? (incentive?.id ?? "new") : null, () => {
+    setForm(incentive ? formFromIncentive(incentive) : emptyForm());
+    setError(null);
+  });
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));

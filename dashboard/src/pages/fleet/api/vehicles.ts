@@ -11,6 +11,7 @@ import type {
   VehiclePilotReport,
 } from "../types";
 import { LOOKUP_LIMIT, PAGE_LIMIT } from "./constants";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Vehicles: full CRUD against /v1/fleet/vehicles, plus the two read-only
@@ -78,7 +79,7 @@ export function useVehicleLiveOptions() {
       });
       return data.items;
     },
-    refetchInterval: 30_000,
+    ...pollingQueryOptions(POLL.ROSTER),
   });
 }
 
@@ -169,7 +170,7 @@ export function useComplianceExpiry(withinDays = 30) {
       );
       return data;
     },
-    refetchInterval: 60_000,
+    ...pollingQueryOptions(POLL.AMBIENT),
   });
 }
 

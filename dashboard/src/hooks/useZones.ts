@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Data layer for the Zones domain (`/v1/zones`) — named dispatch zones with a
@@ -77,7 +78,7 @@ export function useZoneStatsQuery() {
       const { data } = await apiClient.get<ZoneStats[]>("/v1/zones/stats");
       return data;
     },
-    refetchInterval: 20_000,
+    ...pollingQueryOptions(POLL.SUPPORTING),
   });
 }
 

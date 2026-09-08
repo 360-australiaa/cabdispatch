@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import { useUpdateShiftMutation } from "./api";
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from "./format";
 import type { DriverLite, Shift, VehicleLite } from "./types";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 /** `PATCH /v1/shifts/{id}` — admin corrections: reassign driver/vehicle, fix
  * a mis-keyed reconciliation figure, or flip the `reconciled` flag by hand.
@@ -34,22 +35,25 @@ export function EditShiftModal({
 
   const updateMutation = useUpdateShiftMutation();
 
-  useEffect(() => {
-    if (open && shift) {
-      setDriverId(shift.driver_id);
-      setVehicleId(shift.vehicle_id);
-      setStartAt(toDatetimeLocalValue(shift.start_at));
-      setEndAt(toDatetimeLocalValue(shift.end_at));
-      setTripsCount(String(shift.trips_count));
-      setKmTotal(shift.km_total);
-      setCashTotal(shift.cash_total);
-      setCardTotal(shift.card_total);
-      setPslOwed(shift.psl_owed);
-      setReconciled(shift.reconciled);
-      updateMutation.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, shift]);
+  // Re-seed when the modal opens on a shift, and when it is re-pointed at a
+  // different one. Keyed on the shift's id rather than the whole `shift`
+  // object, which is what the old suppression was really for: the shifts list
+  // refetches on a 30s poll and hands down a new-but-equal object each time,
+  // and resetting on that would wipe a half-finished correction.
+  useResetOnChange(open ? (shift?.id ?? null) : null, () => {
+    if (!shift) return;
+    setDriverId(shift.driver_id);
+    setVehicleId(shift.vehicle_id);
+    setStartAt(toDatetimeLocalValue(shift.start_at));
+    setEndAt(toDatetimeLocalValue(shift.end_at));
+    setTripsCount(String(shift.trips_count));
+    setKmTotal(shift.km_total);
+    setCashTotal(shift.cash_total);
+    setCardTotal(shift.card_total);
+    setPslOwed(shift.psl_owed);
+    setReconciled(shift.reconciled);
+    updateMutation.reset();
+  });
 
   const driverOptions = drivers.map((d) => ({ value: d.id, label: d.name }));
   const vehicleOptions = vehicles.map((v) => ({ value: v.id, label: v.rego }));

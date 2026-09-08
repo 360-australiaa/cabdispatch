@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import { useEndShiftMutation } from "./api";
 import { fromDatetimeLocalValue } from "./format";
 import type { Shift } from "./types";
+import { useResetOnChange } from "@/lib/useResetOnChange";
 
 /** `POST /v1/shifts/{id}/end` — closes an active shift. `trips_count` /
  * `km_total` / `cash_total` / `card_total` are recomputed server-side from
@@ -23,15 +24,16 @@ export function EndShiftModal({
   const [reconciled, setReconciled] = useState(true);
   const endMutation = useEndShiftMutation();
 
-  useEffect(() => {
-    if (open && shift) {
-      setEndAt("");
-      setPslOwed(shift.psl_owed ?? "0");
-      setReconciled(true);
-      endMutation.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, shift]);
+  // Same rule as EditShiftModal: key on the shift's id, not the object, so a
+  // background refetch of the shifts list does not reset a figure the
+  // operator is part-way through keying in.
+  useResetOnChange(open ? (shift?.id ?? null) : null, () => {
+    if (!shift) return;
+    setEndAt("");
+    setPslOwed(shift.psl_owed ?? "0");
+    setReconciled(true);
+    endMutation.reset();
+  });
 
   async function handleSubmit() {
     if (!shift) return;

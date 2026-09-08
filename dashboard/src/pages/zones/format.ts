@@ -1,23 +1,12 @@
-import axios from "axios";
+/** Display formatting for the Zones page.
+ *
+ * The `format*` helpers below are re-exported from `@/lib/format`, which is
+ * now the single implementation of each (see that module's header: this file
+ * used to carry its own copy, one of 12 near-identical ones across the
+ * per-page `format.ts` modules). Only the page-specific helpers below are local.
+ */
 
-/** Extracts a human-readable message from an axios error — same shape
- * handling as the sibling tariffs/format.ts helper. */
-export function extractErrorMessage(err: unknown): string {
-  if (axios.isAxiosError(err)) {
-    const detail = err.response?.data?.detail;
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail)) {
-      return detail
-        .map((d) => {
-          const field = Array.isArray(d?.loc) ? d.loc.at(-1) : undefined;
-          return field ? `${field}: ${d.msg}` : (d?.msg ?? JSON.stringify(d));
-        })
-        .join("; ");
-    }
-    return err.message;
-  }
-  return err instanceof Error ? err.message : "Something went wrong";
-}
+export { extractErrorMessage } from "@/lib/format";
 
 export function formatCoords(lat: number, lng: number): string {
   return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;

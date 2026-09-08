@@ -1,24 +1,14 @@
+/** Display formatting for the Dispatch page.
+ *
+ * The `format*` helpers below are re-exported from `@/lib/format`, which is
+ * now the single implementation of each (see that module's header: this file
+ * used to carry its own copy, one of 12 near-identical ones across the
+ * per-page `format.ts` modules). Only the page-specific helpers below are local.
+ */
+
 import type { JobOfferStatus, JobStatus } from "./types";
 
-export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  // Explicit "en-AU" -- matches the rest of the app's date-formatting
-  // convention (Trips/Shifts/Tariffs/Vouchers all pin this locale); this was
-  // previously left as the browser default, so this page alone could render
-  // dates in a different order on a non-AU browser.
-  return d.toLocaleString("en-AU", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-export function formatMoney(value: string | number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  const n = typeof value === "string" ? Number.parseFloat(value) : value;
-  if (Number.isNaN(n)) return "—";
-  // Was a raw `$${n.toFixed(2)}` -- no thousands separator, not locale-aware.
-  // Matches Trips/Vouchers/Wallet's Intl.NumberFormat AUD convention.
-  return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(n);
-}
+export { formatDateTime, formatMoney } from "@/lib/format";
 
 export function jobStatusBadgeVariant(
   status: string,
