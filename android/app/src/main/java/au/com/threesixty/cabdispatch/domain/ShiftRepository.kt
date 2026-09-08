@@ -2,12 +2,25 @@ package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.ShiftConflictDetail
 import au.com.threesixty.cabdispatch.data.remote.ShiftDto
 import au.com.threesixty.cabdispatch.data.remote.ShiftStartDto
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import retrofit2.HttpException
 import java.io.IOException
 import java.time.Instant
 import java.util.UUID
+
+/**
+ * The vehicle a shift is starting on already has another driver's shift open under a different
+ * driver (`POST /v1/shifts/start` 409 — see [ShiftConflictDetail]'s own doc for the wire shape).
+ * [conflict] carries everything the UI needs to offer a real shift-changeover: who is on it now,
+ * and since when. Retrying the identical start with `force_handover = true`
+ * ([ShiftRepository.startShift]) ends their shift and opens the new one.
+ */
+class ShiftHandoverConflictException(val conflict: ShiftConflictDetail) : Exception(conflict.message)
 
 /** Opens a shift, per spec B5 S1 ("pre-shift inspection checklist ... ends
  * in a call to open a shift"). */
@@ -17,6 +30,9 @@ interface ShiftRepository {
         vehicleId: String,
         inspection: Map<String, String>,
         deviceAndroidId: String? = null,
+        /** See [ShiftHandoverConflictException]'s doc. Defaulted false so every existing call
+         * site — none of which know about handover — is unaffected. */
+        forceHandover: Boolean = false,
     ): Result<ShiftDto>
 
     /** Plain re-read of one shift by id — added for the Plot Zone screen's "currently plotted
@@ -95,6 +111,7 @@ class OutboxBackedShiftRepository(
         vehicleId: String,
         inspection: Map<String, String>,
         deviceAndroidId: String?,
+        forceHandover: Boolean,
     ): Result<ShiftDto> {
         val clientUuid = newUuid()
         val payload = ShiftStartDto(
@@ -103,6 +120,7 @@ class OutboxBackedShiftRepository(
             inspectionJson = inspection,
             deviceAndroidId = deviceAndroidId,
             clientUuid = clientUuid,
+            forceHandover = forceHandover,
         )
 
         // Queue first, attempt second. The reverse order has a real hole in it: if the process dies
@@ -124,7 +142,12 @@ class OutboxBackedShiftRepository(
             // The server answered and said no. Retrying will get the same answer, so don't leave a
             // row behind to burn its attempts and dead-letter — report the refusal to the driver.
             outbox.deleteShiftStart(clientUuid)
-            return Result.failure(error)
+            // A 409 handover conflict is a distinct, actionable refusal (see
+            // ShiftHandoverConflictException's doc) — surface it typed so the UI can offer the
+            // real fix (retry with force_handover=true) instead of a raw "HTTP 409 Conflict".
+            // Anything that fails to parse (older/mismatched server, network proxy mangling the
+            // body) falls back to the generic error exactly as before — never crash on it.
+            return Result.failure(handoverConflictOrNull(error) ?: error)
         }
 
         // Offline. The row stays queued; hand back a shift the app can work under meanwhile.
@@ -161,5 +184,27 @@ class OutboxBackedShiftRepository(
         /** The `clientUuid` inside a [localShiftId], or null if this isn't one. */
         fun clientUuidOf(shiftId: String): String? =
             if (isLocalShiftId(shiftId)) shiftId.removePrefix(LOCAL_SHIFT_ID_PREFIX) else null
+
+        /**
+         * Extracts the `{"detail": {...}}` conflict body off a 409 [HttpException] — same
+         * `errorBody().string()` + [cabDispatchJson] pattern
+         * [au.com.threesixty.cabdispatch.domain.DevicePairingRepository.errorMessage] already uses
+         * for this API's structured error shape, so both places decode the same way. Returns null
+         * (never throws) for anything that isn't a 409, has no body, or doesn't parse as a
+         * [ShiftConflictDetail] — the caller's fallback is the original error.
+         */
+        private fun handoverConflictOrNull(error: Throwable): ShiftHandoverConflictException? {
+            val http = error as? HttpException ?: return null
+            if (http.code() != 409) return null
+            val body = runCatching { http.response()?.errorBody()?.string() }.getOrNull() ?: return null
+            val detail = runCatching {
+                cabDispatchJson.decodeFromString<ShiftConflictErrorEnvelope>(body).detail
+            }.getOrNull() ?: return null
+            return ShiftHandoverConflictException(detail)
+        }
     }
 }
+
+/** Wire shape of a 409's body from `POST /v1/shifts/start` — `{"detail": {ShiftConflictDetail}}`. */
+@Serializable
+private data class ShiftConflictErrorEnvelope(val detail: ShiftConflictDetail? = null)

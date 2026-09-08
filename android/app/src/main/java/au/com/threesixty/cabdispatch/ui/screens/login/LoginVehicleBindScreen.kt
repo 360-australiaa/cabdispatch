@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.remote.ShiftConflictDetail
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
+import au.com.threesixty.cabdispatch.ui.screens.messages.formatMessageRelativeTime
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainKeypad
@@ -121,6 +123,17 @@ fun LoginVehicleBindScreen(
         UnpairedDeviceNoticeDialog(
             visible = state.showUnpairedDeviceNotice,
             onDismiss = { viewModel.dismissUnpairedDeviceNotice() },
+        )
+
+        // 409 from POST /v1/shifts/start: the vehicle just bound to already has another driver's
+        // shift open on it. Unlike the two advisories above, this genuinely blocks — Continue
+        // cannot succeed until the driver either confirms the handover or backs out (see
+        // LoginVehicleBindUiState.handoverConflict's own doc).
+        HandoverConflictDialog(
+            conflict = state.handoverConflict,
+            isConfirming = state.isStartingShift,
+            onConfirm = { viewModel.confirmHandoverAndStart() },
+            onDismiss = { viewModel.dismissHandoverConflict() },
         )
     }
 }
@@ -777,6 +790,63 @@ private fun UnpairedDeviceNoticeDialog(visible: Boolean, onDismiss: () -> Unit) 
                     color = CaptainPalette.textMuted,
                 )
                 CaptainButton(text = "OK, continue", modifier = Modifier.fillMaxWidth(), onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * `POST /v1/shifts/start` 409 — the vehicle just bound to already has another driver's shift open
+ * on it (backend `app/api/v1/shifts.py`, `app/services/shift.py`). Unlike
+ * [DeviceMismatchWarningDialog]/[UnpairedDeviceNoticeDialog] above, the shift has NOT started at
+ * this point — this is a real fork, mirroring the dashboard's `StartShiftModal` conflict footer
+ * (`dashboard/src/pages/shifts/StartShiftModal.tsx`) field-for-field and copy-for-copy so an
+ * operator watching both surfaces sees the same behaviour: confirm to end the other driver's
+ * shift and start this one, or cancel back to the checklist untouched.
+ *
+ * [isConfirming] is [LoginVehicleBindUiState.isStartingShift] during the `forceHandover = true`
+ * retry — the dialog stays open with its primary button showing progress instead of closing and
+ * reopening, and that button disables so a second tap cannot fire a second request.
+ */
+@Composable
+private fun HandoverConflictDialog(
+    conflict: ShiftConflictDetail?,
+    isConfirming: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    CaptainDialogScrim(visible = conflict != null, onDismissRequest = onDismiss) {
+        CaptainPanel(modifier = Modifier.width(520.dp), cornerRadiusDp = 20, raised = true) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Rounded.Warning, contentDescription = null, tint = CaptainPalette.warning, modifier = Modifier.size(24.dp))
+                    Text("Vehicle already on shift", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+                }
+                if (conflict != null) {
+                    Text(
+                        "This vehicle already has an open shift for ${conflict.conflictingDriverName}, " +
+                            "started ${formatMessageRelativeTime(conflict.conflictingShiftStartAt)}.",
+                        fontFamily = InterFamily,
+                        fontSize = 15.sp,
+                        color = CaptainPalette.textSecondary,
+                    )
+                }
+                Text(
+                    "Ending their shift and starting yours is the real shift-changeover action — " +
+                        "only do this once they've actually handed the vehicle over.",
+                    fontFamily = InterFamily,
+                    fontSize = 13.sp,
+                    color = CaptainPalette.textMuted,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CaptainButton(text = "Cancel", outline = true, modifier = Modifier.weight(1f), onClick = onDismiss)
+                    CaptainButton(
+                        text = if (isConfirming) "Ending their shift…" else "End their shift & start mine",
+                        enabled = !isConfirming,
+                        modifier = Modifier.weight(1f),
+                        onClick = onConfirm,
+                    )
+                }
             }
         }
     }

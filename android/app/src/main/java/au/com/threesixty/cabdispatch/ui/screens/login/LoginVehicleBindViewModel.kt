@@ -4,13 +4,17 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.remote.ShiftConflictDetail
 import au.com.threesixty.cabdispatch.data.remote.UserDto
 import au.com.threesixty.cabdispatch.domain.DevicePairingStatus
+import au.com.threesixty.cabdispatch.domain.DriverAuthRepository
 import au.com.threesixty.cabdispatch.domain.DriverLoginResult
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ApiVehicleUuidResolver
 import au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository
+import au.com.threesixty.cabdispatch.domain.ShiftHandoverConflictException
+import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.sync.TariffRefresh
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -125,13 +129,47 @@ data class LoginVehicleBindUiState(
      * be dismissed once and then forgotten permanently.
      */
     val showUnpairedDeviceNotice: Boolean = false,
+    /**
+     * Set on a `POST /v1/shifts/start` 409: the vehicle just bound to already has another
+     * driver's shift open on it (see [au.com.threesixty.cabdispatch.domain.ShiftHandoverConflictException]).
+     * Unlike [shiftError] this is not a dead end — [LoginVehicleBindViewModel.confirmHandoverAndStart]
+     * retries the same start with `force_handover = true` to end their shift and open this one, and
+     * [LoginVehicleBindViewModel.dismissHandoverConflict] backs out to the checklist untouched (e.g.
+     * the driver realises it's the wrong vehicle). Mirrors the dashboard's `StartShiftModal` conflict
+     * state (`dashboard/src/pages/shifts/StartShiftModal.tsx`) so both surfaces behave identically.
+     * While [isStartingShift] is also true, a confirm retry is in flight — see that field's doc.
+     */
+    val handoverConflict: ShiftConflictDetail? = null,
 ) {
     val allChecklistItemsChecked: Boolean get() = checklist.values.all { it }
 }
 
-class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val driverAuthRepository = SharedPreferencesDriverAuthRepository(application, AppContainer.apiService)
+class LoginVehicleBindViewModel @JvmOverloads constructor(
+    application: Application,
+    /** Injectable seam for [LoginVehicleBindViewModelTest] — production always gets
+     * [AppContainer.shiftRepository], the same singleton every other call site uses.
+     * [AppContainer.shiftRepository] is a `by lazy` bound to real Retrofit/Room dependencies, so
+     * a test cannot swap what it resolves to after the first access anywhere in the process;
+     * injecting it here instead lets a test supply a fake with no [AppContainer] setup at all.
+     * `@JvmOverloads` keeps the single-arg `(Application)` constructor
+     * [androidx.lifecycle.viewmodel.compose.viewModel]'s default factory looks up via reflection,
+     * so every existing call site is unaffected. */
+    private val shiftRepository: ShiftRepository = AppContainer.shiftRepository,
+    /** Same reasoning as [shiftRepository]: [startShift] has always gated on
+     * `DevicePairingStatus.isUnpaired(AppContainer.deviceCommandHeartbeat.state.value...)`, but
+     * [AppContainer.deviceCommandHeartbeat] is a real device-command poll loop wired to a live
+     * [au.com.threesixty.cabdispatch.data.remote.ApiService]/[android.content.Context] — nothing
+     * a unit test should have to stand up just to answer one boolean. Production default is the
+     * exact same check, unchanged. */
+    private val isDeviceUnpairedForShift: () -> Boolean = {
+        val command = AppContainer.deviceCommandHeartbeat.state.value
+        DevicePairingStatus.isUnpaired(command.deviceId, command.deviceRejected)
+    },
+    /** Same reasoning again: [AppContainer.apiService] has a `private set` (only
+     * [AppContainer.init] may assign it), which a test cannot do without standing up the whole
+     * container — so the object built from it is injected instead of the property that feeds it. */
+    private val driverAuthRepository: DriverAuthRepository = SharedPreferencesDriverAuthRepository(application, AppContainer.apiService),
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(LoginVehicleBindUiState())
     val uiState: StateFlow<LoginVehicleBindUiState> = _uiState.asStateFlow()
@@ -261,6 +299,33 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(checklist = it.checklist + (key to !(it.checklist[key] ?: false))) }
     }
 
+    /**
+     * Test-only seam: puts the state [startShift] requires (a logged-in driver, a bound vehicle,
+     * every checklist item ticked, on [LoginStep.INSPECTION]) directly, skipping [login]'s and
+     * [bindVehicle]'s own real network calls — [LoginVehicleBindViewModelTest] exercises
+     * [startShift]/[confirmHandoverAndStart]/[dismissHandoverConflict] in isolation and needs only
+     * the fields those three read, not a full sign-on run. `internal` rather than `private`: AGP
+     * compiles this module's `test` source set with a friend-path to `main`, so this is visible
+     * there and nowhere outside the module.
+     */
+    internal fun seedReadyToStartShiftForTesting(
+        driverId: String,
+        driverName: String,
+        vehicleId: String,
+        isStartingShift: Boolean = false,
+    ) {
+        _uiState.update {
+            it.copy(
+                step = LoginStep.INSPECTION,
+                loggedInDriverId = driverId,
+                loggedInDriverName = driverName,
+                boundVehicleId = vehicleId,
+                checklist = it.checklist.mapValues { true },
+                isStartingShift = isStartingShift,
+            )
+        }
+    }
+
     /** Acknowledges [LoginVehicleBindUiState.showUnpairedDeviceNotice] — a one-off dismiss for this
      * viewing, not a permanent "don't tell me again": see that field's own doc on why it is re-set
      * on every future [bindVehicle] call for as long as the tablet actually stays unpaired. */
@@ -272,6 +337,13 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
      * ever set; this only defers the SAME [onShiftStarted] navigation callback [startShift] was
      * given, so the driver sees the warning before moving on to the shift-start screen. */
     private var pendingOnShiftStarted: (() -> Unit)? = null
+
+    /** The [onShiftStarted] callback of the [startShift] call that most recently hit a
+     * [LoginVehicleBindUiState.handoverConflict] — kept only so [confirmHandoverAndStart] can
+     * re-run the identical attempt with `forceHandover = true` without the caller (the screen)
+     * having to remember and re-pass it. Cleared by [dismissHandoverConflict] and on any
+     * [startShift] outcome that isn't a fresh conflict. */
+    private var pendingHandoverOnShiftStarted: (() -> Unit)? = null
 
     /**
      * ### This DOES now block on [DevicePairingStatus.isUnpaired] (2026-09-08 policy change)
@@ -299,16 +371,19 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
      * a pairing flag. See [au.com.threesixty.cabdispatch.ui.navigation.postAuthDestination], which
      * returns IDLE for an existing session before it consults the gate at all.
      */
-    fun startShift(onShiftStarted: () -> Unit) {
+    fun startShift(onShiftStarted: () -> Unit, forceHandover: Boolean = false) {
         val state = _uiState.value
+        // Guards against a second tap firing a second request while one is already in flight —
+        // this covers both the plain Continue button and the handover-conflict dialog's "End
+        // their shift & start mine" button, which calls back in here via confirmHandoverAndStart.
+        if (state.isStartingShift) return
         val driverId = state.loggedInDriverId ?: return
         val vehicleId = state.boundVehicleId ?: return
         if (!state.allChecklistItemsChecked) {
             _uiState.update { it.copy(shiftError = "Complete every checklist item before starting the shift") }
             return
         }
-        val command = AppContainer.deviceCommandHeartbeat.state.value
-        if (DevicePairingStatus.isUnpaired(command.deviceId, command.deviceRejected)) {
+        if (isDeviceUnpairedForShift()) {
             // Names a fix the driver can actually carry out on their own: restarting the meter
             // lands them on the readiness gate, which takes a pairing code. An error that only
             // said "not registered" would be a dead end at the last screen before earning.
@@ -320,6 +395,12 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
             }
             return
         }
+        // Kept regardless of forceHandover so a fresh conflict on the retry (someone else grabbed
+        // the vehicle in the meantime) can still be re-armed for a further confirm.
+        pendingHandoverOnShiftStarted = onShiftStarted
+        // handoverConflict is deliberately left as-is here: on the forceHandover retry the dialog
+        // stays visible showing "Ending their shift…" (isStartingShift) rather than disappearing
+        // and reappearing, matching the dashboard's StartShiftModal footer-swap behaviour.
         _uiState.update { it.copy(isStartingShift = true, shiftError = null) }
         viewModelScope.launch {
             val inspectionJson = state.checklist.mapValues { if (it.value) "ok" else "fail" }
@@ -337,13 +418,15 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                 getApplication<Application>().contentResolver,
                 android.provider.Settings.Secure.ANDROID_ID,
             )
-            val result = AppContainer.shiftRepository.startShift(
+            val result = shiftRepository.startShift(
                 driverId,
                 vehicleIdForApi,
                 inspectionJson,
                 deviceAndroidId,
+                forceHandover,
             )
             result.onSuccess { shift ->
+                pendingHandoverOnShiftStarted = null
                 SessionHolder.set(
                     DriverSession(
                         driverId = driverId,
@@ -357,7 +440,11 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                     ),
                 )
                 _uiState.update {
-                    it.copy(isStartingShift = false, deviceMismatchWarning = shift.deviceMismatchWarning)
+                    it.copy(
+                        isStartingShift = false,
+                        handoverConflict = null,
+                        deviceMismatchWarning = shift.deviceMismatchWarning,
+                    )
                 }
                 // The shift is already open at this point regardless — a mismatch warning only
                 // holds the screen transition so the driver actually sees it (see
@@ -368,8 +455,19 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
                     pendingOnShiftStarted = onShiftStarted
                 }
             }.onFailure { error ->
-                _uiState.update {
-                    it.copy(isStartingShift = false, shiftError = error.message ?: "Could not start shift")
+                if (error is ShiftHandoverConflictException) {
+                    // A real, actionable refusal — not the generic dead-end message. Stays on the
+                    // checklist screen with the confirm dialog showing; see
+                    // LoginVehicleBindUiState.handoverConflict's own doc.
+                    _uiState.update { it.copy(isStartingShift = false, handoverConflict = error.conflict) }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isStartingShift = false,
+                            handoverConflict = null,
+                            shiftError = error.message ?: "Could not start shift",
+                        )
+                    }
                 }
             }
         }
@@ -381,5 +479,22 @@ class LoginVehicleBindViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(deviceMismatchWarning = null) }
         pendingOnShiftStarted?.invoke()
         pendingOnShiftStarted = null
+    }
+
+    /** The driver has confirmed a real shift-changeover on [LoginVehicleBindUiState.handoverConflict]:
+     * re-runs the exact same [startShift] attempt with `forceHandover = true`, which ends the
+     * other driver's shift on this vehicle server-side and opens this one. No-ops if there is no
+     * conflict in flight (e.g. a stray second tap after it already resolved). */
+    fun confirmHandoverAndStart() {
+        val onShiftStarted = pendingHandoverOnShiftStarted ?: return
+        startShift(onShiftStarted, forceHandover = true)
+    }
+
+    /** Backs out of [LoginVehicleBindUiState.handoverConflict] without forcing anything — e.g. the
+     * driver realises this is the wrong vehicle. Returns the driver to the checklist exactly as it
+     * was; no request is sent. */
+    fun dismissHandoverConflict() {
+        _uiState.update { it.copy(handoverConflict = null) }
+        pendingHandoverOnShiftStarted = null
     }
 }

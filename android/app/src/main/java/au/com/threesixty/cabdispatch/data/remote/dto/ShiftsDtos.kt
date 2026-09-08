@@ -46,6 +46,33 @@ data class ShiftStartDto(
      * and any future caller that isn't going through the outbox has no need to mint one.
      */
     @SerialName("client_uuid") val clientUuid: String? = null,
+
+    /**
+     * Confirms a real shift-changeover: the vehicle already has another driver's shift open on
+     * it (`POST /v1/shifts/start` returns 409 with a [ShiftConflictDetail] body when this is
+     * false and a conflict exists — see `backend/app/api/v1/shifts.py`,
+     * `backend/app/services/shift.py`). Passing `true` in the SAME request ends the conflicting
+     * shift and opens this one (`backend/tests/test_shifts.py`). Defaulted false so every
+     * existing call site — none of which know about handover — is unaffected; mirrors the
+     * dashboard's `ShiftStartInput.force_handover` (`dashboard/src/pages/shifts/types.ts`) field
+     * for field-naming so an operator sees identical behaviour from both surfaces.
+     */
+    @SerialName("force_handover") val forceHandover: Boolean = false,
+)
+
+/**
+ * Structured `detail` on a 409 from `POST /v1/shifts/start` — the vehicle already has an open
+ * shift under a different driver. Mirrors the dashboard's `ShiftConflictDetail`
+ * (`dashboard/src/pages/shifts/types.ts`) field-for-field, so both surfaces describe the same
+ * conflict identically. See [ShiftStartDto.forceHandover]'s doc for how a driver resolves this.
+ */
+@Serializable
+data class ShiftConflictDetail(
+    val message: String,
+    @SerialName("conflicting_shift_id") val conflictingShiftId: String,
+    @SerialName("conflicting_driver_id") val conflictingDriverId: String,
+    @SerialName("conflicting_driver_name") val conflictingDriverName: String,
+    @SerialName("conflicting_shift_start_at") val conflictingShiftStartAt: String,
 )
 
 @Serializable
