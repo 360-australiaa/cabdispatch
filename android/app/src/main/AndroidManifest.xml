@@ -74,21 +74,29 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
-        <!-- windowSoftInputMode=adjustResize: the soft keyboard must SHRINK the window, not sit
-             on top of it. Two screens take a device pairing code on the tablet's own keyboard (the
-             readiness gate in front of login, and Settings > Pair Meter); with the default
-             behaviour the keyboard overlaid the Pair button, on a gate a driver cannot leave.
-             Compose's imePadding() reports nothing while decorFitsSystemWindows stays true (the
-             default here), so this attribute is what actually makes the room. Nothing else in this
-             app raises the IME - every other text entry is a hand-rolled on-screen keypad - so the
-             blast radius is those two screens. -->
+        <!-- windowSoftInputMode=adjustNothing (2026-09-08): the window must keep its FULL
+             height when the keyboard opens.
+
+             It was adjustResize, for a good reason. Two screens take a device pairing code on
+             the tablet's own keyboard (the readiness gate in front of login, and Settings then
+             Pair Meter), and the default behaviour left the keyboard covering the Pair button
+             on a gate a driver cannot leave. But adjustResize is fatal to this particular app:
+             the framework shrinks the window, FixedDesignCanvas derives the design scale from
+             the height it is handed, and the entire interface therefore redrew at about 62%
+             whenever a keyboard appeared. Reported as "when open keyboard, whole screen
+             alignment not good".
+
+             adjustNothing keeps the window whole, so the scale never moves, and the keyboard is
+             reported to Compose as a real inset (see MainActivity setDecorFitsSystemWindows)
+             which the canvas content pads for itself. That answers the original covered button
+             problem the right way round: the content moves, the design does not resize. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:screenOrientation="sensorLandscape"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.CabDispatch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

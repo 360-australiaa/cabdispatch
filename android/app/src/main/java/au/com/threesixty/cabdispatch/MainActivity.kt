@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.ime
@@ -69,6 +70,11 @@ import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Required for WindowInsets.ime to be REPORTED to Compose rather than silently swallowed
+        // by the framework resizing the window for us. It is what makes the manifest's
+        // `adjustNothing` usable: the window keeps its full height (so FixedDesignCanvas's design
+        // scale never moves) and the keyboard arrives as an inset the content pads for itself.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             CabDispatchScreenRoot()
         }
@@ -126,6 +132,13 @@ private fun FixedDesignCanvas(content: @Composable () -> Unit) {
             // scale is a property of the panel and nothing else. The keyboard is handled where it
             // belongs -- as padding on the content below -- which moves things without resizing
             // them.
+            //
+            // `exclude(ime)` alone did NOT achieve this and was the first attempt: under
+            // adjustResize the framework shrinks the window before Compose measures anything, so
+            // the ime inset reads zero and there is nothing left to exclude. The manifest is
+            // adjustNothing now, which keeps the window at full height and reports the keyboard as
+            // a real inset. The exclusion stays because it is what makes the intent explicit and
+            // holds if the soft-input mode is ever changed back.
             .windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime)),
     ) {
         val systemDensity = LocalDensity.current
