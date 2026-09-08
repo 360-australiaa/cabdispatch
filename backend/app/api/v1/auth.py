@@ -15,12 +15,20 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.core.ratelimit import (
+    DRIVER_LOGIN_PER_CODE,
+    DRIVER_LOGIN_PER_IP,
+    LOGIN_PER_IP,
+    MFA_LOGIN_PER_IP,
+    enforce,
+    limiter,
+)
 from app.core.security import (
     TOKEN_TYPE_MFA,
     TOKEN_TYPE_REFRESH,
@@ -35,6 +43,7 @@ from app.core.security import (
     verify_password,
     verify_totp_code,
 )
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.auth import (
     DriverLoginRequest,
@@ -100,9 +109,12 @@ def _login_result(user: User) -> TokenResponse | MfaRequiredResponse:
 
 
 @router.post("/login", response_model=TokenResponse | MfaRequiredResponse)
+@limiter.limit(LOGIN_PER_IP)
 async def login(
-    body: LoginRequest, session: AsyncSession = Depends(get_session)
+    request: Request, body: LoginRequest, session: AsyncSession = Depends(get_session)
 ) -> TokenResponse | MfaRequiredResponse:
+    """Rate limited to LOGIN_PER_IP. `request` is present solely because
+    slowapi's decorator reads the limiter off it — the handler ignores it."""
     result = await session.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
@@ -113,13 +125,40 @@ async def login(
 
 
 @router.post("/driver-login", response_model=TokenResponse | MfaRequiredResponse)
+@limiter.limit(DRIVER_LOGIN_PER_IP)
 async def driver_login(
-    body: DriverLoginRequest, session: AsyncSession = Depends(get_session)
+    request: Request, body: DriverLoginRequest, session: AsyncSession = Depends(get_session)
 ) -> TokenResponse | MfaRequiredResponse:
     """The real driver-facing counterpart to POST /login: Driver ID + PIN
-    instead of email + password. `driver_code` is globally unique (see
-    app/services/user.py::assert_driver_code_available) so — same as
-    email — the lookup needs no tenant context.
+    instead of email + password.
+
+    ⚠ TENANT SCOPING (breaking change). This endpoint used to look the driver up
+    with `select(User).where(User.driver_code == body.driver_code)` — no tenant
+    filter at all. The comment that justified it claimed `driver_code` is
+    "globally unique"; `app/services/user.py::assert_driver_code_available` in
+    fact only guarantees uniqueness where it is called, and even perfect global
+    uniqueness would not make a GLOBAL lookup safe: it meant every tenant on the
+    platform shared one 6-digit-PIN credential space, so an attacker guessing
+    PINs was guessing against the union of every operator's drivers at once
+    (backend audit §5 ADDENDUM). `tenant_slug` is now required and the lookup is
+    filtered by `User.tenant_id`.
+
+    An unknown `tenant_slug` returns the SAME 401 as a wrong PIN, deliberately:
+    a distinct 404 would turn this endpoint into an oracle enumerating which
+    operators exist on the platform.
+
+    ⚠ RATE LIMITING. Two limits apply, and BOTH must pass:
+      * DRIVER_LOGIN_PER_IP, by the decorator above — stops one host spraying
+        PINs at many driver codes.
+      * DRIVER_LOGIN_PER_CODE, enforced imperatively below — stops a
+        distributed/rotating-IP attack grinding a SINGLE driver's 6-digit PIN,
+        which the per-IP limit alone does nothing about. It is keyed on
+        tenant+code (not code alone) so one tenant cannot lock out an
+        identically-numbered driver in another tenant.
+    The per-code counter is consumed before credentials are checked, so a
+    successful login costs a unit too — that is intentional: the limit is on
+    attempts against a credential, not on failures, and 20/hour is far above any
+    real driver's shift-start behaviour.
 
     Replaces the placeholder driverId->email / pin->password mapping
     documented on the Android side in
@@ -139,7 +178,25 @@ async def driver_login(
     app.services.compliance_expiry.check_driver_authority_expiry, wired into
     PATCH /v1/trips/{id}/tick), it doesn't stop the driver logging in.
     """
-    result = await session.execute(select(User).where(User.driver_code == body.driver_code))
+    enforce(
+        DRIVER_LOGIN_PER_CODE,
+        "driver-login-code",
+        body.tenant_slug,
+        body.driver_code,
+        detail="Too many login attempts for this driver code",
+    )
+
+    tenant_result = await session.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant is None:
+        raise _INVALID_DRIVER_CREDENTIALS
+
+    result = await session.execute(
+        select(User).where(
+            User.driver_code == body.driver_code,
+            User.tenant_id == tenant.id,
+        )
+    )
     user = result.scalar_one_or_none()
 
     if (
@@ -157,8 +214,9 @@ async def driver_login(
 
 
 @router.post("/mfa/login", response_model=TokenResponse)
+@limiter.limit(MFA_LOGIN_PER_IP)
 async def mfa_login(
-    body: MfaLoginRequest, session: AsyncSession = Depends(get_session)
+    request: Request, body: MfaLoginRequest, session: AsyncSession = Depends(get_session)
 ) -> TokenResponse:
     """Second step of login for mfa_enabled accounts: exchanges the
     short-lived `mfa_token` from POST /v1/auth/login plus a 6-digit TOTP code
