@@ -225,6 +225,16 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     last_lat: Mapped[float | None] = mapped_column(nullable=True)
     last_lng: Mapped[float | None] = mapped_column(nullable=True)
     last_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Highest TripTickRequest.tick_seq already applied to this trip — the
+    # server-side half of /tick idempotency (backend audit §4). A tick
+    # arriving with tick_seq <= this value is a client retry of work already
+    # billed and is answered with a 200 no-op; see
+    # app.services.trips.is_replayed_tick. Nullable because a trip created
+    # before this column existed, or driven by a meter build that predates
+    # TripTickRequest.tick_seq, has never applied a sequenced tick — those
+    # trips fall back to the timestamp defence (points at or before last_ts
+    # are dropped), which needs no client cooperation.
+    last_tick_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # --- running / final meter totals ---
     distance_m: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

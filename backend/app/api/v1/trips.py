@@ -60,12 +60,14 @@ from app.services.trips import (
     SplitPaymentMismatchError,
     TripNotClosedError,
     UnknownTariffError,
+    accepted_tick_points,
     apply_tick,
     build_gps_trace_row,
     close_trip,
     compute_variance_pct,
     driver_earnings_today,
     flag_trip_for_review,
+    is_replayed_tick,
     recompute_from_trace,
     resolve_is_maxi_vehicle,
     resolve_tariff,
@@ -91,6 +93,36 @@ async def _get_trip_or_404(trip_id: str, tenant_id: str, session: AsyncSession) 
     return trip
 
 
+def _require_trip_write_access(current_user: User, *, driver_id: str | None, action: str) -> None:
+    """Every write to a trip goes through here (backend audit §4: "No
+    role/ownership check on any trip write ... any driver token can tick or
+    close any other driver's trip"). Until now `create`, `tick`, `close`,
+    `PATCH` and `DELETE` took only `get_current_tenant_id`, so tenant
+    membership was the whole authorisation story: any driver in the tenant
+    could tick another driver's running meter, close their trip out from
+    under them, repoint it at a different vehicle, or delete it.
+
+    The rule mirrors `flag_trip` below, which was the only endpoint in this
+    file that ever checked identity: a `driver`-role caller may only write
+    trips where they are the trip's own driver; the staff roles
+    (`_DISPATCH_ROLES` — owner/admin/dispatcher) are unrestricted, because
+    correcting and closing out a driver's trip from the dashboard is exactly
+    their job.
+
+    A trip with `driver_id` set to None or to a driver who no longer exists
+    is NOT writable by a driver-role caller — an unattributed trip is a
+    dispatcher's problem, not something any driver may claim by writing to
+    it."""
+    if current_user.role in _DISPATCH_ROLES:
+        return
+    if driver_id is not None and driver_id == current_user.id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"A driver may only {action} their own trips",
+    )
+
+
 # --- Create -------------------------------------------------------------
 
 
@@ -98,8 +130,14 @@ async def _get_trip_or_404(trip_id: str, tenant_id: str, session: AsyncSession) 
 async def create_trip(
     payload: TripCreate,
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
+    # A driver may only open a trip in their own name — see
+    # _require_trip_write_access. Checked against the REQUESTED driver_id
+    # (there is no trip row yet), which is what stops a driver attributing a
+    # trip, and its takings, to somebody else.
+    _require_trip_write_access(current_user, driver_id=payload.driver_id, action="create")
     # Authoritative: resolved server-side from the vehicle's real
     # vehicle_class, never taken from payload.maxi (accepted but ignored for
     # billing — see TripCreate.maxi's doc comment).
@@ -177,6 +215,26 @@ async def sync_trips(
     results: list[TripSyncResultItem] = []
     newly_created: list[Trip] = []
 
+    # Each item runs in its OWN SAVEPOINT (backend audit §4, "the batch-abort
+    # bug" — the highest-severity backend finding). This loop used to flush
+    # per item but commit once at the very end, while four separate
+    # validation failures (unknown tariff, invalid voucher, invalid account
+    # reference, split-payment mismatch) raised HTTPException from inside the
+    # loop. FastAPI unwound the request without ever reaching that commit, so
+    # ONE poisoned item silently discarded every already-flushed good trip in
+    # the same batch — and the Android meter posts a whole shift's queued
+    # offline trips as a single batch, so one bad voucher lost a shift's
+    # takings. `session.begin_nested()` gives each item its own rollback
+    # boundary: a failed item's partial work (its Trip row, its GPS trace, a
+    # voucher it had already redeemed) is undone, its siblings' work is not,
+    # and the failure is reported back per item as
+    # TripSyncResultItem(status="failed", reason=...) rather than as a status
+    # code for the whole request.
+    #
+    # The batch as a whole therefore no longer fails on one bad item: a
+    # caller must read `status` per result. A malformed *request* (bad JSON,
+    # a field pydantic rejects) is still a 422 for the batch — that is a
+    # client bug, not one trip's data being unacceptable.
     for item in items:
         existing = await session.execute(
             select(Trip).where(
@@ -185,195 +243,221 @@ async def sync_trips(
         )
         trip = existing.scalar_one_or_none()
         if trip is not None:
-            results.append(TripSyncResultItem(client_uuid=item.client_uuid, duplicate=True, trip=trip))
+            results.append(
+                TripSyncResultItem(
+                    client_uuid=item.client_uuid, duplicate=True, status="duplicate", trip=trip
+                )
+            )
             continue
 
-        is_maxi_vehicle = await resolve_is_maxi_vehicle(
-            session, tenant_id=tenant_id, vehicle_id=item.vehicle_id
-        )
         try:
-            # time_class/is_peak deliberately NOT passed through from
-            # item.time_class/item.is_peak here — see recompute_from_trace's
-            # own doc comment; it resolves both authoritatively itself, from
-            # the tariff it looks up and item.start_at, and hands the
-            # resolved values back below for the Trip row.
-            breakdown, distance_m, moving_s, waiting_s, time_class, is_peak = await recompute_from_trace(
-                session,
-                tenant_id=tenant_id,
-                tariff_id=item.tariff_id,
-                trip_type=item.type,
-                is_maxi_vehicle=is_maxi_vehicle,
-                passenger_count=item.passenger_count,
-                wheelchair_hiring=item.wheelchair_hiring,
-                airport_rank_requested_maxi=item.airport_rank_requested_maxi,
-                tolls=item.tolls,
-                extras=item.extras,
-                cleaning_fee=item.cleaning_fee,
-                start_lat=item.start_lat,
-                start_lng=item.start_lng,
-                start_at=item.start_at,
-                gps_trace=item.gps_trace,
-                payment_method=item.payment_method,
-                surcharge_pct=item.surcharge_pct,
-                include_psl=item.include_psl,
-                negotiated_total=item.negotiated_total,
-            )
-        except UnknownTariffError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-        variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
-
-        # Real gap found live (2026-08-27, first-ever real device sync against a real
-        # deployed backend): a trip failing its own max-fare-variance check (device_total
-        # vs the server's independent gps_trace-based recomputation) was silently recorded
-        # in variance_pct/max_fare_check_passed with flagged_for_review left False -- those
-        # two columns existed purely for a human to separately query by hand, never actually
-        # surfacing on the dashboard's flagged-trips view (GET /v1/trips?flagged_for_review=true)
-        # the way a genuine dispute (PATCH /v1/trips/{id}/flag) does. A real trip synced during
-        # that test failed the check by 19% (nineteen times the 1% tolerance) and was never
-        # flagged. Auto-flag here instead of only via the manual Dispute button -- this is
-        # exactly the kind of fare-accuracy signal the NSW cl.14 self-certification story this
-        # whole Compliance Vault module exists for needs to actually be visible, not silent.
-        fare_check_passed = variance_pct <= 1.0
-        auto_flag_reason: str | None = None
-        if not fare_check_passed:
-            auto_flag_reason = (
-                f"Auto-flagged: fare variance {variance_pct}% exceeds 1% tolerance "
-                f"(device reported {item.device_total}, server recomputed {breakdown.grand_total})"
-            )
-
-        # New payment methods (blueprint 5.2.5), same validate-before-persist contract as
-        # close_trip (app/services/trips.py) — voucher/account/split_fare are validated against
-        # the just-recomputed breakdown BEFORE any Trip row is constructed for this item, so a
-        # bad item raises before touching the session, same as UnknownTariffError above. This
-        # closes the real gap the sync-item schema had until now: voucher_code/account_reference/
-        # split_payments used to round-trip through TripSyncItemDto on the Android side but were
-        # silently dropped here since this schema didn't declare them.
-        # Generated up front (rather than left to Trip's default factory) so a
-        # voucher redemption below can record the real id of the row that's
-        # about to be inserted on Voucher.redeemed_by_trip_id.
-        new_trip_id = str(uuid.uuid4())
-        split_payments_to_store: list[dict] | None = None
-        if item.payment_method == "voucher":
-            try:
-                await payments_service.redeem_voucher(
-                    session, tenant_id=tenant_id, voucher_code=item.voucher_code or "", trip_id=new_trip_id
+            async with session.begin_nested():
+                is_maxi_vehicle = await resolve_is_maxi_vehicle(
+                    session, tenant_id=tenant_id, vehicle_id=item.vehicle_id
                 )
-            except InvalidVoucherCodeError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        elif item.payment_method == "account":
-            try:
-                await payments_service.validate_account_reference(
-                    session, tenant_id=tenant_id, account_reference=item.account_reference or ""
+                # time_class/is_peak deliberately NOT passed through from
+                # item.time_class/item.is_peak here — see recompute_from_trace's
+                # own doc comment; it resolves both authoritatively itself, from
+                # the tariff it looks up and item.start_at, and hands the
+                # resolved values back below for the Trip row.
+                breakdown, distance_m, moving_s, waiting_s, time_class, is_peak = await recompute_from_trace(
+                    session,
+                    tenant_id=tenant_id,
+                    tariff_id=item.tariff_id,
+                    trip_type=item.type,
+                    is_maxi_vehicle=is_maxi_vehicle,
+                    passenger_count=item.passenger_count,
+                    wheelchair_hiring=item.wheelchair_hiring,
+                    airport_rank_requested_maxi=item.airport_rank_requested_maxi,
+                    tolls=item.tolls,
+                    extras=item.extras,
+                    cleaning_fee=item.cleaning_fee,
+                    start_lat=item.start_lat,
+                    start_lng=item.start_lng,
+                    start_at=item.start_at,
+                    gps_trace=item.gps_trace,
+                    payment_method=item.payment_method,
+                    surcharge_pct=item.surcharge_pct,
+                    include_psl=item.include_psl,
+                    negotiated_total=item.negotiated_total,
                 )
-            except InvalidAccountReferenceError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        elif item.payment_method == "split_fare":
-            subtotal = sum(
-                (Decimal(str(leg.amount)) for leg in (item.split_payments or [])), Decimal(0)
+
+                variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
+
+                # Real gap found live (2026-08-27, first-ever real device sync against a real
+                # deployed backend): a trip failing its own max-fare-variance check (device_total
+                # vs the server's independent gps_trace-based recomputation) was silently recorded
+                # in variance_pct/max_fare_check_passed with flagged_for_review left False -- those
+                # two columns existed purely for a human to separately query by hand, never actually
+                # surfacing on the dashboard's flagged-trips view (GET /v1/trips?flagged_for_review=true)
+                # the way a genuine dispute (PATCH /v1/trips/{id}/flag) does. A real trip synced during
+                # that test failed the check by 19% (nineteen times the 1% tolerance) and was never
+                # flagged. Auto-flag here instead of only via the manual Dispute button -- this is
+                # exactly the kind of fare-accuracy signal the NSW cl.14 self-certification story this
+                # whole Compliance Vault module exists for needs to actually be visible, not silent.
+                fare_check_passed = variance_pct <= 1.0
+                auto_flag_reason: str | None = None
+                if not fare_check_passed:
+                    auto_flag_reason = (
+                        f"Auto-flagged: fare variance {variance_pct}% exceeds 1% tolerance "
+                        f"(device reported {item.device_total}, server recomputed {breakdown.grand_total})"
+                    )
+
+                # New payment methods (blueprint 5.2.5), same validate-before-persist contract as
+                # close_trip (app/services/trips.py) — voucher/account/split_fare are validated against
+                # the just-recomputed breakdown BEFORE any Trip row is constructed for this item, so a
+                # bad item raises before touching the session, same as UnknownTariffError above. This
+                # closes the real gap the sync-item schema had until now: voucher_code/account_reference/
+                # split_payments used to round-trip through TripSyncItemDto on the Android side but were
+                # silently dropped here since this schema didn't declare them.
+                # Generated up front (rather than left to Trip's default factory) so a
+                # voucher redemption below can record the real id of the row that's
+                # about to be inserted on Voucher.redeemed_by_trip_id.
+                new_trip_id = str(uuid.uuid4())
+                split_payments_to_store: list[dict] | None = None
+                if item.payment_method == "voucher":
+                    await payments_service.redeem_voucher(
+                        session, tenant_id=tenant_id, voucher_code=item.voucher_code or "", trip_id=new_trip_id
+                    )
+                elif item.payment_method == "account":
+                    await payments_service.validate_account_reference(
+                        session, tenant_id=tenant_id, account_reference=item.account_reference or ""
+                    )
+                elif item.payment_method == "split_fare":
+                    subtotal = sum(
+                        (Decimal(str(leg.amount)) for leg in (item.split_payments or [])), Decimal(0)
+                    )
+                    if round_half_up(subtotal) != round_half_up(breakdown.grand_total):
+                        raise SplitPaymentMismatchError(
+                            f"split_payments sum to {subtotal} but trip total is {breakdown.grand_total}"
+                        )
+                    split_payments_to_store = [{"method": leg.method, "amount": str(leg.amount)} for leg in item.split_payments]
+
+                trip = Trip(
+                    id=new_trip_id,
+                    tenant_id=tenant_id,
+                    client_uuid=item.client_uuid,
+                    vehicle_id=item.vehicle_id,
+                    driver_id=item.driver_id,
+                    shift_id=item.shift_id,
+                    tariff_id=item.tariff_id,
+                    type=item.type,
+                    # Carried straight through from the device -- see Trip.simulated. The
+                    # server cannot detect a simulated trip on its own (the trace replays
+                    # cleanly, which is the whole problem), so the honest flag is the one
+                    # the device that fabricated the fixes sends.
+                    simulated=item.simulated,
+                    status=TRIP_STATUS_CLOSED,
+                    time_class=time_class.value,
+                    is_peak=is_peak,
+                    maxi=is_maxi_vehicle,
+                    passenger_count=item.passenger_count,
+                    wheelchair_hiring=item.wheelchair_hiring,
+                    airport_rank_requested_maxi=item.airport_rank_requested_maxi,
+                    start_at=item.start_at,
+                    end_at=item.end_at,
+                    start_lat=item.start_lat,
+                    start_lng=item.start_lng,
+                    end_lat=item.end_lat,
+                    end_lng=item.end_lng,
+                    distance_m=distance_m,
+                    moving_s=moving_s,
+                    waiting_s=waiting_s,
+                    flag_fall=breakdown.flag_fall,
+                    dist_amount=breakdown.distance_charge,
+                    wait_amount=breakdown.waiting_charge,
+                    peak_amount=breakdown.peak_charge,
+                    tolls=breakdown.tolls,
+                    psl=breakdown.psl,
+                    extras=breakdown.extras,
+                    subtotal=breakdown.fare_total,
+                    surcharge=breakdown.surcharge,
+                    total=breakdown.grand_total,
+                    gst_component=breakdown.gst_component,
+                    payment_method=item.payment_method,
+                    voucher_code=item.voucher_code,
+                    account_reference=item.account_reference,
+                    split_payments=split_payments_to_store,
+                    gps_trace_ref=item.gps_trace_ref,
+                    max_fare_check_passed=fare_check_passed,
+                    variance_pct=variance_pct,
+                    flagged_for_review=not fare_check_passed,
+                    review_notes=auto_flag_reason,
+                    receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
+                    negotiated_total=item.negotiated_total,
+                    # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (deviation #6).
+                    # This is the ONLY network path this app's offline-first close flow actually makes
+                    # (see TripSyncItemDto's own doc comment, ApiService.kt), so a tip entered on-device
+                    # must round-trip here, not only through the direct (no real call site) /close
+                    # endpoint above — never folded into breakdown/device_total either side.
+                    tip_amount=item.tip_amount,
+                )
+                session.add(trip)
+
+                # Durable GPS-trace persistence (see app.models.trips.TripGpsTrace's
+                # module docstring for the full design rationale) — added to the SAME
+                # flush as `trip` above, not a separate one, so a racing duplicate
+                # client_uuid (the IntegrityError branch below) rolls the trace back
+                # together with the trip it belongs to rather than orphaning it.
+                # `build_gps_trace_row` itself returns None (no row at all) for an
+                # empty gps_trace — see that function's own doc comment for why this
+                # must never create a junk "recorded but empty" row.
+                trace_row = build_gps_trace_row(
+                    tenant_id=tenant_id,
+                    trip_id=new_trip_id,
+                    gps_trace=item.gps_trace,
+                    recorded_at=item.end_at,
+                )
+                if trace_row is not None:
+                    session.add(trace_row)
+
+                # Raises IntegrityError if we lost a race against another concurrent
+                # sync of the same client_uuid; caught OUTSIDE the savepoint below,
+                # because rolling that back is the savepoint's job, not this line's.
+                await session.flush()
+                created = trip
+        except (
+            UnknownTariffError,
+            InvalidVoucherCodeError,
+            InvalidAccountReferenceError,
+            SplitPaymentMismatchError,
+        ) as exc:
+            # This one item's data is unacceptable. Its savepoint is already
+            # rolled back by the context manager; every sibling stands.
+            results.append(
+                TripSyncResultItem(
+                    client_uuid=item.client_uuid,
+                    duplicate=False,
+                    status="failed",
+                    reason=str(exc),
+                    trip=None,
+                )
             )
-            if round_half_up(subtotal) != round_half_up(breakdown.grand_total):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"split_payments sum to {subtotal} but trip total is {breakdown.grand_total}",
-                )
-            split_payments_to_store = [{"method": leg.method, "amount": str(leg.amount)} for leg in item.split_payments]
-
-        trip = Trip(
-            id=new_trip_id,
-            tenant_id=tenant_id,
-            client_uuid=item.client_uuid,
-            vehicle_id=item.vehicle_id,
-            driver_id=item.driver_id,
-            shift_id=item.shift_id,
-            tariff_id=item.tariff_id,
-            type=item.type,
-            # Carried straight through from the device -- see Trip.simulated. The
-            # server cannot detect a simulated trip on its own (the trace replays
-            # cleanly, which is the whole problem), so the honest flag is the one
-            # the device that fabricated the fixes sends.
-            simulated=item.simulated,
-            status=TRIP_STATUS_CLOSED,
-            time_class=time_class.value,
-            is_peak=is_peak,
-            maxi=is_maxi_vehicle,
-            passenger_count=item.passenger_count,
-            wheelchair_hiring=item.wheelchair_hiring,
-            airport_rank_requested_maxi=item.airport_rank_requested_maxi,
-            start_at=item.start_at,
-            end_at=item.end_at,
-            start_lat=item.start_lat,
-            start_lng=item.start_lng,
-            end_lat=item.end_lat,
-            end_lng=item.end_lng,
-            distance_m=distance_m,
-            moving_s=moving_s,
-            waiting_s=waiting_s,
-            flag_fall=breakdown.flag_fall,
-            dist_amount=breakdown.distance_charge,
-            wait_amount=breakdown.waiting_charge,
-            peak_amount=breakdown.peak_charge,
-            tolls=breakdown.tolls,
-            psl=breakdown.psl,
-            extras=breakdown.extras,
-            subtotal=breakdown.fare_total,
-            surcharge=breakdown.surcharge,
-            total=breakdown.grand_total,
-            gst_component=breakdown.gst_component,
-            payment_method=item.payment_method,
-            voucher_code=item.voucher_code,
-            account_reference=item.account_reference,
-            split_payments=split_payments_to_store,
-            gps_trace_ref=item.gps_trace_ref,
-            max_fare_check_passed=fare_check_passed,
-            variance_pct=variance_pct,
-            flagged_for_review=not fare_check_passed,
-            review_notes=auto_flag_reason,
-            receipt_ref=item.receipt_ref or f"RCPT-SYNC-{item.client_uuid[:8].upper()}",
-            negotiated_total=item.negotiated_total,
-            # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (deviation #6).
-            # This is the ONLY network path this app's offline-first close flow actually makes
-            # (see TripSyncItemDto's own doc comment, ApiService.kt), so a tip entered on-device
-            # must round-trip here, not only through the direct (no real call site) /close
-            # endpoint above — never folded into breakdown/device_total either side.
-            tip_amount=item.tip_amount,
-        )
-        session.add(trip)
-
-        # Durable GPS-trace persistence (see app.models.trips.TripGpsTrace's
-        # module docstring for the full design rationale) — added to the SAME
-        # flush as `trip` above, not a separate one, so a racing duplicate
-        # client_uuid (the IntegrityError branch below) rolls the trace back
-        # together with the trip it belongs to rather than orphaning it.
-        # `build_gps_trace_row` itself returns None (no row at all) for an
-        # empty gps_trace — see that function's own doc comment for why this
-        # must never create a junk "recorded but empty" row.
-        trace_row = build_gps_trace_row(
-            tenant_id=tenant_id,
-            trip_id=new_trip_id,
-            gps_trace=item.gps_trace,
-            recorded_at=item.end_at,
-        )
-        if trace_row is not None:
-            session.add(trace_row)
-
-        try:
-            await session.flush()
+            continue
         except IntegrityError:
             # Lost a race against another concurrent sync of the same
-            # client_uuid — treat as duplicate rather than failing the batch.
-            await session.rollback()
+            # client_uuid — treat as duplicate rather than failing the item.
+            # Only this item's savepoint was rolled back, so the re-read
+            # below still sees the batch's earlier work.
             existing = await session.execute(
                 select(Trip).where(
                     Trip.tenant_id == tenant_id, Trip.client_uuid == item.client_uuid
                 )
             )
             trip = existing.scalar_one()
-            results.append(TripSyncResultItem(client_uuid=item.client_uuid, duplicate=True, trip=trip))
+            results.append(
+                TripSyncResultItem(
+                    client_uuid=item.client_uuid, duplicate=True, status="duplicate", trip=trip
+                )
+            )
             continue
 
-        newly_created.append(trip)
-        results.append(TripSyncResultItem(client_uuid=item.client_uuid, duplicate=False, trip=trip))
+        newly_created.append(created)
+        results.append(
+            TripSyncResultItem(
+                client_uuid=item.client_uuid, duplicate=False, status="synced", trip=created
+            )
+        )
 
     await session.commit()
     for trip in newly_created:
@@ -531,9 +615,17 @@ async def update_trip(
     trip_id: str,
     payload: TripUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
+    _require_trip_write_access(current_user, driver_id=trip.driver_id, action="update")
+    # Reassigning a trip to a different driver is a staff action: a driver
+    # who could set driver_id would be able to hand their own trip away, or
+    # (having passed the check above on a trip that is genuinely theirs)
+    # walk it onto another driver's sheet.
+    if payload.driver_id is not None and payload.driver_id != trip.driver_id:
+        _require_trip_write_access(current_user, driver_id=None, action="reassign")
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         if field == "split_payments" and value is not None:
@@ -556,9 +648,11 @@ async def update_trip(
 async def delete_trip(
     trip_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
+    _require_trip_write_access(current_user, driver_id=trip.driver_id, action="delete")
     if trip.status == TRIP_STATUS_CLOSED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -576,6 +670,7 @@ async def tick_trip(
     trip_id: str,
     payload: TripTickRequest,
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
     """Also runs driver-fatigue checks (blueprint 12.3) as a side effect of
@@ -594,22 +689,46 @@ async def tick_trip(
     resolve to a real row, same reasoning as the shift lookup above (Trip's
     cross-domain refs are unconstrained — see app.models.trips)."""
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
+    _require_trip_write_access(current_user, driver_id=trip.driver_id, action="tick")
     if trip.status != TRIP_STATUS_OPEN:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is not open")
+
+    # --- replay guard (backend audit §4) -------------------------------
+    # A retried tick used to re-bill its distance. Answer a replay as a 200
+    # no-op with the trip exactly as it stands: the retrying client gets the
+    # same success it would have got had its first attempt's response
+    # arrived, and stops retrying. Deliberately returned BEFORE the fatigue
+    # and compliance-expiry side effects below as well as before apply_tick,
+    # so a replay cannot raise a duplicate speed-exceeded alert on points
+    # that were already checked.
+    if is_replayed_tick(trip, payload.tick_seq):
+        return trip
+    accepted_points = accepted_tick_points(trip, payload.points)
+    if not accepted_points:
+        # Every point in this batch is at or before the trip's continuity
+        # anchor, i.e. already billed — a replay by a client that sends no
+        # tick_seq. Still record the sequence high-water mark if one came
+        # with it, so the next attempt is caught by the cheaper check above.
+        if payload.tick_seq is not None:
+            trip.last_tick_seq = max(payload.tick_seq, trip.last_tick_seq or 0)
+            await session.commit()
+            await session.refresh(trip)
+        return trip
 
     try:
         await apply_tick(
             session,
             tenant_id=tenant_id,
             trip=trip,
-            points=payload.points,
+            points=accepted_points,
             dest_lat=payload.dest_lat,
             dest_lng=payload.dest_lng,
+            tick_seq=payload.tick_seq,
         )
     except UnknownTariffError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    for point in payload.points:
+    for point in accepted_points:
         await fatigue_service.check_speed(
             session,
             tenant_id=tenant_id,
@@ -652,9 +771,11 @@ async def close_trip_endpoint(
     trip_id: str,
     payload: TripCloseRequest,
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Trip:
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
+    _require_trip_write_access(current_user, driver_id=trip.driver_id, action="close")
     if trip.status != TRIP_STATUS_OPEN:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is already closed")
 
@@ -667,6 +788,7 @@ async def close_trip_endpoint(
         cleaning_fee=payload.cleaning_fee,
         include_psl=payload.include_psl,
         receipt_ref=payload.receipt_ref,
+        device_total=payload.device_total,
         voucher_code=payload.voucher_code,
         account_reference=payload.account_reference,
         split_payments=(

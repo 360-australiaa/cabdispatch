@@ -12,6 +12,21 @@ class ShiftStart(BaseModel):
 
     driver_id: str
     vehicle_id: str
+    # Device-generated idempotency key — see app.models.shift.Shift.client_uuid
+    # for the full why. This is what makes an offline shift start real: the
+    # meter mints this uuid with no network, queues the start in its outbox,
+    # and replays it on reconnect; replaying it again (a retry, a reinstall,
+    # two racing outbox drains) returns the SAME shift rather than opening a
+    # second one. Field name agreed with the Android outbox workstream.
+    client_uuid: str | None = Field(
+        default=None,
+        max_length=36,
+        description=(
+            "Device-generated idempotency key, unique per tenant. Replaying a "
+            "start with a client_uuid already used returns the existing shift "
+            "(200-equivalent semantics) instead of opening a second one."
+        ),
+    )
     start_at: datetime | None = Field(
         default=None, description="Defaults to server time (UTC now) if omitted."
     )

@@ -117,6 +117,14 @@ def _trip_payload(*, tariff_id: str, **overrides) -> dict:
 
 
 async def _create_trip(client: AsyncClient, headers: dict, tariff_id: str, **overrides) -> dict:
+    # Attributed to the AUTHENTICATED caller by default. `POST /v1/trips` now
+    # enforces that a driver-role caller may only open a trip in their own
+    # name (app.api.v1.trips._require_trip_write_access, backend audit §4:
+    # "No role/ownership check on any trip write"), so a helper that
+    # attributed every trip to a fresh random uuid while authenticating as a
+    # driver was exercising exactly the hole that check closes. Tests that
+    # deliberately want somebody else's driver_id still pass it explicitly.
+    overrides.setdefault("driver_id", _user_id_of(headers))
     resp = await client.post("/v1/trips", json=_trip_payload(tariff_id=tariff_id, **overrides), headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -224,13 +232,20 @@ async def test_create_trip_duplicate_client_uuid_is_409(client: AsyncClient, ses
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
     client_uuid = str(uuid.uuid4())
+    # driver_id is the authenticated caller's own: a driver may only open a
+    # trip in their own name (see _create_trip's comment).
+    driver_id = _user_id_of(headers)
     first = await client.post(
-        "/v1/trips", json=_trip_payload(tariff_id=tariff.id, client_uuid=client_uuid), headers=headers
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, client_uuid=client_uuid, driver_id=driver_id),
+        headers=headers,
     )
     assert first.status_code == 201
 
     second = await client.post(
-        "/v1/trips", json=_trip_payload(tariff_id=tariff.id, client_uuid=client_uuid), headers=headers
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff.id, client_uuid=client_uuid, driver_id=driver_id),
+        headers=headers,
     )
     assert second.status_code == 409
 
@@ -536,7 +551,9 @@ async def test_tick_outside_toll_geofence_adds_no_toll(client: AsyncClient, sess
 async def test_tick_unknown_tariff_is_422(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="driver")
     trip_resp = await client.post(
-        "/v1/trips", json=_trip_payload(tariff_id=str(uuid.uuid4())), headers=headers
+        "/v1/trips",
+        json=_trip_payload(tariff_id=str(uuid.uuid4()), driver_id=_user_id_of(headers)),
+        headers=headers,
     )
     assert trip_resp.status_code == 201
     trip = trip_resp.json()
@@ -1061,7 +1078,18 @@ async def test_sync_split_fare_matching_sum_persists_split_payments(
     ]
 
 
-async def test_sync_split_fare_mismatched_sum_is_422(client: AsyncClient, session: AsyncSession):
+async def test_sync_split_fare_mismatched_sum_fails_only_that_item(
+    client: AsyncClient, session: AsyncSession
+):
+    """Was `..._is_422`: a split_payments sum that does not match the trip
+    total used to raise HTTPException from inside sync_trips' per-item loop,
+    which aborted the WHOLE batch and (because the single commit sat at the
+    end of that loop) destroyed every already-flushed good trip in it — the
+    batch-abort bug, backend audit §4. The item is still rejected, and for
+    exactly the same reason; it is now rejected on its own, as a per-item
+    `status="failed"` result, instead of taking its siblings down with it.
+    See test_sync_poisoned_item_does_not_destroy_the_rest_of_the_batch for
+    the multi-item proof."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -1079,7 +1107,23 @@ async def test_sync_split_fare_mismatched_sum_is_422(client: AsyncClient, sessio
         split_payments=[{"method": "cash", "amount": "1.00"}, {"method": "card", "amount": "1.00"}],
     )
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
-    assert resp.status_code == 422
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["results"][0]
+    assert result["status"] == "failed"
+    assert result["trip"] is None
+    # The reason still names the real mismatch, the same text the 422 detail
+    # used to carry.
+    assert "split_payments sum to" in result["reason"]
+
+    # Nothing was persisted for the rejected item.
+    stored = (
+        await session.execute(
+            select(Trip).where(
+                Trip.tenant_id == tenant_id, Trip.client_uuid == item["client_uuid"]
+            )
+        )
+    ).scalar_one_or_none()
+    assert stored is None
 
 
 # --- dispute flagging (blueprint 5.2.5 "Dispute" button) --------------------
@@ -1131,9 +1175,16 @@ async def test_flag_by_unrelated_driver_is_403(client: AsyncClient, session: Asy
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
-    # trip's driver_id is a random uuid, NOT this authenticated driver's own id
-    trip = await _create_trip(client, headers, tariff.id)
-    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=headers)
+    # The trip belongs to SOMEBODY ELSE: its driver_id is a random uuid, not
+    # this authenticated driver's own id. It has to be opened and closed by a
+    # staff role now that a driver may only write their own trips
+    # (app.api.v1.trips._require_trip_write_access) - a driver can no longer
+    # create a trip attributed to another driver, which is the point. The
+    # authorization asserted below is still exactly the original one: an
+    # unrelated driver may not flag a trip that is not theirs.
+    staff_headers = await auth_headers(client, session, role="admin", tenant_id=tenant_id)
+    trip = await _create_trip(client, staff_headers, tariff.id, driver_id=str(uuid.uuid4()))
+    await client.post(f"/v1/trips/{trip['id']}/close", json={}, headers=staff_headers)
 
     resp = await client.patch(
         f"/v1/trips/{trip['id']}/flag", json={"reason": "not my trip"}, headers=headers
@@ -1382,7 +1433,9 @@ async def test_create_trip_with_split_fare_payment_method_is_allowed_without_spl
 
     resp = await client.post(
         "/v1/trips",
-        json=_trip_payload(tariff_id=tariff.id, payment_method="split_fare"),
+        json=_trip_payload(
+            tariff_id=tariff.id, payment_method="split_fare", driver_id=_user_id_of(headers)
+        ),
         headers=headers,
     )
     assert resp.status_code == 201
@@ -2226,3 +2279,247 @@ async def test_gps_trace_is_tenant_isolated(client: AsyncClient, session: AsyncS
     headers_b = await auth_headers(client, session, role="driver", tenant_name="Trace Tenant B")
     other_resp = await client.get(f"/v1/trips/{trip_id}/gps-trace", headers=headers_b)
     assert other_resp.status_code == 404
+
+
+# --- WAVE-1 B1: trip integrity (backend audit §4) ---------------------------
+
+
+async def test_sync_poisoned_item_does_not_destroy_the_rest_of_the_batch(
+    client: AsyncClient, session: AsyncSession
+):
+    """THE batch-abort bug (backend audit §4, highest-severity backend
+    finding). `sync_trips` flushed per item but committed ONCE at the end,
+    while an invalid voucher raised HTTPException from inside the loop —
+    FastAPI unwound the request without ever reaching that commit, so every
+    already-flushed good trip in the batch was destroyed. The Android meter
+    posts a whole shift's queued offline trips as one batch, so one bad
+    voucher lost a shift's takings.
+
+    Five items, item 3 poisoned with a voucher code that does not exist:
+    four must be persisted and one reported failed with a reason."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+
+    items = [_sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00") for _ in range(5)]
+    # Item 3 (index 2) is the poison: payment_method="voucher" with a code
+    # that was never issued, which app.services.payments.redeem_voucher
+    # rejects with InvalidVoucherCodeError.
+    items[2]["payment_method"] = "voucher"
+    items[2]["voucher_code"] = "NO-SUCH-VOUCHER-EVER-ISSUED"
+
+    resp = await client.post("/v1/trips/sync", json=items, headers=headers)
+
+    # The batch itself succeeds — a single unacceptable item is per-item data,
+    # not a malformed request.
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    assert len(results) == 5
+
+    statuses = [r["status"] for r in results]
+    assert statuses == ["synced", "synced", "failed", "synced", "synced"]
+
+    failed = results[2]
+    assert failed["trip"] is None
+    assert failed["reason"]  # a real explanation, not an empty string
+    assert "NO-SUCH-VOUCHER-EVER-ISSUED" in failed["reason"]
+    assert failed["client_uuid"] == items[2]["client_uuid"]
+
+    # The four good items are genuinely COMMITTED, not merely reported — this
+    # is the assertion the bug would have failed. Re-read them from the
+    # database rather than trusting the response body.
+    for index in (0, 1, 3, 4):
+        assert results[index]["trip"] is not None
+        stored = (
+            await session.execute(
+                select(Trip).where(
+                    Trip.tenant_id == tenant_id, Trip.client_uuid == items[index]["client_uuid"]
+                )
+            )
+        ).scalar_one_or_none()
+        assert stored is not None, f"item {index} was lost — the batch-abort bug is back"
+        assert stored.status == TRIP_STATUS_CLOSED
+
+    # ...and the poisoned item left NOTHING behind: its savepoint rolled its
+    # half-built Trip row back.
+    orphan = (
+        await session.execute(
+            select(Trip).where(
+                Trip.tenant_id == tenant_id, Trip.client_uuid == items[2]["client_uuid"]
+            )
+        )
+    ).scalar_one_or_none()
+    assert orphan is None
+
+
+async def test_replayed_tick_batch_does_not_double_count_distance(
+    client: AsyncClient, session: AsyncSession
+):
+    """`/tick` had no idempotency (backend audit §4). apply_tick walks from
+    trip.last_ts and ACCUMULATES haversine distance, so a client retry after
+    a mobile timeout, or a double-tap, billed the same kilometres twice.
+    Waiting time was already safe (elapsed clamps to 0 on backwards time);
+    distance was not.
+
+    Post the identical tick batch twice. The second must be a 200 no-op:
+    same distance, same distance charge, same everything."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(
+        client, headers, tariff.id, driver_id=_user_id_of(headers)
+    )
+
+    now = _FIXED_DAY_START_AT
+    batch = {
+        "tick_seq": 1,
+        "points": [
+            {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()},
+            {"lat": -33.8500, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=120)).isoformat()},
+        ],
+    }
+
+    first = await client.patch(f"/v1/trips/{trip['id']}/tick", json=batch, headers=headers)
+    assert first.status_code == 200, first.text
+    after_first = first.json()
+    assert after_first["distance_m"] > 0, "the first tick must actually bill something"
+
+    # Byte-identical replay — exactly what a retrying client sends.
+    second = await client.patch(f"/v1/trips/{trip['id']}/tick", json=batch, headers=headers)
+    assert second.status_code == 200, second.text
+    after_second = second.json()
+
+    assert after_second["distance_m"] == after_first["distance_m"]
+    assert after_second["dist_amount"] == after_first["dist_amount"]
+    assert after_second["wait_amount"] == after_first["wait_amount"]
+    assert after_second["moving_s"] == after_first["moving_s"]
+    assert after_second["waiting_s"] == after_first["waiting_s"]
+
+    # The timestamp defence must hold on its own too, for meter builds that
+    # send no tick_seq at all — replay the same points with the field omitted.
+    legacy_replay = {"points": batch["points"]}
+    third = await client.patch(f"/v1/trips/{trip['id']}/tick", json=legacy_replay, headers=headers)
+    assert third.status_code == 200, third.text
+    assert third.json()["distance_m"] == after_first["distance_m"]
+    assert third.json()["dist_amount"] == after_first["dist_amount"]
+
+    # A genuinely NEW point still bills normally — the guard must not have
+    # simply frozen the trip.
+    advance = {
+        "tick_seq": 2,
+        "points": [
+            {"lat": -33.8400, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=180)).isoformat()}
+        ],
+    }
+    fourth = await client.patch(f"/v1/trips/{trip['id']}/tick", json=advance, headers=headers)
+    assert fourth.status_code == 200, fourth.text
+    assert fourth.json()["distance_m"] > after_first["distance_m"]
+
+
+async def test_driver_cannot_close_another_drivers_trip(client: AsyncClient, session: AsyncSession):
+    """No trip write had a role/ownership check (backend audit §4) — any
+    driver token could tick or close any other driver's trip in the same
+    tenant. Driver A must not be able to close driver B's trip; a staff role
+    still can."""
+    headers_b = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers_b)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # Driver B's own trip.
+    trip = await _create_trip(client, headers_b, tariff.id, driver_id=_user_id_of(headers_b))
+
+    # Driver A: a DIFFERENT driver in the SAME tenant — tenant scoping alone
+    # would let this through, which was exactly the hole.
+    headers_a = await auth_headers(client, session, role="driver", tenant_id=tenant_id)
+    assert _user_id_of(headers_a) != _user_id_of(headers_b)
+
+    close_body = {"payment_method": "cash"}
+    forbidden = await client.post(f"/v1/trips/{trip['id']}/close", json=close_body, headers=headers_a)
+    assert forbidden.status_code == 403, forbidden.text
+
+    # ...nor tick, update, or delete it.
+    tick_body = {
+        "points": [
+            {
+                "lat": -33.86,
+                "lng": 151.2093,
+                "speed_kmh": 40,
+                "ts": (_FIXED_DAY_START_AT + timedelta(seconds=60)).isoformat(),
+            }
+        ]
+    }
+    assert (await client.patch(f"/v1/trips/{trip['id']}/tick", json=tick_body, headers=headers_a)).status_code == 403
+    assert (await client.patch(f"/v1/trips/{trip['id']}", json={"extras": "1.00"}, headers=headers_a)).status_code == 403
+    assert (await client.delete(f"/v1/trips/{trip['id']}", headers=headers_a)).status_code == 403
+
+    # The trip is untouched: still open, still driver B's.
+    assert (await client.get(f"/v1/trips/{trip['id']}", headers=headers_b)).json()["status"] == TRIP_STATUS_OPEN
+
+    # A staff role in the same tenant is unrestricted — closing out a
+    # driver's trip from the dashboard is exactly a dispatcher's job.
+    headers_staff = await auth_headers(client, session, role="dispatcher", tenant_id=tenant_id)
+    allowed = await client.post(f"/v1/trips/{trip['id']}/close", json=close_body, headers=headers_staff)
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["status"] == TRIP_STATUS_CLOSED
+
+
+async def test_online_close_runs_the_variance_check_when_device_total_is_supplied(
+    client: AsyncClient, session: AsyncSession
+):
+    """`max_fare_check_passed = True` used to be unconditional on the online
+    close path, so every trip closed online carried an unverified fare BY
+    CONSTRUCTION (backend audit §4). With a device_total supplied the close
+    must run the same 1%-tolerance check /sync runs, and auto-flag on
+    failure."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=_user_id_of(headers))
+
+    now = _FIXED_DAY_START_AT
+    await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "tick_seq": 1,
+            "points": [
+                {"lat": -33.8600, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}
+            ],
+        },
+        headers=headers,
+    )
+
+    # A device total wildly at odds with whatever the server accrues.
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close",
+        json={"payment_method": "cash", "device_total": "999.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["max_fare_check_passed"] is False
+    assert body["flagged_for_review"] is True
+    assert Decimal(body["variance_pct"]) > Decimal("1.0")
+    assert "Auto-flagged" in (body["review_notes"] or "")
+
+
+async def test_online_close_without_device_total_records_no_variance(
+    client: AsyncClient, session: AsyncSession
+):
+    """The honest half of the pass above: with nothing to compare against,
+    the check is recorded as passed rather than a variance being invented.
+    This is the pre-existing behaviour for every client that does not yet
+    send device_total, and it must not change."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id, driver_id=_user_id_of(headers))
+
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/close", json={"payment_method": "cash"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["max_fare_check_passed"] is True
+    assert resp.json()["flagged_for_review"] is False

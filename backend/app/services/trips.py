@@ -156,6 +156,81 @@ async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip)
     return state
 
 
+# --- /tick idempotency (backend audit §4, "/tick has no idempotency") -------
+#
+# A tick batch was never idempotent. apply_tick walks forward from
+# trip.last_ts and ACCUMULATES haversine distance; waiting time was already
+# safe (elapsed clamps to 0 on backwards time, see the loop below) but
+# distance was not, so a client retry after a mobile timeout, or a
+# double-tapped resend, billed the same kilometres twice. Nothing downstream
+# caught it either — the online-close path recorded max_fare_check_passed =
+# True by construction. Two independent defences, both applied on every tick:
+#
+# 1. `tick_seq` (is_replayed_tick) — the client's own monotonic per-trip
+#    counter against Trip.last_tick_seq. Catches an entire replayed request
+#    up front, before any fare state is rebuilt and before the fatigue and
+#    compliance side effects in the router run a second time. Requires a
+#    meter build that sends the field.
+# 2. `ts` (accepted_tick_points) — drop every point that is not strictly
+#    after Trip.last_ts. Needs no client cooperation at all, so it protects
+#    the legacy clients defence 1 cannot, and it also handles the partial
+#    case defence 1 cannot see: a batch that genuinely overlaps the previous
+#    one, replaying some already-billed points alongside new ones.
+#
+# Both are silent no-ops, never errors: a client retrying because it never
+# saw our first response must be able to stop retrying, and a 409 would only
+# make it retry harder.
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Every timestamp comparison in the tick path goes through here.
+
+    SQLite does not store a timezone offset: SQLAlchemy renders a
+    `DateTime(timezone=True)` column from the datetime's naive components and
+    drops the tzinfo, so an aware `2026-07-15 14:00+10:00` is written as
+    `14:00` and read back NAIVE. Reading that back and assuming UTC (which is
+    what the elapsed-seconds arithmetic below has always done) puts the
+    anchor ten hours ahead of the instant it actually represents — harmless
+    while the only consumer was an elapsed that clamps to 0, but fatal to a
+    `ts <= last_ts` replay comparison, which would then discard every
+    genuinely new point of a NSW-local trip.
+
+    So: a naive value is taken as UTC (the assumption the whole module
+    already makes), and an aware one is CONVERTED to UTC rather than having
+    its offset ignored. Paired with `apply_tick` normalising `trip.last_ts`
+    to UTC before it is persisted, both sides of every comparison are then in
+    the same frame no matter what offset the device sent."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def is_replayed_tick(trip: Trip, tick_seq: int | None) -> bool:
+    """True when this request's tick_seq has already been applied to `trip`.
+    False when either side has no sequence (a legacy client, or the trip's
+    first sequenced tick) — the timestamp defence covers that case."""
+    if tick_seq is None or trip.last_tick_seq is None:
+        return False
+    return tick_seq <= trip.last_tick_seq
+
+
+def accepted_tick_points(trip: Trip, points: list[TelemetryPoint]) -> list[TelemetryPoint]:
+    """`points` with every already-billed sample removed — i.e. those whose
+    `ts` is not strictly after the trip's tick-continuity anchor
+    (`Trip.last_ts`). Order is preserved; nothing is re-sorted, because a
+    device's own recording order is the only ordering the fare replay can
+    honestly assume.
+
+    A point at EXACTLY last_ts is dropped as well as one before it: last_ts
+    is the timestamp of the last point already fed through the engine, so an
+    equal timestamp is that same point coming round again, and re-feeding it
+    would add its haversine leg a second time for zero elapsed seconds.
+
+    Returns everything when the trip has no anchor yet (its first tick)."""
+    if trip.last_ts is None:
+        return list(points)
+    anchor = _as_utc(trip.last_ts)
+    return [point for point in points if _as_utc(point.ts) > anchor]
+
+
 async def apply_tick(
     session: AsyncSession,
     *,
@@ -164,6 +239,7 @@ async def apply_tick(
     points: list[TelemetryPoint],
     dest_lat: float | None = None,
     dest_lng: float | None = None,
+    tick_seq: int | None = None,
 ) -> Trip:
     """Feeds a batch of telemetry points through the fare engine sequentially,
     mutating `trip`'s running totals + tick-continuity anchor in place.
@@ -178,10 +254,29 @@ async def apply_tick(
     planned_dest_lat/lng are left exactly as they are: a driver who already
     picked a destination does not need to keep resending it on every
     subsequent tick, and this must never silently clear a value some
-    earlier tick already set."""
+    earlier tick already set.
+
+    `points` is filtered through `accepted_tick_points` here as well as (not
+    instead of) at the router — this function is the one that actually bills
+    distance, so the replay guard belongs on it unconditionally rather than
+    depending on every future caller remembering to filter first. Passing an
+    already-filtered list is therefore free: the second filter removes
+    nothing. `tick_seq`, when given, is recorded as the high-water mark on
+    Trip.last_tick_seq so the next replay of this same request is caught by
+    `is_replayed_tick` before it ever reaches here."""
     if dest_lat is not None and dest_lng is not None:
         trip.planned_dest_lat = dest_lat
         trip.planned_dest_lng = dest_lng
+
+    points = accepted_tick_points(trip, points)
+    if tick_seq is not None:
+        trip.last_tick_seq = max(tick_seq, trip.last_tick_seq or 0)
+    if not points:
+        # Every point in this batch was already billed. The destination
+        # update above (if any) still stands — it is a state assignment, not
+        # an accumulation, so replaying it is harmless — but nothing else on
+        # the trip may move.
+        return trip
 
     state = await build_fare_state(session, tenant_id=tenant_id, trip=trip)
 
@@ -207,9 +302,9 @@ async def apply_tick(
         distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
         elapsed_seconds = Decimal(0)
         if prev_ts is not None:
-            ts_prev = prev_ts if prev_ts.tzinfo else prev_ts.replace(tzinfo=UTC)
-            ts_point = point.ts if point.ts.tzinfo else point.ts.replace(tzinfo=UTC)
-            elapsed_seconds = Decimal(str(max((ts_point - ts_prev).total_seconds(), 0)))
+            elapsed_seconds = Decimal(
+                str(max((_as_utc(point.ts) - _as_utc(prev_ts)).total_seconds(), 0))
+            )
 
         state = engine.tick(
             state,
@@ -256,7 +351,11 @@ async def apply_tick(
     trip.wait_amount = round_half_up(state.accrued_waiting_charge)
     trip.moving_s += int(moving_delta)
     trip.waiting_s += int(waiting_delta)
-    trip.last_lat, trip.last_lng, trip.last_ts = prev_lat, prev_lng, prev_ts
+    # Normalised to UTC before persisting — see _as_utc. SQLite drops the
+    # offset on write, so storing the device's own local-offset wall clock
+    # here is what made the anchor unusable for the replay comparison.
+    trip.last_lat, trip.last_lng = prev_lat, prev_lng
+    trip.last_ts = _as_utc(prev_ts) if prev_ts is not None else None
     # Reassign (not mutate in place) so SQLAlchemy's change-tracking on this
     # plain JSON column reliably marks it dirty for the flush.
     trip.auto_tolls_applied = list(applied_toll_geofence_ids)
@@ -282,6 +381,10 @@ class CloseParams:
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[dict] | None = None
+    # The device meter's own grand total for this trip, when the client knows
+    # it (see TripCloseRequest.device_total). None means "nothing to compare"
+    # — see close_trip's max_fare_check_passed assignment.
+    device_total: Decimal | None = None
     # Driver tip (Close & Pay "tips" pass) — see Trip.tip_amount's doc (module docstring
     # deviation #6). Deliberately NOT passed to engine.close() below; assigned straight onto
     # the trip row so it can never influence fare_total/surcharge/total/gst_component.
@@ -373,7 +476,36 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     trip.end_at = params.end_at
     trip.end_lat = params.end_lat
     trip.end_lng = params.end_lng
-    trip.max_fare_check_passed = True  # no device_total to compare for online closes
+    # --- fare verification on the ONLINE close path (backend audit §4) ------
+    # This used to be an unconditional `True`, commented "no device_total to
+    # compare for online closes" — which meant every trip closed online
+    # carried an unverified fare BY CONSTRUCTION, and the flagged-trips view
+    # could only ever show offline-replayed (/sync) trips. It also meant the
+    # /tick double-count overcharge had nothing downstream that could catch
+    # it. When the client supplies its own meter total, run exactly the same
+    # check /sync runs on a synced trip: same compute_variance_pct, same 1%
+    # tolerance, same auto-flag with the same reason text, so a dashboard
+    # operator cannot tell (and should not need to tell) whether a flagged
+    # trip arrived online or offline.
+    #
+    # With no device_total there is genuinely nothing to compare against, and
+    # inventing a variance would be worse than admitting none was measured:
+    # the check is recorded as passed and variance_pct left at its default,
+    # which is the pre-existing behaviour for every client that does not yet
+    # send the field.
+    if params.device_total is not None:
+        variance_pct = compute_variance_pct(breakdown.grand_total, params.device_total)
+        trip.variance_pct = variance_pct
+        trip.max_fare_check_passed = variance_pct <= 1.0
+        if not trip.max_fare_check_passed:
+            trip.flagged_for_review = True
+            trip.review_notes = (
+                f"Auto-flagged: fare variance {variance_pct}% exceeds 1% tolerance "
+                f"(device reported {params.device_total}, server recomputed "
+                f"{breakdown.grand_total})"
+            )
+    else:
+        trip.max_fare_check_passed = True
     trip.receipt_ref = params.receipt_ref or f"RCPT-{trip.id[:8].upper()}"
     # Assigned straight from params, never derived from `breakdown` — a tip is not part of
     # the fare-engine's output (see Trip.tip_amount's doc, deviation #6 above).
