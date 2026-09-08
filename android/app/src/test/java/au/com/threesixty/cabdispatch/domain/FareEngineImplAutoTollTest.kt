@@ -195,4 +195,40 @@ class FareEngineImplAutoTollTest {
         // was previewing. This test now pins the billed figure, which is the point of F8.
         assertEquals(BigDecimal("6.50"), state.total.setScale(2, RoundingMode.HALF_UP))
     }
+
+    // ---- Sydney Airport pickup fee (JurisdictionConfig.NSW.airportAccessFee) --------------------
+
+    @Test
+    fun `a hiring that STARTS inside the airport precinct is charged the access fee once`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        // T2/T3 rank side of Sydney Airport -- inside the configured precinct.
+        engine.startTrip(urbanTariffDto(), startLat = -33.9455, startLng = 151.1795)
+        runCurrent()
+        assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+    }
+
+    @Test
+    fun `a manual Airport preset after the automatic fee does not charge it twice`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        engine.startTrip(urbanTariffDto(), startLat = -33.9399, startLng = 151.1753)
+        runCurrent()
+        engine.addToll(TollPresets.AIRPORT)
+        assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+    }
+
+    @Test
+    fun `a hiring that starts elsewhere pays no airport fee, and the manual preset still works`() = runTest {
+        val speedSource = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        // Sydney CBD: ~9 km from the precinct centre. The fee is for PICKUPS at the airport;
+        // a drop-off that later drives in is never charged by position, so start position is
+        // the only thing tested here.
+        engine.startTrip(urbanTariffDto(), startLat = -33.8688, startLng = 151.2093)
+        runCurrent()
+        assertEquals(BigDecimal.ZERO.setScale(2), engine.state.value.breakdown.tolls.setScale(2))
+        engine.addToll(TollPresets.AIRPORT)
+        assertEquals(BigDecimal("6.43"), engine.state.value.breakdown.tolls)
+    }
 }

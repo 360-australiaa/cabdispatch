@@ -28,6 +28,15 @@ import java.time.ZoneId
  * reading its own [FareEngine.NSW_FARE_ZONE] constant directly; this class is where a future pass
  * threads a per-tenant config through instead, once the server actually serves one.
  */
+/** True when ([lat],[lng]) lies inside this jurisdiction's airport precinct; false when the
+ * jurisdiction has no airport fee configured. */
+fun JurisdictionConfig.isInsideAirportPrecinct(lat: Double, lng: Double): Boolean {
+    val cLat = airportPrecinctLat ?: return false
+    val cLng = airportPrecinctLng ?: return false
+    val r = airportPrecinctRadiusM ?: return false
+    return au.com.threesixty.cabdispatch.domain.location.GeoMath.distanceKm(lat, lng, cLat, cLng) * 1000.0 <= r
+}
+
 data class JurisdictionConfig(
     /** Machine-stable code — mirrors the backend's `Tenant.jurisdiction` / `FareRegion.code`. */
     val code: String,
@@ -59,6 +68,24 @@ data class JurisdictionConfig(
     val regionResolverCentreLng: Double,
     val urbanRadiusKm: Double,
     val operatingFootprintRadiusKm: Double,
+    /**
+     * Airport ground-transport access fee, charged ONCE per hiring that STARTS inside the airport
+     * precinct (a pickup). NSW: $6.43, Point to Point Transport (Fares) Order 2026 -- the same
+     * figure [au.com.threesixty.cabdispatch.domain.TollPresets.AIRPORT] already carries for the
+     * manual preset; this is what makes it automatic. `null` in a jurisdiction with no such fee.
+     *
+     * Applied at pickup only, deliberately: the fee is paid by passengers picked up at the
+     * airport. A drop-off drives INTO the precinct and must not be charged, so entering the area
+     * mid-trip never triggers it -- only the trip's start position does.
+     */
+    val airportAccessFee: java.math.BigDecimal? = null,
+    /** Centre and radius of the airport precinct used for the pickup test above. The NSW values
+     * cover Sydney Airport's T1 and T2/T3 precincts and their rank roads; the radius is an
+     * approximation of the precinct boundary, flagged as such, and lives here (not in code paths)
+     * so a jurisdiction record can correct it. */
+    val airportPrecinctLat: Double? = null,
+    val airportPrecinctLng: Double? = null,
+    val airportPrecinctRadiusM: Double? = null,
 ) {
     enum class Source {
         /** Compiled into this build. True for every jurisdiction today — see this file's own doc. */
@@ -105,6 +132,11 @@ data class JurisdictionConfig(
             regionResolverCentreLng = 67.0011,
             urbanRadiusKm = 50.0,
             operatingFootprintRadiusKm = 2000.0,
+            // Sydney Airport (T1 + T2/T3 precinct), Fares Order 2026 access fee. Radius approximate.
+            airportAccessFee = java.math.BigDecimal("6.43"),
+            airportPrecinctLat = -33.9399,
+            airportPrecinctLng = 151.1753,
+            airportPrecinctRadiusM = 1_800.0,
         )
     }
 }

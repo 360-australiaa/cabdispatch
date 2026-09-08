@@ -494,6 +494,17 @@ class FareEngineImpl(
         // awaited here, so a slow/empty cache can never delay the meter actually starting.
         scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
         startTicking()
+        // AIRPORT PICKUP FEE (2026-09-08). Charged once per hiring that STARTS inside the airport
+        // precinct -- the passenger picked up at the airport pays it -- never for a drop-off that
+        // merely drives in. Same ledger line as the manual Airport preset, so the breakdown, the
+        // receipt and the server's auto_tolls_applied list all see one thing. Skipped if the driver
+        // already added the preset by hand, so it can never be charged twice.
+        airportFeeAutoApplied = false
+        val jurisdiction = JurisdictionConfig.NSW
+        if (jurisdiction.airportAccessFee != null && jurisdiction.isInsideAirportPrecinct(startLat, startLng)) {
+            addToll(TollPresets.AIRPORT)
+            airportFeeAutoApplied = true
+        }
     }
 
     /**
@@ -635,7 +646,12 @@ class FareEngineImpl(
      * visible result: the amount the driver entered is the amount on the breakdown, which is what
      * they will expect to see.
      */
+    /** Set by [startTrip] when the airport pickup fee was applied automatically, so a manual
+     * Airport preset tap on the same trip is a no-op rather than a second $6.43. */
+    private var airportFeeAutoApplied: Boolean = false
+
     override fun addToll(preset: TollPreset) {
+        if (preset.id == TollPresets.AIRPORT.id && airportFeeAutoApplied && calcState != null) return
         preset.registryRoadId?.let { roadId -> supersedeAutoToll(roadId) }
         val current = _state.value
         // Mirrored into the shadow calc state too — harmless today (close() below still returns

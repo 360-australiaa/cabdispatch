@@ -57,6 +57,11 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
         // Toll routes need the cached registry, which is a suspending Room read — so the list is
         // built here rather than in composition. Registry not synced yet => only the plain
         // routes, never a toll route through invented coordinates.
+        // Refresh first, so a tablet that has never managed to sync the registry (fresh install,
+        // paired and logged in a minute ago) shows the tunnel and motorway routes on first open
+        // instead of only the three plain ones. Best-effort: offline, the cached snapshot below
+        // still serves whatever it has.
+        runCatching { AppContainer.tollRegistryCache.refresh() }
         val registry = runCatching { AppContainer.tollRegistryCache.snapshot() }.getOrNull()
         val tollRoutes = registry
             ?.roadsById

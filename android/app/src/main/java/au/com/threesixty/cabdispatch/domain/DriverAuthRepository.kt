@@ -136,6 +136,11 @@ class SharedPreferencesDriverAuthRepository internal constructor(
             val user = response.user
             if (accessToken != null && user != null) {
                 AppContainer.accessToken = accessToken
+                // The NSW toll registry is fetched at boot, but a never-logged-in tablet gets a
+                // 401 there and nothing retried it -- so on a fresh device the simulator listed
+                // no toll routes and auto-toll detection had no gantries (second tablet,
+                // 2026-09-08). The first authenticated moment is the right one to fetch it.
+                AppContainer.refreshTollRegistry()
                 // Real gap closed 2026-09-06: this field existed on the response the whole time
                 // and was simply never read — see AppContainer.refreshToken's doc for the 401s
                 // that went unrecovered without it.
