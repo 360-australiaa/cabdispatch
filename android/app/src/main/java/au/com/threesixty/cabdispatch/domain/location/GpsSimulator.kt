@@ -48,6 +48,7 @@ class GpsSimulator(private val scope: CoroutineScope) {
     private val _speedKmh = MutableStateFlow(0.0)
     private val _route = MutableStateFlow<SimulatedRoute?>(null)
     private val _finished = MutableStateFlow(false)
+    private var finishedAtMillis: Long? = null
 
     /** The route being driven, or null when the simulator is off. */
     val route: StateFlow<SimulatedRoute?> = _route.asStateFlow()
@@ -102,7 +103,23 @@ class GpsSimulator(private val scope: CoroutineScope) {
                     timestampMillis = System.currentTimeMillis(),
                     heading = position.bearingDegrees,
                 )
-                if (position.finished) _finished.value = true
+                if (position.finished) {
+                    if (!_finished.value) {
+                        _finished.value = true
+                        finishedAtMillis = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - (finishedAtMillis ?: 0L) >= FINISHED_GRACE_MS) {
+                        // RELEASE THE METER (tablet, 2026-09-08). A finished route used to park the
+                        // vehicle forever: still "active", still the source the meter reads, still
+                        // 0 km/h -- with real GPS ignored and the red banner up -- until a human
+                        // found STOP in Settings. The next fare started on that tablet read 0 km/h
+                        // and 0.0 km for its whole life. Parking briefly is right (the calm-motion
+                        // check needs a still ring at the end); parking indefinitely is a trap.
+                        // After the grace the simulator stops itself and the switch hands the
+                        // meter back to the real provider.
+                        stop()
+                        return@launch
+                    }
+                }
 
                 delay(TICK_INTERVAL_MS)
             }
@@ -119,6 +136,7 @@ class GpsSimulator(private val scope: CoroutineScope) {
     fun stop() {
         job?.cancel()
         job = null
+        finishedAtMillis = null
         _speedKmh.value = 0.0
         _activeState.value = false
         _route.value = null
@@ -145,6 +163,8 @@ class GpsSimulator(private val scope: CoroutineScope) {
         fun isSimulating(): Boolean = simulating
 
         const val TICK_INTERVAL_MS = 1_000L
+        /** How long a finished route stays parked before the simulator releases the meter. */
+        const val FINISHED_GRACE_MS = 20_000L
 
         /** Metres. Mid-range for a real in-vehicle fix (LocationFix.accuracyM documents 5-30m). */
         const val SIMULATED_ACCURACY_M = 8.0f

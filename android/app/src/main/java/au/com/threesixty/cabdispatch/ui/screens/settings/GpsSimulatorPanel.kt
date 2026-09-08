@@ -92,7 +92,10 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
 
         Spacer(Modifier.height(12.dp))
 
-        if (active) {
+        // A FINISHED run shows the route list again (with a note), not only STOP: the rows were
+        // hidden for as long as the old run stayed active, so a tester tapping a new route hit
+        // nothing and the stale, parked simulation kept the meter at 0 km/h (tablet, 2026-09-08).
+        if (active && !finished) {
             val label = running?.name ?: "route"
             Text(
                 if (finished) "Arrived — $label finished, vehicle stopped." else "Driving $label…",
