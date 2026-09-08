@@ -19,6 +19,7 @@ import {
   type TableColumn,
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { getJurisdictionCapabilities } from "@/lib/i18n";
 import {
   downloadComplianceDocument,
   downloadVehicleDossierPdf,
@@ -80,9 +81,14 @@ export default function CompliancePage() {
 }
 
 function ReportsView() {
+  const { tenant } = useAuth();
+  // NSW Point to Point Transport Commissioner export -- NSW-only concept
+  // (audit §4, WS-F.4). See lib/i18n/jurisdiction.ts for why every tenant
+  // has the capability today.
+  const jurisdiction = getJurisdictionCapabilities(tenant);
   return (
     <div className="flex flex-col gap-4">
-      <NswPtpExportCard />
+      {jurisdiction.nswPtpExport && <NswPtpExportCard />}
       <RevenueSection />
     </div>
   );

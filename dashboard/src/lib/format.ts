@@ -19,6 +19,19 @@ import axios from "axios";
  * Workstream X1 makes locale and currency tenant-driven; this module is the
  * single seam that change has to go through, which is the main reason for
  * consolidating in the first place.
+ *
+ * D6 STATUS (2026-09-08): still blocked. `lib/auth.tsx`'s `AuthContextValue`
+ * now carries a `tenant` record (see its `TenantRecord` interface) so a
+ * caller finally has *something* to pass in here, but the backend `Tenant`
+ * row (`backend/app/models/tenant.py`) has no `currency`/`timezone` column
+ * yet -- confirmed on this branch and on `wave3/x1-jurisdiction`, which owns
+ * adding them and hasn't started. Wiring `LOCALE`/`CURRENCY` to read from a
+ * tenant that cannot actually answer the question would mean silently
+ * defaulting to `en-AU`/`AUD` for every tenant anyway, just with an extra
+ * layer of indirection pretending otherwise -- worse than the honest
+ * hardcode this already is. Left alone until the field exists; do not add a
+ * `tenant?.currency ?? "AUD"` fallback here, that is the plausible-default
+ * this task explicitly rules out.
  */
 
 /** The locale every helper here pins. See the Wave 3 note above. */

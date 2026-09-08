@@ -3,6 +3,28 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@/components/ui";
 
+/**
+ * Platform-default branding, shown until a signed-in tenant's own
+ * `theme_json` is available (see `components/layout/Sidebar.tsx`, which
+ * *does* have a tenant to brand with, once the operator is signed in).
+ *
+ * HONESTY NOTE (audit §4, tenant naming): a real per-tenant login page — a
+ * driver typing their own operator's name/logo before they've authenticated
+ * at all — needs the *server* to know which tenant a bare `/login` request
+ * is for (a subdomain, a `?tenant=slug` the backend can resolve to branding,
+ * or similar), and there's no such public, unauthenticated endpoint today.
+ * `POST /v1/auth/driver-login`'s `tenant_slug` (app/api/v1/auth.py) is the
+ * closest analogue but it's a *login* call, not a branding lookup, and it's
+ * the Android app's endpoint, not this dashboard's. Building that endpoint
+ * is backend work this workstream doesn't own (`backend/**` is out of
+ * bounds — see the program plan's Wave 3 constraints). So this page stays
+ * generically branded and named as a constant rather than a scattered
+ * literal, which is the honest amount of "tenant branding on login" this
+ * workstream can deliver without adding an API.
+ */
+const BRAND_NAME = "Cab Dispatch Fleet Ops";
+const BRAND_MARK = "CD";
+
 export default function LoginPage() {
   const { login, completeMfaLogin, isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -74,9 +96,9 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-brand-primary font-bold text-brand-primary-foreground">
-            CD
+            {BRAND_MARK}
           </div>
-          <CardTitle className="text-center text-lg">Cab Dispatch Fleet Ops</CardTitle>
+          <CardTitle className="text-center text-lg">{BRAND_NAME}</CardTitle>
         </CardHeader>
         <CardContent>
           {step === "credentials" ? (

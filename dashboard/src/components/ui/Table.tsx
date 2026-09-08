@@ -1,6 +1,7 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { LiveRegion } from "./LiveRegion";
 import { Pagination } from "./Pagination";
 import { Spinner } from "./Spinner";
@@ -53,6 +54,7 @@ export function Table<T>({
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDirection>(null);
   const [page, setPage] = useState(0);
+  const { t } = useI18n();
 
   const sorted = useMemo(() => {
     if (!sortKey || !sortDir) return data;
@@ -124,7 +126,7 @@ export function Table<T>({
       <LiveRegion
         message={
           isLoading
-            ? "Loading table data"
+            ? t("ui.table.loadingAnnouncement")
             : `${sorted.length} ${sorted.length === 1 ? "row" : "rows"}`
         }
       />
@@ -174,15 +176,15 @@ export function Table<T>({
               <tr>
                 <td colSpan={columns.length} className="px-4 py-6 text-center text-muted-foreground">
                   <span className="inline-flex items-center gap-2">
-                    <Spinner size="sm" label="Loading table data" />
-                    Loading…
+                    <Spinner size="sm" label={t("ui.table.loadingAnnouncement")} />
+                    {t("common.loading")}
                   </span>
                 </td>
               </tr>
             ) : paged.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-4 py-6 text-center text-muted-foreground">
-                  {emptyState ?? "No data"}
+                  {emptyState ?? t("ui.table.noResults")}
                 </td>
               </tr>
             ) : (

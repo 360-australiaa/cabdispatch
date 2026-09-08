@@ -1,11 +1,12 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme, type ThemePreference } from "@/lib/theme";
+import { useI18n, type I18nKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-const OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor },
+const OPTIONS: { value: ThemePreference; labelKey: I18nKey; icon: typeof Sun }[] = [
+  { value: "light", labelKey: "ui.themeToggle.light", icon: Sun },
+  { value: "dark", labelKey: "ui.themeToggle.dark", icon: Moon },
+  { value: "system", labelKey: "ui.themeToggle.system", icon: Monitor },
 ];
 
 export interface ThemeToggleProps {
@@ -27,6 +28,7 @@ export interface ThemeToggleProps {
  */
 export function ThemeToggle({ className }: ThemeToggleProps) {
   const { preference, setPreference } = useTheme();
+  const { t } = useI18n();
 
   return (
     <div
@@ -34,8 +36,9 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
       aria-label="Colour theme"
       className={cn("inline-flex rounded-md border border-white/15 bg-white/5 p-0.5", className)}
     >
-      {OPTIONS.map(({ value, label, icon: Icon }) => {
+      {OPTIONS.map(({ value, labelKey, icon: Icon }) => {
         const selected = preference === value;
+        const label = t(labelKey);
         return (
           <button
             key={value}

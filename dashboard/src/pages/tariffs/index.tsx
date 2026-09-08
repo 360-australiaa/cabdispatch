@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
+import { getJurisdictionCapabilities } from "@/lib/i18n";
 import {
   useDeleteTariffMutation,
   useTariffsQuery,
@@ -54,8 +55,16 @@ export default function TariffsPage() {
   // console itself uses (src/lib/platformAdmin.ts) — an ordinary tenant
   // owner/admin can no longer write tariffs at all, only read them.
   // Change-log (read-only) stays visible to every role.
-  const { user } = useAuth();
+  const { user, tenant } = useAuth();
   const canWrite = isPlatformOwner(user);
+  // "NSW Toll Roads" is a NSW-specific concept (audit §4, WS-F.4) — hidden
+  // for a tenant without the capability. See lib/i18n/jurisdiction.ts for
+  // why every tenant has it today (the backend has no jurisdiction field
+  // yet) and what changes once one exists.
+  const jurisdiction = getJurisdictionCapabilities(tenant);
+  const visibleTabs = jurisdiction.nswTollRoads
+    ? TABS
+    : TABS.filter((item) => item.value !== "toll-roads");
   const toast = useToast();
 
   const [tab, setTab] = useState<TariffStudioTab>("tariffs");
@@ -159,7 +168,7 @@ export default function TariffsPage() {
       />
 
       <Tabs
-        items={TABS}
+        items={visibleTabs}
         value={tab}
         onChange={setTab}
         variant="underline"
