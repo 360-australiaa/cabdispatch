@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.AutoTollAlert
 import au.com.threesixty.cabdispatch.domain.DuressUiState
@@ -232,6 +234,16 @@ fun HiredScreen(
     // (TripEntity.startAt) — and its persisted GPS trace for the backdrop's route polyline.
     val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
     val persistedTrace by AppContainer.tripRepository.observeActiveTripGpsTrace().collectAsState(initial = emptyList())
+    // The tariff the running fare is actually charging, for a RESUMED fare (tablet, 2026-09-08).
+    // `tripContext` above is the in-memory hand-off set when the driver tapped START; after a
+    // process death it is null, so on a resumed fare the Night Fare tile and the breakdown's
+    // "Night fare (x)" row read "—" while the engine -- restored from Room with its tariff --
+    // was charging correctly. The cache is keyed by region, and the fallback is accepted ONLY when
+    // its id matches the open trip's own tariffId, so the label can never name a tariff other than
+    // the one on the bill. No match: still an honest dash, never a plausible number.
+    val region = remember { RegionResolver.resolve(AppContainer.speedSource.locationFix.value) }
+    val cachedTariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }.collectAsState(initial = null)
+    val resumedTariff: TariffDto? = cachedTariff?.takeIf { activeTrip != null && it.id == activeTrip?.tariffId }
     val liveTrace = rememberLiveTrace()
     val liveFix by AppContainer.speedSource.locationFix.collectAsState()
 
@@ -650,6 +662,7 @@ fun HiredScreen(
             ControlsDrawer(
                 fareState = fareState,
                 tripContext = tripContext,
+                tariffFallback = resumedTariff,
                 startAtIso = activeTrip?.startAt,
                 hasDestination = hasDestination,
                 breakdownExpanded = breakdownExpanded,

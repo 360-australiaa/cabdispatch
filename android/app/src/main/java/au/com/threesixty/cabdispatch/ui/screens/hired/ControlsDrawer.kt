@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.role
@@ -101,6 +102,8 @@ internal fun ControlsHandle(onClick: () -> Unit, modifier: Modifier = Modifier) 
 internal fun ControlsDrawer(
     fareState: FareState,
     tripContext: TripContext?,
+    /** The charging tariff for a resumed fare, when [tripContext] is gone -- see HiredScreen. */
+    tariffFallback: TariffDto? = null,
     startAtIso: String?,
     hasDestination: Boolean,
     breakdownExpanded: Boolean,
@@ -142,7 +145,7 @@ internal fun ControlsDrawer(
         }
         Spacer(Modifier.height(16.dp))
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-            NightFareTile(timeClass = fareState.timeClass, tariff = tripContext?.tariff)
+            NightFareTile(timeClass = fareState.timeClass, tariff = (tripContext?.tariff ?: tariffFallback))
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SetPriceTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
@@ -158,7 +161,7 @@ internal fun ControlsDrawer(
                 title = if (hasDestination) "FARE DETAILS" else "FARE BREAKDOWN",
                 breakdown = fareState.breakdown,
                 timeClass = fareState.timeClass,
-                nightMultiplierLabel = nightMultiplierLabel(tripContext?.tariff),
+                nightMultiplierLabel = nightMultiplierLabel((tripContext?.tariff ?: tariffFallback)),
                 expanded = breakdownExpanded,
                 onToggle = onToggleBreakdown,
                 negotiatedTotal = fareState.negotiatedTotal,
