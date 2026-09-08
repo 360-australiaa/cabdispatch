@@ -42,3 +42,29 @@ export function useVerifyAuditLogChain() {
     },
   });
 }
+
+/** One staff member, for resolving an entry's raw `actor_user_id` to a human
+ * name. Declared here rather than in `./types` because the audit-log response
+ * itself never carries it -- it comes from `GET /v1/users`. */
+export interface AuditLogActorOption {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/** Lightweight, unpaginated-ish (first 100 — the same server-side cap as
+ * `GET /v1/users` itself) staff lookup for resolving `actor_user_id` to a
+ * human name/email — the audit-log response only carries the raw id. Same
+ * pattern as `pages/duress/api.ts`'s `listVehicleOptionsForDeviceLink`.
+ *
+ * Restored during the Phase 0 dashboard scaffold: the merge this work is based
+ * on dropped this function while keeping its only caller
+ * (`pages/tariffs/ChangeLogModal.tsx`), so `tsc -b` failed on the base commit
+ * itself. Body is the original, unchanged.
+ */
+export async function listActorOptions(): Promise<AuditLogActorOption[]> {
+  const res = await apiClient.get<{ items: AuditLogActorOption[] }>("/v1/users", {
+    params: { skip: 0, limit: 100 },
+  });
+  return res.data.items;
+}
