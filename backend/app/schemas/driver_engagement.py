@@ -115,6 +115,25 @@ class RatingRead(BaseModel):
     recent: list[TripRatingRead]
 
 
+class RatingsSummaryDriverLine(BaseModel):
+    driver_id: str
+    count: int
+    average: float
+
+
+class RatingsSummary(BaseModel):
+    """`GET /v1/ratings/summary` -- a real SQL aggregate (COUNT/AVG/GROUP BY)
+    over every rating row matching the tenant (+ optional `driver_id`)
+    filter, not the "average over whatever page happened to load" the
+    dashboard's Ratings page computed before this endpoint existed. `average`
+    is null when `total` is 0 (no ratings yet -- never rendered as 0)."""
+
+    total: int
+    average: float | None
+    distribution: dict[int, int]
+    by_driver: list[RatingsSummaryDriverLine]
+
+
 # --- announcements ------------------------------------------------------------
 
 

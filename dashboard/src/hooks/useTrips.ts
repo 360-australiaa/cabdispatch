@@ -99,6 +99,18 @@ export interface TripListFilters {
   vehicle_id?: string;
   driver_id?: string;
   flagged_for_review?: boolean;
+  /** ISO datetime bounds on `start_at`/`end_at`, inclusive — real server-side
+   * filters (`backend/app/api/v1/trips.py::list_trips`), not a client-side
+   * approximation over a capped page. `end_from`/`end_to` only ever match
+   * closed trips (an open trip's `end_at` is null), so pair them with
+   * `status: "closed"` — see `useIncentiveProgressQuery` in
+   * `pages/driver-engagement/hooks.ts` for exactly that combination, which
+   * can now read an exact `total` for a trip-count window instead of the
+   * "floor over the most recent 200" it previously had to report. */
+  start_from?: string;
+  start_to?: string;
+  end_from?: string;
+  end_to?: string;
   skip?: number;
   limit?: number;
 }

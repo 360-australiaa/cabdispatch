@@ -119,16 +119,23 @@ async def test_list_ledger_entries_filters_by_driver_and_period(client, session)
         assert resp.status_code == 201
 
     all_entries = await client.get("/v1/psl/ledger", headers=headers)
-    assert len(all_entries.json()) == 3
+    assert len(all_entries.json()["items"]) == 3
+    assert all_entries.json()["total"] == 3
 
     by_driver = await client.get(f"/v1/psl/ledger?driver_id={driver_a.id}", headers=headers)
-    assert len(by_driver.json()) == 2
+    assert len(by_driver.json()["items"]) == 2
+    assert by_driver.json()["total"] == 2
 
     by_period = await client.get("/v1/psl/ledger?period=2026-07", headers=headers)
-    assert len(by_period.json()) == 2
+    assert len(by_period.json()["items"]) == 2
+    assert by_period.json()["total"] == 2
 
+    # The total is a real SELECT count(*) over the whole matching set, not
+    # the length of the page fetched -- distinct from `items`, which is
+    # capped at `limit`.
     paginated = await client.get("/v1/psl/ledger?limit=1&skip=0", headers=headers)
-    assert len(paginated.json()) == 1
+    assert len(paginated.json()["items"]) == 1
+    assert paginated.json()["total"] == 3
 
 
 async def test_update_and_delete_ledger_entry(client, session):
@@ -172,7 +179,8 @@ async def test_tenant_isolation_on_ledger(client, session):
 
     # Tenant B cannot see tenant A's entry, in the list or by id.
     list_b = await client.get("/v1/psl/ledger", headers=headers_b)
-    assert list_b.json() == []
+    assert list_b.json()["items"] == []
+    assert list_b.json()["total"] == 0
 
     get_b = await client.get(f"/v1/psl/ledger/{entry_id}", headers=headers_b)
     assert get_b.status_code == 404
@@ -202,12 +210,15 @@ async def test_topup_uses_mock_stripe_fallback_and_credits_ledger(client, sessio
     ledger_resp = await client.get(
         f"/v1/psl/ledger?driver_id={driver.id}&period=2026-07", headers=headers
     )
-    entries = ledger_resp.json()
+    body = ledger_resp.json()
+    entries = body["items"]
     assert len(entries) == 1
+    assert body["total"] == 1
     assert Decimal(entries[0]["amount_collected"]) == Decimal("25.00")
 
     topups_resp = await client.get(f"/v1/psl/topups?driver_id={driver.id}", headers=headers)
-    assert len(topups_resp.json()) == 1
+    assert len(topups_resp.json()["items"]) == 1
+    assert topups_resp.json()["total"] == 1
 
 
 async def test_topup_for_unknown_driver_404s(client, session):

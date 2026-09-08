@@ -1,25 +1,24 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Star } from "lucide-react";
-import { Badge, Card, CardContent, PageHeader, Select, Spinner, Table, type TableColumn } from "@/components/ui";
+import {
+  Badge,
+  Card,
+  CardContent,
+  PageHeader,
+  Pagination,
+  Select,
+  Spinner,
+  Table,
+  type TableColumn,
+} from "@/components/ui";
+import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/lib/auth";
-import { useDriverOptionsQuery, useRatingsQuery, type RatingStars, type TripRating } from "./hooks";
+import { useDriverOptionsQuery, type Page, type RatingStars, type TripRating } from "./hooks";
 import { formatDateTime } from "./format";
 
-// Matches the backend's `GET /v1/ratings` cap (`limit: int = Query(default=50, ge=1, le=200)`,
-// app/api/v1/ratings.py) -- fetching the max page gives the best client-side
-// average/histogram without a second round trip. No fleet-wide "average
-// rating per driver" endpoint exists server-side (only a single-driver one,
-// wired to /v1/me/rating for the driver's own tablet), so both the overall
-// summary and the per-driver leaderboard below are computed from this same
-// loaded set, same "derive the rollup from the list you already fetched"
-// convention `pages/psl/RemittanceReport.tsx` uses.
-const FETCH_LIMIT = 200;
-
-function average(ratings: TripRating[]): number | null {
-  if (ratings.length === 0) return null;
-  return ratings.reduce((sum, r) => sum + r.stars, 0) / ratings.length;
-}
+const PAGE_SIZE = 15;
 
 function Stars({ value }: { value: number }) {
   const rounded = Math.round(value);
@@ -44,6 +43,74 @@ const STAR_FILTER_OPTIONS = [
   { value: "1", label: "1 star" },
 ];
 
+// --- Summary aggregate (GET /v1/ratings/summary) ----------------------------
+//
+// A real SQL aggregate (COUNT/AVG/GROUP BY, backend/app/api/v1/ratings.py)
+// over EVERY rating row matching the tenant (+ optional driver_id) filter --
+// not derived client-side from whatever page of GET /v1/ratings happened to
+// be loaded, which used to silently under-count a fleet with more than 200
+// ratings. Colocated here rather than in ./hooks.ts, which this page does
+// not own (see docs/plans/2026-09-08-global-meter-program.md's D12 row) --
+// only RatingsPage.tsx itself is this workstream's to edit.
+
+interface RatingsSummaryDriverLine {
+  driver_id: string;
+  count: number;
+  average: number;
+}
+
+interface RatingsSummary {
+  total: number;
+  average: number | null;
+  distribution: Record<string, number>;
+  by_driver: RatingsSummaryDriverLine[];
+}
+
+function useRatingsSummaryQuery(driverId: string | null) {
+  return useQuery({
+    queryKey: ["ratings-summary", driverId],
+    queryFn: async () => {
+      const res = await apiClient.get<RatingsSummary>("/v1/ratings/summary", {
+        params: driverId ? { driver_id: driverId } : undefined,
+      });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
+// --- Row-level list (GET /v1/ratings) --------------------------------------
+//
+// A local query, not `useRatingsQuery` from `./hooks.ts` (this page does not
+// own that file), so the `stars` filter -- which needs to run server-side
+// alongside real `skip`/`limit` paging for `total` to stay honest -- can be
+// wired here without touching a file outside this workstream's ownership.
+
+interface RatingsListFilters {
+  driverId?: string;
+  stars?: number;
+  skip: number;
+  limit: number;
+}
+
+function useRatingsListQuery(filters: RatingsListFilters) {
+  return useQuery({
+    queryKey: ["ratings-list", filters],
+    queryFn: async () => {
+      const res = await apiClient.get<Page<TripRating>>("/v1/ratings", {
+        params: {
+          driver_id: filters.driverId || undefined,
+          stars: filters.stars,
+          skip: filters.skip,
+          limit: filters.limit,
+        },
+      });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
 /**
  * Ratings — owner/admin view of the passenger's post-trip 1-5 star rating
  * (`GET /v1/ratings`, captured by the driver tablet's Close & Pay rating
@@ -53,6 +120,13 @@ const STAR_FILTER_OPTIONS = [
  * drivers were being rated poorly, or read a passenger's written comment,
  * without querying the API directly. Mirrors `WalletPage.tsx`'s shape
  * (owner/admin-gated, read-only from here).
+ *
+ * The fleet average, star distribution and per-driver leaderboard come from
+ * `GET /v1/ratings/summary` -- a real aggregate over every matching row --
+ * while the row-level table below pages through `GET /v1/ratings` with a
+ * real server-side `skip`/`limit`/`stars` filter and real `total` (D12
+ * server-side pagination), not a single capped fetch filtered/paginated
+ * client-side the way this page used to work.
  */
 export default function RatingsPage() {
   const { user } = useAuth();
@@ -60,6 +134,7 @@ export default function RatingsPage() {
 
   const [driverId, setDriverId] = useState<string>("");
   const [starsFilter, setStarsFilter] = useState<string>("");
+  const [page, setPage] = useState(0);
 
   const driversQuery = useDriverOptionsQuery();
   const drivers = useMemo(() => driversQuery.data ?? [], [driversQuery.data]);
@@ -69,43 +144,34 @@ export default function RatingsPage() {
     return map;
   }, [drivers]);
 
-  const ratingsQuery = useRatingsQuery({
-    driver_id: canAccess ? driverId || undefined : undefined,
-    skip: 0,
-    limit: FETCH_LIMIT,
+  const summaryQuery = useRatingsSummaryQuery(canAccess ? driverId || null : null);
+  const summary = summaryQuery.data;
+
+  const ratingsQuery = useRatingsListQuery({
+    driverId: canAccess ? driverId || undefined : undefined,
+    stars: starsFilter ? Number(starsFilter) : undefined,
+    skip: page * PAGE_SIZE,
+    limit: PAGE_SIZE,
   });
 
-  const allRatings = ratingsQuery.data?.items ?? [];
-  const rows = starsFilter ? allRatings.filter((r) => String(r.stars) === starsFilter) : allRatings;
+  const rows = ratingsQuery.data?.items ?? [];
   const total = ratingsQuery.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const overallAverage = average(allRatings);
-  const distribution = useMemo(() => {
-    const counts: Record<RatingStars, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    for (const r of allRatings) counts[r.stars]++;
-    return counts;
-  }, [allRatings]);
+  const overallAverage = summary?.average ?? null;
+  const distribution: Record<RatingStars, number> = {
+    1: summary?.distribution?.["1"] ?? 0,
+    2: summary?.distribution?.["2"] ?? 0,
+    3: summary?.distribution?.["3"] ?? 0,
+    4: summary?.distribution?.["4"] ?? 0,
+    5: summary?.distribution?.["5"] ?? 0,
+  };
+  const distributionTotal = summary?.total ?? 0;
 
-  // Per-driver leaderboard, only meaningful when not already filtered to a
-  // single driver -- lets an operator spot a driver trending low without
-  // clicking through every driver one at a time.
-  const leaderboard = useMemo(() => {
-    if (driverId) return [];
-    const byDriver = new Map<string, TripRating[]>();
-    for (const r of allRatings) {
-      const list = byDriver.get(r.driver_id) ?? [];
-      list.push(r);
-      byDriver.set(r.driver_id, list);
-    }
-    return Array.from(byDriver.entries())
-      .map(([id, ratings]) => ({
-        driverId: id,
-        name: driverNameById.get(id) ?? `${id.slice(0, 8)}…`,
-        count: ratings.length,
-        average: average(ratings) ?? 0,
-      }))
-      .sort((a, b) => a.average - b.average); // worst-first -- the list worth acting on
-  }, [allRatings, driverId, driverNameById]);
+  // Worst-first, same as the backend's own sort -- lets an operator spot a
+  // driver trending low without clicking through every driver one at a time.
+  // Only meaningful when not already filtered to a single driver.
+  const leaderboard = driverId ? [] : (summary?.by_driver ?? []);
 
   const driverOptions = [
     { value: "", label: driversQuery.isLoading ? "Loading drivers…" : "All drivers" },
@@ -179,10 +245,10 @@ export default function RatingsPage() {
               {overallAverage != null && <Stars value={overallAverage} />}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {ratingsQuery.isLoading ? (
+              {summaryQuery.isLoading ? (
                 <Spinner size="sm" label="Loading ratings" />
               ) : (
-                `From ${allRatings.length} of ${total} rating${total === 1 ? "" : "s"}`
+                `From all ${distributionTotal} rating${distributionTotal === 1 ? "" : "s"}`
               )}
             </p>
           </CardContent>
@@ -193,7 +259,7 @@ export default function RatingsPage() {
             <div className="flex flex-col gap-1">
               {([5, 4, 3, 2, 1] as RatingStars[]).map((star) => {
                 const count = distribution[star];
-                const pct = allRatings.length ? (count / allRatings.length) * 100 : 0;
+                const pct = distributionTotal ? (count / distributionTotal) * 100 : 0;
                 return (
                   <div key={star} className="flex items-center gap-2 text-xs">
                     <span className="w-3 shrink-0 text-muted-foreground">{star}</span>
@@ -219,12 +285,17 @@ export default function RatingsPage() {
             <div className="flex flex-wrap gap-2">
               {leaderboard.slice(0, 6).map((d) => (
                 <button
-                  key={d.driverId}
+                  key={d.driver_id}
                   type="button"
-                  onClick={() => setDriverId(d.driverId)}
+                  onClick={() => {
+                    setDriverId(d.driver_id);
+                    setPage(0);
+                  }}
                   className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs hover:bg-muted"
                 >
-                  <span className="font-medium text-foreground">{d.name}</span>
+                  <span className="font-medium text-foreground">
+                    {driverNameById.get(d.driver_id) ?? `${d.driver_id.slice(0, 8)}…`}
+                  </span>
                   <Badge variant={d.average < 3 ? "destructive" : d.average < 4 ? "accent" : "success"}>
                     {d.average.toFixed(1)}★
                   </Badge>
@@ -240,11 +311,27 @@ export default function RatingsPage() {
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Driver</label>
-            <Select className="w-64" options={driverOptions} value={driverId} onChange={(e) => setDriverId(e.target.value)} />
+            <Select
+              className="w-64"
+              options={driverOptions}
+              value={driverId}
+              onChange={(e) => {
+                setDriverId(e.target.value);
+                setPage(0);
+              }}
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Stars</label>
-            <Select className="w-44" options={STAR_FILTER_OPTIONS} value={starsFilter} onChange={(e) => setStarsFilter(e.target.value)} />
+            <Select
+              className="w-44"
+              options={STAR_FILTER_OPTIONS}
+              value={starsFilter}
+              onChange={(e) => {
+                setStarsFilter(e.target.value);
+                setPage(0);
+              }}
+            />
           </div>
           <span className="mb-2 ml-auto text-xs text-muted-foreground">
             {rows.length} of {total} rating{total === 1 ? "" : "s"}
@@ -258,19 +345,20 @@ export default function RatingsPage() {
         </p>
       )}
 
-      {total > FETCH_LIMIT && (
-        <p className="mb-3 text-xs text-muted-foreground">
-          Showing the latest {FETCH_LIMIT} of {total} ratings — filter to a driver to see more of theirs.
-        </p>
-      )}
-
       <Table
         columns={columns}
         data={rows}
         rowKey={(row) => row.id}
         isLoading={ratingsQuery.isLoading}
         emptyState="No ratings match these filters."
-        pageSize={15}
+        label="Ratings"
+      />
+      <Pagination
+        page={page}
+        pageCount={pageCount}
+        onPageChange={setPage}
+        summary={`${total} rating${total === 1 ? "" : "s"} — page ${page + 1} of ${pageCount}`}
+        label="Ratings pagination"
       />
     </div>
   );

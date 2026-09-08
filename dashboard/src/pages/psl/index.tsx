@@ -91,8 +91,13 @@ export default function PslPage() {
     ...drivers.map((d) => ({ value: d.id, label: d.name })),
   ];
 
-  const entries = ledgerQuery.data ?? [];
-  const topUps = topUpsQuery.data ?? [];
+  // GET /v1/psl/ledger and /topups now return a `Page` envelope with a real
+  // total (D12 server-side pagination), not a bare array — see
+  // hooks/usePSLCentre.ts. This page still fetches/paginates client-side
+  // over the capped `FETCH_LIMIT` page below; that UX change is out of
+  // scope here (belongs to whoever owns this page).
+  const entries = ledgerQuery.data?.items ?? [];
+  const topUps = topUpsQuery.data?.items ?? [];
 
   const columns: TableColumn<PSLLedgerEntry>[] = [
     {

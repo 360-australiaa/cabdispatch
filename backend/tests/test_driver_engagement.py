@@ -14,6 +14,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.core import security
 from app.models.tenant import Tenant
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip
@@ -251,6 +253,69 @@ async def test_rating_average_and_validation(client, session):
     assert listing.status_code == 200
     assert listing.json()["total"] == 3
     assert (await client.get("/v1/ratings", headers=driver)).status_code == 403
+
+    # `stars` filters server-side, and `total` reflects the filtered count --
+    # not the length of a client-filtered page.
+    fours = await client.get("/v1/ratings", params={"driver_id": driver_id, "stars": 4}, headers=admin)
+    assert fours.status_code == 200
+    assert fours.json()["total"] == 2
+    assert all(item["stars"] == 4 for item in fours.json()["items"])
+
+
+async def test_ratings_summary_is_a_real_aggregate_not_a_capped_page(client, session):
+    """`GET /v1/ratings/summary` must compute its average/distribution/
+    per-driver breakdown as a real SQL aggregate over every matching row --
+    not by fetching a capped page and reducing over it client-side (the
+    dashboard's old Ratings-page convention, which was silently wrong past
+    `GET /v1/ratings`'s own limit<=200)."""
+    tenant_id = await _tenant(session)
+    _admin_id, admin = await _user(session, tenant_id=tenant_id, role="admin")
+    driver_1_id, driver_1 = await _user(session, tenant_id=tenant_id, role="driver")
+    driver_2_id, driver_2 = await _user(session, tenant_id=tenant_id, role="driver")
+
+    async def _rate(driver_headers, driver_id, stars):
+        trip_id = await _trip(session, tenant_id=tenant_id, driver_id=driver_id, end_at=datetime.now(UTC))
+        resp = await client.post(f"/v1/trips/{trip_id}/rating", json={"stars": stars}, headers=driver_headers)
+        assert resp.status_code == 201, resp.text
+
+    await _rate(driver_1, driver_1_id, 5)
+    await _rate(driver_1, driver_1_id, 5)
+    await _rate(driver_1, driver_1_id, 4)
+    await _rate(driver_2, driver_2_id, 1)
+
+    resp = await client.get("/v1/ratings/summary", headers=admin)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 4
+    assert body["average"] == 3.75
+    assert body["distribution"] == {"1": 1, "2": 0, "3": 0, "4": 1, "5": 2}
+
+    by_driver = {line["driver_id"]: line for line in body["by_driver"]}
+    assert by_driver[driver_1_id]["count"] == 3
+    assert by_driver[driver_1_id]["average"] == pytest.approx(4.67, abs=0.01)
+    assert by_driver[driver_2_id]["count"] == 1
+    assert by_driver[driver_2_id]["average"] == 1.0
+    # Worst-first, same convention as the dashboard's own leaderboard sort.
+    assert [line["driver_id"] for line in body["by_driver"]] == [driver_2_id, driver_1_id]
+
+    scoped = await client.get("/v1/ratings/summary", params={"driver_id": driver_2_id}, headers=admin)
+    assert scoped.json()["total"] == 1
+    assert scoped.json()["average"] == 1.0
+    assert len(scoped.json()["by_driver"]) == 1
+
+    # No ratings at all -> average is null, never 0.
+    empty_tenant_id = await _tenant(session, "Empty Ratings Tenant")
+    _empty_admin_id, empty_admin = await _user(session, tenant_id=empty_tenant_id, role="admin")
+    empty = await client.get("/v1/ratings/summary", headers=empty_admin)
+    assert empty.json() == {
+        "total": 0,
+        "average": None,
+        "distribution": {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0},
+        "by_driver": [],
+    }
+
+    # Driver role is refused, same gate as GET /v1/ratings.
+    assert (await client.get("/v1/ratings/summary", headers=driver_1)).status_code == 403
 
 
 async def test_rating_scoped_to_own_driver_and_tenant(client, session):

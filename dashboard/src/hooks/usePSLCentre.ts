@@ -13,8 +13,10 @@ import apiClient from "@/lib/apiClient";
  * straight off the wire — never coerced here. Formatting happens explicitly
  * at render time in `src/pages/psl/format.ts`.
  *
- * `GET /v1/psl/ledger` and `GET /v1/psl/topups` return a plain array (no
- * envelope/total — server caps at `limit`, max 200), unlike `/v1/trips`.
+ * `GET /v1/psl/ledger` and `GET /v1/psl/topups` now return a `Page` envelope
+ * (`items`/`total`/`skip`/`limit`, matching `/v1/trips`'s shape) with a real
+ * `SELECT count(*)` total — they used to return a bare capped array with no
+ * total at all, which is exactly the dashboard-audit gap this hook closes.
  */
 
 export interface PSLLedgerEntry {
@@ -100,6 +102,14 @@ export interface PSLReport {
   drivers: PSLReportDriverLine[];
 }
 
+/** Server-side paged envelope, mirroring `app.schemas.driver_engagement.Page`. */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
 const PSL_LEDGER_KEY = "psl-ledger";
 const PSL_TOPUPS_KEY = "psl-topups";
 const PSL_REPORT_KEY = "psl-report";
@@ -108,7 +118,7 @@ export function usePSLLedgerQuery(filters: PSLLedgerFilters) {
   return useQuery({
     queryKey: [PSL_LEDGER_KEY, filters],
     queryFn: async () => {
-      const res = await apiClient.get<PSLLedgerEntry[]>("/v1/psl/ledger", { params: filters });
+      const res = await apiClient.get<Page<PSLLedgerEntry>>("/v1/psl/ledger", { params: filters });
       return res.data;
     },
     placeholderData: (prev) => prev,
@@ -160,7 +170,7 @@ export function useTopUpsQuery(filters: PSLTopUpFilters) {
   return useQuery({
     queryKey: [PSL_TOPUPS_KEY, filters],
     queryFn: async () => {
-      const res = await apiClient.get<PSLTopUp[]>("/v1/psl/topups", { params: filters });
+      const res = await apiClient.get<Page<PSLTopUp>>("/v1/psl/topups", { params: filters });
       return res.data;
     },
     placeholderData: (prev) => prev,

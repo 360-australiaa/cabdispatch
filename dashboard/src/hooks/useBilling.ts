@@ -51,6 +51,13 @@ export interface InvoiceListResponse {
   items: InvoiceRead[];
   total: number;
   mock: boolean;
+  /** Real server-side paging (D12) — `total` is the full matching set
+   * (every invoice for every matching subscription), computed before
+   * `skip`/`limit` slice the page; `items.length` can be smaller than
+   * `total`. Optional on the wire type only for older cached responses this
+   * session may still hold — the backend always sends both now. */
+  skip?: number;
+  limit?: number;
 }
 
 export interface VehicleRead {
@@ -160,15 +167,30 @@ export function useConnectOnboard() {
 
 /** ---- Invoices ---- */
 
-export function useInvoices(subscriptionId?: string) {
+export interface InvoiceFilters {
+  subscriptionId?: string;
+  skip?: number;
+  limit?: number;
+}
+
+export function useInvoices(filters: string | InvoiceFilters | undefined = undefined) {
+  // Accepts a bare subscription id (existing call shape) or the full filter
+  // object — additive, so no existing call site needs to change.
+  const { subscriptionId, skip, limit } =
+    typeof filters === "string" ? { subscriptionId: filters, skip: undefined, limit: undefined } : (filters ?? {});
   return useQuery({
-    queryKey: ["billing", "invoices", subscriptionId ?? "all"],
+    queryKey: ["billing", "invoices", subscriptionId ?? "all", skip ?? 0, limit ?? 200],
     queryFn: async () => {
       const { data } = await apiClient.get<InvoiceListResponse>("/v1/billing/invoices", {
-        params: subscriptionId ? { subscription_id: subscriptionId } : undefined,
+        params: {
+          subscription_id: subscriptionId || undefined,
+          skip,
+          limit,
+        },
       });
       return data;
     },
+    placeholderData: keepPreviousData,
   });
 }
 

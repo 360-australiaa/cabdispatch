@@ -480,9 +480,33 @@ async def list_trips(
     flagged_for_review: bool | None = Query(
         None, description="Filter to trips flagged (or not) for operator review — blueprint 5.2.5 dashboard 'flagged' view"
     ),
+    start_from: datetime | None = Query(
+        None, description="Trips whose start_at is on or after this timestamp (inclusive)."
+    ),
+    start_to: datetime | None = Query(
+        None, description="Trips whose start_at is on or before this timestamp (inclusive)."
+    ),
+    end_from: datetime | None = Query(
+        None,
+        description=(
+            "Trips whose end_at is on or after this timestamp (inclusive). An open trip has "
+            "end_at=None and never matches this filter — use it with status=closed."
+        ),
+    ),
+    end_to: datetime | None = Query(
+        None, description="Trips whose end_at is on or before this timestamp (inclusive)."
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
 ) -> TripListResponse:
+    """Date-range filters (`start_from`/`start_to`/`end_from`/`end_to`) were
+    added so a caller counting trips inside a fixed window — e.g. an
+    incentive's `[starts_at, ends_at)` — can get the server's real `total`
+    for that window directly, rather than fetching the most recent `limit`
+    closed trips and hoping the window is fully covered (see
+    `dashboard/src/pages/driver-engagement/hooks.ts`'s
+    `useIncentiveProgressQuery`, which documents exactly this gap and the
+    "maybe incomplete" floor it has to report as a result)."""
     if status_filter is not None and status_filter not in {TRIP_STATUS_OPEN, TRIP_STATUS_CLOSED}:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
     if type_filter is not None and type_filter not in TRIP_TYPES:
@@ -499,6 +523,14 @@ async def list_trips(
         filters.append(Trip.driver_id == driver_id)
     if flagged_for_review is not None:
         filters.append(Trip.flagged_for_review == flagged_for_review)
+    if start_from is not None:
+        filters.append(Trip.start_at >= start_from)
+    if start_to is not None:
+        filters.append(Trip.start_at <= start_to)
+    if end_from is not None:
+        filters.append(Trip.end_at >= end_from)
+    if end_to is not None:
+        filters.append(Trip.end_at <= end_to)
 
     total_result = await session.execute(select(func.count()).select_from(Trip).where(*filters))
     total = total_result.scalar_one()
