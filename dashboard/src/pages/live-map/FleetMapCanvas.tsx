@@ -58,6 +58,33 @@ interface FleetMapCanvasProps {
   /** Index into [trail] the scrubber is parked on, or null for "live". Renders a
    * ghost marker at that point so an operator can step back through the drive. */
   trailCursor?: number | null;
+  /** Tablets that answer to no vehicle, at wherever they last reported from. */
+  devicePoints?: DevicePoint[];
+  /** The device the operator is looking at, if the selection is a tablet rather
+   * than a vehicle: gets a ring, and the camera flies to it when it changes. */
+  selectedDeviceId?: string | null;
+  /** Called when a tablet's own point is clicked. */
+  onSelectDevice?: (deviceId: string) => void;
+}
+
+/**
+ * One tablet plotted in its own right, from its last locate response.
+ *
+ * A device and a vehicle are not the same thing, and the map only ever knew about
+ * the second. A tablet bound to no vehicle -- brand new, or left over after its car
+ * was retired -- had no way of appearing at all, so "locate that tablet" silently
+ * found nothing. These are drawn distinctly (a hollow grey ring, never the status
+ * palette) because a device's last locate is a snapshot from whenever an operator
+ * last asked, not a live position, and must not be read as one.
+ */
+export interface DevicePoint {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  /** When the tablet actually answered the locate. Shown, not hidden -- a fix from
+   * three days ago is still worth having, as long as nobody thinks it is current. */
+  locatedAt: string | null;
 }
 
 /** One recorded position for the history trail. A trimmed
@@ -134,6 +161,15 @@ interface TrailFeatureCollection {
   type: "FeatureCollection";
   features: TrailFeature[];
 }
+
+const DEVICE_SOURCE_ID = "unpaired-devices";
+const DEVICE_CIRCLE_LAYER_ID = "unpaired-devices-circle";
+const DEVICE_LABEL_LAYER_ID = "unpaired-devices-label";
+
+/** Grey, and only grey. The status palette (green available / gold on-trip / red
+ * duress) belongs to vehicles carrying passengers; a tablet's last locate is a
+ * stale snapshot and must not borrow a colour that means "live and available". */
+const DEVICE_POINT_COLOR = "#94a3b8";
 
 const TRAIL_SOURCE_ID = "vehicle-trail";
 const TRAIL_LINE_LAYER_ID = "vehicle-trail-line";
@@ -227,6 +263,9 @@ interface MapDataProps {
   onFollowInterrupted?: () => void;
   trail: TrailPoint[];
   trailCursor: number | null;
+  devicePoints: DevicePoint[];
+  selectedDeviceId: string | null;
+  onSelectDevice: (deviceId: string) => void;
 }
 
 /**
@@ -245,6 +284,9 @@ export function FleetMapCanvas({
   onFollowInterrupted,
   trail = [],
   trailCursor = null,
+  devicePoints = [],
+  selectedDeviceId = null,
+  onSelectDevice = () => {},
 }: FleetMapCanvasProps) {
   const plotted = useMemo(
     () => vehicles.filter((v): v is PlottedVehicle => v.lat != null && v.lng != null),
@@ -293,6 +335,9 @@ export function FleetMapCanvas({
         onFollowInterrupted={onFollowInterrupted}
         trail={trail}
         trailCursor={trailCursor}
+        devicePoints={devicePoints}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={onSelectDevice}
         onSelectVehicle={onSelectVehicle}
       />
     );
@@ -310,6 +355,13 @@ export function FleetMapCanvas({
       follow={false}
       trail={[]}
       trailCursor={null}
+      // The SVG fallback plots vehicles from a fitted bounding box and has no
+      // layer machinery to add a second kind of point to. Unpaired tablets are
+      // still fully listed and locatable beside it -- they just are not drawn
+      // here -- rather than being half-drawn in a plot that cannot label them.
+      devicePoints={[]}
+      selectedDeviceId={null}
+      onSelectDevice={() => {}}
       onSelectVehicle={onSelectVehicle}
     />
   );
@@ -745,10 +797,20 @@ function MapboxFleetMap({
   onFollowInterrupted,
   trail,
   trailCursor,
+  devicePoints,
+  selectedDeviceId,
+  onSelectDevice,
 }: MapDataProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
+
+  // The click handler is registered once, on map load, so it must not close over
+  // a stale `onSelectDevice`. Same reason the vehicle markers keep their own
+  // callback refs (see buildMarkerElement's usage below).
+  const onSelectDeviceRef = useRef(onSelectDevice);
+  onSelectDeviceRef.current = onSelectDevice;
+
   const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
   const [styleLoaded, setStyleLoaded] = useState(false);
 
@@ -805,6 +867,57 @@ function MapboxFleetMap({
         type: "line",
         source: GEOFENCE_SOURCE_ID,
         paint: { "line-color": "var(--brand-accent)", "line-width": 1.5, "line-dasharray": [2, 2] },
+      });
+
+      // Unpaired tablets, from their own last locate response. Added before the
+      // trail and the vehicle markers so a real vehicle always draws on top of a
+      // stale device fix that happens to sit in the same street.
+      map.addSource(DEVICE_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: DEVICE_CIRCLE_LAYER_ID,
+        type: "circle",
+        source: DEVICE_SOURCE_ID,
+        paint: {
+          "circle-radius": ["case", ["get", "selected"], 9, 6],
+          // Hollow, not filled: the fleet's own markers are solid discs, and a
+          // tablet's last-known position is a weaker claim than a live vehicle
+          // position. It should read as an outline, not a car.
+          "circle-color": "#0b0b10",
+          "circle-opacity": 0.85,
+          "circle-stroke-width": ["case", ["get", "selected"], 3, 2],
+          "circle-stroke-color": DEVICE_POINT_COLOR,
+        },
+      });
+      map.addLayer({
+        id: DEVICE_LABEL_LAYER_ID,
+        type: "symbol",
+        source: DEVICE_SOURCE_ID,
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-offset": [0, 1.4],
+          "text-anchor": "top",
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": DEVICE_POINT_COLOR,
+          "text-halo-color": "#0b0b10",
+          "text-halo-width": 1.5,
+        },
+      });
+      map.on("click", DEVICE_CIRCLE_LAYER_ID, (e) => {
+        const feature = e.features?.[0] as { properties?: Record<string, unknown> } | undefined;
+        const id = feature?.properties?.id;
+        if (typeof id === "string") onSelectDeviceRef.current(id);
+      });
+      map.on("mouseenter", DEVICE_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", DEVICE_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "";
       });
 
       // History trail -- where the selected vehicle has actually been, as a real
@@ -908,6 +1021,34 @@ function MapboxFleetMap({
   // separate, much-less-frequent update than the marker-sync effect below
   // (geofences rarely change, see useGeofences.ts's long staleTime), so it's
   // kept as its own effect rather than folded into that one.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleLoaded) return;
+    const source = map.getSource(DEVICE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData({
+      type: "FeatureCollection",
+      features: devicePoints.map((d) => ({
+        type: "Feature",
+        properties: { id: d.id, label: d.label, selected: d.id === selectedDeviceId },
+        geometry: { type: "Point", coordinates: [d.lng, d.lat] },
+      })),
+    });
+  }, [devicePoints, selectedDeviceId, styleLoaded]);
+
+  // Fly to a selected tablet the same way a selected vehicle is flown to -- the
+  // whole point of listing them is that "locate" reaches them too.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selectedDeviceId) return;
+    const point = devicePoints.find((d) => d.id === selectedDeviceId);
+    if (!point) return;
+    map.flyTo({ center: [point.lng, point.lat], zoom: Math.max(map.getZoom(), SINGLE_VEHICLE_ZOOM) });
+    // Keyed on the id alone: a device's last locate does not move on its own, and
+    // re-flying on every poll would fight an operator reading the map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDeviceId]);
+
   // Feed the trail source: one LineString per run of points, a stop marker
   // wherever the vehicle sat still, and the scrubber's ghost.
   useEffect(() => {

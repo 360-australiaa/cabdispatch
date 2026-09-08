@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, BatteryFull, BatteryLow, BatteryMedium, BatteryWarning, Radio, RadioTower, WifiOff } from "lucide-react";
@@ -27,12 +27,14 @@ import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 // Fleet & Drivers will otherwise never see an expiring licence/rego/
 // insurance date at all.
 import { ComplianceExpiryBanner } from "@/pages/fleet/ComplianceExpiryBanner";
-import { FleetLocateList } from "./FleetLocateList";
+import { useDevices } from "@/pages/fleet/api";
+import { FleetLocateList, type UnpairedTablet } from "./FleetLocateList";
 import { TrailControls } from "./TrailControls";
 import { usePositionHistoryQuery } from "./useVehiclePositionHistory";
-import { FleetMapCanvas, ROUTE_LINE_COLOR, type TrailPoint, type VehicleMapState } from "./FleetMapCanvas";
+import { FleetMapCanvas, ROUTE_LINE_COLOR, type DevicePoint, type TrailPoint, type VehicleMapState } from "./FleetMapCanvas";
 import { PublishPositionModal } from "./PublishPositionModal";
 import { ResolveDuressModal } from "./ResolveDuressModal";
+import { TabletDetailSheet } from "./TabletDetailSheet";
 import { VehicleDetailModal } from "./VehicleDetailModal";
 import { useLiveMapGeofencesQuery } from "./useGeofences";
 import { usePositionHistory } from "./usePositionHistory";
@@ -128,6 +130,10 @@ export default function LiveMapPage() {
   useEffect(() => {
     setTrailCursor(null);
   }, [selectedVehicleId, trailHours]);
+  /** A tablet selected instead of a vehicle. Mutually exclusive with
+   * [selectedVehicleId]: the map flies to one thing at a time, and the sheet
+   * describes one thing at a time. */
+  const [selectedTabletId, setSelectedTabletId] = useState<string | null>(null);
   const [resolvingEvent, setResolvingEvent] = useState<DuressEventRead | null>(null);
 
   // --- table filters (debounced rego search) -----------------------------
@@ -157,6 +163,25 @@ export default function LiveMapPage() {
     refetchInterval: 20000,
   });
 
+  // The socket sends no snapshot on connect: it only forwards publishes made while
+  // you are listening. So everything that happened during a drop is simply missing,
+  // and the `positions` cache still holds whatever each vehicle was doing when the
+  // connection died -- merged over the REST rows, that is a fleet of ghosts frozen
+  // at the moment of the drop. `GET /v1/vehicles` carries every vehicle's real
+  // last-known position, so refetching it the moment the socket RE-opens closes the
+  // gap immediately instead of waiting out the 20s poll. Only on a re-open: the
+  // first connect already has a fetch of its own in flight.
+  const refetchVehicles = vehiclesMapQuery.refetch;
+  const socketHasDropped = useRef(false);
+  useEffect(() => {
+    if (connectionState !== "open") {
+      socketHasDropped.current = true;
+    } else if (socketHasDropped.current) {
+      socketHasDropped.current = false;
+      void refetchVehicles();
+    }
+  }, [connectionState, refetchVehicles]);
+
   // --- data: filtered/paginated vehicle list for the table ----------------
   const vehiclesTableQuery = useQuery({
     queryKey: ["live-map", "vehicles", "table", { rego, liveStatus, page }],
@@ -173,6 +198,44 @@ export default function LiveMapPage() {
     },
     placeholderData: keepPreviousData,
   });
+
+  // Every tablet in the tenant, so the ones bound to no vehicle can be listed and
+  // located too -- see FleetLocateList's own section comment. Same cached query the
+  // Fleet > Devices page uses, so arriving from that page's Locate link costs
+  // nothing, and the vehicle sheet's remote controls read the same rows.
+  const devicesQuery = useDevices(0, {}, 100);
+
+  const unpairedTablets: UnpairedTablet[] = useMemo(() => {
+    const vehicleIds = new Set((vehiclesMapQuery.data?.items ?? []).map((v) => v.id));
+    return (devicesQuery.data?.items ?? [])
+      // Retired tablets are not "unpaired", they are gone -- listing them would put
+      // permanent dead rows under every operator's search.
+      .filter((d) => !d.revoked_at)
+      .filter((d) => !d.vehicle_id || !vehicleIds.has(d.vehicle_id))
+      .map((d) => ({
+        id: d.id,
+        androidId: d.android_id,
+        model: d.model,
+        lastSeenAt: d.last_seen_at,
+        lat: d.last_locate_lat,
+        lng: d.last_locate_lng,
+        locatedAt: d.last_locate_at,
+      }));
+  }, [devicesQuery.data, vehiclesMapQuery.data]);
+
+  const devicePoints: DevicePoint[] = useMemo(
+    () =>
+      unpairedTablets
+        .filter((t): t is UnpairedTablet & { lat: number; lng: number } => t.lat != null && t.lng != null)
+        .map((t) => ({
+          id: t.id,
+          label: t.model ?? t.androidId.slice(0, 8),
+          lat: t.lat,
+          lng: t.lng,
+          locatedAt: t.locatedAt,
+        })),
+    [unpairedTablets],
+  );
 
   // --- data: open duress events, polled --------------------------------
   const duressQuery = useQuery({
@@ -230,6 +293,20 @@ export default function LiveMapPage() {
   const duressEvents: DuressEventRead[] = duressQuery.data?.items ?? [];
 
   const duressVehicleIds = useMemo(() => new Set(duressEvents.map((e) => e.vehicle_id)), [duressEvents]);
+
+  // A locked camera must never be the reason nobody saw an alarm. Following one
+  // vehicle holds the map on it, while a duress event elsewhere in the fleet draws
+  // its marker oversized in red somewhere off screen. Following the vehicle that
+  // RAISED the duress is the one case worth keeping -- that is the car everyone now
+  // wants the camera on.
+  //
+  // Deliberately a boolean, not the event list: this fires once on the edge, so an
+  // operator who turns Follow back on with an alarm still open keeps it, rather
+  // than having it switched off under them every 5s poll.
+  const otherVehicleInDuress = duressEvents.some((e) => e.vehicle_id !== selectedVehicleId);
+  useEffect(() => {
+    if (otherVehicleInDuress) setFollow(false);
+  }, [otherVehicleInDuress]);
 
   const vehicleRegoById = useMemo(() => {
     const map = new Map<string, string>();
@@ -397,7 +474,11 @@ export default function LiveMapPage() {
     // the sheet sits BESIDE the map instead of on top of it. The map picks the
     // new width up through FleetMapCanvas's ResizeObserver. Below `lg` there is
     // no room to share, so the sheet covers the page as a dialog would.
-    <div className={selectedVehicleId ? "transition-[padding] lg:pr-[27rem]" : "transition-[padding]"}>
+    <div
+      className={
+        selectedVehicleId || selectedTabletId ? "transition-[padding] lg:pr-[27rem]" : "transition-[padding]"
+      }
+    >
       <PageHeader
         title="Live Map"
         description="Real-time vehicle positions and active duress events across the fleet."
@@ -462,8 +543,19 @@ export default function LiveMapPage() {
                 vehicles={mapVehicleStates}
                 selectedVehicleId={selectedVehicleId}
                 onSelect={(id) => {
+                  setSelectedTabletId(null);
                   setSelectedVehicleId(id);
                   setFollow(true);
+                }}
+                unpairedTablets={unpairedTablets}
+                selectedTabletId={selectedTabletId}
+                onSelectTablet={(id) => {
+                  // A tablet has no live feed to follow, so picking one drops
+                  // follow rather than leaving the camera locked to a vehicle the
+                  // operator has just navigated away from.
+                  setSelectedVehicleId(null);
+                  setFollow(false);
+                  setSelectedTabletId(id);
                 }}
               />
               <div className="min-w-0 flex-1">
@@ -480,6 +572,13 @@ export default function LiveMapPage() {
                   onFollowInterrupted={() => setFollow(false)}
                   trail={trail}
                   trailCursor={trailCursor}
+                  devicePoints={devicePoints}
+                  selectedDeviceId={selectedTabletId}
+                  onSelectDevice={(id) => {
+                    setSelectedVehicleId(null);
+                    setFollow(false);
+                    setSelectedTabletId(id);
+                  }}
                 />
                 {selectedVehicleId && (
                   <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
@@ -612,6 +711,7 @@ export default function LiveMapPage() {
         onClose={() => setSelectedVehicleId(null)}
         mapState={selectedVehicleMapState}
       />
+      <TabletDetailSheet deviceId={selectedTabletId} onClose={() => setSelectedTabletId(null)} />
       <ResolveDuressModal event={resolvingEvent} onClose={() => setResolvingEvent(null)} />
     </div>
   );

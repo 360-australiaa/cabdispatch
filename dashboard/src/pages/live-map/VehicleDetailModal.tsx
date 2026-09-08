@@ -183,7 +183,7 @@ function ReplayMiniMap({ items, index }: { items: PositionHistoryItem[]; index: 
  * answer. A control that looks identical before and after the device has acted is
  * the exact failure that made Locate and Restart read "Pending" forever.
  */
-function RemoteActions({ deviceId }: { deviceId: string }) {
+export function RemoteActions({ deviceId }: { deviceId: string }) {
   const devicesQuery = useDevices(0, {}, 100);
   const device = devicesQuery.data?.items?.find((d) => d.id === deviceId);
   const locate = useLocateDevice();

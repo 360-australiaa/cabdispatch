@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, Tablet } from "lucide-react";
 import { Badge, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { VehicleMapState } from "./FleetMapCanvas";
@@ -19,10 +19,28 @@ const FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "offline", label: "Offline" },
 ];
 
+/** A tablet that answers to no vehicle, as the list needs to show it. */
+export interface UnpairedTablet {
+  id: string;
+  androidId: string;
+  model: string | null;
+  lastSeenAt: string | null;
+  /** Where it last answered a locate from, if it ever has. Null means it can be
+   * listed but not flown to -- which is still worth saying out loud. */
+  lat: number | null;
+  lng: number | null;
+  locatedAt: string | null;
+}
+
 interface FleetLocateListProps {
   vehicles: VehicleMapState[];
   selectedVehicleId: string | null;
   onSelect: (vehicleId: string) => void;
+  /** Tablets bound to no vehicle. Listed in their own group -- see the section's
+   * own comment below for why they are not merged into the vehicle list. */
+  unpairedTablets?: UnpairedTablet[];
+  selectedTabletId?: string | null;
+  onSelectTablet?: (deviceId: string) => void;
 }
 
 /**
@@ -38,7 +56,14 @@ interface FleetLocateListProps {
  * Selecting a row is what flies the map there; the parent owns that, so this component
  * stays a pure list.
  */
-export function FleetLocateList({ vehicles, selectedVehicleId, onSelect }: FleetLocateListProps) {
+export function FleetLocateList({
+  vehicles,
+  selectedVehicleId,
+  onSelect,
+  unpairedTablets = [],
+  selectedTabletId = null,
+  onSelectTablet = () => {},
+}: FleetLocateListProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
 
@@ -73,6 +98,18 @@ export function FleetLocateList({ vehicles, selectedVehicleId, onSelect }: Fleet
         return byRank !== 0 ? byRank : a.rego.localeCompare(b.rego);
       });
   }, [vehicles, query, filter]);
+
+  // The same search box, against the two things anyone knows about a bare tablet.
+  // Status filters deliberately do NOT apply: a tablet has no live_status, and
+  // silently emptying this group when someone clicks "Available" would recreate
+  // the exact "locate found nothing" confusion the group exists to prevent.
+  const shownTablets = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return unpairedTablets;
+    return unpairedTablets.filter((t) =>
+      [t.androidId, t.model].filter(Boolean).join(" ").toLowerCase().includes(q),
+    );
+  }, [unpairedTablets, query]);
 
   return (
     <div className="flex w-full shrink-0 flex-col gap-3 lg:w-[340px]">
@@ -158,6 +195,54 @@ export function FleetLocateList({ vehicles, selectedVehicleId, onSelect }: Fleet
       <p className="text-xs text-muted-foreground">
         {shown.length} of {vehicles.length} shown
       </p>
+
+      {/* Their own group, never merged into the vehicle list. A device and a
+          vehicle are different things: a tablet has no rego, no driver, no live
+          status and no live position -- only whatever it last answered a locate
+          with. Before this, such a tablet could not appear on this page at all,
+          so an operator searching for one found nothing and had no way to tell
+          "not here" from "not paired". */}
+      {shownTablets.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Tablets with no vehicle
+          </p>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {shownTablets.map((t) => {
+              const locatable = t.lat != null && t.lng != null;
+              const selected = t.id === selectedTabletId;
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => onSelectTablet(t.id)}
+                    aria-current={selected}
+                    className={cn(
+                      "flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors",
+                      selected ? "bg-accent/15" : "hover:bg-muted/40",
+                    )}
+                  >
+                    <Tablet className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{t.model ?? "Tablet"}</span>
+                      <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
+                        {t.androidId}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {/* Two clocks, both named. "Seen" is the 60s heartbeat, which
+                            says the tablet is on; "located" is the last time anyone
+                            asked it where it was, which can be days older. */}
+                        Seen {formatRelativeTime(t.lastSeenAt)} ·{" "}
+                        {locatable ? `located ${formatRelativeTime(t.locatedAt)}` : "never located"}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
