@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
 
 /**
@@ -249,6 +249,81 @@ export function useDriverWalletQuery(driverId: string | null, limit = 50) {
   });
 }
 
+export interface WalletTransactionListFilters {
+  driver_id?: string;
+  kind?: string;
+  skip?: number;
+  limit?: number;
+}
+
+/** Real server-side paged ledger — `GET /v1/wallet/transactions`
+ * (`backend/app/api/v1/wallet.py`) already computes `skip`/`limit`/`total`
+ * against the whole tenant, filtered by `driver_id` when one is given. This
+ * is genuine server-side paging, not a client slice over a capped fetch —
+ * unlike the five patterns the dashboard audit flags elsewhere (§4), this
+ * endpoint's `total` is a real `SELECT count(*)`. Used both for one driver's
+ * ledger (WalletPage's detail view) and, with no `driver_id`, the fleet-wide
+ * transaction feed. */
+export function useWalletTransactionsQuery(filters: WalletTransactionListFilters) {
+  return useQuery({
+    queryKey: [WALLET_KEY, "transactions", filters],
+    queryFn: async () => {
+      const params: Record<string, string | number> = {
+        skip: filters.skip ?? 0,
+        limit: filters.limit ?? 20,
+      };
+      if (filters.driver_id) params.driver_id = filters.driver_id;
+      if (filters.kind) params.kind = filters.kind;
+      const res = await apiClient.get<Page<WalletTransaction>>("/v1/wallet/transactions", { params });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+  });
+}
+
+export interface DriverWalletBalance {
+  driver: DriverOption;
+  /** `null` while loading or on error — never a fabricated "$0.00" for a
+   * balance that has not come back yet (see D5's fix for the same bug on the
+   * revenue console: an empty value is missing, not zero). */
+  balance_aud: string | null;
+  isLoading: boolean;
+  isError: boolean;
+}
+
+/** Fleet-wide balances for a Driver Wallets landing view.
+ *
+ * There is no bulk "every driver's balance in one call" endpoint — only
+ * `GET /v1/wallet/drivers/{driver_id}` (one driver at a time, per the
+ * dashboard audit line 30). Rather than leave the page showing nothing until
+ * an operator picks a name from a dropdown (the exact "why is it empty"
+ * complaint this workstream exists to fix), this issues one real request per
+ * driver currently loaded (`useDriverOptionsQuery`'s first 100 — the same
+ * cap that lookup already has) and renders each balance as it arrives. It is
+ * N+1 by construction and the page says so; a true bulk aggregate is backend
+ * work outside this workstream's `pages/driver-engagement/**` ownership. */
+export function useFleetWalletBalancesQuery(drivers: DriverOption[]): DriverWalletBalance[] {
+  const results = useQueries({
+    queries: drivers.map((driver) => ({
+      queryKey: [WALLET_KEY, "driver", driver.id, "balance-only"],
+      queryFn: async () => {
+        const res = await apiClient.get<DriverWallet>(`/v1/wallet/drivers/${driver.id}`, {
+          params: { limit: 1 },
+        });
+        return res.data.balance_aud;
+      },
+      staleTime: 30_000,
+    })),
+  });
+
+  return drivers.map((driver, i) => ({
+    driver,
+    balance_aud: results[i]?.data ?? null,
+    isLoading: results[i]?.isLoading ?? false,
+    isError: results[i]?.isError ?? false,
+  }));
+}
+
 export function useCreateWalletTransactionMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -309,6 +384,73 @@ export function useRatingsQuery(filters: RatingListFilters) {
       return res.data;
     },
     placeholderData: (prev) => prev,
+  });
+}
+
+// --- Incentive progress (derived client-side from GET /v1/trips) -------------
+//
+// The driver tablet's own progress number comes from
+// `app.services.driver_engagement.incentive_progress_for_driver`, which
+// counts CLOSED trips whose `end_at` falls inside the incentive's window —
+// but that logic is only reachable through `GET /v1/me/incentives`, scoped
+// to the CALLER's own driver id (`app.api.v1.me`). There is no owner/admin
+// route that runs it for an arbitrary driver, and adding one is backend
+// work outside `pages/driver-engagement/**`. `GET /v1/trips` also has no
+// `end_at` range filter (`backend/app/api/v1/trips.py` takes only
+// status/type/vehicle_id/driver_id + skip/limit), so this reproduces the
+// same count from the driver's most recent closed trips and says plainly
+// when that page might not cover the whole window.
+
+export interface IncentiveProgress {
+  completedTrips: number;
+  targetTrips: number;
+  remainingTrips: number;
+  progressPct: number;
+  achieved: boolean;
+  /** True when the trip page fetched may not include every closed trip
+   * inside the incentive's window (more closed trips exist than were
+   * fetched, and the oldest one fetched is still inside the window) — the
+   * count below is then a floor, not an exact figure. */
+  maybeIncomplete: boolean;
+}
+
+const TRIP_WINDOW_FETCH_LIMIT = 200; // backend's own per-request cap
+
+export function useIncentiveProgressQuery(
+  driverId: string | null,
+  incentive: Pick<Incentive, "target_trips" | "starts_at" | "ends_at"> | null,
+) {
+  return useQuery({
+    queryKey: ["incentive-progress", driverId, incentive?.starts_at, incentive?.ends_at, incentive?.target_trips],
+    queryFn: async (): Promise<IncentiveProgress> => {
+      if (!driverId || !incentive) throw new Error("driver and incentive are required");
+      const res = await apiClient.get<Page<{ id: string; end_at: string | null; status: string }>>(
+        "/v1/trips",
+        { params: { driver_id: driverId, status: "closed", limit: TRIP_WINDOW_FETCH_LIMIT, skip: 0 } },
+      );
+      const startMs = new Date(incentive.starts_at).getTime();
+      const endMs = new Date(incentive.ends_at).getTime();
+      const rows = res.data.items;
+      const completed = rows.filter((row) => {
+        if (!row.end_at) return false;
+        const t = new Date(row.end_at).getTime();
+        return t >= startMs && t < endMs;
+      }).length;
+      const target = Number(incentive.target_trips);
+      const oldestFetched = rows.at(-1)?.end_at ?? null;
+      const moreExist = res.data.total > rows.length;
+      const maybeIncomplete =
+        moreExist && (oldestFetched == null || new Date(oldestFetched).getTime() >= startMs);
+      return {
+        completedTrips: completed,
+        targetTrips: target,
+        remainingTrips: Math.max(target - completed, 0),
+        progressPct: target > 0 ? Math.min(100, Math.floor((completed * 100) / target)) : 0,
+        achieved: completed >= target,
+        maybeIncomplete,
+      };
+    },
+    enabled: driverId != null && driverId !== "" && incentive != null,
   });
 }
 
