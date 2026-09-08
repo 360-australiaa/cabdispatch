@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.domain.TenantBranding
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.navigation.postAuthDestination
@@ -51,6 +52,11 @@ import kotlinx.coroutines.delay
  * Bold 40 wordmark · 18sp subtitle · 360×6 progress track with an animated bar (it sweeps rather
  * than sitting at a fixed fraction, since a static bar on a live screen would read as "stuck") ·
  * loading line · Roboto Mono footer "v0.1.0 · TSP-448041 · Ed25519 tariff verification".
+ *
+ * The operator name, the "NSW Taxi Meter" description and the TSP authorisation number are no
+ * longer literals here (A7, 2026-09-08) — they come from [TenantBranding], which documents what
+ * each should become once Wave 3's jurisdiction seam gives this app a real cached tenant record.
+ * The rendered text is unchanged for this tenant; what changed is that it is sourced.
  */
 @Composable
 fun SplashScreen(navController: NavHostController) {
@@ -95,12 +101,20 @@ fun SplashScreen(navController: NavHostController) {
                 Text("CD", color = CaptainPalette.onAccent, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 48.sp)
             }
             Text("CAB DISPATCH", color = CaptainPalette.textPrimary, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 40.sp)
-            Text("The Captain Taxis · NSW Taxi Meter", color = CaptainPalette.textSecondary, fontFamily = InterFamily, fontSize = 18.sp)
+            Text(TenantBranding.splashSubtitle, color = CaptainPalette.textSecondary, fontFamily = InterFamily, fontSize = 18.sp)
             LoadingBar()
             Text("Loading tariffs & signing keys…", color = CaptainPalette.textMuted, fontFamily = InterFamily, fontSize = 15.sp)
         }
+        // Composed from TenantBranding rather than typed as a literal — and the authorisation
+        // number is DROPPED, not blanked, when the operator's jurisdiction issues none. A footer
+        // reading "v0.1.0 ·  · Ed25519…" would look like a bug; one asserting an authorisation
+        // number that is not this operator's would be a false compliance claim.
         Text(
-            "v${BuildConfig.VERSION_NAME} · TSP-448041 · Ed25519 tariff verification",
+            listOfNotNull(
+                "v${BuildConfig.VERSION_NAME}",
+                TenantBranding.authorisationNumber,
+                "Ed25519 tariff verification",
+            ).joinToString(" · "),
             color = CaptainPalette.textMuted,
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,

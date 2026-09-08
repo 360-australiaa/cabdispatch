@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import retrofit2.HttpException
 import java.io.File
 import java.security.MessageDigest
 
@@ -92,20 +93,30 @@ sealed interface AppUpdateState {
  * read-back) and compared against the server-supplied [LatestAppReleaseDto.sha256] — a mismatch
  * deletes the file and reports [AppUpdateState.Failed] rather than ever hitting [promptInstall].
  *
- * ### Auth
- * `GET /v1/app-releases/latest` and the download it points at both require a valid bearer token
- * (`get_current_user` server-side, same as most of this app's other endpoints) — [okHttpClient]'s
- * existing auth interceptor (see [au.com.threesixty.cabdispatch.data.AppContainer.authInterceptor])
- * attaches it automatically, exactly as it does for every other [apiService] call. Unlike
- * [DeviceCommandHeartbeat]'s heartbeat, there is no device-secret fallback for these two endpoints
- * — a parked/logged-off tablet with no bearer token in memory cannot check for or fetch an update
- * until a driver signs in online, same limitation [DeviceCommandHeartbeat]'s own doc describes for
- * the pre-device-secret heartbeat.
+ * ### Auth — bearer OR device secret (B5, 2026-09-08)
+ * `GET /v1/app-releases/latest` and the download it points at used to require a bearer token
+ * (`get_current_user` server-side), attached automatically by [okHttpClient]'s existing auth
+ * interceptor (see [au.com.threesixty.cabdispatch.data.AppContainer.authInterceptor]). That made
+ * this class useless on exactly the tablet `force_update_pending` is aimed at: a parked or
+ * logged-off one, which holds no bearer token anywhere in memory. The flag would sit "Pending" on
+ * the dashboard forever and the driver-facing banner had nothing it could do.
+ *
+ * B5 replaced that dependency with `require_device_or_user` on both routes, so this class now sends
+ * the `X-Device-Secret` it gets from [pairingStore] alongside whatever the interceptor attaches.
+ * Both credentials on one request is deliberate and safe — the server accepts either — and it means
+ * the common case (a signed-in driver on a paired tablet) is unchanged.
+ *
+ * **The capability check.** A backend older than B5 has the routes but not the header handling, and
+ * answers a token-less request with `401`. This class does not probe for that ahead of time; it
+ * reacts to it, in [checkForUpdate], by reporting the real reason ("this depot's server does not
+ * yet accept a device secret — sign in to check for updates") rather than a bare HTTP code. There
+ * is nothing to retry differently, so a probe would cost a round trip and buy nothing.
  */
 class AppUpdateChecker(
     private val apiService: ApiService,
     private val okHttpClient: OkHttpClient,
     private val appContext: Context,
+    private val pairingStore: DevicePairingStore,
 ) {
     private val _state = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
     val state: StateFlow<AppUpdateState> = _state.asStateFlow()
@@ -115,14 +126,45 @@ class AppUpdateChecker(
      * calls the first time it appears, and what its "RETRY" action re-calls after a [AppUpdateState.Failed]. */
     suspend fun checkForUpdate() {
         _state.value = AppUpdateState.Checking
-        val release = runCatching { apiService.latestAppRelease() }.getOrElse { error ->
-            _state.value = AppUpdateState.Failed(error.message ?: "Could not reach the update server")
+        val deviceSecret = pairingStore.getDeviceSecret()
+        val release = runCatching { apiService.latestAppRelease(deviceSecret) }.getOrElse { error ->
+            _state.value = AppUpdateState.Failed(describeCheckFailure(error, deviceSecret))
             return
         }
         _state.value = if (release.versionCode > BuildConfig.VERSION_CODE) {
             AppUpdateState.Available(release)
         } else {
             AppUpdateState.UpToDate
+        }
+    }
+
+    /**
+     * The capability check described in this class's "Auth" section, as a real user-facing message.
+     *
+     * A `401` here has exactly two honest readings, and which one applies is knowable from state
+     * this app already holds:
+     * - **A secret was sent and still rejected.** Either this depot's backend predates B5 (it has
+     *   `/v1/app-releases/latest` but not `require_device_or_user`, so a token-less request is
+     *   simply unauthorised), or the secret has been rotated server-side by a re-pair this tablet
+     *   did not perform. Both are told the same way, because this app genuinely cannot tell them
+     *   apart from one response — and both have the same remedy for the driver standing there.
+     * - **No secret to send.** An unpaired tablet with no signed-in driver. That is not a server
+     *   limitation, it is a missing pairing, and saying "sign in" would send the technician down
+     *   the wrong path.
+     *
+     * Anything that is not a `401` keeps the original message verbatim. Never a generic
+     * "something went wrong" — see [AppUpdateState.Failed].
+     */
+    private fun describeCheckFailure(error: Throwable, deviceSecret: String?): String {
+        if ((error as? HttpException)?.code() != HTTP_UNAUTHORIZED) {
+            return error.message ?: "Could not reach the update server"
+        }
+        return if (deviceSecret != null) {
+            "This tablet is not authorised to check for updates — the depot's server may not accept " +
+                "a device credential yet, or this tablet needs re-pairing. Signing a driver in also works."
+        } else {
+            "This tablet is not paired and no driver is signed in, so it cannot check for updates. " +
+                "Pair it in Settings, or sign in."
         }
     }
 
@@ -139,7 +181,16 @@ class AppUpdateChecker(
         val outcome = withContext(Dispatchers.IO) {
             runCatching {
                 val url = BuildConfig.API_BASE_URL.trimEnd('/') + release.downloadUrl
-                val request = Request.Builder().url(url).build()
+                // Same both-credentials posture as checkForUpdate: the interceptor still attaches
+                // a bearer if one exists, and the device secret rides alongside so a logged-off
+                // tablet can actually fetch the APK it was just told about. A null secret adds no
+                // header at all (unpaired tablet), leaving this request byte-identical to before.
+                val request = Request.Builder()
+                    .url(url)
+                    .apply {
+                        pairingStore.getDeviceSecret()?.let { addHeader("X-Device-Secret", it) }
+                    }
+                    .build()
                 okHttpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         error("Download failed: HTTP ${response.code}")
@@ -245,5 +296,9 @@ class AppUpdateChecker(
 
     private companion object {
         const val DOWNLOAD_BUFFER_BYTES = 8 * 1024
+
+        /** See [describeCheckFailure] — the one status code that means "credential problem"
+         * rather than "server problem", and the only one this class reads specially. */
+        const val HTTP_UNAUTHORIZED = 401
     }
 }

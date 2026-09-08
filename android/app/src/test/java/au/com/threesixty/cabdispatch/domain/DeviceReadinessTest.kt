@@ -251,7 +251,67 @@ class DeviceReadinessTest {
         ).first { it.check == DeviceReadiness.ReadinessCheck.Kiosk }
 
         assertFalse(row.passed)
-        assertTrue(row.detail.contains("not pinned"))
+        assertTrue(row.detail, row.detail.contains("pinned"))
+        assertTrue(row.detail, row.detail.contains("tap to pin it"))
+    }
+
+    /**
+     * The honesty rule the A7 copy pass added: this app holds no Device Owner provisioning, so
+     * everything it can do itself is Android screen pinning — escapable, and gone after a reboot.
+     * Only [DeviceReadiness.KioskState.DpcLocked], a lock this app can observe but never cause, is
+     * allowed to use the word "kiosk". A technician reading "Kiosk lock" against a merely pinned
+     * tablet signs off something stronger than what is running.
+     */
+    @Test
+    fun `only a real DPC lock is allowed to call itself a kiosk lock`() {
+        fun detailFor(state: DeviceReadiness.KioskState) = DeviceReadiness.evaluate(inputs(kiosk = state))
+            .first { it.check == DeviceReadiness.ReadinessCheck.Kiosk }
+            .detail
+
+        for (state in listOf(
+            DeviceReadiness.KioskState.Pinned,
+            DeviceReadiness.KioskState.DepotWantsItButNotPinned,
+            DeviceReadiness.KioskState.NotRequested,
+        )) {
+            val detail = detailFor(state)
+            assertFalse("$state: $detail", detail.contains("kiosk", ignoreCase = true))
+        }
+
+        assertTrue(detailFor(DeviceReadiness.KioskState.DpcLocked).contains("Kiosk-locked"))
+    }
+
+    /**
+     * And the limits are stated, not merely implied. A pinned tablet's row must say both true
+     * things about screen pinning: a driver can escape it, and a reboot clears it.
+     */
+    @Test
+    fun `the pinned row states that it is escapable and does not survive a reboot`() {
+        val detail = DeviceReadiness.evaluate(inputs(kiosk = DeviceReadiness.KioskState.Pinned))
+            .first { it.check == DeviceReadiness.ReadinessCheck.Kiosk }
+            .detail
+
+        assertTrue(detail, detail.contains("unpin"))
+        assertTrue(detail, detail.contains("reboot"))
+    }
+
+    // --- battery optimisation ---------------------------------------------------------------
+
+    /**
+     * A1 hoisted the fare engine into a foreground service, so Doze no longer stops a running
+     * fare. This row used to assert exactly that as its consequence while carrying only ADVISORY
+     * severity — a blocker-shaped claim on an advisory row, and, after A1, simply not true. It must
+     * not overstate the risk in either direction: the fare is safe, the 60 s depot poll and the
+     * Live Map publish (which run in the app process, not the service) are what get delayed.
+     */
+    @Test
+    fun `the battery row no longer claims Doze can stop a running fare`() {
+        val detail = DeviceReadiness.evaluate(inputs(batteryOptimisationExempt = false))
+            .first { it.check == DeviceReadiness.ReadinessCheck.BatteryOptimisation }
+            .detail
+
+        assertFalse(detail, detail.contains("stop a running fare"))
+        assertTrue(detail, detail.contains("foreground service"))
+        assertTrue(detail, detail.contains("delayed"))
     }
 
     // --- signed tariff needs its verifying key --------------------------------------------

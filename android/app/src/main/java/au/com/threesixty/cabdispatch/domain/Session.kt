@@ -176,6 +176,31 @@ object SessionHolder {
         store?.save(session)
     }
 
+    /**
+     * Corrects [DriverSession.vehicleUuid] in place, durably, without disturbing any other field.
+     *
+     * Added 2026-09-08 for [DeviceCommandHeartbeat]'s vehicle-binding self-heal (see
+     * `decideVehicleRebind` for the decision and the field failure behind it). Deliberately narrow:
+     * the heartbeat learns exactly one fact about the session — which car the depot says this
+     * tablet is in — and must not be able to write anything else through this door. The rego
+     * ([DriverSession.vehicleId]) in particular stays as the driver entered it; only the UUID
+     * `POST /v1/fleet/positions` addresses is healed.
+     *
+     * A no-op with no session, which is the ordinary state of a parked, logged-off tablet whose
+     * heartbeat is still running on its device secret — the caller checks this too, and this
+     * repeats the check rather than assuming, since a log-off can land between the two.
+     *
+     * Write-through to [store] for the same reason [set] is: a heal that a cold start silently
+     * threw away would restore the exact stale UUID this exists to replace.
+     */
+    fun updateVehicleUuid(vehicleUuid: String) {
+        val current = _session.value ?: return
+        if (current.vehicleUuid == vehicleUuid) return
+        val updated = current.copy(vehicleUuid = vehicleUuid)
+        _session.value = updated
+        store?.save(updated)
+    }
+
     private val _pendingTrip = MutableStateFlow<TripContext?>(null)
     val pendingTrip: StateFlow<TripContext?> = _pendingTrip.asStateFlow()
 

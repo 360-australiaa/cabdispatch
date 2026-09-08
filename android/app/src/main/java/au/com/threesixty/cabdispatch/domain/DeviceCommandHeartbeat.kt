@@ -290,6 +290,7 @@ class DeviceCommandHeartbeat(
             kioskLocked = pairingStore.getKioskLocked(),
             forceUpdatePending = pairingStore.getForceUpdatePending(),
         )
+        scope.launch { recoverDeviceIdFromSecret() }
         scope.launch {
             SessionHolder.deviceIdFlow.collect { deviceId ->
                 pollJob?.cancel()
@@ -302,6 +303,40 @@ class DeviceCommandHeartbeat(
                 pollJob = deviceId?.let { id -> scope.launch { pollLoop(id) } }
             }
         }
+    }
+
+    /**
+     * Recovers a lost `deviceId` from the device secret, via B5's `GET /v1/fleet/devices/me`.
+     *
+     * ### The gap this closes
+     * Every command path in this class is gated on [SessionHolder.deviceId] being non-null, because
+     * the heartbeat is addressed at `/v1/fleet/devices/{id}/heartbeat`. Before B5 there was no read
+     * that did not need that id, so a tablet holding a valid secret but no id was permanently
+     * unreachable: no kiosk lock, no locate, no forced update, and — from S6's point of view — not
+     * paired at all, with the only remedy a physical re-pair at the depot. `devices/me` needs
+     * nothing but the secret, so that tablet can now name itself and rejoin the fleet on its own.
+     *
+     * Not folded into [pollOnce]: once the id is known the heartbeat is the better read (it also
+     * *writes* battery/network/app-version telemetry, which this does not), so this runs at most
+     * once per process and only in the one state where the poll cannot run at all. Setting
+     * [SessionHolder.deviceId] is what actually starts it — [start]'s collector is already
+     * watching, so there is no second nudge to forget.
+     *
+     * Silent on failure by design, exactly like every other network call in this class: offline,
+     * a secret the server has since rotated, or a backend older than B5 (404 on the path) all mean
+     * "still no id", which is the state the tablet was already in. Nothing here fabricates one.
+     */
+    private suspend fun recoverDeviceIdFromSecret() {
+        if (SessionHolder.deviceId != null) return
+        val secret = pairingStore.getDeviceSecret() ?: return
+        val device = runCatching { apiService.deviceMe(secret) }.getOrNull() ?: return
+        // Re-check: a pairing could have completed on S6 while this call was in flight, and that
+        // id is the fresher of the two (registering rotates the secret this call authenticated
+        // with). Never overwrite it.
+        if (SessionHolder.deviceId != null) return
+        pairingStore.saveDeviceId(device.id)
+        SessionHolder.deviceId = device.id
+        reconcileVehicleBinding(device.vehicleId)
     }
 
     /** Polls immediately and then every [POLL_INTERVAL_MS] — same "act then delay" shape as
@@ -389,6 +424,9 @@ class DeviceCommandHeartbeat(
             kioskLocked = device.kioskLocked,
             forceUpdatePending = device.forceUpdatePending,
         )
+        // The self-heal channel that was on the wire all along and never read — see
+        // [reconcileVehicleBinding] and [decideVehicleRebind].
+        reconcileVehicleBinding(device.vehicleId)
         if (shouldAnswerLocate(device.locateRequested)) {
             respondToLocateRequest(deviceId)
         }
@@ -404,6 +442,27 @@ class DeviceCommandHeartbeat(
         if (device.rebootRequested) {
             actOnRestartRequest(deviceId)
         }
+    }
+
+    /**
+     * Adopts the depot's own record of which vehicle this tablet sits in, when it disagrees with
+     * the binding the driver's session is holding.
+     *
+     * ### The field failure this fixes
+     * Reported on the test tablet (2026-09-08, and written up in [VehicleBinding]'s class doc):
+     * a session still bound to a vehicle UUID that had been deleted in a fleet wipe published to
+     * `POST /v1/fleet/positions` every tick and got `404 Vehicle not found` every tick — surfaced
+     * to the driver as "Location request failed to send — HTTP 404" and to the dispatcher as a car
+     * that simply never appeared on the Live Map. There was no path back short of the driver
+     * logging out and re-binding, because nothing in the app ever re-read the binding. The answer
+     * was arriving on this very poll, in `DeviceDto.vehicle_id`, and being discarded unread.
+     *
+     * The decision itself is [decideVehicleRebind] — pure, unit-tested, and documenting the three
+     * cases that must NOT rebind. This method is only the part that touches live state.
+     */
+    private fun reconcileVehicleBinding(reportedVehicleUuid: String?) {
+        val adopt = decideVehicleRebind(SessionHolder.session.value, reportedVehicleUuid) ?: return
+        SessionHolder.updateVehicleUuid(adopt)
     }
 
     /**

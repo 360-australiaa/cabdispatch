@@ -847,7 +847,14 @@ object AppContainer {
      * is explicitly triggered by
      * [ForceUpdatePendingBanner][au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner].
      */
-    val appUpdateChecker: AppUpdateChecker by lazy { AppUpdateChecker(apiService, okHttpClient, appContext) }
+    val appUpdateChecker: AppUpdateChecker by lazy {
+        // [devicePairingStore] is passed rather than reached for globally, the same constructor-
+        // injection convention [deviceCommandHeartbeat] already uses — it is what lets a parked,
+        // logged-off tablet authenticate the two OTA calls with its device secret (B5, 2026-09-08).
+        // `by lazy` means [init] has always run before this is first touched, so the `lateinit` is
+        // safe here for the same reason it is at every other lazy call site in this file.
+        AppUpdateChecker(apiService, okHttpClient, appContext, devicePairingStore)
+    }
 
     // Repository/DAO singletons are added here by sibling agents, e.g.:
     // val fooDao: FooDao by lazy { database.fooDao() }

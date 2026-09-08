@@ -83,19 +83,49 @@ object DeviceReadiness {
         /**
          * The tablet is exempt from battery optimisation.
          *
-         * There is no foreground service in this app — the meter's tick loop is a coroutine in the
-         * process (see FareEngineImpl.startTicking). Doze can therefore stop a running fare, which
-         * on a regulated meter is not a battery-life inconvenience; it is a trip that stops being
-         * charged for while the passenger is still in the car.
+         * ### What this protects, now that A1 has landed (2026-09-08)
+         * The premise this check was written on is gone. It used to read "there is no foreground
+         * service in this app — the meter's tick loop is a coroutine in the process, so Doze can
+         * stop a running fare", and that was true and severe: a trip that stops being charged for
+         * while the passenger is still in the car. A1 hoisted the fare engine into
+         * [MeterForegroundService], and a started foreground service with a visible notification is
+         * not something Doze stops. **A running fare is no longer at risk from this.**
+         *
+         * What exemption still buys is real but smaller, and worth naming precisely rather than
+         * leaving the old blocker-shaped wording in place over a consequence that no longer
+         * follows:
+         * - The 60 s [DeviceCommandHeartbeat] poll and [LivePositionHeartbeat] position publish run
+         *   in the app process, NOT in the foreground service. On an idle, parked, screen-off
+         *   tablet Doze batches their timers, so kiosk lock / locate / force-update commands and
+         *   Live Map positions arrive late — up to the length of a maintenance window rather than
+         *   within a minute. That is a dispatcher-visible fault, not a fare fault.
+         * - Between hirings there is no foreground service at all (it is started for a hiring and
+         *   stopped at the end of one), so that is exactly when the batching bites.
+         *
+         * Stays [Severity.ADVISORY], which it always was — the difference is that the severity and
+         * the stated consequence now agree with each other.
          */
         BatteryOptimisation,
 
         /**
-         * The tablet is actually locked to the meter — "connected to the kiosk".
+         * The tablet is pinned to the meter — Android **screen pinning**, not a kiosk lock.
          *
-         * Compares what the depot ASKED for against what the OS is DOING. A tablet the depot has
-         * flagged `kiosk_locked` that is not pinned is a real, silent misconfiguration a technician
-         * can fix on the spot, and nothing surfaced it before.
+         * ### Why the wording matters
+         * This row said "Kiosk lock" and let a technician sign a tablet off believing something
+         * much stronger than what is actually running. [KioskLockController]'s own doc has always
+         * been correct about it and the user-facing string was not: this app holds no Device Owner
+         * provisioning, so the only mode it can ever *start* is `Activity.startLockTask()` with no
+         * DPC allowlist — plain screen pinning. That is:
+         * - **escapable by the user** — a long Back + Recents press prompts to unpin, and
+         * - **not durable across a reboot** — pinning is task state and dies with the task.
+         *
+         * [DeviceCommandHeartbeat] re-applies it on every 60 s poll, so an escape self-corrects
+         * within a minute rather than lasting the shift; a reboot leaves the tablet unpinned until
+         * the first poll after boot. Both are honest limits to state, not defects to hide.
+         *
+         * "Kiosk lock" is reserved for [KioskState.DpcLocked] — a real Device Owner / Knox
+         * allowlisted lock, which this app can observe but never cause. A future Device Owner build
+         * is what would earn the word back for everything else.
          */
         Kiosk,
 
@@ -324,9 +354,14 @@ object DeviceReadiness {
         check = ReadinessCheck.BatteryOptimisation,
         passed = inputs.batteryOptimisationExempt == true,
         severity = Severity.ADVISORY,
+        // Copy rewritten 2026-09-08 (A7) to match what A1's foreground service actually changed —
+        // see ReadinessCheck.BatteryOptimisation's doc. The old "may stop a running fare" line was
+        // a blocker-severity claim on an advisory row, and is no longer true either way.
         detail = when (inputs.batteryOptimisationExempt) {
-            true -> "Exempt — the meter keeps running with the screen off"
-            false -> "Not exempt — Android may stop a running fare to save battery"
+            true -> "Exempt — depot commands and Live Map positions stay on time when parked"
+            false ->
+                "Not exempt — a running fare is safe (it holds a foreground service), but depot " +
+                    "commands and Live Map positions can be delayed while the tablet sits idle"
             null -> "Not checked"
         },
     )
@@ -339,12 +374,17 @@ object DeviceReadiness {
             inputs.kiosk == KioskState.Pinned ||
             inputs.kiosk == KioskState.NotRequested,
         severity = Severity.ADVISORY,
+        // "Kiosk lock" is reserved for DpcLocked — see ReadinessCheck.Kiosk's doc. Every other
+        // state says "pinned", and the states a technician can act on say what the limits are, so
+        // nobody signs a tablet off believing it is locked down harder than it is.
         detail = when (inputs.kiosk) {
-            KioskState.DpcLocked -> "Locked to the meter by the fleet policy"
-            KioskState.Pinned -> "Pinned to the meter"
+            KioskState.DpcLocked -> "Kiosk-locked to the meter by the fleet policy — survives a reboot"
+            KioskState.Pinned ->
+                "Screen pinned to the meter — a driver can unpin it (hold Back + Recents), and a " +
+                    "reboot clears it until the next depot check-in, about a minute later"
             KioskState.DepotWantsItButNotPinned ->
-                "The depot asked for kiosk mode but this tablet is not pinned — tap to pin it"
-            KioskState.NotRequested -> "Not requested by the depot"
+                "The depot asked for the meter to be pinned but this tablet is not — tap to pin it"
+            KioskState.NotRequested -> "Not pinned; the depot has not asked for it"
             null -> "Not checked"
         },
     )

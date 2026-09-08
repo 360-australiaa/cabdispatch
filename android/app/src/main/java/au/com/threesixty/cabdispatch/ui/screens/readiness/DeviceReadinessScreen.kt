@@ -572,7 +572,11 @@ private fun DeviceReadiness.ReadinessCheck.label(): String = when (this) {
     DeviceReadiness.ReadinessCheck.Permissions -> "Permissions"
     DeviceReadiness.ReadinessCheck.Location -> "Location \u0026 GPS"
     DeviceReadiness.ReadinessCheck.BatteryOptimisation -> "Battery optimisation"
-    DeviceReadiness.ReadinessCheck.Kiosk -> "Kiosk lock"
+    // "Screen pinned", not "Kiosk lock": this app holds no Device Owner provisioning, so what it
+    // can actually do is Android screen pinning — escapable, and gone after a reboot until the
+    // next heartbeat re-applies it. See DeviceReadiness.ReadinessCheck.Kiosk's doc; the row's own
+    // detail line carries the limits. The word "kiosk" is kept for a real DPC lock only.
+    DeviceReadiness.ReadinessCheck.Kiosk -> "Screen pinned"
     DeviceReadiness.ReadinessCheck.MapService -> "Map service"
     DeviceReadiness.ReadinessCheck.VehicleClass -> "Vehicle class"
     DeviceReadiness.ReadinessCheck.OfflineMaps -> "Offline maps"

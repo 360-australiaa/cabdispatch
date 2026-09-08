@@ -886,6 +886,11 @@ private class FakeApiService : ApiService {
     // deviceSecret param added 2026-08-29 (device-scoped heartbeat auth pass) — see
     // ApiService.deviceHeartbeat's own doc; not exercised by this test, default kept.
     override suspend fun deviceHeartbeat(deviceId: String, body: DeviceHeartbeatRequestDto, deviceSecret: String?): DeviceDto = notUsed()
+
+    // GET /v1/fleet/devices/me (B5, 2026-09-08) -- this tablet's own row, addressed by its device
+    // secret alone. Read by DeviceCommandHeartbeat's device-id recovery, never by the outbox
+    // drainer under test here.
+    override suspend fun deviceMe(deviceSecret: String): DeviceDto = notUsed()
     override suspend fun deviceLocateResponse(deviceId: String, body: DeviceLocateResponseDto, deviceSecret: String?): DeviceDto = notUsed()
     override suspend fun deviceCommandAck(deviceId: String, body: DeviceCommandAckDto, deviceSecret: String?): DeviceDto = notUsed()
     override suspend fun activeTariff(region: String, at: String?): TariffDto = notUsed()
@@ -979,7 +984,7 @@ private class FakeApiService : ApiService {
     override suspend fun listJobOffers(jobId: String): List<JobOfferDto> = notUsed()
     override suspend fun declineJobOffer(jobId: String, offerId: String): JobOfferDto = notUsed()
     override suspend fun publishPosition(body: PositionPublishRequestDto): PositionPublishResponseDto = notUsed()
-    override suspend fun listVehicles(skip: Int, limit: Int): VehiclePageDto = notUsed()
+    override suspend fun listVehicles(skip: Int, limit: Int, regoExact: String?): VehiclePageDto = notUsed()
     override suspend fun getShift(shiftId: String): ShiftDto = notUsed()
     override suspend fun flagTrip(tripId: String, body: TripFlagRequestDto): TripDto = notUsed()
     override suspend fun rateTrip(tripId: String, body: TripRatingCreateDto): TripRatingDto = notUsed()
@@ -1018,7 +1023,7 @@ private class FakeApiService : ApiService {
 
     // App releases (real OTA self-update, 2026-09-06) — read by AppUpdateChecker only, never by
     // the outbox drainer under test here.
-    override suspend fun latestAppRelease(): au.com.threesixty.cabdispatch.data.remote.LatestAppReleaseDto = notUsed()
+    override suspend fun latestAppRelease(deviceSecret: String?): au.com.threesixty.cabdispatch.data.remote.LatestAppReleaseDto = notUsed()
 
     // NSW toll-road registry (automatic toll detection, 2026-09) — pulled by
     // TollRegistryCache on its own schedule, never by the outbox drainer under test here.
