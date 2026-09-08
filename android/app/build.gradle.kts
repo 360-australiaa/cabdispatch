@@ -4,12 +4,17 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
-    id("org.jetbrains.kotlin.kapt")
+    // Compose compiler as its own Gradle plugin (A9 toolchain upgrade) -- mandatory as of
+    // Kotlin 2.0's K2 compiler; replaces `composeOptions.kotlinCompilerExtensionVersion` below.
+    id("org.jetbrains.kotlin.plugin.compose")
+    // Room's annotation processor, KSP not kapt (A9 toolchain upgrade). See root build.gradle.kts
+    // for why. kapt is gone from this module entirely -- Room was its only user.
+    id("com.google.devtools.ksp")
     // Static analysis. Versioned here rather than in the root build file because detekt applies
-    // to this module only -- `:app` is the sole Kotlin source set in the project. 1.23.7 is the
-    // release built against Kotlin 1.9.x, matching this module's compiler; a newer detekt would
-    // parse sources with a mismatched frontend.
-    id("io.gitlab.arturbosch.detekt") version "1.23.7"
+    // to this module only -- `:app` is the sole Kotlin source set in the project. 1.23.7 was the
+    // release built against Kotlin 1.9.x; bumped to the first release with real Kotlin 2.0/K2
+    // frontend support alongside the toolchain upgrade above.
+    id("io.gitlab.arturbosch.detekt") version "1.23.8"
 }
 
 // Detekt runs on the existing tree with a BASELINE (detekt-baseline.xml), not with the rules
@@ -74,6 +79,17 @@ val releaseApiBaseUrlPlaceholder = "https://api.cabdispatch.example.com"
 val releaseApiBaseUrl: String = localProperties.getProperty("RELEASE_API_BASE_URL")
     ?: System.getenv("RELEASE_API_BASE_URL")
     ?: releaseApiBaseUrlPlaceholder
+
+// Room schema export destination (A9 toolchain upgrade -- see AppDatabase.kt's `exportSchema`
+// doc for why this was off before and what turning it on now does and does not cover). KSP's
+// `room.schemaLocation` arg, not the old kapt `javaCompileOptions.annotationProcessorOptions`
+// path. Checked in under androidTest so RoomMigrationTest.kt's future bumps (13, 14, ...) can
+// use `MigrationTestHelper`'s asset-backed `createDatabase()` the normal way -- versions 8-11
+// still can't, since no JSON was ever captured for them; that test builds their starting schema
+// by hand instead and says so.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
 
 android {
     namespace = "au.com.threesixty.cabdispatch"
@@ -189,20 +205,30 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
+    // `composeOptions.kotlinCompilerExtensionVersion` is gone (A9 toolchain upgrade) -- the
+    // `org.jetbrains.kotlin.plugin.compose` plugin applied above wires the Compose compiler to
+    // whatever Kotlin version this module builds with (2.0.21) and does not take a version of
+    // its own; setting this field with that plugin applied is a Gradle build error, not a no-op.
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // Robolectric (RoomMigrationTest) needs the merged Android assets/resources on the unit-test
+    // classpath -- off by default because it roughly doubles unit-test task time; this is the
+    // one test that needs it.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
     // -- Compose (BOM pins all Compose artifact versions together) --
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -241,10 +267,21 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // -- Room (local offline store; entities/DAOs added by the sync-domain
-    // sibling agent — this module just wires the dependency + KSP-free setup) --
+    // sibling agent — this module just wires the dependency) --
+    // A9 toolchain upgrade: kapt -> KSP for the annotation processor (root build.gradle.kts has
+    // the rationale). Practical payoff, not just "the modern option": with KSP, `room.schemaLocation`
+    // (below) actually produces schema JSON on this project -- the old kapt setup produced nothing
+    // (see the now-obsolete workaround in AppDatabase.kt's MIGRATION_9_10 doc, which had engineers
+    // reading Room's generated Java instead). exportSchema is turned on for the same reason -- see
+    // androidTest/.../RoomMigrationTest.kt for what that does and does not retroactively give us.
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+    // MigrationTestHelper (RoomMigrationTest.kt). Runs under Robolectric in testDebugUnitTest,
+    // not as a connectedAndroidTest -- no device/emulator involved, see that test's own doc.
+    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
 
     // -- WorkManager (background sync) --
     implementation("androidx.work:work-runtime-ktx:2.9.1")
