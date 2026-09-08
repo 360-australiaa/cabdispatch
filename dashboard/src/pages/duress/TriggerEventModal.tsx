@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import { Button, Modal, Select } from "@/components/ui";
 import { triggerDuressEvent } from "./api";
 import type { DuressEvent, DuressTrigger } from "./types";
+import { useDuressLookups } from "./useDuressLookups";
 
 const TRIGGER_OPTIONS: { value: DuressTrigger; label: string }[] = [
   { value: "button", label: "Panic button" },
@@ -16,6 +17,11 @@ const TRIGGER_OPTIONS: { value: DuressTrigger; label: string }[] = [
  * for logging an incident (e.g. dispatch takes a phone call reporting a
  * driver in distress and opens the record manually). Starts the 10-second
  * cancel window server-side.
+ *
+ * Vehicle and driver are `<Select>`s over the same lookups the events table
+ * uses to resolve UUIDs (`useDuressLookups`), not free-text UUID fields —
+ * dashboard audit `TriggerEventModal.tsx:66,74`: an operator opening an
+ * incident by phone should never have to go find and paste a UUID first.
  */
 export function TriggerEventModal({
   open,
@@ -26,6 +32,7 @@ export function TriggerEventModal({
   onClose: () => void;
   onCreated: (event: DuressEvent) => void;
 }) {
+  const lookups = useDuressLookups();
   const [vehicleId, setVehicleId] = useState("");
   const [driverId, setDriverId] = useState("");
   const [trigger, setTrigger] = useState<DuressTrigger>("button");
@@ -50,6 +57,9 @@ export function TriggerEventModal({
     onClose();
   }
 
+  const vehicleOptions = lookups.vehicles.map((v) => ({ value: v.id, label: v.rego }));
+  const driverOptions = lookups.drivers.map((d) => ({ value: d.id, label: d.name }));
+
   return (
     <Modal
       open={open}
@@ -59,21 +69,31 @@ export function TriggerEventModal({
       className="max-w-md"
     >
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <FormField label="Vehicle ID">
-          <Input
+        <FormField label="Vehicle">
+          <Select
+            options={vehicleOptions}
             value={vehicleId}
             onChange={(e) => setVehicleId(e.target.value)}
-            placeholder="vehicle UUID"
+            placeholder={lookups.isLoading ? "Loading vehicles…" : "Select a vehicle"}
+            disabled={lookups.isLoading || vehicleOptions.length === 0}
             required
           />
+          {!lookups.isLoading && vehicleOptions.length === 0 && (
+            <p className="text-xs text-muted-foreground">No vehicles found.</p>
+          )}
         </FormField>
-        <FormField label="Driver ID">
-          <Input
+        <FormField label="Driver">
+          <Select
+            options={driverOptions}
             value={driverId}
             onChange={(e) => setDriverId(e.target.value)}
-            placeholder="driver UUID"
+            placeholder={lookups.isLoading ? "Loading drivers…" : "Select a driver"}
+            disabled={lookups.isLoading || driverOptions.length === 0}
             required
           />
+          {!lookups.isLoading && driverOptions.length === 0 && (
+            <p className="text-xs text-muted-foreground">No drivers found.</p>
+          )}
         </FormField>
         <FormField label="Trigger">
           <Select
@@ -91,7 +111,11 @@ export function TriggerEventModal({
           <Button type="button" variant="outline" onClick={handleClose}>
             Cancel
           </Button>
-          <Button type="submit" variant="destructive" disabled={mutation.isPending}>
+          <Button
+            type="submit"
+            variant="destructive"
+            disabled={mutation.isPending || !vehicleId || !driverId}
+          >
             {mutation.isPending ? "Triggering…" : "Trigger event"}
           </Button>
         </div>
