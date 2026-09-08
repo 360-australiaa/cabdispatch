@@ -43,6 +43,12 @@ const WhiteLabelPage = lazy(() => import("@/pages/settings/white-label"));
 const SecuritySettingsPage = lazy(() => import("@/pages/settings/security"));
 const PlatformConsolePage = lazy(() => import("@/pages/platform"));
 const PaymentReconciliationPage = lazy(() => import("@/pages/payment-recon"));
+// D10: password-reset-by-email landing pages, reached from a "forgot
+// password?" click or a freshly-clicked email link — a secondary
+// pre-auth flow, not the first thing a visitor sees, so these are lazy
+// like every other route rather than joining LoginPage's exception.
+const ForgotPasswordPage = lazy(() => import("@/pages/login/ForgotPasswordPage"));
+const ResetPasswordPage = lazy(() => import("@/pages/login/ResetPasswordPage"));
 
 /**
  * Route table for the fleet-ops dashboard. Public: /login. Everything else
@@ -96,6 +102,14 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     element: <LoginPage />,
+  },
+  {
+    path: "/forgot-password",
+    element: lazyRoute(<ForgotPasswordPage />),
+  },
+  {
+    path: "/reset-password",
+    element: lazyRoute(<ResetPasswordPage />),
   },
   {
     path: "/",

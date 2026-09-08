@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: str = ""
     SENDGRID_FROM_EMAIL: str = "receipts@cabdispatch.example"
 
+    # --- Dashboard base URL (D10: password-reset email link) ---
+    # The reset link embedded in the password-reset email points here +
+    # "/reset-password?token=...". Not itself a secret.
+    DASHBOARD_BASE_URL: str = "http://localhost:5173"
+
     # --- Twilio (receipt SMS delivery, blueprint 5.2.6/8.5) ---
     # All three must be set for app.services.receipts to treat Twilio as
     # configured; any one missing falls back to a mock response.

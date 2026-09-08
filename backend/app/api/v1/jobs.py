@@ -59,6 +59,7 @@ from app.core.security import (
     get_current_tenant_id,
     get_current_user,
     require_role,
+    revocation_aware_pump,
 )
 from app.schemas.jobs import (
     DriverAvailabilityRead,
@@ -288,9 +289,11 @@ async def live(websocket: WebSocket) -> None:
     await websocket.accept()
     queue = await jobs_service.job_offer_broadcaster.subscribe(driver_id)
     try:
-        while True:
-            message = await queue.get()
-            await websocket.send_json(message)
+        # D10: rechecks revocation every poll tick for the life of the
+        # connection, not just at the handshake — a driver logged out (or
+        # "signed out everywhere") mid-shift no longer keeps a live job-offer
+        # feed open indefinitely.
+        await revocation_aware_pump(websocket, queue, auth.payload.get("jti"))
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

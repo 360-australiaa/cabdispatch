@@ -78,8 +78,14 @@ interface AuthContextValue {
   /** True while the initial session (token -> /v1/auth/me) is being resolved. */
   isLoading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
-  /** Second step of login for mfa_enabled accounts: exchanges the mfa_token + TOTP code for real tokens. */
-  completeMfaLogin: (mfaToken: string, code: string) => Promise<void>;
+  /** Second step of login for mfa_enabled accounts: exchanges the mfa_token
+   * plus EITHER a TOTP `code` OR a `recoveryCode` (D10: the "lost my
+   * authenticator" fallback) for real tokens. Exactly one of the two must be
+   * supplied — same contract `POST /v1/auth/mfa/login` enforces server-side. */
+  completeMfaLogin: (
+    mfaToken: string,
+    credential: { code: string } | { recoveryCode: string },
+  ) => Promise<void>;
   /** Re-fetches /v1/auth/me — call after enabling/disabling MFA so `user.mfa_enabled` stays in sync. */
   refreshUser: () => Promise<void>;
   logout: () => void;
@@ -140,15 +146,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { mfaRequired: false };
   }, [fetchTenant]);
 
-  const completeMfaLogin = useCallback(async (mfaToken: string, code: string) => {
-    const res = await apiClient.post<TokenResponse>("/v1/auth/mfa/login", {
-      mfa_token: mfaToken,
-      code,
-    });
-    setTokens(res.data.access_token, res.data.refresh_token);
-    setUser(res.data.user);
-    await fetchTenant();
-  }, [fetchTenant]);
+  const completeMfaLogin = useCallback(
+    async (mfaToken: string, credential: { code: string } | { recoveryCode: string }) => {
+      const res = await apiClient.post<TokenResponse>("/v1/auth/mfa/login", {
+        mfa_token: mfaToken,
+        code: "code" in credential ? credential.code : undefined,
+        recovery_code: "recoveryCode" in credential ? credential.recoveryCode : undefined,
+      });
+      setTokens(res.data.access_token, res.data.refresh_token);
+      setUser(res.data.user);
+      await fetchTenant();
+    },
+    [fetchTenant],
+  );
 
   const refreshUser = useCallback(async () => {
     const res = await apiClient.get<CurrentUser>("/v1/auth/me");

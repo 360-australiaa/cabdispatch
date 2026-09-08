@@ -55,6 +55,7 @@ from app.core.security import (
     get_current_tenant_id,
     get_current_user,
     require_role,
+    revocation_aware_pump,
 )
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
@@ -638,9 +639,10 @@ async def live(
     await websocket.accept()
     queue = gps_broadcaster.subscribe(event.id)
     try:
-        while True:
-            point = await queue.get()
-            await websocket.send_json(point)
+        # D10: rechecks revocation every poll tick for the life of the
+        # connection, not just at the handshake — a dispatcher's session
+        # revoked mid-watch no longer keeps a live duress GPS feed open.
+        await revocation_aware_pump(websocket, queue, auth.payload.get("jti"))
     except WebSocketDisconnect:
         pass
     finally:

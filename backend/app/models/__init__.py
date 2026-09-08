@@ -32,6 +32,7 @@ from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
 from app.models.payment import Payment
 from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
+from app.models.recovery_code import RecoveryCode
 from app.models.shift import Shift
 from app.models.tariffs import Extra, Tariff, TariffChangeLog
 from app.models.tenant import Tenant
@@ -45,6 +46,7 @@ from app.models.toll import (
 )
 from app.models.trips import Trip, TripGpsTrace
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.models.vouchers import CorporateAccount, Voucher
 from app.models.zones import Zone
 
@@ -78,6 +80,7 @@ __all__ = [
     "PSLLedgerEntry",
     "PSLTopUp",
     "Payment",
+    "RecoveryCode",
     "Shift",
     "Subscription",
     "Tariff",
@@ -93,6 +96,7 @@ __all__ = [
     "TripGpsTrace",
     "TripRating",
     "User",
+    "UserSession",
     "Vehicle",
     "VehiclePositionHistory",
     "Voucher",
