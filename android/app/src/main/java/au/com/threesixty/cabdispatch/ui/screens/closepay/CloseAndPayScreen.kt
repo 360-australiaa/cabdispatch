@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -68,6 +69,7 @@ import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
 import au.com.threesixty.cabdispatch.hardware.SIMULATED_BANNER
 import au.com.threesixty.cabdispatch.hardware.TEST_RECEIPT_MARKER
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
+import au.com.threesixty.cabdispatch.ui.overlays.reportsChromeHeader
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
@@ -224,22 +226,34 @@ private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAn
  * live GPS source of its own, so only the fields this screen genuinely knows (clock) render. */
 @Composable
 private fun ClosingStatusStrip() {
-    Box(
-        modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp, vertical = 4.dp),
+    // A Row, not a Box with two centre-aligned children (tablet, 2026-09-08): the pill grew to
+    // near full width and printed "TRIP · CLOSING" straight over the clock. Pill at the start,
+    // clock at the end, a weighted gap between -- they cannot meet whatever width either takes.
+    //
+    // reportsChromeHeader(): this strip IS this screen's top chrome. Without reporting it, the
+    // app-level chips positioned themselves off the last header they had measured -- the 120dp
+    // home header -- and FLEET LOCKED landed across the "Close & Pay" headline. Reporting the
+    // real 64dp puts the chip lane just under this strip, above the content.
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .reportsChromeHeader()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        HudStatusPill(
+            label = "Trip",
+            value = "CLOSING",
+            tone = HudTone.Danger,
+        )
+        Spacer(Modifier.weight(1f))
         Text(
             rememberDeckClock(),
             fontFamily = RobotoMonoFamily,
             fontWeight = FontWeight.Medium,
             fontSize = 14.sp,
             color = CaptainPalette.textSecondary,
-            modifier = Modifier.align(Alignment.CenterStart),
-        )
-        HudStatusPill(
-            label = "Trip",
-            value = "CLOSING",
-            tone = HudTone.Danger,
-            modifier = Modifier.align(Alignment.Center),
         )
     }
 }
@@ -404,9 +418,6 @@ private fun TotalCol(
         }
         CleaningFeeEntryRow(currentFee = state.cleaningFee, cap = tariff.cleaningFeeCap, onClick = onReportSoiling)
         TipEntryRow(currentTip = state.tip, onClick = onAddTip)
-        // Clears the fixed "← Back to meter" button (MethodPickerScreen's BottomStart-aligned
-        // overlay) when scrolled all the way down — see this Column's verticalScroll doc above.
-        Spacer(Modifier.height(88.dp))
     }
 }
 
@@ -700,7 +711,22 @@ private fun MethodPickerScreen(
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {
-            TotalCol(state = state, onReportSoiling = { showCleaningDialog = true }, onAddTip = { showTipDialog = true })
+            // "Back to meter" lives IN the left column's flow, under the scroller, not as a
+            // BottomStart overlay on the whole Box (tablet, 2026-09-08). An overlay covers
+            // whatever happens to be at the bottom of the viewport at any scroll position -- on
+            // the tablet that was the "Add a tip" card, with the button printed across it. A
+            // trailing spacer inside the scroller only ever helped once scrolled to the very end.
+            // Reserving the button's own row means nothing can ever sit under it.
+            Column(modifier = Modifier.width(400.dp).fillMaxHeight()) {
+                TotalCol(
+                    state = state,
+                    onReportSoiling = { showCleaningDialog = true },
+                    onAddTip = { showTipDialog = true },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.height(16.dp))
+                CaptainButton(text = "← Back to meter", outline = true, widthDp = 240, onClick = onBackToMeter)
+            }
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -777,13 +803,6 @@ private fun MethodPickerScreen(
                 }
             }
         }
-        CaptainButton(
-            text = "← Back to meter",
-            outline = true,
-            widthDp = 240,
-            modifier = Modifier.align(Alignment.BottomStart),
-            onClick = onBackToMeter,
-        )
     }
 
     CaptainDialogScrim(visible = showCleaningDialog, onDismissRequest = { showCleaningDialog = false }) {
