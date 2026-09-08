@@ -61,6 +61,18 @@ async def list_audit_log_entries(
     offset: int = Query(default=0, ge=0),
     entity_type: str | None = Query(default=None),
     entity_id: str | None = Query(default=None),
+    subject_id: str | None = Query(
+        default=None,
+        description=(
+            "Alias for `entity_id` -- the id of the record an entry is ABOUT "
+            "(e.g. a driver or vehicle), for callers (a driver/vehicle detail "
+            "page's Activity tab) that don't know or care about this table's "
+            "own `entity_type`/`entity_id` naming. Filters the same "
+            "`AuditLog.entity_id` column entity_id does; if both are given "
+            "they must agree with each other for a row to match (both are "
+            "ANDed in, matching how entity_type + entity_id combine above)."
+        ),
+    ),
     actor_user_id: str | None = Query(default=None),
     action: str | None = Query(default=None),
     at_from: datetime | None = Query(default=None, description="Inclusive lower bound on `at`."),
@@ -71,6 +83,8 @@ async def list_audit_log_entries(
         filters.append(AuditLog.entity_type == entity_type)
     if entity_id is not None:
         filters.append(AuditLog.entity_id == entity_id)
+    if subject_id is not None:
+        filters.append(AuditLog.entity_id == subject_id)
     if actor_user_id is not None:
         filters.append(AuditLog.actor_user_id == actor_user_id)
     if action is not None:

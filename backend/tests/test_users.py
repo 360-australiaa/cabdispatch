@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.core import security
 from app.models.audit_log import AuditLog
@@ -220,6 +221,150 @@ async def test_update_user_and_new_password_can_login(client, session):
 
     resp = await client.post("/v1/auth/login", json={"email": email, "password": "Old-Passw0rd!"})
     assert resp.status_code == 401
+
+
+# --- PATCH status transition audit logging -----------------------------------
+
+
+async def test_update_user_status_change_is_audit_logged(client, session):
+    """`UserUpdate.status` already supports active/inactive/suspended
+    transitions (app/schemas/user.py::UserStatus); this asserts the PATCH
+    endpoint now also writes an audit_log entry for the transition, the same
+    way POST /v1/users/{id}/reset-pin does."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("status-change"))
+    user_id = resp.json()["id"]
+    assert resp.json()["status"] == "active"
+
+    resp = await client.patch(
+        f"/v1/users/{user_id}", json={"status": "inactive"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "inactive"
+
+    rows = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user_id,
+                AuditLog.action == "status_change",
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].before_json == {"status": "active"}
+    assert rows[0].after_json == {"status": "inactive"}
+
+
+async def test_update_user_without_status_change_writes_no_audit_entry(client, session):
+    """A PATCH that doesn't touch `status` (or sets it to the same value it
+    already had) must not write a spurious status_change entry."""
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("no-status-change"))
+    user_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"/v1/users/{user_id}", json={"phone": "0400111222"}, headers=headers
+    )
+    assert resp.status_code == 200
+
+    rows = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user_id,
+                AuditLog.action == "status_change",
+            )
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+# --- POST /v1/users/{id}/reset-pin --------------------------------------------
+
+
+async def _tenant_slug_for_user(session, user_id: str) -> str:
+    user = await session.get(User, user_id)
+    tenant = await session.get(Tenant, user.tenant_id)
+    return tenant.slug
+
+
+async def test_owner_can_reset_driver_pin_and_log_in_with_it(client, session):
+    headers = await auth_headers(client, session, role="owner")
+    resp = await _create_driver(client, headers, email=_unique_email("reset-pin"))
+    user_id = resp.json()["id"]
+    driver_code = resp.json()["driver_code"]
+    slug = await _tenant_slug_for_user(session, user_id)
+
+    resp = await client.post(f"/v1/users/{user_id}/reset-pin", headers=headers)
+    assert resp.status_code == 200, resp.text
+    new_pin = resp.json()["pin"]
+    assert new_pin
+
+    # The returned plaintext PIN actually logs the driver in.
+    login = await client.post(
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": new_pin},
+    )
+    assert login.status_code == 200, login.text
+
+    # The OLD password no longer works.
+    old_login = await client.post(
+        "/v1/auth/driver-login",
+        json={"tenant_slug": slug, "driver_code": driver_code, "pin": "Driver-Pass1!"},
+    )
+    assert old_login.status_code == 401
+
+
+async def test_reset_pin_requires_owner_or_admin_role(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("reset-pin-role"))
+    user_id = resp.json()["id"]
+
+    for role in ("driver", "dispatcher"):
+        non_admin = await auth_headers(client, session, role=role)
+        resp = await client.post(f"/v1/users/{user_id}/reset-pin", headers=non_admin)
+        assert resp.status_code == 403
+
+
+async def test_reset_pin_rejects_non_driver_accounts(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(
+        client, headers, role="dispatcher", email=_unique_email("reset-pin-dispatcher")
+    )
+    user_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/users/{user_id}/reset-pin", headers=headers)
+    assert resp.status_code == 400
+
+
+async def test_reset_pin_writes_an_audit_entry(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await _create_driver(client, headers, email=_unique_email("reset-pin-audit"))
+    user_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/users/{user_id}/reset-pin", headers=headers)
+    assert resp.status_code == 200
+
+    rows = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user_id,
+                AuditLog.action == "reset_pin",
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    # The plaintext PIN must never be written into the audit trail.
+    assert rows[0].before_json is None
+    assert rows[0].after_json is None
+
+
+async def test_reset_pin_404_for_unknown_user(client, session):
+    headers = await auth_headers(client, session, role="admin")
+    resp = await client.post("/v1/users/does-not-exist/reset-pin", headers=headers)
+    assert resp.status_code == 404
 
 
 async def test_delete_user(client, session):

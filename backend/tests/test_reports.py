@@ -490,6 +490,91 @@ async def test_revenue_group_by_driver(client: AsyncClient, session: AsyncSessio
     assert groups[0]["gross_revenue"] == "40.00"
 
 
+async def test_revenue_driver_id_filter_scopes_to_one_driver(client: AsyncClient, session: AsyncSession):
+    """`driver_id` (independent of `group_by`) scopes every SUM/COUNT to one
+    driver's trips only -- e.g. a driver detail page's own revenue
+    sparkline, grouped by day, for just that driver."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+    driver_a = await _seed_driver(session, tenant_id=tenant_id, name="Driver A")
+    driver_b = await _seed_driver(session, tenant_id=tenant_id, name="Driver B")
+
+    trips = [
+        _make_trip(
+            tenant_id=tenant_id,
+            driver_id=driver_a.id,
+            vehicle_id=str(uuid.uuid4()),
+            tariff_id=str(uuid.uuid4()),
+            start_at=datetime(2026, 6, 6, tzinfo=UTC),
+            total=Decimal("15.00"),
+        ),
+        _make_trip(
+            tenant_id=tenant_id,
+            driver_id=driver_b.id,
+            vehicle_id=str(uuid.uuid4()),
+            tariff_id=str(uuid.uuid4()),
+            start_at=datetime(2026, 6, 6, tzinfo=UTC),
+            total=Decimal("99.00"),
+        ),
+    ]
+    session.add_all(trips)
+    await session.commit()
+
+    resp = await client.get(
+        "/v1/reports/revenue",
+        params={"from": "2026-06-01", "to": "2026-06-30", "group_by": "day", "driver_id": driver_a.id},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["totals"]["trip_count"] == 1
+    assert body["totals"]["gross_revenue"] == "15.00"
+
+
+async def test_revenue_vehicle_id_filter_scopes_to_one_vehicle(client: AsyncClient, session: AsyncSession):
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+    vehicle_a = await _seed_vehicle(session, tenant_id=tenant_id, rego="VEH-A")
+    vehicle_b = await _seed_vehicle(session, tenant_id=tenant_id, rego="VEH-B")
+
+    trips = [
+        _make_trip(
+            tenant_id=tenant_id,
+            driver_id=str(uuid.uuid4()),
+            vehicle_id=vehicle_a.id,
+            tariff_id=str(uuid.uuid4()),
+            start_at=datetime(2026, 6, 7, tzinfo=UTC),
+            total=Decimal("30.00"),
+        ),
+        _make_trip(
+            tenant_id=tenant_id,
+            driver_id=str(uuid.uuid4()),
+            vehicle_id=vehicle_b.id,
+            tariff_id=str(uuid.uuid4()),
+            start_at=datetime(2026, 6, 7, tzinfo=UTC),
+            total=Decimal("77.00"),
+        ),
+    ]
+    session.add_all(trips)
+    await session.commit()
+
+    resp = await client.get(
+        "/v1/reports/revenue",
+        params={
+            "from": "2026-06-01",
+            "to": "2026-06-30",
+            "group_by": "vehicle",
+            "vehicle_id": vehicle_a.id,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    groups = resp.json()["groups"]
+    assert len(groups) == 1
+    assert groups[0]["group_key"] == vehicle_a.id
+    assert groups[0]["gross_revenue"] == "30.00"
+
+
 async def test_revenue_group_by_payment_method(client: AsyncClient, session: AsyncSession):
     headers = await auth_headers(client, session, role="admin")
     tenant_id = await _tenant_of(headers)

@@ -231,16 +231,33 @@ async def revenue_report(
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
     group_by: RevenueGroupBy = Query(default="day"),
+    driver_id: str | None = Query(
+        default=None, description="Scope every total to this driver's trips only"
+    ),
+    vehicle_id: str | None = Query(
+        default=None, description="Scope every total to this vehicle's trips only"
+    ),
     tenant_id: str = Depends(get_current_tenant_id),
     _user: User = Depends(_require_read_role),
     session: AsyncSession = Depends(get_session),
 ) -> RevenueReportResponse:
     """Aggregated revenue totals over closed trips in the inclusive [from,
     to] calendar-day range, grouped as requested. All SUM/COUNT/GROUP BY runs
-    in SQL via SQLAlchemy (see app.services.reports.revenue_report)."""
+    in SQL via SQLAlchemy (see app.services.reports.revenue_report).
+
+    `driver_id` / `vehicle_id` (optional, independent of `group_by`) scope
+    the whole report to one driver's or one vehicle's trips -- e.g. a driver
+    detail page's `?group_by=day&driver_id=...` revenue sparkline. Omitted,
+    behaviour is unchanged (fleet-wide)."""
     try:
         groups, totals = await reports_service.revenue_report(
-            session, tenant_id=tenant_id, from_date=from_date, to_date=to_date, group_by=group_by
+            session,
+            tenant_id=tenant_id,
+            from_date=from_date,
+            to_date=to_date,
+            group_by=group_by,
+            driver_id=driver_id,
+            vehicle_id=vehicle_id,
         )
     except reports_service.InvalidDateRangeError as exc:
         raise _reraise_invalid_range(exc) from exc

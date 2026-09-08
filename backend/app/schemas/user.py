@@ -101,6 +101,15 @@ class UserUpdate(BaseModel):
         return _plausible_expiry(value)
 
 
+class ResetPinRead(BaseModel):
+    """Response of `POST /v1/users/{id}/reset-pin`. `pin` is the new
+    PLAINTEXT meter PIN, shown exactly ONCE -- only its hash
+    (`User.pin_hash`) is persisted, so this is the only place this value is
+    ever visible again after this call. See app/api/v1/users.py::reset_pin."""
+
+    pin: str
+
+
 class UserRead(UserBase):
     model_config = ConfigDict(from_attributes=True)
 

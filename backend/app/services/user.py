@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_password
 from app.models.audit_log import AuditLog
 from app.models.compliance import ComplianceDocument
 from app.models.driver_engagement import TripRating, WalletTransaction
@@ -218,6 +219,50 @@ async def assert_driver_code_available(
     count = (await session.execute(stmt)).scalar_one()
     if count > 0:
         raise DuplicateDriverCodeError(driver_code)
+
+
+# Meter-PIN alphabet/length -- digits only (keyed in by hand on a
+# meter/kiosk keypad, same rationale as _DRIVER_CODE_ALPHABET above), matching
+# the "6-digit PIN" convention POST /v1/auth/driver-login's own docstring
+# describes (app/api/v1/auth.py::driver_login). No ambiguous-character
+# exclusion needed here (unlike the driver-code alphabet): digits alone have
+# no visually-confusable pairs the way 0/O or 1/I do across digits+letters.
+_DRIVER_PIN_ALPHABET = string.digits
+DRIVER_PIN_LENGTH = 6
+
+
+def generate_driver_pin() -> str:
+    """Mints a random plaintext meter PIN. Unlike `generate_unique_driver_code`
+    this is never checked for uniqueness against other drivers' PINs -- a PIN
+    is a CREDENTIAL (like a password), not a lookup key, so two drivers
+    sharing a PIN is no more a problem than two people sharing a password;
+    only the driver_code + tenant pair needs to be unique, and PIN-login
+    already requires both to match the same row (see
+    app/api/v1/auth.py::driver_login). `secrets.choice` gives this
+    unguessability without a uniqueness check."""
+    return "".join(secrets.choice(_DRIVER_PIN_ALPHABET) for _ in range(DRIVER_PIN_LENGTH))
+
+
+async def reset_driver_pin(user: User) -> str:
+    """Generates a new plaintext meter PIN, hashes it into `user.pin_hash`
+    with the SAME `hash_password` (bcrypt) call every account's
+    password/PIN in this system is hashed with (see
+    app/api/v1/users.py::create_user and app/core/security.hash_password --
+    there is no separate "PIN format" anywhere in this codebase; a PIN IS a
+    password, just entered on a driver-login screen instead of an
+    email+password one), and returns the PLAINTEXT value.
+
+    Does NOT commit and does NOT write to session -- `user` is a live ORM
+    instance already attached to the caller's session; mutating its
+    `pin_hash` attribute is enough for the caller's own `session.commit()`
+    (alongside its `record_audit()` call, same caller-commits convention
+    `app.services.audit_log.record_audit` documents) to persist it. The
+    returned plaintext PIN is never stored or logged anywhere by this
+    function -- it is the caller's job to hand it back to the requester
+    exactly once and then let it go out of scope."""
+    new_pin = generate_driver_pin()
+    user.pin_hash = hash_password(new_pin)
+    return new_pin
 
 
 async def generate_unique_driver_code(session: AsyncSession, *, tenant_id: str) -> str:

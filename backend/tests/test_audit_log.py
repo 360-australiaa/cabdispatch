@@ -149,6 +149,37 @@ async def test_list_audit_log_filters_by_entity_type_entity_id_actor_and_action(
     assert paginated.json()["total"] == 3
 
 
+async def test_list_audit_log_filters_by_subject_id_alias_for_entity_id(client, session):
+    """`subject_id` is an alias for `entity_id` -- for callers (a driver or
+    vehicle detail page's Activity tab) that think of the filter as "entries
+    about this record" rather than this table's own entity_type/entity_id
+    naming. Same column, same result as filtering by entity_id directly."""
+    headers = await auth_headers(client, session, role="admin")
+    me = (await client.get("/v1/auth/me", headers=headers)).json()
+    tenant_id, actor_id = me["tenant_id"], me["id"]
+
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+        entity_type="user", entity_id="driver-x",
+    )
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="update",
+        entity_type="user", entity_id="driver-x",
+    )
+    await _write_entry(
+        session, tenant_id=tenant_id, actor_user_id=actor_id, action="create",
+        entity_type="vehicle", entity_id="veh-y",
+    )
+
+    by_subject_id = await client.get("/v1/audit-log?subject_id=driver-x", headers=headers)
+    assert by_subject_id.status_code == 200
+    assert by_subject_id.json()["total"] == 2
+    assert all(item["entity_id"] == "driver-x" for item in by_subject_id.json()["items"])
+
+    unmatched = await client.get("/v1/audit-log?subject_id=does-not-exist", headers=headers)
+    assert unmatched.json()["total"] == 0
+
+
 async def test_list_audit_log_is_ordered_most_recent_first(client, session):
     headers = await auth_headers(client, session, role="admin")
     me = (await client.get("/v1/auth/me", headers=headers)).json()

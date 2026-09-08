@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user, hash_password, require_role
 from app.models.user import User
-from app.schemas.user import Page, UserCreate, UserRead, UserUpdate
+from app.schemas.user import Page, ResetPinRead, UserCreate, UserRead, UserUpdate
 from app.services import user as user_service
+from app.services.audit_log import record_audit
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
@@ -128,7 +129,7 @@ async def update_user(
     payload: UserUpdate,
     tenant_id: str = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
-    _admin=Depends(_require_admin),
+    admin: User = Depends(_require_admin),
 ):
     try:
         user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
@@ -136,14 +137,85 @@ async def update_user(
         raise _user_error_to_http(exc) from exc
 
     updates = payload.model_dump(exclude_unset=True, exclude={"password"})
+
+    # Captured before mutation, so a status transition can be audit-logged
+    # with a real before/after pair -- same "log the change, not just the
+    # fact something changed" shape every other domain's record_audit calls
+    # use (see e.g. app.services.audit_log's own module docstring example).
+    previous_status = user.status
+
     for field, value in updates.items():
         setattr(user, field, value)
     if payload.password is not None:
         user.pin_hash = hash_password(payload.password)
 
+    if "status" in updates and updates["status"] != previous_status:
+        await record_audit(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=admin.id,
+            action="status_change",
+            entity_type="user",
+            entity_id=user.id,
+            before={"status": previous_status},
+            after={"status": updates["status"]},
+        )
+
     await session.commit()
     await session.refresh(user)
     return user
+
+
+@router.post("/{user_id}/reset-pin", response_model=ResetPinRead)
+async def reset_pin(
+    user_id: str,
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    admin: User = Depends(_require_admin),
+):
+    """Owner/admin only. Generates a new one-time meter PIN for a driver
+    account, overwriting `User.pin_hash` (the SAME column and hashing
+    (`hash_password`/bcrypt) `POST /v1/users` already uses for a driver's
+    initial PIN -- see app.services.user.reset_driver_pin), and returns the
+    new PIN in PLAINTEXT exactly once. Nothing else about the account
+    (driver_code, email, status, etc.) changes -- only the credential a
+    driver types on the meter/kiosk login screen
+    (`POST /v1/auth/driver-login`).
+
+    Driver accounts only: `pin_hash` also backs staff email+password login
+    (`POST /v1/auth/login`), so resetting it on a non-driver account would
+    silently change that person's real account password under a "PIN" label
+    -- refused with 400 instead.
+
+    Audited (`action="reset_pin"`) the same way `update_user` audits a
+    status change: the new plaintext PIN itself is never written to
+    before/after -- an audit trail is not the place to also hold a live
+    credential.
+    """
+    try:
+        user = await user_service.get_user_or_404(session, tenant_id=tenant_id, user_id=user_id)
+    except user_service.UserError as exc:
+        raise _user_error_to_http(exc) from exc
+
+    if user.role != "driver":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reset-pin only applies to driver accounts (role='driver')",
+        )
+
+    new_pin = await user_service.reset_driver_pin(user)
+
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=admin.id,
+        action="reset_pin",
+        entity_type="user",
+        entity_id=user.id,
+    )
+
+    await session.commit()
+    return ResetPinRead(pin=new_pin)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

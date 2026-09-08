@@ -215,11 +215,26 @@ def _zero_totals() -> RevenueTotalsResult:
 
 
 async def revenue_report(
-    session: AsyncSession, *, tenant_id: str, from_date: date, to_date: date, group_by: str
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    from_date: date,
+    to_date: date,
+    group_by: str,
+    driver_id: str | None = None,
+    vehicle_id: str | None = None,
 ) -> tuple[list[RevenueGroupResult], RevenueTotalsResult]:
     """Aggregated revenue totals, grouped as requested. Only status='closed'
     trips are included (open trips have no final `total`/breakdown yet).
-    All aggregation (SUM/COUNT/GROUP BY) runs in SQL."""
+    All aggregation (SUM/COUNT/GROUP BY) runs in SQL.
+
+    `driver_id`/`vehicle_id` (optional) scope every SUM/COUNT to that one
+    driver's or vehicle's trips only -- e.g. the driver detail page's 30-day
+    revenue sparkline (`group_by=day&driver_id=...`). Independent of
+    `group_by`: a caller can filter to one driver AND group by day, or filter
+    to one driver and group by vehicle (that driver's revenue split across
+    the vehicles they drove). Unscoped (both None) behaviour is unchanged
+    from before this filter existed."""
     _validate_range(from_date, to_date)
     start, end = date_range_bounds(from_date, to_date)
 
@@ -229,6 +244,10 @@ async def revenue_report(
         Trip.start_at >= start,
         Trip.start_at < end,
     ]
+    if driver_id is not None:
+        base_filters.append(Trip.driver_id == driver_id)
+    if vehicle_id is not None:
+        base_filters.append(Trip.vehicle_id == vehicle_id)
 
     group_key_expr, label_expr = _group_expr_and_label_source(group_by)
     needs_user_join = group_by == "driver"
