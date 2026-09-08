@@ -66,7 +66,7 @@ export function TrailControls({
         ))}
         {hours != null && (
           <span className="ml-1 text-xs text-muted-foreground">
-            {loading ? "Loading…" : `${trail.length} points`}
+            {loading ? "Loading…" : `${trail.length} point${trail.length === 1 ? "" : "s"}`}
           </span>
         )}
       </div>
@@ -110,6 +110,16 @@ export function TrailControls({
       {hours != null && !loading && trail.length === 0 && (
         <p className="mt-2 text-xs text-muted-foreground">
           No recorded positions in this window. History is kept for about 72 hours.
+        </p>
+      )}
+
+      {/* One point is a real state, not an empty one, and it used to render as a
+          bare "1 points" with no line, no scrubber and no explanation. A line
+          needs two ends; say so rather than leaving the operator wondering which
+          control they failed to find. */}
+      {hours != null && !loading && trail.length === 1 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Only one recorded position in this window, so there is no route to draw yet.
         </p>
       )}
     </div>
