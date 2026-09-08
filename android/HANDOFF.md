@@ -154,13 +154,22 @@ server (not just unit-tested), and the exact end-to-end flow this app is suppose
 ### The live server
 
 - API: `http://72.61.107.107:8001` (plain HTTP, no domain/TLS yet -- see
-  `docs/DEPLOY_UBUNTU.md`'s "Adding HTTPS later"). `android/local.properties`'s `API_BASE_URL` key
+  `docs/DEPLOY_UBUNTU.md`, where HTTPS via Caddy is now a required deploy step rather than a
+  deferred one -- once the owner redeploys onto a domain, this IP and the cleartext exemption
+  below both go away). `android/local.properties`'s `API_BASE_URL` key
   should already point here (see `app/build.gradle.kts`'s `apiBaseUrlOverride`).
 - `android/app/src/main/res/xml/network_security_config.xml` permits cleartext to this ONE IP only
   -- temporary, delete it (and the `AndroidManifest.xml` reference) the day this server gets HTTPS.
-- Demo driver: Driver ID `GL2HY`, PIN `123456` (numeric -- the app's PIN keypad is numeric-only,
-  do not reuse alphanumeric passwords for driver PINs anywhere, including test fixtures you write).
-- Demo staff: `owner@lillycabs.test` / `ChangeMe123!` (dashboard login, not the meter app).
+- Demo driver: **create one on the dashboard, Fleet ▸ Drivers.** No driver code or PIN is
+  recorded in this repo any more -- the pair that used to sit here was a live, working login
+  against the production server, and it was compiled into a shipped APK. Treat it as disclosed;
+  it has been rotated. Fleet ▸ Drivers mints the `driver_code` and the PIN through the normal
+  audited path, and is the only place either value should ever be read from.
+  Note the PIN is numeric-only (the app's PIN keypad has no letters or symbols), so do not reuse
+  an alphanumeric password as a driver PIN anywhere, including in test fixtures you write.
+- Demo staff: create via the dashboard, or seed locally with `SEED_OWNER_PASSWORD` set
+  (`backend/scripts/seed.py` no longer embeds or prints any credential, and refuses to run
+  against `ENV=production` without `--i-know-this-is-production`).
 
 ### Figma v2 prototype -> Android reality, screen by screen
 
@@ -1927,9 +1936,8 @@ and move on unless you specifically have hardware to test against.
 
 ## Step 3 — manual end-to-end test, once it runs
 
-1. Log in (S1) — see the driver-auth gap above; for now use a real backend user's email/password
-   as "Driver ID"/"PIN" (create one via the dashboard's Fleet & Drivers page, or
-   `POST /v1/users`).
+1. Log in (S1) — create a driver on the dashboard's Fleet ▸ Drivers page and use the
+   `driver_code`/PIN it mints. Never hardcode either value into the app or into a doc.
 2. Walk S1 → S2 (available toggle) → S3 (start a trip, watch the fare accrue) → S4 (close, check
    the fare breakdown + GST line) → S5 (shift report) → S6 (settings/diagnostics).
 3. **Offline test — this is the point of the whole app:** turn on airplane mode, run a full trip
