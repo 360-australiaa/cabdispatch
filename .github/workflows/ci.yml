@@ -111,7 +111,67 @@ jobs:
       - name: Ruff
         run: uv run ruff check
 
+      # The default run builds the test schema by running `alembic upgrade head`
+      # (tests/conftest.py), so this step also proves the migration chain applies
+      # to an empty database. It did not, on SQLite, for an unknown length of
+      # time before Wave 2 — with the whole suite green.
       - name: Pytest
+        run: uv run pytest
+
+  # Production is Postgres; the suite has only ever run on SQLite, and the two
+  # differ on exactly the things this system cares about — numeric precision,
+  # JSON operators and concurrency (backend audit §7). This job runs the same
+  # suite against a real Postgres by setting TEST_DATABASE_URL, which
+  # tests/conftest.py honours in place of its temp SQLite file.
+  #
+  # Local development is deliberately unaffected: TEST_DATABASE_URL is unset
+  # everywhere else, so `pytest` still needs nothing but a filesystem.
+  #
+  # continue-on-error: the suite has never once been executed against Postgres,
+  # so its first runs are a discovery exercise, not a gate. Do not leave it that
+  # way — once this job is green, delete the flag and make it blocking. A gate
+  # that cannot fail the build is not a gate.
+  backend-postgres:
+    name: Backend — pytest on Postgres (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cabdispatch
+          POSTGRES_PASSWORD: cabdispatch
+          POSTGRES_DB: cabdispatch_test
+        ports:
+          - 5432:5432
+        # Without a healthcheck the job races the container's first boot and
+        # fails on connection-refused rather than on anything real.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://cabdispatch:cabdispatch@localhost:5432/cabdispatch_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Pytest (Postgres)
         run: uv run pytest
 
   dashboard:
