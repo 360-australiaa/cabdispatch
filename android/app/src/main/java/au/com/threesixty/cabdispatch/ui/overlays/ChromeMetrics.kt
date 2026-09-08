@@ -73,12 +73,28 @@ object CaptainChromeMetrics {
      * because a driver must see these states everywhere else, and the only screens that may
      * suppress them are the ones whose entire job is to say the same thing better.
      */
-    var fullScreenGateVisible: Boolean by mutableStateOf(false)
-        private set
+    val fullScreenGateVisible: Boolean get() = gateDepth > 0
+
+    /**
+     * How many full-screen gates are currently composed, NOT a boolean.
+     *
+     * A boolean was wrong and failed in the ordinary case (tablet, 2026-09-08). Compose runs the
+     * incoming screen's `DisposableEffect` before the outgoing screen's `onDispose`, so navigating
+     * disclaimer -> readiness ran `set(true)` and then `set(false)`: the screen that had just LEFT
+     * got the last word, the flag read false for the whole of the next gate, and TABLET NOT
+     * REGISTERED sat across "Set up this tablet" exactly as it had across "Disclaimer".
+     *
+     * Counting makes the answer independent of the order the two effects happen to run in: the
+     * gate is up while any gate screen is composed, and the overlap during a transition is
+     * precisely what a count handles and a boolean cannot.
+     */
+    private var gateDepth: Int by mutableStateOf(0)
 
     /** Called by each of those screens as it enters and leaves composition. */
     internal fun setFullScreenGateVisible(visible: Boolean) {
-        fullScreenGateVisible = visible
+        // Clamped at zero: an unbalanced release must never make the count negative, which would
+        // then swallow a later genuine gate. Better to show a redundant chip than to hide one.
+        gateDepth = if (visible) gateDepth + 1 else (gateDepth - 1).coerceAtLeast(0)
     }
 
     /**
