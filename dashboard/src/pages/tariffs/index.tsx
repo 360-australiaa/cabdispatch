@@ -45,7 +45,7 @@ type TariffStudioTab = "tariffs" | "toll-roads" | "toll-zones";
 const TABS: TabItem<TariffStudioTab>[] = [
   { value: "tariffs", label: "Rate cards", icon: Receipt },
   { value: "toll-roads", label: "NSW Toll Roads", icon: Route },
-  { value: "toll-zones", label: "Toll Zones", icon: MapPinned },
+  { value: "toll-zones", label: "Toll & Airport Zones", icon: MapPinned },
 ];
 
 export default function TariffsPage() {
