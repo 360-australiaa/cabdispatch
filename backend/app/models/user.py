@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, String
+from sqlalchemy import Date, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -25,6 +25,19 @@ ROLE_DRIVER = "driver"
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
+    # X2 (2026-09-08, tenant self-serve onboarding): driver_code used to carry a
+    # PLATFORM-WIDE unique index (see the column's own comment below, now
+    # corrected) — two different operators could not both hand out driver code
+    # "101", which is a tenancy bug, not a feature: nothing about the login flow
+    # actually needs global uniqueness once POST /v1/auth/driver-login resolves
+    # the driver within a tenant (see app/api/v1/auth.py::driver_login, which
+    # already filters `User.tenant_id == tenant.id` alongside `driver_code` —
+    # that landed ahead of this fix and is what makes narrowing the DB
+    # constraint safe: the lookup was already effectively tenant+code). This
+    # composite constraint is what the query actually needed all along.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "driver_code", name="uq_users_tenant_driver_code"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     # Nullable: tenant "0"/"TCT" owner-role platform staff are not tied to a tenant.
@@ -42,12 +55,19 @@ class User(Base, TimestampMixin):
     # Driver PIN-login identifier for POST /v1/auth/driver-login (see
     # app/api/v1/auth.py). Short/memorable so it can be keyed in by hand on a
     # meter/kiosk; only issued to role == "driver" (see
-    # app/services/user.py::generate_unique_driver_code). Globally unique —
-    # like User.email, not per-tenant — because driver-login has no tenant
-    # context to scope a lookup by (see
-    # app/services/user.py::assert_driver_code_available for the same
-    # reasoning already established for email by assert_email_available).
-    driver_code: Mapped[str | None] = mapped_column(String(6), nullable=True, unique=True, index=True)
+    # app/services/user.py::generate_unique_driver_code).
+    #
+    # UNIQUE PER TENANT, not platform-wide — corrected by X2 (2026-09-08,
+    # migration c9d2f4a81b7e). This column used to carry a bare `unique=True`,
+    # meaning two different taxi networks could not both have a driver "101":
+    # a tenancy bug, since two operators are not one login-credential space.
+    # The real uniqueness guarantee is now the composite
+    # `uq_users_tenant_driver_code` constraint on `__table_args__` above; this
+    # column's own `unique=True` is deliberately gone, and `index=True` stays
+    # only as a plain (non-unique) lookup index — see
+    # app/services/user.py::assert_driver_code_available /
+    # generate_unique_driver_code, both now tenant-scoped to match.
+    driver_code: Mapped[str | None] = mapped_column(String(6), nullable=True, index=True)
     # MFA (blueprint 12.2): opt-in TOTP, not forced — mfa_enabled defaults to
     # False so every existing seeded/test account keeps logging in with just
     # email+password. mfa_secret is populated by POST /v1/auth/mfa/setup and

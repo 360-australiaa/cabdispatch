@@ -274,26 +274,24 @@ async def test_driver_code_limit_key_includes_the_tenant(app, client, session):
     )
 
 
-async def test_driver_code_is_globally_unique_today(client, session):
-    """Documents the constraint the tests above have to work around, so the next
-    reader does not mistake it for an oversight.
-
-    `users.driver_code` has a UNIQUE index with no tenant component, so two
-    tenants cannot currently hold the same driver code at all. That is a
-    *separate* defect from the one this workstream fixes: it means one tenant's
-    choice of driver numbering silently constrains every other tenant's. It does
-    NOT make the old global lookup safe — a globally-unique code still meant a
-    single 6-digit-PIN credential space shared by the whole platform, which is
-    exactly what the per-tenant scoping and the per-code limit address.
-    """
-    from sqlalchemy.exc import IntegrityError
+async def test_driver_code_is_now_unique_per_tenant_not_globally(client, session):
+    """Was `test_driver_code_is_globally_unique_today` — documented, at the time
+    this rate-limiting workstream landed, that `users.driver_code` carried a
+    UNIQUE index with NO tenant component: two tenants could not hold the same
+    driver code at all, even though nothing about `driver-login`'s per-tenant
+    lookup needed that. Fixed by X2 (2026-09-08, migration c9d2f4a81b7e —
+    `uq_users_tenant_driver_code` replaces the bare `unique=True` — see
+    app/models/user.py::User and tests/test_users.py's own driver_code tests
+    for the create-via-API coverage of the same fix). This test now documents
+    the corrected behaviour instead of the bug: the same code IS now allowed
+    across two different tenants, and setting it directly at the ORM layer no
+    longer raises."""
+    from sqlalchemy import select
 
     from app.models.user import User
 
     a = await _make_driver(client, session, tenant_name="Unique Code Tenant A")
     b = await _make_driver(client, session, tenant_name="Unique Code Tenant B")
-
-    from sqlalchemy import select
 
     user_b = (
         await session.execute(
@@ -303,9 +301,10 @@ async def test_driver_code_is_globally_unique_today(client, session):
         )
     ).scalar_one()
     user_b.driver_code = a["driver_code"]
-    with pytest.raises(IntegrityError):
-        await session.commit()
-    await session.rollback()
+    await session.commit()  # no longer raises IntegrityError — see docstring above
+
+    await session.refresh(user_b)
+    assert user_b.driver_code == a["driver_code"]
 
 
 # --- tenant scoping -----------------------------------------------------------

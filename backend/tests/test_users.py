@@ -136,6 +136,37 @@ async def test_create_and_get_driver(client, session):
     assert resp.json()["id"] == user_id
 
 
+# --- driver_code uniqueness: per-tenant, not platform-wide (X2, 2026-09-08) --
+# Before this, `users.driver_code` carried a bare platform-wide unique index —
+# two different operators could not both have a driver "101". Fixed by
+# migration c9d2f4a81b7e (`uq_users_tenant_driver_code`).
+
+
+async def test_two_different_tenants_can_both_use_driver_code_101(client, session):
+    # UserCreate.driver_code requires min_length=4, so "101" itself is not a
+    # legal payload — "0101" is the 4-digit equivalent the test's name refers to.
+    admin_a = await auth_headers(client, session, role="admin", tenant_name="Driver Code Tenant A")
+    admin_b = await auth_headers(client, session, role="admin", tenant_name="Driver Code Tenant B")
+
+    resp_a = await _create_driver(client, admin_a, email=_unique_email(), driver_code="0101")
+    assert resp_a.status_code == 201
+    assert resp_a.json()["driver_code"] == "0101"
+
+    resp_b = await _create_driver(client, admin_b, email=_unique_email(), driver_code="0101")
+    assert resp_b.status_code == 201
+    assert resp_b.json()["driver_code"] == "0101"
+
+
+async def test_driver_code_still_unique_within_one_tenant(client, session):
+    headers = await auth_headers(client, session, role="admin", tenant_name="Driver Code Same Tenant")
+
+    first = await _create_driver(client, headers, email=_unique_email(), driver_code="0202")
+    assert first.status_code == 201
+
+    second = await _create_driver(client, headers, email=_unique_email(), driver_code="0202")
+    assert second.status_code == 409
+
+
 async def test_create_user_requires_admin_role(client, session):
     headers = await auth_headers(client, session, role="driver")
 

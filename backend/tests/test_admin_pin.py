@@ -174,6 +174,55 @@ async def test_get_my_tenant_returns_identity_and_null_theme_by_default(client, 
     assert body["id"] == tenant_id
     assert body["name"] == "White Label Tenant"
     assert body["theme_json"] is None
+    assert body["authorization_number"] is None
+
+
+# --- Tenant.slug exposure (X2, 2026-09-08) -----------------------------------
+# Before this, `slug` existed on the model and was already REQUIRED by
+# POST /v1/auth/driver-login, but NO endpoint ever returned it — an owner had
+# no way to discover the value their own tablets must be configured with.
+
+
+async def test_get_my_tenant_exposes_slug(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Slug Exposure Tenant")
+
+    resp = await client.get("/v1/tenants/me", headers=headers)
+    assert resp.status_code == 200
+    slug = resp.json()["slug"]
+    assert slug  # never blank — Tenant's before_insert listener guarantees one
+    assert slug.startswith("slug-exposure-tenant")
+
+
+# --- Tenant.authorization_number (X2/A7 seam, 2026-09-08) --------------------
+# The TENANT half of the authorisationNumber/jurisdiction-label split
+# documented in android's domain/TenantBranding.kt — nullable, owner-settable,
+# wholesale-overwrite same as theme_json (see TenantThemeUpdate's own doc).
+
+
+async def test_owner_can_set_authorization_number(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Authorisation Tenant")
+
+    resp = await client.patch(
+        "/v1/tenants/me",
+        json={"authorization_number": "TSP-448041"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["authorization_number"] == "TSP-448041"
+
+    # Persists across a fresh GET, not just echoed back.
+    resp = await client.get("/v1/tenants/me", headers=headers)
+    assert resp.json()["authorization_number"] == "TSP-448041"
+
+
+async def test_authorization_number_resets_to_null_when_omitted(client, session):
+    headers = await auth_headers(client, session, role="owner", tenant_name="Authorisation Reset Tenant")
+
+    await client.patch("/v1/tenants/me", json={"authorization_number": "TSP-1"}, headers=headers)
+
+    resp = await client.patch("/v1/tenants/me", json={"theme_json": None}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["authorization_number"] is None
 
 
 async def test_owner_can_update_theme(client, session):

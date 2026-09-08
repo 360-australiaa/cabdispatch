@@ -43,6 +43,12 @@ class PlatformTenantRead(BaseModel):
 
     id: str
     name: str
+    # The public handle POST /v1/auth/driver-login requires (X2, 2026-09-08 —
+    # see app/models/tenant.py::Tenant.slug). Surfaced here too, not just on
+    # GET /v1/tenants/me, so the platform console's own tenant list/create
+    # response can show an operator's tablets what to configure without a
+    # second round-trip as that tenant.
+    slug: str | None
     plan: str
     status: TenantStatus
     created_at: datetime
@@ -57,6 +63,47 @@ class PlatformTenantCreate(BaseModel):
     tsp_number: str | None = Field(default=None, max_length=50)
     bsp_number: str | None = Field(default=None, max_length=50)
     plan: str = Field(default="standard", max_length=50)
+    # The onboarding-flow entry point creates the tenant's OWNER user in the
+    # same transaction (X2, 2026-09-08 — see app.services.platform.create_tenant),
+    # so it needs an email/display name for that user up front. No password
+    # here: the owner sets their own via the one-time invite this endpoint
+    # returns — see PlatformTenantOnboardRead.
+    owner_email: str = Field(min_length=3, max_length=255)
+    owner_name: str = Field(min_length=1, max_length=255)
+
+
+class PlatformTenantOnboardRead(PlatformTenantRead):
+    """Response for `POST /v1/platform/tenants` — everything `PlatformTenantRead`
+    has, plus the ONE-TIME materials a platform operator needs to hand the new
+    owner: their email and a raw invite token. Both are returned exactly once,
+    in this response only — the token is never retrievable again (only its
+    SHA-256 digest is stored — see app.models.tenant_invite.TenantInvite) and
+    is never logged anywhere in this codebase."""
+
+    owner_email: str
+    invite_token: str
+    invite_expires_at: datetime
+
+
+# --- POST /v1/platform/invites/accept -----------------------------------------
+# Deliberately NOT gated by require_platform_owner (see app/api/v1/platform.py):
+# the owner exchanging their invite holds no bearer token yet.
+
+
+class OwnerInviteAcceptRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class OwnerInviteAcceptResponse(BaseModel):
+    """Confirms the owner's own password is now set — deliberately does NOT
+    also issue bearer tokens here: that would make this endpoint a second,
+    parallel login path with its own credential-handling surface. The owner
+    logs in the normal way, immediately afterwards, via POST /v1/auth/login."""
+
+    tenant_id: str
+    user_id: str
+    email: str
 
 
 # --- GET /v1/platform/tenants/{id}/summary ------------------------------------
@@ -120,10 +167,13 @@ class TenantSubscriptionRead(BaseModel):
 
 
 __all__ = [
+    "OwnerInviteAcceptRequest",
+    "OwnerInviteAcceptResponse",
     "Page",
     "PlatformBillingSummary",
     "PlatformHealth",
     "PlatformTenantCreate",
+    "PlatformTenantOnboardRead",
     "PlatformTenantRead",
     "TenantStatus",
     "TenantStatusUpdate",

@@ -43,11 +43,20 @@ async def set_admin_pin(session: AsyncSession, tenant: Tenant, *, pin: str) -> T
     return tenant
 
 
-async def update_theme(session: AsyncSession, tenant: Tenant, *, theme_json: dict | None) -> Tenant:
-    """White-label branding (blueprint 7.2.10/9.1/13.1). Wholesale overwrite, same "set/update are
-    the same operation" precedent as set_admin_pin above — `theme_json=None` is a deliberate reset
-    to the platform default, not "no change" (see TenantThemeUpdate's own doc)."""
+async def update_theme(
+    session: AsyncSession,
+    tenant: Tenant,
+    *,
+    theme_json: dict | None,
+    authorization_number: str | None = None,
+) -> Tenant:
+    """White-label branding (blueprint 7.2.10/9.1/13.1) plus, since X2 (2026-09-08), the tenant's
+    jurisdiction-issued authorisation number. Wholesale overwrite for BOTH fields, same "set/update
+    are the same operation" precedent as set_admin_pin above — `theme_json=None` and
+    `authorization_number=None` are each a deliberate reset, not "no change" (see
+    TenantThemeUpdate's own doc)."""
     tenant.theme_json = theme_json
+    tenant.authorization_number = authorization_number
     await session.commit()
     await session.refresh(tenant)
     return tenant
