@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.SatelliteAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -52,8 +53,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import androidx.navigation.NavHostController
+import au.com.threesixty.cabdispatch.domain.RuntimePermissions
+import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -97,6 +99,15 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 @Composable
 fun PermissionsChecklistScreen(navController: NavHostController, next: String? = null) {
     val context = LocalContext.current
+
+    // No header on this screen, so the app-level banners fall back to their last measured
+    // clearance -- on a fresh install, nothing has ever measured one -- and land across this
+    // screen's own headline. They are redundant here too: TABLET NOT REGISTERED says less than the
+    // screen already says, with no fix attached. Stand them down while this screen is up.
+    DisposableEffect(Unit) {
+        CaptainChromeMetrics.setFullScreenGateVisible(true)
+        onDispose { CaptainChromeMetrics.setFullScreenGateVisible(false) }
+    }
 
     // Bumped after every request/settings result so the grid re-reads live grant state. The
     // permission dialogs and the battery-optimisation/background-location Settings screens all

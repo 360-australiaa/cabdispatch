@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
+import au.com.threesixty.cabdispatch.ui.overlays.CaptainChromeMetrics
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
@@ -60,6 +62,15 @@ private const val DISCLAIMER_PARA_2 =
 fun TermsDisclaimerScreen(onAccept: () -> Unit) {
     val context = LocalContext.current
     val session by SessionHolder.session.collectAsState()
+
+    // No header on this screen, so the app-level banners fall back to their last measured
+    // clearance -- on a fresh install, nothing has ever measured one -- and land across this
+    // screen's own headline. They are redundant here too: TABLET NOT REGISTERED says less than the
+    // screen already says, with no fix attached. Stand them down while this screen is up.
+    DisposableEffect(Unit) {
+        CaptainChromeMetrics.setFullScreenGateVisible(true)
+        onDispose { CaptainChromeMetrics.setFullScreenGateVisible(false) }
+    }
 
     Row(
         modifier = Modifier

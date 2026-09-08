@@ -41,6 +41,11 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 11 / 0.6.2 (2026-09-08): the app-level banners no longer land across the headline of the
+        // three header-less onboarding screens (readiness gate, permissions, disclaimer). Seen on a
+        // clean install: "TABLET NOT REGISTERED" printed straight through the word "Permissions".
+        // Only the gate suppressed them before.
+        //
         // 10 / 0.6.1 (2026-09-08): the tablet recovers its vehicle binding instead of publishing
         // to a uuid that no longer exists. A fleet wipe gives every car a new uuid under the same
         // rego, and a session bound to the old one 404'd every 5s for the rest of the shift --
@@ -80,8 +85,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 10
-        versionName = "0.6.1"
+        versionCode = 11
+        versionName = "0.6.2"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

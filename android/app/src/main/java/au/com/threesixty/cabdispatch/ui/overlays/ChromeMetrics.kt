@@ -54,22 +54,29 @@ object CaptainChromeMetrics {
      * True while an exclusive full-screen surface owns the display and the app-level banners must
      * stand down.
      *
-     * Set only by the device-readiness gate
-     * ([au.com.threesixty.cabdispatch.ui.screens.readiness.DeviceReadinessScreen]). That screen has
-     * no header, so the banners' measured clearance -- the last real header they saw -- lands them
-     * on top of its own headline and its first checklist row. Worse, they are redundant there:
-     * FLEET LOCKED, TABLET NOT REGISTERED and UPDATE PENDING all announce conditions the gate is
-     * already dedicated to, in fewer words and with no fix attached, over the version of the same
-     * message that does have one.
+     * Set by the three header-less onboarding surfaces a tablet passes through before anything
+     * with a header exists: the device-readiness gate
+     * ([au.com.threesixty.cabdispatch.ui.screens.readiness.DeviceReadinessScreen]), the permissions
+     * checklist ([au.com.threesixty.cabdispatch.ui.screens.permissions.PermissionsChecklistScreen])
+     * and the disclaimer ([au.com.threesixty.cabdispatch.ui.screens.terms.TermsDisclaimerScreen]).
+     *
+     * None of them has a header, so the banners' measured clearance -- the last real header they
+     * saw, or [FALLBACK] on a fresh install where no header has EVER composed -- lands them on top
+     * of the screen's own headline. Seen on the tablet from a clean install (2026-09-08): TABLET
+     * NOT REGISTERED sitting across the word "Permissions", and again across "Disclaimer".
+     *
+     * They are also redundant on all three: FLEET LOCKED, TABLET NOT REGISTERED and UPDATE PENDING
+     * announce conditions these screens exist to fix, in fewer words and with no fix attached, over
+     * the version of the same message that does have one.
      *
      * Deliberately narrow. This is not a general "hide the chrome" switch -- the banners exist
-     * because a driver must see these states everywhere else, and the one place they may be
-     * suppressed is a screen whose entire job is to say the same thing better.
+     * because a driver must see these states everywhere else, and the only screens that may
+     * suppress them are the ones whose entire job is to say the same thing better.
      */
     var fullScreenGateVisible: Boolean by mutableStateOf(false)
         private set
 
-    /** Called by the gate as it enters and leaves composition. */
+    /** Called by each of those screens as it enters and leaves composition. */
     internal fun setFullScreenGateVisible(visible: Boolean) {
         fullScreenGateVisible = visible
     }
