@@ -172,6 +172,7 @@ const DEVICE_LABEL_LAYER_ID = "unpaired-devices-label";
 const DEVICE_POINT_COLOR = "#94a3b8";
 
 const TRAIL_SOURCE_ID = "vehicle-trail";
+const TRAIL_CASING_LAYER_ID = "vehicle-trail-casing";
 const TRAIL_LINE_LAYER_ID = "vehicle-trail-line";
 const TRAIL_STOP_LAYER_ID = "vehicle-trail-stops";
 const TRAIL_CURSOR_LAYER_ID = "vehicle-trail-cursor";
@@ -729,6 +730,20 @@ const POSITION_TWEEN_MS = 3500;
 // convention as TollZoneMapPicker.tsx's own CIRCLE_SOURCE_ID/CIRCLE_*_LAYER_ID
 // constants for the equivalent single-zone preview.
 const GEOFENCE_SOURCE_ID = "live-map-geofences";
+/**
+ * The gold both geofence layers are drawn in — the literal value of the
+ * `--brand-accent` custom property in `index.css`, not a reference to it.
+ *
+ * They used to pass `"var(--brand-accent)"` straight to Mapbox, which cannot read
+ * CSS custom properties: `addLayer` rejected both with `color expected,
+ * "var(--brand-accent)" found` and returned without adding them, so the geofence
+ * overlay this component documents at length has in fact never drawn a single
+ * boundary on the live map. It failed as a console error rather than a thrown
+ * exception, which is why nothing downstream noticed. DOM markers below keep using
+ * the `var()` form — that is real CSS, and works.
+ */
+const GEOFENCE_COLOR = "#f4c300";
+
 const GEOFENCE_FILL_LAYER_ID = "live-map-geofences-fill";
 const GEOFENCE_LINE_LAYER_ID = "live-map-geofences-line";
 
@@ -860,13 +875,13 @@ function MapboxFleetMap({
         id: GEOFENCE_FILL_LAYER_ID,
         type: "fill",
         source: GEOFENCE_SOURCE_ID,
-        paint: { "fill-color": "var(--brand-accent)", "fill-opacity": 0.12 },
+        paint: { "fill-color": GEOFENCE_COLOR, "fill-opacity": 0.12 },
       });
       map.addLayer({
         id: GEOFENCE_LINE_LAYER_ID,
         type: "line",
         source: GEOFENCE_SOURCE_ID,
-        paint: { "line-color": "var(--brand-accent)", "line-width": 1.5, "line-dasharray": [2, 2] },
+        paint: { "line-color": GEOFENCE_COLOR, "line-width": 1.5, "line-dasharray": [2, 2] },
       });
 
       // Unpaired tablets, from their own last locate response. Added before the
@@ -930,6 +945,23 @@ function MapboxFleetMap({
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+      // A dark casing under the coloured line. Checked on the deployed map: a plain
+      // 3px line at 85% opacity is genuinely hard to pick out against this dark
+      // style over a grey street grid -- it was there and rendering, and still took
+      // a paint-property probe to see. The casing is what every routing map does,
+      // and it costs one more line layer.
+      map.addLayer({
+        id: TRAIL_CASING_LAYER_ID,
+        type: "line",
+        source: TRAIL_SOURCE_ID,
+        filter: ["==", ["geometry-type"], "LineString"],
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#0b0b10",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 5, 16, 9],
+          "line-opacity": 0.9,
+        },
+      });
       map.addLayer({
         id: TRAIL_LINE_LAYER_ID,
         type: "line",
@@ -946,8 +978,10 @@ function MapboxFleetMap({
             30, TRAIL_MID_COLOR,
             70, TRAIL_FAST_COLOR,
           ],
-          "line-width": 3,
-          "line-opacity": 0.85,
+          // Widens with zoom so the trail stays readable both when it is a whole
+          // shift across a city and when it is one street.
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 3, 16, 6],
+          "line-opacity": 1,
         },
       });
       map.addLayer({
