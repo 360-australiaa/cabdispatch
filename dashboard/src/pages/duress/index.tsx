@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, Siren } from "lucide-react";
+import { Bell, BellOff, Cpu, Siren } from "lucide-react";
 import {
   Badge,
   Button,
@@ -19,9 +19,12 @@ import type { TableColumn } from "@/components/ui/Table";
 import { listDuressEvents } from "./api";
 import { DevicesPanel } from "./DevicesPanel";
 import { EventDetailPanel } from "./EventDetailPanel";
+import { IdentityLabel } from "./IdentityLabel";
 import { TriggerEventModal } from "./TriggerEventModal";
 import { formatDateTime, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
+import { useDuressAlerts } from "./useDuressAlerts";
+import { useDuressLookups } from "./useDuressLookups";
 import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 type ViewTab = "events" | "devices";
@@ -68,8 +71,22 @@ export default function DuressPage() {
     placeholderData: (prev) => prev,
     // This is a safety desk: a new incident (or a status change from another
     // dispatcher's action) must show up without anyone touching a filter.
-    ...pollingQueryOptions(POLL.INCIDENT_LIST),
+    // There is no fleet-wide WS that pushes duress-event list changes today
+    // (only the per-event live GPS socket, WS /v1/duress/{id}/live, opened
+    // once an event is already selected) -- see
+    // docs/followups/2026-09-08-redis-pubsub-broadcasters.md and this
+    // module's own upstream doc comment in lib/pollIntervals.ts ("moving
+    // them onto the socket is a separate change with its own risk, not a
+    // rename"). Adding that endpoint is backend work, out of scope for this
+    // (dashboard-only) workstream, so this polls at the fastest named band
+    // instead of the plain list band it used before, and the alert hook
+    // below is what actually gets a new event in front of an operator
+    // without them staring at the table.
+    ...pollingQueryOptions(POLL.REALTIME),
   });
+
+  const lookups = useDuressLookups();
+  const { armed, notifPermission, arm } = useDuressAlerts(eventsQuery.data?.items);
 
   const total = eventsQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -80,8 +97,30 @@ export default function DuressPage() {
       header: "Event",
       render: (row) => <span className="font-mono text-xs">{row.id.slice(0, 8)}</span>,
     },
-    { key: "vehicle_id", header: "Vehicle", render: (row) => row.vehicle_id },
-    { key: "driver_id", header: "Driver", render: (row) => row.driver_id },
+    {
+      key: "vehicle_id",
+      header: "Vehicle",
+      render: (row) => (
+        <IdentityLabel
+          id={row.vehicle_id}
+          label={lookups.resolveVehicle(row.vehicle_id)?.rego ?? null}
+          isLoading={lookups.isLoading}
+          kind="vehicle"
+        />
+      ),
+    },
+    {
+      key: "driver_id",
+      header: "Driver",
+      render: (row) => (
+        <IdentityLabel
+          id={row.driver_id}
+          label={lookups.resolveDriver(row.driver_id)?.name ?? null}
+          isLoading={lookups.isLoading}
+          kind="driver"
+        />
+      ),
+    },
     {
       key: "trigger",
       header: "Trigger",
@@ -110,9 +149,28 @@ export default function DuressPage() {
         description="Open and escalating panic-button events across the fleet, with a live GPS trace while an event is under review."
         actions={
           tab === "events" ? (
-            <Button variant="destructive" onClick={() => setTriggerModalOpen(true)}>
-              <Siren className="h-4 w-4" /> Trigger event
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={armed ? "outline" : "secondary"}
+                onClick={arm}
+                disabled={armed && notifPermission !== "default"}
+                title={
+                  armed
+                    ? notifPermission === "granted"
+                      ? "Alerts on: sound + desktop notification for new open events"
+                      : notifPermission === "denied"
+                        ? "Desktop notifications were denied in the browser — sound still plays for new open events"
+                        : "Sound is on for new open events"
+                    : "Turn on a sound (and, if you allow it, a desktop notification) for new open duress events"
+                }
+              >
+                {armed ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+                {armed ? "Alerts on" : "Enable alerts"}
+              </Button>
+              <Button variant="destructive" onClick={() => setTriggerModalOpen(true)}>
+                <Siren className="h-4 w-4" /> Trigger event
+              </Button>
+            </div>
           ) : undefined
         }
       />

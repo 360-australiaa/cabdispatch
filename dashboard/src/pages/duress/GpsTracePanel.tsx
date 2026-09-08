@@ -38,9 +38,18 @@ const DEVICE_COLOR = "var(--brand-accent)";
 export function GpsTracePanel({
   status,
   points,
+  stale = false,
+  lastFixAgeMs = null,
 }: {
   status: LiveGpsStatus;
   points: DuressGpsPoint[];
+  /** True when the socket reports `open` but no fix has landed within the
+   * staleness window (`useDuressLiveGps`'s `STALE_AFTER_MS`) — the per-
+   * process `GPSBroadcaster` frozen-position failure mode documented in
+   * `docs/followups/2026-09-08-redis-pubsub-broadcasters.md`. A stale feed
+   * must never read as "Live" — this is a life-safety surface. */
+  stale?: boolean;
+  lastFixAgeMs?: number | null;
 }) {
   const latest = points[points.length - 1] ?? null;
   const hasDeviceSource = points.some((p) => p.source === "device");
@@ -67,17 +76,35 @@ export function GpsTracePanel({
         <span
           className={cn(
             "inline-flex items-center gap-1.5 text-xs font-medium",
-            status === "open" && "text-success",
+            status === "open" && !stale && "text-success",
+            status === "open" && stale && "text-destructive",
             status === "connecting" && "text-muted-foreground",
             (status === "closed" || status === "error") && "text-destructive",
             status === "idle" && "text-muted-foreground",
           )}
         >
-          <Radio className={cn("h-3 w-3", status === "open" && "animate-pulse")} />
-          {STATUS_LABEL[status]}
-          {status === "open" && ` · ${points.length} fix${points.length === 1 ? "" : "es"}`}
+          {/* The pulsing dot is the "this is live" signal — the calm-motion
+              doctrine's own duress-exception (a duress-active indicator is
+              exempt from reduce-motion, same as the Android side) applies
+              specifically to a genuinely-live feed. A stale one must NOT
+              pulse: that would tell the operator the frozen position is
+              current, which is the exact honesty failure this panel exists
+              to prevent. */}
+          <Radio className={cn("h-3 w-3", status === "open" && !stale && "animate-pulse")} />
+          {stale ? "Stale — position may not be current" : STATUS_LABEL[status]}
+          {status === "open" &&
+            !stale &&
+            ` · ${points.length} fix${points.length === 1 ? "" : "es"}`}
         </span>
       </div>
+
+      {stale && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          No GPS fix in {lastFixAgeMs != null ? Math.round(lastFixAgeMs / 1000) : "?"}s, though
+          the connection is still open. Do not treat the position below as this driver's current
+          location — check with the driver or another source before acting on it.
+        </p>
+      )}
 
       {hasBothSources && (
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -189,7 +216,10 @@ export function GpsTracePanel({
               </div>
               <div>
                 <dt className="text-muted-foreground">Last fix</dt>
-                <dd className="font-medium text-foreground">{formatTime(latest.ts)}</dd>
+                <dd className={cn("font-medium", stale ? "text-destructive" : "text-foreground")}>
+                  {formatTime(latest.ts)}
+                  {stale && lastFixAgeMs != null && ` (${Math.round(lastFixAgeMs / 1000)}s ago)`}
+                </dd>
               </div>
             </dl>
           )}

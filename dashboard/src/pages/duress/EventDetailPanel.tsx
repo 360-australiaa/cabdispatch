@@ -27,6 +27,8 @@ import { DuressAudioPlayer } from "./DuressAudioPlayer";
 import { EscalationTimeline } from "./EscalationTimeline";
 import { GpsTracePanel } from "./GpsTracePanel";
 import { EditEventModal } from "./EditEventModal";
+import { IdentityLabel } from "./IdentityLabel";
+import { useDuressLookups } from "./useDuressLookups";
 import {
   formatCallResultSummary,
   formatDateTime,
@@ -55,6 +57,7 @@ export function EventDetailPanel({
 }) {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const lookups = useDuressLookups();
   const [note, setNote] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -118,10 +121,13 @@ export function EventDetailPanel({
   // "action failed" message.
   const canManageEvent = canWatchLiveGps;
   const isSelected = !!event;
-  const { status: gpsStatus, points: gpsPoints, latestSnapshot } = useDuressLiveGps(
-    isSelected ? eventId : null,
-    isSelected && canWatchLiveGps,
-  );
+  const {
+    status: gpsStatus,
+    points: gpsPoints,
+    latestSnapshot,
+    stale: gpsStale,
+    lastFixAgeMs: gpsLastFixAgeMs,
+  } = useDuressLiveGps(isSelected ? eventId : null, isSelected && canWatchLiveGps);
 
   const anyActionPending =
     cancelMutation.isPending ||
@@ -183,8 +189,22 @@ export function EventDetailPanel({
               <Field label="Trigger">
                 <span className="capitalize">{event.trigger}</span>
               </Field>
-              <Field label="Vehicle">{event.vehicle_id}</Field>
-              <Field label="Driver">{event.driver_id}</Field>
+              <Field label="Vehicle">
+                <IdentityLabel
+                  id={event.vehicle_id}
+                  label={lookups.resolveVehicle(event.vehicle_id)?.rego ?? null}
+                  isLoading={lookups.isLoading}
+                  kind="vehicle"
+                />
+              </Field>
+              <Field label="Driver">
+                <IdentityLabel
+                  id={event.driver_id}
+                  label={lookups.resolveDriver(event.driver_id)?.name ?? null}
+                  isLoading={lookups.isLoading}
+                  kind="driver"
+                />
+              </Field>
               <Field label="Opened">{formatDateTime(event.opened_at)}</Field>
               <Field label="Closed">{formatDateTime(event.closed_at)}</Field>
               <Field label="GPS stream ref">
@@ -216,7 +236,12 @@ export function EventDetailPanel({
             )}
 
             {canWatchLiveGps ? (
-              <GpsTracePanel status={gpsStatus} points={gpsPoints} />
+              <GpsTracePanel
+                status={gpsStatus}
+                points={gpsPoints}
+                stale={gpsStale}
+                lastFixAgeMs={gpsLastFixAgeMs}
+              />
             ) : (
               <p className="text-xs text-muted-foreground">
                 Live GPS relay is restricted to owner/admin/dispatcher roles.

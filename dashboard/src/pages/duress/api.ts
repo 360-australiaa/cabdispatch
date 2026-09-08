@@ -168,3 +168,24 @@ export async function listVehicleOptionsForDeviceLink(): Promise<DuressVehicleOp
   });
   return res.data.items;
 }
+
+// --- driver lookup, for the "trigger event" form and UUID -> name resolution ----
+
+export interface DuressDriverOption {
+  id: string;
+  name: string;
+}
+
+/** Same lightweight, first-page-only lookup pattern as
+ * `listVehicleOptionsForDeviceLink` above, but over `GET /v1/drivers`
+ * (`DriverLiveRead`) -- this desk needs a driver's *name*, not the live
+ * on-shift rollup fields that endpoint otherwise carries, so only `id`/`name`
+ * survive into the option type. An operator reading a UUID during a live
+ * panic event is exactly the failure this lookup exists to remove (dashboard
+ * audit `duress/index.tsx:66-67`, `TriggerEventModal.tsx:66,74`). */
+export async function listDriverOptionsForTrigger(): Promise<DuressDriverOption[]> {
+  const res = await apiClient.get<{ items: DuressDriverOption[] }>("/v1/drivers", {
+    params: { skip: 0, limit: 100 },
+  });
+  return res.data.items;
+}
