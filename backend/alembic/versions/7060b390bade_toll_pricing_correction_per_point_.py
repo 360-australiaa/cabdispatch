@@ -119,14 +119,30 @@ def upgrade() -> None:
 
     op.add_column('toll_gantries', sa.Column('toll_point_id', sa.String(length=64), nullable=True))
     op.create_index(op.f('ix_toll_gantries_toll_point_id'), 'toll_gantries', ['toll_point_id'], unique=False)
-    op.create_foreign_key(
-        op.f('fk_toll_gantries_toll_point_id_toll_points'), 'toll_gantries', 'toll_points', ['toll_point_id'], ['id']
-    )
+    # batch_alter_table, not a bare op.create_foreign_key: SQLite has no
+    # ALTER TABLE ... ADD CONSTRAINT, so the plain form raises
+    # NotImplementedError("No support for ALTER of constraints in SQLite
+    # dialect") and `alembic upgrade head` dies here on a fresh SQLite
+    # database -- which is every developer machine and every CI run.
+    #
+    # This went unnoticed because the test suite builds its schema with
+    # Base.metadata.create_all() and never executes a migration at all
+    # (tests/conftest.py), so a full 800-test green run says nothing about
+    # whether the migration chain applies. That is the same blind spot that
+    # produced the production-only NOT NULL crash documented at the top of
+    # app/services/fleet.py. Postgres tolerates the bare form, so this only
+    # ever broke the local/CI path, which is exactly the path that would
+    # have caught it.
+    with op.batch_alter_table('toll_gantries') as batch_op:
+        batch_op.create_foreign_key(
+            op.f('fk_toll_gantries_toll_point_id_toll_points'), 'toll_points', ['toll_point_id'], ['id']
+        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_constraint(op.f('fk_toll_gantries_toll_point_id_toll_points'), 'toll_gantries', type_='foreignkey')
+    with op.batch_alter_table('toll_gantries') as batch_op:
+        batch_op.drop_constraint(op.f('fk_toll_gantries_toll_point_id_toll_points'), type_='foreignkey')
     op.drop_index(op.f('ix_toll_gantries_toll_point_id'), table_name='toll_gantries')
     op.drop_column('toll_gantries', 'toll_point_id')
 
