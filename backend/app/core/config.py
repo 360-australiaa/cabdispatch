@@ -182,11 +182,23 @@ class Settings(BaseSettings):
         return self.ENV == "production"
 
 
-# The literal default from JWT_SECRET above. Kept as a separate constant
-# (rather than re-declaring the string at each check site) so the guard
-# below and its test can compare against the exact same value the field
-# default uses.
+# The literal default from JWT_SECRET above. Kept as a named constant because
+# callers and tests import it; the guard itself reads every default off the
+# model via `_field_default` so there is exactly one definition of each.
 DEFAULT_JWT_SECRET = "dev-only-insecure-secret-change-me"
+
+
+def _field_default(name: str) -> str:
+    """The committed source default for a Settings field.
+
+    Read off the model rather than re-declaring the literal: TARIFF_SIGNING_
+    PRIVATE_KEY and SECRET_ENCRYPTION_KEY are *functional* private keys that
+    happen to live in this file, and copying either one into a second place
+    would mean a rotation of the placeholder silently leaves a stale copy
+    behind that the guard then compares against -- i.e. the guard would stop
+    guarding. One definition, one comparison.
+    """
+    return str(Settings.model_fields[name].default)
 
 
 class InsecureProductionConfigError(RuntimeError):
@@ -194,24 +206,78 @@ class InsecureProductionConfigError(RuntimeError):
     at its insecure development default -- see `assert_production_secrets_safe`."""
 
 
-def assert_production_secrets_safe(settings_obj: "Settings") -> None:
-    """Startup guard: refuses to let the app boot in production with the
-    default, publicly-known JWT_SECRET still active.
+# Every secret whose committed default is publicly readable in this file, and
+# what a production deploy actually loses by keeping it. The guard iterates
+# this so adding a fourth secret is a one-line change here, not a new branch.
+#
+#   (field name, human "generate a real one" hint, what the default costs you)
+#
+# JWT_SECRET was the only entry until a backend audit pointed out the obvious:
+# the other two defaults are real, working keys, published in this repo, and
+# nothing stopped production booting on them. The docstring on the old guard
+# even conceded it was "deliberately narrow". Narrow is how you get a fleet
+# signing its tariffs with a key an attacker can copy-paste.
+_PRODUCTION_SECRET_CHECKS: tuple[tuple[str, str, str], ...] = (
+    (
+        "JWT_SECRET",
+        "`openssl rand -hex 32`",
+        ("every access and refresh token this server issues could be forged by "
+        "anyone who can read this repository -- full authentication bypass"),
+    ),
+    (
+        "TARIFF_SIGNING_PRIVATE_KEY",
+        ('python -c "'
+        "import base64;"
+        "from cryptography.hazmat.primitives.asymmetric import ed25519;"
+        "from cryptography.hazmat.primitives import serialization;"
+        "k=ed25519.Ed25519PrivateKey.generate();"
+        "print(base64.b64encode(k.private_bytes("
+        "serialization.Encoding.DER,serialization.PrivateFormat.PKCS8,"
+         'serialization.NoEncryption())).decode())"'),
+        ("every tariff would be signed with a publicly-known Ed25519 key, so "
+        "the tablet's TariffSignatureVerifier would happily accept a forged "
+        "fare table -- the entire anti-tamper chain becomes decorative"),
+    ),
+    (
+        "SECRET_ENCRYPTION_KEY",
+        ('python -c "from cryptography.fernet import Fernet; '
+         'print(Fernet.generate_key().decode())"'),
+        ("every duress-device shared secret at rest would be encrypted with a "
+        "publicly-known Fernet key, i.e. stored in effectively plaintext -- "
+        "anyone with a copy of the database could impersonate a panic device"),
+    ),
+)
 
-    Deliberately narrow (JWT_SECRET only) -- this closes the specific gap an
-    audit found (`is_production` was defined but never referenced anywhere),
-    not a general secret-scanning pass. Call this as early as possible
-    (import time of `app.main`, before the FastAPI app is constructed) so a
-    misconfigured production deployment fails loudly before serving any
-    request, rather than silently running with a secret anyone can read out
-    of this source file.
+
+def assert_production_secrets_safe(settings_obj: Settings) -> None:
+    """Startup guard: refuses to let the app boot in production while any
+    secret is still at its committed, publicly-known development default.
+
+    Covers all three of the secrets this file ships a working default for
+    (`_PRODUCTION_SECRET_CHECKS`). This is not a general secret-scanning pass
+    -- it is specifically "did the operator forget to override a key that is
+    printed in our own source". Call it as early as possible (import time of
+    `app.main`, before the FastAPI app is constructed) so a misconfigured
+    production deployment fails loudly before serving any request, rather
+    than silently running with a secret anyone can read out of this file.
+
+    Raises on the FIRST offending secret rather than collecting all three:
+    the operator has to go fix .env.production and redeploy either way, and
+    a single unambiguous message is easier to act on than a list.
     """
-    if settings_obj.is_production and settings_obj.JWT_SECRET == DEFAULT_JWT_SECRET:
+    if not settings_obj.is_production:
+        return
+
+    for field_name, generate_hint, consequence in _PRODUCTION_SECRET_CHECKS:
+        if getattr(settings_obj, field_name) != _field_default(field_name):
+            continue
         raise InsecureProductionConfigError(
-            "Refusing to start: ENV=production but JWT_SECRET is still the "
-            "insecure development default. Set the JWT_SECRET environment "
-            "variable to a real, random secret before starting the app in "
-            "production (e.g. `openssl rand -hex 32`)."
+            f"Refusing to start: ENV=production but {field_name} is still the "
+            f"insecure development default committed to this repository. "
+            f"Consequence if this booted: {consequence}. "
+            f"Set the {field_name} environment variable to a real, random "
+            f"value before starting the app in production "
+            f"(generate one with: {generate_hint})."
         )
 
 

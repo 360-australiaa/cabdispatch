@@ -10,17 +10,60 @@
 # See docs/DEPLOY_UBUNTU.md for the full server setup runbook (first-time
 # server prep, secret generation, firewall, day-2 update workflow).
 #
-# Four services: postgres (db), redis (cache/session -- optional, backend
-# runs fine without it reachable, see app.core.security's fallback), backend
-# (FastAPI API, migrates itself on every boot via entrypoint.sh), dashboard
-# (the built React SPA served by nginx). No reverse proxy / TLS in this file
-# by design (see docs/DEPLOY_UBUNTU.md's "adding HTTPS later" section for
-# when you're ready) -- backend and dashboard are published directly on host
-# ports 8001 and 80.
+# Five services: caddy (TLS-terminating reverse proxy -- the ONLY service
+# published to the public internet), postgres (db), redis (cache/session --
+# optional, backend runs fine without it reachable, see app.core.security's
+# fallback), backend (FastAPI API, migrates itself on every boot via
+# entrypoint.sh), dashboard (the built React SPA served by nginx).
+#
+# TLS IS NOT OPTIONAL. This stack used to publish the API on a bare host port
+# over plaintext HTTP, which is what a backend audit flagged as the single
+# largest operational risk: this API carries JWTs, device shared secrets, live
+# GPS traces and duress *audio recordings*. All of it was readable by anything
+# on the path. Caddy now terminates TLS with automatic certificates and both
+# app services are bound to loopback / the compose network only. See
+# docs/DEPLOY_UBUNTU.md for the Caddyfile and the DNS prerequisites.
+#
+# Every service sets a json-file log cap: unbounded container logs on a small
+# VPS eventually fill the disk, which takes Postgres down with it.
+# Reused by every service below (YAML anchor -- Compose expands it in place).
+# 3 x 10MB per container is enough history to debug yesterday's incident and
+# small enough that five containers can never cost more than ~150MB of disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
+  # Public entrypoint. Obtains and renews Let's Encrypt certificates by itself
+  # (ACME HTTP-01 over :80, which is also why :80 stays open -- it serves the
+  # challenge and otherwise 308-redirects everything to https://).
+  # The Caddyfile is deployment-specific (it names YOUR domains), so it is not
+  # committed; docs/DEPLOY_UBUNTU.md step 5 has the exact file to create.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Named volumes, NOT bind mounts: caddy_data holds the issued
+      # certificates and the ACME account key. Lose it and every redeploy
+      # re-requests certificates, which will hit Let's Encrypt rate limits
+      # (5 duplicate certs per week) and leave you with no TLS at all.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - dashboard
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: cabdispatch
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
@@ -36,6 +79,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -45,8 +89,31 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
-    ports:
-      - "8001:8001"
+    logging: *default-logging
+    # SINGLE WORKER, DELIBERATELY. backend/entrypoint.sh runs uvicorn with no
+    # --workers flag, i.e. exactly one worker process, and it MUST STAY THAT
+    # WAY. Several things in this app hold state in the worker process's own
+    # memory and break *silently* -- no error, just missing data -- the moment
+    # a second worker exists:
+    #   - app/services/live_ops.py's in-process vehicle-position broadcaster,
+    #     plus the equivalent JobOfferBroadcaster and message_broadcaster: a
+    #     WebSocket client connected to worker A never sees an event published
+    #     by worker B, so the live map simply stops updating for half your
+    #     users.
+    #   - app/core/security.py's JWT revocation store falls back to a
+    #     per-process dict when Redis is unreachable; with >1 worker a
+    #     "revoked" token still works on every other worker.
+    # If you need more throughput, scale horizontally behind Caddy with a
+    # shared Redis pub/sub backend for the broadcasters -- do not just raise
+    # the worker count.
+    #
+    # No `ports:` any more. The API is reached ONLY through Caddy over TLS
+    # (service name `backend` on the compose network). Publishing 8001 on the
+    # host is what let JWTs, device secrets and duress audio travel in
+    # cleartext; if you need it for local debugging, bind it to loopback
+    # explicitly -- `- "127.0.0.1:8001:8001"` -- never 0.0.0.0.
+    expose:
+      - "8001"
     env_file:
       - .env.production
     environment:
@@ -71,16 +138,24 @@ services:
       args:
         # Vite bakes these into the static bundle at BUILD time -- see
         # dashboard/Dockerfile's comment. Set VITE_API_URL in .env.production
-        # to http://<your-server-ip>:8001 (or your real API domain, once you
-        # have one) before building.
-        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL in .env.production, e.g. http://<server-ip>:8001}
+        # to https://<your API domain> before building -- an http:// value
+        # here means the HTTPS dashboard makes cleartext API calls, which the
+        # browser will block as mixed content anyway.
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL in .env.production, e.g. https://api.yourdomain.example}
         VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
     restart: unless-stopped
-    ports:
-      - "80:80"
+    logging: *default-logging
+    # Also unpublished -- Caddy serves it on https://<dashboard domain>.
+    expose:
+      - "80"
     depends_on:
       - backend
 
 volumes:
   cabdispatch_pgdata:
+  # Receipts, compliance documents and duress audio. Back this up alongside
+  # the database -- a pg_dump on its own restores rows that point at files
+  # that no longer exist. See DEPLOY_UBUNTU.md's "Backups and restore drill".
   cabdispatch_uploads:
+  caddy_data:
+  caddy_config:

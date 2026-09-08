@@ -54,7 +54,7 @@ private const val DISCLAIMER_PARA_2 =
  * Layout unchanged from the previous port: left column (H1 "Disclaimer" · subtitle · mono context
  * chip) + right terms card (panel surface, 600dp text column), Cancel outline bottom-left, 360×72
  * primary Accept bottom-right. Zero scroll — the body copy fits the card at 17sp/1.52 line height.
- * The context chip shows the real session ("Driver GL2HY · Vehicle S5517") when one exists; at
+ * The context chip shows the real session ("Driver A1B2C · Vehicle S5517") when one exists; at
  * boot time there is usually no session yet, so this renders the app version stamp instead —
  * never fabricated IDs.
  */

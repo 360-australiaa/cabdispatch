@@ -15,8 +15,10 @@ server (`72.61.107.107:8001`, tenant "Lilly Cabs"), not just read from code.
 3. **Right-side nav carousel** — moved the dashboard nav rail from left to a draggable right-side
    wheel per product request (cosmetic, not backend-relevant).
 4. **Quick Login (Demo Driver) fixed** — was using `driver@lillycabs.test`/a fake password that
-   401s against `driver-login` (it wants `driver_code`, not email). Swapped in `GL2HY`/`123456`,
-   confirmed live against your DB.
+   401s against `driver-login` (it wants `driver_code`, not email). Swapped in a real seeded
+   `driver_code`/PIN pair, confirmed live against your DB. **Superseded:** that pair was a working
+   production login, it reached a shipped APK, and it has been rotated. The quick-login constants
+   are gone; create a driver on Fleet ▸ Drivers instead.
 5. **Mapbox SDK + offline maps** — re-enabled real SDK, fixed missing `MapboxOptions.accessToken`
    wiring, added a Karachi offline region (field test location) alongside Sydney.
 6. **Real data-loss bug found + fixed**: an app kill/crash mid-fare left a `Trip` row stuck
@@ -36,7 +38,8 @@ server (`72.61.107.107:8001`, tenant "Lilly Cabs"), not just read from code.
 
 ## Current live state (as of last test)
 
-Logged in as driver `GL2HY` (real `driver_code`, not the offline demo path), bound to vehicle
+Logged in as a real seeded driver (a real `driver_code`, not the offline demo path -- the code
+itself is deliberately not recorded here; read it off Fleet ▸ Drivers), bound to vehicle
 `KHI-01` (real UUID `363975ba-8199-4058-98ba-d1fff0c6919a`), shift open, tariff signed
 (Ed25519, `Lilly Cabs urban rank/hail`), GPS live in Karachi, dashboard on OFF DUTY.
 

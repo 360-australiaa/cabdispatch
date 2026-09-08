@@ -71,8 +71,8 @@ import kotlinx.coroutines.launch
  * before).
  *
  * One deliberate deviation kept from the previous pass: the sign-in keypad is only numeric
- * ([CaptainKeypad]), but real driver codes are alphanumeric (`GL2HY`). When the DRIVER # field is
- * focused the keypad slot swaps to a compact A–Z+digit grid in the same visual language; focusing
+ * ([CaptainKeypad]), but real driver codes are alphanumeric (5 chars, e.g. `A1B2C`). When the
+ * DRIVER # field is focused the keypad slot swaps to a compact A–Z+digit grid in the same visual language; focusing
  * PIN restores [CaptainKeypad]. Nothing else changes.
  *
  * "Report a defect" (2026-08-29): previously a no-op button (its own comment said defect
