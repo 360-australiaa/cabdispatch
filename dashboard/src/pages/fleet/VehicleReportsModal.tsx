@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { Card, CardContent, Input, Modal } from "@/components/ui";
+import { Card, CardContent, Input, Modal, SkeletonText, Tabs, type TabItem } from "@/components/ui";
 import { defaultReportRange, formatAud, toDateInputValue } from "@/hooks/useReports";
 import { useVehicleLifetimeTotals, useVehiclePilotReport } from "./api";
 import { errorMessage, formatDateTime } from "./format";
 import type { Vehicle } from "./types";
 
 type ReportsTab = "lifetime" | "pilot";
+
+const TABS: TabItem<ReportsTab>[] = [
+  { value: "lifetime", label: "Lifetime totals" },
+  { value: "pilot", label: "Pilot report" },
+];
 
 function stat(value: string | null | undefined) {
   return value == null ? "—" : formatAud(value);
@@ -40,32 +45,14 @@ export function VehicleReportsModal({
       title={vehicle ? "Operations reports — " + vehicle.rego : "Operations reports"}
       className="max-w-2xl"
     >
-      <div className="mb-4 flex gap-1 border-b border-border">
-        <button
-          type="button"
-          onClick={() => setTab("lifetime")}
-          className={
-            "border-b-2 px-3 py-2 text-sm font-medium transition-colors " +
-            (tab === "lifetime"
-              ? "border-brand-primary text-brand-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground")
-          }
-        >
-          Lifetime totals
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("pilot")}
-          className={
-            "border-b-2 px-3 py-2 text-sm font-medium transition-colors " +
-            (tab === "pilot"
-              ? "border-brand-primary text-brand-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground")
-          }
-        >
-          Pilot report
-        </button>
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="underline"
+        label="Vehicle report sections"
+        className="mb-4"
+      />
 
       {tab === "lifetime" && (
         <div>
@@ -78,7 +65,7 @@ export function VehicleReportsModal({
               Failed to load lifetime totals: {errorMessage(totalsQuery.error)}
             </p>
           ) : totalsQuery.isLoading || !totalsQuery.data ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <SkeletonText lines={4} />
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -143,7 +130,7 @@ export function VehicleReportsModal({
               Failed to load the pilot report: {errorMessage(pilotQuery.error)}
             </p>
           ) : pilotQuery.isLoading || !pilotQuery.data ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <SkeletonText lines={4} />
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">

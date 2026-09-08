@@ -1,7 +1,7 @@
 import { useState } from "react";
 import axios from "axios";
 import { AlertTriangle, CheckCircle2, Flag, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Input, Modal, Select } from "@/components/ui";
+import { Badge, Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
   useCloseTripMutation,
   useFlagTripMutation,
@@ -352,15 +352,11 @@ export function TripDetailModal({
                     value={closePaymentMethod}
                     onChange={(e) => setClosePaymentMethod(e.target.value)}
                   />
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={includePsl}
-                      onChange={(e) => setIncludePsl(e.target.checked)}
-                      className="h-4 w-4 rounded border-input"
-                    />
-                    Include PSL
-                  </label>
+                  <Checkbox
+                    label="Include PSL"
+                    checked={includePsl}
+                    onChange={(e) => setIncludePsl(e.target.checked)}
+                  />
                 </div>
                 {closePaymentMethod === "voucher" && (
                   <Input

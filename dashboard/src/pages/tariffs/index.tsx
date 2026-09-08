@@ -7,11 +7,14 @@ import {
   CardContent,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
+  Tabs,
+  useToast,
+  type TabItem,
   type TableColumn,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
@@ -38,10 +41,10 @@ const BOOKED_FILTER_OPTIONS = [
 
 type TariffStudioTab = "tariffs" | "toll-roads" | "toll-zones";
 
-const TABS: { key: TariffStudioTab; label: string; icon: typeof Receipt }[] = [
-  { key: "tariffs", label: "Rate cards", icon: Receipt },
-  { key: "toll-roads", label: "NSW Toll Roads", icon: Route },
-  { key: "toll-zones", label: "Toll Zones", icon: MapPinned },
+const TABS: TabItem<TariffStudioTab>[] = [
+  { value: "tariffs", label: "Rate cards", icon: Receipt },
+  { value: "toll-roads", label: "NSW Toll Roads", icon: Route },
+  { value: "toll-zones", label: "Toll Zones", icon: MapPinned },
 ];
 
 export default function TariffsPage() {
@@ -53,6 +56,7 @@ export default function TariffsPage() {
   // Change-log (read-only) stays visible to every role.
   const { user } = useAuth();
   const canWrite = isPlatformOwner(user);
+  const toast = useToast();
 
   const [tab, setTab] = useState<TariffStudioTab>("tariffs");
   const [regionFilter, setRegionFilter] = useState<Region | "">("");
@@ -154,24 +158,14 @@ export default function TariffsPage() {
         }
       />
 
-      <div className="mb-6 flex gap-1 border-b border-border">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={cn(
-              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              tab === key
-                ? "border-brand-primary text-brand-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="underline"
+        label="Tariff Studio sections"
+        className="mb-6"
+      />
 
       {tab === "toll-roads" && <NswTollRoadsPanel />}
 
@@ -232,29 +226,16 @@ export default function TariffsPage() {
       />
 
       {pageCount > 1 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount} ({total} tariffs)
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+          summary={
+            <>
+              Page {page + 1} of {pageCount} ({total} tariffs)
+            </>
+          }
+        />
       )}
         </>
       )}
@@ -295,11 +276,14 @@ export default function TariffsPage() {
               onClick={async () => {
                 if (!deletingTariff) return;
                 setDeleteError(null);
+                const tariffName = deletingTariff.name;
                 try {
                   await deleteMutation.mutateAsync(deletingTariff.id);
                   setDeletingTariff(null);
+                  toast.success("Tariff deleted", { description: tariffName });
                 } catch (err) {
                   setDeleteError(extractErrorMessage(err));
+                  toast.error("Failed to delete tariff", { description: extractErrorMessage(err) });
                 }
               }}
             >

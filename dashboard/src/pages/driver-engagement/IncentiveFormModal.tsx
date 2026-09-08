@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { Button, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import {
   useCreateIncentiveMutation,
   useUpdateIncentiveMutation,
@@ -211,15 +211,11 @@ export function IncentiveFormModal({ open, onClose, mode, incentive }: Incentive
           </div>
         </div>
 
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-input"
-            checked={form.active}
-            onChange={(e) => update("active", e.target.checked)}
-          />
-          Active (uncheck to hide from drivers without deleting)
-        </label>
+        <Checkbox
+          label="Active (uncheck to hide from drivers without deleting)"
+          checked={form.active}
+          onChange={(e) => update("active", e.target.checked)}
+        />
 
         {error && (
           <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">

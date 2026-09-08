@@ -7,7 +7,7 @@ export const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-brand-lavender text-brand-primary",
+        default: "bg-brand-lavender text-brand-lavender-foreground",
         primary: "bg-brand-primary text-brand-primary-foreground",
         accent: "bg-brand-accent text-brand-accent-foreground",
         success: "bg-success text-success-foreground",

@@ -7,13 +7,16 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  ErrorBanner,
   Input,
   PageHeader,
+  Pagination,
   Select,
   Table,
+  Tabs,
+  type TabItem,
   type TableColumn,
 } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { usePaymentsList } from "./api";
 import type { PaymentRead, PaymentStatus, ReconciliationMethod } from "./types";
 
@@ -37,7 +40,7 @@ const STATUS_BADGE_VARIANT: Record<PaymentStatus, "success" | "accent" | "destru
   canceled: "outline",
 };
 
-const METHOD_TABS: { value: ReconciliationMethod; label: string; icon: typeof CreditCard }[] = [
+const METHOD_TABS: TabItem<ReconciliationMethod>[] = [
   { value: "cabcharge", label: "CabCharge", icon: CreditCard },
   { value: "ttss", label: "TTSS", icon: Ticket },
 ];
@@ -88,22 +91,14 @@ export default function PaymentReconciliationPage() {
         description="Read-only audit view of CabCharge and TTSS docket payments for reconciliation against settlement/claim reports."
       />
 
-      <div className="mb-4 inline-flex rounded-md border border-border bg-muted p-1">
-        {METHOD_TABS.map(({ value, label, icon: Icon }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setMethod(value)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
-              method === value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={METHOD_TABS}
+        value={method}
+        onChange={setMethod}
+        variant="pill"
+        label="Reconciliation methods"
+        className="mb-4"
+      />
 
       <DocketTable method={method} />
     </div>
@@ -224,57 +219,20 @@ function DocketTable({ method }: { method: ReconciliationMethod }) {
               emptyState={"No " + methodLabel + " dockets match these filters."}
             />
             {total > 0 && (
-              <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-                <span>
-                  {total} docket{total === 1 ? "" : "s"} {"—"} page {page + 1} of {pageCount}
-                </span>
-                <div className="flex gap-2">
-                  <PageButton disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-                    Previous
-                  </PageButton>
-                  <PageButton
-                    disabled={page >= pageCount - 1}
-                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                  >
-                    Next
-                  </PageButton>
-                </div>
-              </div>
+              <Pagination
+                page={page}
+                pageCount={pageCount}
+                onPageChange={setPage}
+                summary={
+                  <>
+                    {total} docket{total === 1 ? "" : "s"} {"—"} page {page + 1} of {pageCount}
+                  </>
+                }
+              />
             )}
           </>
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function PageButton({
-  children,
-  disabled,
-  onClick,
-}: {
-  children: string;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-sm font-medium transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-      {message}
-    </div>
   );
 }

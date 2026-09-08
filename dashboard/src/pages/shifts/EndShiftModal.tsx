@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import { useEndShiftMutation } from "./api";
 import { fromDatetimeLocalValue } from "./format";
 import type { Shift } from "./types";
@@ -80,15 +80,11 @@ export function EndShiftModal({
             onChange={(e) => setPslOwed(e.target.value)}
           />
         </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-border"
-            checked={reconciled}
-            onChange={(e) => setReconciled(e.target.checked)}
-          />
-          Driver's counted cash matches the recomputed cash total
-        </label>
+        <Checkbox
+          label="Driver's counted cash matches the recomputed cash total"
+          checked={reconciled}
+          onChange={(e) => setReconciled(e.target.checked)}
+        />
 
         {endMutation.isError && (
           <p className="text-sm text-destructive">Failed to end this shift. Try again.</p>

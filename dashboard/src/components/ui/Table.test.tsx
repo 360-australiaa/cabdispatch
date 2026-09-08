@@ -191,21 +191,26 @@ describe("Table pagination", () => {
   });
 
   /**
-   * KNOWN DEFECT, asserted as-is rather than as it should be.
+   * UPDATED BY D4 -- this test was inverted on purpose, and D4 is the
+   * workstream it was waiting for.
    *
-   * `page` is never reset when `data` changes, so a caller who filters a list
-   * while the user is on page 3 leaves the table showing an out-of-range
-   * slice: an empty body under a "Page 3 of 1" pager, with Previous enabled
-   * and Next disabled. Every page in the dashboard that pairs a filter input
-   * with a paginated Table can reproduce it.
+   * D1 wrote it as "does NOT reset to page 1 when the data shrinks (known
+   * defect)", asserting the broken behaviour and explaining: "`page` is never
+   * reset when `data` changes, so a caller who filters a list while the user
+   * is on page 3 leaves the table showing an out-of-range slice: an empty body
+   * under a 'Page 3 of 1' pager, with Previous enabled and Next disabled. ...
+   * The fix ... is a change to Table.tsx, which this workstream does not own --
+   * D4 owns the design system. So this test locks in the current behaviour and
+   * the bug is reported instead. Whoever fixes it will see this test fail,
+   * which is exactly the signal they want."
    *
-   * The fix (reset `page` to 0 when `data` identity or the sort changes) is a
-   * change to Table.tsx, which this workstream does not own -- D4 owns the
-   * design system. So this test locks in the current behaviour and the bug is
-   * reported instead. Whoever fixes it will see this test fail, which is
-   * exactly the signal they want.
+   * That signal arrived. `Table` now clamps `page` into range whenever the
+   * data identity, the sort or the page count changes, so the assertion is
+   * flipped to describe the fixed behaviour. This is the one D1 test whose
+   * expectations changed, and it changed in the direction D1 asked for -- not
+   * weakened to make something pass.
    */
-  it("does NOT reset to page 1 when the data shrinks (known defect)", async () => {
+  it("clamps back into range when the data shrinks under the current page", async () => {
     const { rerender } = render(
       <Table columns={COLUMNS} data={many} rowKey={(r) => r.id} pageSize={3} />,
     );
@@ -218,9 +223,123 @@ describe("Table pagination", () => {
       <Table columns={COLUMNS} data={many.slice(0, 2)} rowKey={(r) => r.id} pageSize={3} />,
     );
 
-    // What the operator sees: an empty table, and a pager that contradicts
-    // itself. The correct behaviour would be page 1 showing both rows.
-    expect(screen.getByText("No data")).toBeInTheDocument();
-    expect(screen.queryByText("Page 1 of 1")).not.toBeInTheDocument();
+    // Both surviving rows are visible under an honest pager, instead of an
+    // empty body under a "Page 3 of 1" that contradicts itself.
+    expect(screen.queryByText("No data")).not.toBeInTheDocument();
+    expect(bodyRows()).toHaveLength(2);
+    expect(screen.queryByText("Page 3 of 1")).not.toBeInTheDocument();
+  });
+
+  it("keeps the operator on their page when it still exists", async () => {
+    const { rerender } = render(
+      <Table columns={COLUMNS} data={many} rowKey={(r) => r.id} pageSize={3} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
+
+    // Six rows still means three pages, so page 2 is still valid. Clamping
+    // rather than always resetting to 0 is what stops a background refetch
+    // from yanking the operator back to the top of a list they were reading.
+    rerender(
+      <Table columns={COLUMNS} data={many.slice(0, 6)} rowKey={(r) => r.id} pageSize={3} />,
+    );
+
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+  });
+});
+
+/**
+ * ADDED BY D4. The dashboard audit (§6, Table.tsx:96,136) found the sort
+ * headers and the row click were mouse-only: `onClick` on a bare `<th>` and a
+ * bare `<tr>`, with no role, no tabIndex and no key handler. Column sort and
+ * row activation were simply unavailable to a keyboard or screen-reader user.
+ */
+describe("Table keyboard and screen-reader access", () => {
+  it("exposes each sortable header as a button", () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+
+    expect(screen.getByRole("button", { name: /Fare/ })).toBeInTheDocument();
+    // A column that is not sortable stays plain text -- no fake affordance.
+    expect(screen.queryByRole("button", { name: /^ID/ })).not.toBeInTheDocument();
+  });
+
+  it("sorts from the keyboard", async () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+
+    screen.getByRole("button", { name: /Fare/ }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(bodyRows().map((c) => c[1])).toEqual(["$7.25", "$19.00", "$42.50"]);
+
+    await userEvent.keyboard(" ");
+    expect(bodyRows().map((c) => c[1])).toEqual(["$42.50", "$19.00", "$7.25"]);
+  });
+
+  it("announces the current sort with aria-sort", async () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+    const header = screen.getByRole("columnheader", { name: /Fare/ });
+
+    expect(header).toHaveAttribute("aria-sort", "none");
+
+    await userEvent.click(screen.getByRole("button", { name: /Fare/ }));
+    expect(header).toHaveAttribute("aria-sort", "ascending");
+
+    await userEvent.click(screen.getByRole("button", { name: /Fare/ }));
+    expect(header).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("gives no aria-sort to an unsortable column", () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+
+    expect(screen.getByRole("columnheader", { name: "ID" })).not.toHaveAttribute("aria-sort");
+  });
+
+  it("activates a row with Enter and Space when it is clickable", async () => {
+    const onRowClick = vi.fn();
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} onRowClick={onRowClick} />);
+    const firstRow = screen.getAllByRole("row")[1];
+
+    expect(firstRow).toHaveAttribute("tabindex", "0");
+    firstRow.focus();
+
+    await userEvent.keyboard("{Enter}");
+    expect(onRowClick).toHaveBeenCalledWith(ROWS[0]);
+
+    await userEvent.keyboard(" ");
+    expect(onRowClick).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves rows out of the tab order when they are not clickable", () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+
+    // An inert row that advertised itself as focusable would be a lie, and
+    // would add three dead Tab stops per row to every table on the page.
+    expect(screen.getAllByRole("row")[1]).not.toHaveAttribute("tabindex");
+  });
+
+  it("announces the async result: loading, then how many rows arrived", () => {
+    const { container, rerender } = render(
+      <Table columns={COLUMNS} data={[]} rowKey={(r) => r.id} isLoading />,
+    );
+    const region = () => container.querySelector("[aria-live]");
+
+    expect(region()).toHaveTextContent("Loading table data");
+
+    rerender(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} />);
+
+    // The swap from a loading row to real rows used to be a purely visual
+    // change -- nothing told a screen-reader user the fetch had finished.
+    expect(region()).toHaveTextContent("3 rows");
+  });
+
+  it("announces an empty result, so a filter that matched nothing is not silent", () => {
+    const { container } = render(<Table columns={COLUMNS} data={[]} rowKey={(r) => r.id} />);
+
+    expect(container.querySelector("[aria-live]")).toHaveTextContent("0 rows");
+  });
+
+  it("takes an accessible name for the table itself", () => {
+    render(<Table columns={COLUMNS} data={ROWS} rowKey={(r) => r.id} label="Trips" />);
+
+    expect(screen.getByRole("table", { name: "Trips" })).toBeInTheDocument();
   });
 });

@@ -1,6 +1,11 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: ["class"],
+  // `data-theme` on <html> is the single theming mechanism (see src/lib/theme.tsx
+  // and the comment at the top of src/index.css). This used to be
+  // `["class"]` -- a `.dark` hook that nothing in the app ever applied, so every
+  // `dark:` utility silently rendered its light value. Pointing the variant at
+  // the attribute that is actually written makes those utilities live.
+  darkMode: ["selector", '[data-theme="dark"]'],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
@@ -13,6 +18,7 @@ export default {
           accent: "var(--brand-accent)",
           "accent-foreground": "var(--brand-accent-foreground)",
           lavender: "var(--brand-lavender)",
+          "lavender-foreground": "var(--brand-lavender-foreground)",
         },
         // Direct brand palette, usable as bg-indigo-500 style utilities too.
         indigo: {
@@ -73,6 +79,10 @@ export default {
         success: {
           DEFAULT: "var(--success)",
           foreground: "var(--success-foreground)",
+        },
+        warning: {
+          DEFAULT: "var(--warning)",
+          foreground: "var(--warning-foreground)",
         },
       },
       borderRadius: {

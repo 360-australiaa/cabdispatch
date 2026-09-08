@@ -100,7 +100,7 @@ export default function GettingStartedPage() {
                 </div>
                 <Link
                   to={item.href}
-                  className="shrink-0 text-sm font-medium text-brand-primary hover:underline"
+                  className="shrink-0 text-sm font-medium text-brand-primary dark:text-brand-accent hover:underline"
                 >
                   {item.linkLabel}
                 </Link>
@@ -119,7 +119,7 @@ export default function GettingStartedPage() {
                   </p>
                 </div>
               </div>
-              <Link to="/compliance" className="shrink-0 text-sm font-medium text-brand-primary hover:underline">
+              <Link to="/compliance" className="shrink-0 text-sm font-medium text-brand-primary dark:text-brand-accent hover:underline">
                 Go to Compliance Vault
               </Link>
             </li>

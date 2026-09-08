@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import { Table, type TableColumn } from "@/components/ui";
 import type { TollGantry, TollRoad } from "@/hooks/useTollRoads";
 
 // Same public/publishable token pattern as the Live Map and the toll-zone
@@ -244,29 +245,40 @@ function PlainCoordinateTable({
   roadNames: Record<string, string>;
 }) {
   return (
-    <div className="max-h-[420px] overflow-y-auto rounded-md border border-border">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-card">
-          <tr className="text-left text-muted-foreground">
-            <th className="px-3 py-2 font-medium">Road</th>
-            <th className="px-3 py-2 font-medium">Gantry</th>
-            <th className="px-3 py-2 font-medium">Latitude</th>
-            <th className="px-3 py-2 font-medium">Longitude</th>
-          </tr>
-        </thead>
-        <tbody>
-          {gantries.map((g) => (
-            <tr key={g.id} className="border-t border-border/50">
-              <td className="px-3 py-1">{roadNames[g.toll_road_id] ?? g.toll_road_id}</td>
-              <td className="px-3 py-1">{g.location}</td>
-              <td className="px-3 py-1 font-mono">{g.latitude.toFixed(5)}</td>
-              <td className="px-3 py-1 font-mono">{g.longitude.toFixed(5)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="max-h-[420px] overflow-y-auto">
+      <Table
+        columns={coordinateColumns(roadNames)}
+        data={gantries}
+        rowKey={(g) => g.id}
+        stickyHeader
+        label="Toll gantry coordinates"
+      />
     </div>
   );
+}
+
+/** Road and gantry are sortable: an operator hunting one specific gantry in
+ * 141 rows is exactly who needs to reorder them, and the kit Table gives that
+ * (keyboard-accessible) for free. Built per render because the road-name
+ * lookup is a prop. */
+function coordinateColumns(roadNames: Record<string, string>): TableColumn<TollGantry>[] {
+  const roadName = (g: TollGantry) => roadNames[g.toll_road_id] ?? g.toll_road_id;
+  return [
+    { key: "road", header: "Road", sortable: true, sortAccessor: roadName, render: roadName },
+    { key: "location", header: "Gantry", sortable: true, sortAccessor: (g) => g.location, render: (g) => g.location },
+    {
+      key: "latitude",
+      header: "Latitude",
+      className: "font-mono",
+      render: (g) => g.latitude.toFixed(5),
+    },
+    {
+      key: "longitude",
+      header: "Longitude",
+      className: "font-mono",
+      render: (g) => g.longitude.toFixed(5),
+    },
+  ];
 }
 
 function Legend({ gantries, roadNames }: { gantries: TollGantry[]; roadNames: Record<string, string> }) {

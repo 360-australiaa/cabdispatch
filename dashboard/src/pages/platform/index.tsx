@@ -22,7 +22,9 @@ import {
   Input,
   Modal,
   PageHeader,
+  Pagination,
   Table,
+  useToast,
   type TableColumn,
 } from "@/components/ui";
 import {
@@ -82,7 +84,7 @@ function HealthSummary() {
                 key={label}
                 className="flex items-center gap-3 rounded-md border border-border p-4"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-lavender-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
                 <div>
@@ -121,7 +123,7 @@ function BillingSummary() {
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="flex items-center gap-3 rounded-md border border-border p-4">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-lavender-foreground">
                 <CreditCard className="h-4 w-4" />
               </div>
               <div>
@@ -163,6 +165,9 @@ const EMPTY_RELEASE_FORM = { version_code: "", version_name: "", release_notes: 
  * APK ever reaches a tablet, so it lives on the platform-owner console next
  * to the tenant list, not inside any one tenant's fleet page. */
 function AppReleasesSection() {
+  // This card sits several screens below the fold on the platform console, so
+  // the inline formError alone reaches nobody scrolled elsewhere.
+  const toast = useToast();
   const [skip, setSkip] = useState(0);
   const releasesQuery = useAppReleases(skip);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -206,12 +211,14 @@ function AppReleasesSection() {
         file,
       });
       setFormOpen(false);
+      toast.success("Release published", { description: form.version_name.trim() || undefined });
     } catch (err) {
       // A session that expired mid-upload now retries once against a freshly
       // refreshed token (see apiClient.ts) instead of losing the upload
       // outright — this branch is a real remaining failure (network drop,
       // duplicate version_code, refresh token itself expired), not that.
       setFormError(errorMessage(err));
+      toast.error("Failed to publish release", { description: errorMessage(err) });
     } finally {
       setUploadProgress(null);
     }
@@ -237,7 +244,20 @@ function AppReleasesSection() {
           disabled={setActive.isPending}
           onClick={(e) => {
             e.stopPropagation();
-            setActive.mutate({ id: r.id, isActive: !r.is_active });
+            setActive.mutate(
+              { id: r.id, isActive: !r.is_active },
+              {
+                onSuccess: () =>
+                  toast.success(r.is_active ? "Release unpublished" : "Release republished", {
+                    description: r.version_name,
+                  }),
+                onError: (err) =>
+                  toast.error(
+                    r.is_active ? "Failed to unpublish release" : "Failed to republish release",
+                    { description: errorMessage(err) },
+                  ),
+              },
+            );
           }}
         >
           {r.is_active ? "Unpublish" : "Republish"}
@@ -279,19 +299,11 @@ function AppReleasesSection() {
           emptyState={releasesQuery.isError ? "Couldn't load releases." : "No releases published yet."}
         />
         {pageCount > 1 && (
-          <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-            <span>
-              Page {page + 1} of {pageCount}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={skip === 0} onClick={() => setSkip((s) => Math.max(0, s - PLATFORM_PAGE_LIMIT))}>
-                Previous
-              </Button>
-              <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setSkip((s) => s + PLATFORM_PAGE_LIMIT)}>
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            onPageChange={(p) => setSkip(p * PLATFORM_PAGE_LIMIT)}
+          />
         )}
       </CardContent>
 
@@ -461,7 +473,7 @@ function TenantDetailModal({
               key={label}
               className="flex items-center gap-3 rounded-md border border-border p-4"
             >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-primary">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-lavender text-brand-lavender-foreground">
                 <Icon className="h-4 w-4" />
               </div>
               <div>
@@ -484,6 +496,7 @@ function TenantDetailModal({
  * Cross-tenant tenant list + onboarding + platform-wide health, backed by
  * app/api/v1/platform.py (prefix /v1/platform). */
 export default function PlatformConsolePage() {
+  const toast = useToast();
   const [skip, setSkip] = useState(0);
   const tenantsQuery = usePlatformTenants(skip);
   const createTenant = useCreateTenant();
@@ -505,9 +518,22 @@ export default function PlatformConsolePage() {
   function confirmToggleTenantStatus() {
     if (!confirmingTenant) return;
     const nextStatus: TenantStatus = confirmingTenant.status === "suspended" ? "active" : "suspended";
+    const tenantName = confirmingTenant.name;
     updateTenantStatus.mutate(
       { tenantId: confirmingTenant.id, status: nextStatus },
-      { onSuccess: () => setConfirmingTenant(null) },
+      {
+        onSuccess: () => {
+          setConfirmingTenant(null);
+          toast.success(nextStatus === "suspended" ? "Tenant suspended" : "Tenant reactivated", {
+            description: tenantName,
+          });
+        },
+        onError: (err) =>
+          toast.error(
+            nextStatus === "suspended" ? "Failed to suspend tenant" : "Failed to reactivate tenant",
+            { description: errorMessage(err) },
+          ),
+      },
     );
   }
 
@@ -526,8 +552,10 @@ export default function PlatformConsolePage() {
     try {
       await createTenant.mutateAsync(formValues);
       setFormOpen(false);
+      toast.success("Tenant created", { description: formValues.name.trim() || undefined });
     } catch (err) {
       setFormError(errorMessage(err));
+      toast.error("Failed to create tenant", { description: errorMessage(err) });
     }
   }
 
@@ -629,29 +657,11 @@ export default function PlatformConsolePage() {
             onRowClick={(t) => setSelectedTenantId(t.id)}
           />
           {pageCount > 1 && (
-            <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-              <span>
-                Page {page + 1} of {pageCount}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={skip === 0}
-                  onClick={() => setSkip((s) => Math.max(0, s - PLATFORM_PAGE_LIMIT))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page >= pageCount - 1}
-                  onClick={() => setSkip((s) => s + PLATFORM_PAGE_LIMIT)}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onPageChange={(p) => setSkip(p * PLATFORM_PAGE_LIMIT)}
+            />
           )}
         </CardContent>
       </Card>

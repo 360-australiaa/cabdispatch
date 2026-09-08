@@ -1,15 +1,14 @@
 import { useState } from "react";
 import { BarChart3, MapPinned } from "lucide-react";
-import { PageHeader } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { PageHeader, Tabs, type TabItem } from "@/components/ui";
 import { ZonesPanel } from "./ZonesPanel";
 import { ZoneStatsPanel } from "./ZoneStatsPanel";
 
 type ZonesTab = "stats" | "zones";
 
-const TABS: { key: ZonesTab; label: string; icon: typeof BarChart3 }[] = [
-  { key: "stats", label: "Live Stats", icon: BarChart3 },
-  { key: "zones", label: "Zones", icon: MapPinned },
+const TABS: TabItem<ZonesTab>[] = [
+  { value: "stats", label: "Live Stats", icon: BarChart3 },
+  { value: "zones", label: "Zones", icon: MapPinned },
 ];
 
 /** Zones & Demand -- named dispatch zones (drivers plot into a zone by its
@@ -26,24 +25,14 @@ export default function ZonesPage() {
         description="Dispatch zones drivers plot into while waiting for work, and a live per-zone supply/demand snapshot."
       />
 
-      <div className="mb-6 flex gap-1 border-b border-border">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={cn(
-              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              tab === key
-                ? "border-brand-primary text-brand-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="underline"
+        label="Zones sections"
+        className="mb-6"
+      />
 
       {tab === "stats" && <ZoneStatsPanel />}
       {tab === "zones" && <ZonesPanel />}

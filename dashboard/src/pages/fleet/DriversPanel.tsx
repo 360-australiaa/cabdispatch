@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Camera, Plus } from "lucide-react";
-import { Badge, Button, Card, CardContent, Input, Modal, Select, Table, type TableColumn } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  Input,
+  Modal,
+  Pagination,
+  Select,
+  Table,
+  useToast,
+  type TableColumn,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import {
   useCreateDriver,
@@ -13,7 +25,6 @@ import {
   PAGE_LIMIT,
 } from "./api";
 import { DriverAvatar } from "./DriverAvatar";
-import { PaginationBar } from "./PaginationBar";
 import { errorMessage, formatDateTime, truncateId, vehicleLabel } from "./format";
 import type { Driver } from "./types";
 
@@ -66,6 +77,9 @@ const EMPTY_COMPLIANCE_FORM: DriverComplianceFormValues = {
 
 export function DriversPanel() {
   const { user } = useAuth();
+  // The inline "Saved." / error text below sits at the bottom of a long modal
+  // on a long page; the toast is the copy the operator actually sees.
+  const toast = useToast();
   const canUploadPhoto = Boolean(user && PHOTO_UPLOAD_ROLES.has(user.role));
   // PATCH /v1/users/{id} is owner/admin-gated server-side (see _require_admin
   // in backend/app/api/v1/users.py) -- narrower than the photo-upload roles
@@ -99,6 +113,14 @@ export function DriversPanel() {
   );
 
   const driversQuery = useDrivers(skip, filters);
+
+  // Server-side pagination is offset-based (`skip`), so the shared zero-based
+  // `Pagination` needs the offset translated to a page index and back.
+  const total = driversQuery.data?.total ?? 0;
+  const page = Math.floor(skip / PAGE_LIMIT);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_LIMIT));
+  const rangeStart = total === 0 ? 0 : skip + 1;
+  const rangeEnd = Math.min(total, skip + PAGE_LIMIT);
   const vehicleOptionsQuery = useVehicleOptions();
 
   // Reset to the freshly-fetched compliance dates whenever a different driver
@@ -126,8 +148,10 @@ export function DriversPanel() {
         },
       });
       setComplianceSaved(true);
+      toast.success("Compliance dates saved", { description: selected.name });
     } catch (err) {
       setComplianceError(errorMessage(err));
+      toast.error("Failed to save compliance dates", { description: errorMessage(err) });
     }
   }
 
@@ -138,8 +162,10 @@ export function DriversPanel() {
     setPhotoError(null);
     try {
       await uploadPhoto.mutateAsync({ userId: selected.id, file });
+      toast.success("Driver photo uploaded", { description: selected.name });
     } catch (err) {
       setPhotoError(errorMessage(err));
+      toast.error("Failed to upload driver photo", { description: errorMessage(err) });
     }
   }
 
@@ -163,8 +189,10 @@ export function DriversPanel() {
       });
       setCreateOpen(false);
       setCreateForm(EMPTY_CREATE_DRIVER_FORM);
+      toast.success("Driver created", { description: createForm.name.trim() || undefined });
     } catch (err) {
       setCreateError(errorMessage(err));
+      toast.error("Failed to create driver", { description: errorMessage(err) });
     }
   }
 
@@ -247,12 +275,19 @@ export function DriversPanel() {
             onRowClick={setSelected}
             emptyState="No drivers match these filters."
           />
-          <PaginationBar
-            skip={skip}
-            limit={PAGE_LIMIT}
-            total={driversQuery.data?.total ?? 0}
-            onSkipChange={setSkip}
-          />
+          {/* Hidden while the whole list fits on one page. */}
+          {total > PAGE_LIMIT && (
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onPageChange={(p) => setSkip(p * PAGE_LIMIT)}
+              summary={
+                <>
+                  {rangeStart}–{rangeEnd} of {total} (page {page + 1} of {pageCount})
+                </>
+              }
+            />
+          )}
         </>
       )}
 

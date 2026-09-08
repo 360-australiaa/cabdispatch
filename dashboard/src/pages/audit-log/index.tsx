@@ -8,6 +8,7 @@ import {
   Input,
   Modal,
   PageHeader,
+  Pagination,
   Table,
   type TableColumn,
 } from "@/components/ui";
@@ -313,29 +314,16 @@ export default function AuditLogPage() {
       />
 
       {total > 0 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {currentPage} of {pageCount} ({total} total entries)
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={offset === 0}
-              onClick={() => setOffset((o) => Math.max(0, o - PAGE_LIMIT))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={offset + PAGE_LIMIT >= total}
-              onClick={() => setOffset((o) => o + PAGE_LIMIT)}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination
+          page={Math.floor(offset / PAGE_LIMIT)}
+          pageCount={pageCount}
+          onPageChange={(p) => setOffset(p * PAGE_LIMIT)}
+          summary={
+            <>
+              Page {currentPage} of {pageCount} ({total} total entries)
+            </>
+          }
+        />
       )}
 
       <Modal

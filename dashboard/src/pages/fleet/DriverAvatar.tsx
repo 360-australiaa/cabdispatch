@@ -55,7 +55,7 @@ export function DriverAvatar({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-primary",
+        "flex shrink-0 items-center justify-center rounded-full bg-brand-lavender text-xs font-semibold text-brand-lavender-foreground",
         size,
       )}
     >

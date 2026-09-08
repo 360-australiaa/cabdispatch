@@ -1,5 +1,5 @@
 import { Car, CircleDot, Clock3, Hand, PhoneCall, Users } from "lucide-react";
-import { Card, CardContent } from "@/components/ui";
+import { Card, CardContent, Spinner } from "@/components/ui";
 import { useZoneStatsQuery } from "@/hooks/useZones";
 
 /** Live per-zone supply/demand grid -- mirrors the "Statistics" screen a
@@ -30,7 +30,9 @@ export function ZoneStatsPanel() {
       )}
 
       {statsQuery.isLoading ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">Loading...</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          <Spinner size="sm" label="Loading zone stats" />
+        </p>
       ) : stats.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">
           No zones configured yet -- add a zone in the Zones tab to see live stats here.
@@ -42,7 +44,7 @@ export function ZoneStatsPanel() {
               <CardContent className="pt-4">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-lavender font-mono text-sm font-bold text-brand-primary">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-lavender font-mono text-sm font-bold text-brand-lavender-foreground">
                       {row.zone_number}
                     </span>
                     <span className="font-medium text-foreground">{row.zone_name}</span>

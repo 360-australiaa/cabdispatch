@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
   useCreateLedgerEntryMutation,
   useUpdateLedgerEntryMutation,
@@ -222,18 +222,12 @@ export function LedgerFormModal({ open, onClose, mode, entry, drivers }: LedgerF
             inputMode="decimal"
           />
         </div>
-        <div className="flex items-center gap-2 pt-5">
-          <input
-            id="remitted"
-            type="checkbox"
-            checked={form.remitted}
-            onChange={(e) => update("remitted", e.target.checked)}
-            className="h-4 w-4 rounded border-input"
-          />
-          <label htmlFor="remitted" className="text-sm text-foreground">
-            Remitted to regulator
-          </label>
-        </div>
+        <Checkbox
+          label="Remitted to regulator"
+          checked={form.remitted}
+          onChange={(e) => update("remitted", e.target.checked)}
+          wrapperClassName="pt-5"
+        />
         {form.remitted && (
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-muted-foreground">Remitted on</label>

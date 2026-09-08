@@ -1,6 +1,18 @@
 import { useState } from "react";
 import { AlertTriangle, History, Info, Plus } from "lucide-react";
-import { Badge, Button, Card, CardContent, Input, Modal, Select, Table, type TableColumn } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  Input,
+  Modal,
+  Select,
+  Spinner,
+  Table,
+  Tooltip,
+  type TableColumn,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/platformAdmin";
 import {
@@ -8,7 +20,10 @@ import {
   useTollGantriesQuery,
   useTollRoadDetailQuery,
   useTollRoadsQuery,
+  type TollGantry,
+  type TollPoint,
   type TollRoad,
+  type TollRoadPriceRevision,
   type TollRoadPriceRevisionInput,
 } from "@/hooks/useTollRoads";
 import { TollGantryMap } from "./TollGantryMap";
@@ -259,6 +274,81 @@ function CurrentPriceCell({ road }: { road: TollRoad }) {
   return <span className="text-muted-foreground">Not captured</span>;
 }
 
+const TOLL_POINT_COLUMNS: TableColumn<TollPoint>[] = [
+  { key: "name", header: "Toll point", render: (point) => point.name },
+  {
+    key: "price",
+    header: "Class A price",
+    render: (point) =>
+      point.current_price?.price_class_a ? formatMoney(point.current_price.price_class_a) : "—",
+  },
+  {
+    key: "gantries",
+    header: "Gantries",
+    className: "text-muted-foreground",
+    render: (point) =>
+      point.gantry_count > 0
+        ? `${point.gantry_count} gantr${point.gantry_count === 1 ? "y" : "ies"}`
+        : "no gantries — not GPS-detectable",
+  },
+  {
+    key: "confidence",
+    header: "Confidence",
+    render: (point) => <ConfidenceBadge confidence={point.current_price?.confidence} />,
+  },
+];
+
+const GANTRY_COLUMNS: TableColumn<TollGantry>[] = [
+  { key: "location", header: "Location", render: (g) => g.location },
+  { key: "ramp", header: "Ramp", className: "text-muted-foreground", render: (g) => g.ramp ?? "—" },
+  {
+    key: "direction",
+    header: "Direction",
+    className: "text-muted-foreground",
+    render: (g) => g.direction ?? "—",
+  },
+  {
+    key: "coordinates",
+    header: "Coordinates",
+    className: "font-mono text-muted-foreground",
+    // The coordinate IS the detection point -- see TollGantryMap's doc.
+    // Shown to 5dp (~1m), well inside the meter's 150m match radius.
+    render: (g) => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)}`,
+  },
+];
+
+const PRICE_HISTORY_COLUMNS: TableColumn<TollRoadPriceRevision>[] = [
+  { key: "effective", header: "Effective", render: (rev) => formatDateTime(rev.effective_date) },
+  {
+    key: "price",
+    header: "Class A",
+    render: (rev) => (rev.price_class_a_max ? formatMoney(rev.price_class_a_max) : "—"),
+  },
+  {
+    key: "confidence",
+    header: "Confidence",
+    render: (rev) => (
+      <span className="inline-flex items-center gap-1">
+        <ConfidenceBadge confidence={rev.confidence} />
+        {/* Provenance, not decoration: this is what an operator
+            opens when a passenger disputes a toll. */}
+        {rev.source_url && (
+          <Tooltip content={rev.retrieved_at ? `Confirmed ${rev.retrieved_at}` : "Source"}>
+            <a
+              href={rev.source_url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline decoration-dotted underline-offset-2"
+            >
+              source
+            </a>
+          </Tooltip>
+        )}
+      </span>
+    ),
+  },
+];
+
 function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClose: () => void }) {
   const detailQuery = useTollRoadDetailQuery(roadId);
   const detail = detailQuery.data;
@@ -276,7 +366,9 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
       }
     >
       {detailQuery.isLoading || !detail ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">
+          <Spinner size="sm" label="Loading toll road detail" />
+        </p>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {detail.source_note && (
@@ -294,26 +386,12 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
                 Toll points ({detail.toll_points.length}) —{" "}
                 {CHARGING_POLICY_LABELS[detail.charging_policy] ?? detail.charging_policy}
               </h4>
-              <table className="w-full text-xs">
-                <tbody>
-                  {detail.toll_points.map((point) => (
-                    <tr key={point.id} className="border-b border-border/50">
-                      <td className="py-1 pr-2">{point.name}</td>
-                      <td className="py-1 pr-2">
-                        {point.current_price?.price_class_a ? formatMoney(point.current_price.price_class_a) : "—"}
-                      </td>
-                      <td className="py-1 pr-2 text-muted-foreground">
-                        {point.gantry_count > 0
-                          ? `${point.gantry_count} gantr${point.gantry_count === 1 ? "y" : "ies"}`
-                          : "no gantries — not GPS-detectable"}
-                      </td>
-                      <td className="py-1">
-                        <ConfidenceBadge confidence={point.current_price?.confidence} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <Table
+                columns={TOLL_POINT_COLUMNS}
+                data={detail.toll_points}
+                rowKey={(point) => point.id}
+                label={`Toll points on ${detail.name}`}
+              />
             </div>
           )}
           <div>
@@ -326,22 +404,13 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
               </p>
             ) : (
               <div className="max-h-64 overflow-y-auto text-xs">
-                <table className="w-full">
-                  <tbody>
-                    {detail.gantries.map((g) => (
-                      <tr key={g.id} className="border-b border-border/50">
-                        <td className="py-1 pr-2">{g.location}</td>
-                        <td className="py-1 pr-2 text-muted-foreground">{g.ramp ?? "—"}</td>
-                        <td className="py-1 pr-2 text-muted-foreground">{g.direction ?? "—"}</td>
-                        {/* The coordinate IS the detection point -- see TollGantryMap's doc.
-                            Shown to 5dp (~1m), well inside the meter's 150m match radius. */}
-                        <td className="py-1 font-mono text-muted-foreground">
-                          {g.latitude.toFixed(5)}, {g.longitude.toFixed(5)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <Table
+                  columns={GANTRY_COLUMNS}
+                  data={detail.gantries}
+                  rowKey={(g) => g.id}
+                  stickyHeader
+                  label={`Gantries on ${detail.name}`}
+                />
               </div>
             )}
           </div>
@@ -350,39 +419,13 @@ function TollRoadDetailModal({ roadId, onClose }: { roadId: string | null; onClo
               <History className="h-3.5 w-3.5" /> Price history
             </h4>
             <div className="max-h-64 overflow-y-auto text-xs">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-muted-foreground">
-                    <th className="pb-1 font-medium">Effective</th>
-                    <th className="pb-1 font-medium">Class A</th>
-                    <th className="pb-1 font-medium">Confidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.price_history.map((rev) => (
-                    <tr key={rev.id} className="border-b border-border/50">
-                      <td className="py-1 pr-2">{formatDateTime(rev.effective_date)}</td>
-                      <td className="py-1 pr-2">{rev.price_class_a_max ? formatMoney(rev.price_class_a_max) : "—"}</td>
-                      <td className="py-1">
-                        <ConfidenceBadge confidence={rev.confidence} />
-                        {/* Provenance, not decoration: this is what an operator
-                            opens when a passenger disputes a toll. */}
-                        {rev.source_url && (
-                          <a
-                            href={rev.source_url}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            className="ml-1 underline decoration-dotted underline-offset-2"
-                            title={rev.retrieved_at ? `Confirmed ${rev.retrieved_at}` : "Source"}
-                          >
-                            source
-                          </a>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <Table
+                columns={PRICE_HISTORY_COLUMNS}
+                data={detail.price_history}
+                rowKey={(rev) => rev.id}
+                stickyHeader
+                label={`Price history for ${detail.name}`}
+              />
             </div>
           </div>
         </div>

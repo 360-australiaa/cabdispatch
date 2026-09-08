@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Star } from "lucide-react";
-import { Badge, Card, CardContent, PageHeader, Select, Table, type TableColumn } from "@/components/ui";
+import { Badge, Card, CardContent, PageHeader, Select, Spinner, Table, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { useDriverOptionsQuery, useRatingsQuery, type RatingStars, type TripRating } from "./hooks";
 import { formatDateTime } from "./format";
@@ -139,7 +139,7 @@ export default function RatingsPage() {
         // (`?search=`, matched against trip.id -- see pages/trips/index.tsx).
         <Link
           to={`/trips?search=${row.trip_id}`}
-          className="font-mono text-xs text-brand-primary underline-offset-2 hover:underline"
+          className="font-mono text-xs text-brand-primary dark:text-brand-accent underline-offset-2 hover:underline"
           title={row.trip_id}
         >
           {row.trip_id.slice(0, 8)}…
@@ -179,7 +179,11 @@ export default function RatingsPage() {
               {overallAverage != null && <Stars value={overallAverage} />}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {ratingsQuery.isLoading ? "Loading…" : `From ${allRatings.length} of ${total} rating${total === 1 ? "" : "s"}`}
+              {ratingsQuery.isLoading ? (
+                <Spinner size="sm" label="Loading ratings" />
+              ) : (
+                `From ${allRatings.length} of ${total} rating${total === 1 ? "" : "s"}`
+              )}
             </p>
           </CardContent>
         </Card>

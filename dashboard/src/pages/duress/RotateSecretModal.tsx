@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
-import { Button, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import { rotateDuressDeviceSecret } from "./api";
 import { errorMessage } from "./format";
 import type { DuressDevice } from "./types";
@@ -89,16 +89,17 @@ export function RotateSecretModal({
 
         <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-          <label className="flex items-start gap-2 text-xs text-foreground">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-border"
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-            />
-            I understand this immediately invalidates the device's current credential, and I have
-            already re-flashed its firmware with this new secret.
-          </label>
+          <Checkbox
+            wrapperClassName="text-xs text-foreground"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+            label={
+              <span className="font-normal">
+                I understand this immediately invalidates the device's current credential, and I
+                have already re-flashed its firmware with this new secret.
+              </span>
+            }
+          />
         </div>
 
         {mutation.isError && (

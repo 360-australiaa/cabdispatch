@@ -8,8 +8,10 @@ import {
   CardContent,
   Input,
   Modal,
+  Pagination,
   Select,
   Table,
+  useToast,
   type TableColumn,
 } from "@/components/ui";
 import {
@@ -24,7 +26,6 @@ import {
   type VehicleFilters,
   PAGE_LIMIT,
 } from "./api";
-import { PaginationBar } from "./PaginationBar";
 import { VehicleReportsModal } from "./VehicleReportsModal";
 import { errorMessage, formatDateTime } from "./format";
 import {
@@ -51,6 +52,9 @@ function statusBadgeVariant(status: VehicleStatus) {
 
 export function VehiclesPanel() {
   const navigate = useNavigate();
+  // Above-the-fold echo of the inline results below: this table is long enough
+  // that a save confirmation inside the modal is gone the moment it closes.
+  const toast = useToast();
   const [skip, setSkip] = useState(0);
   const [regoSearch, setRegoSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -66,6 +70,14 @@ export function VehiclesPanel() {
   );
 
   const vehiclesQuery = useVehicles(skip, filters);
+
+  // Server-side pagination is offset-based (`skip`), so the shared zero-based
+  // `Pagination` needs the offset translated to a page index and back.
+  const total = vehiclesQuery.data?.total ?? 0;
+  const page = Math.floor(skip / PAGE_LIMIT);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_LIMIT));
+  const rangeStart = total === 0 ? 0 : skip + 1;
+  const rangeEnd = Math.min(total, skip + PAGE_LIMIT);
   const deviceOptionsQuery = useDeviceOptions();
   const vehicleLiveOptionsQuery = useVehicleLiveOptions();
 
@@ -147,26 +159,36 @@ export function VehiclesPanel() {
 
   async function submitForm() {
     setFormError(null);
+    const wasEditing = editing;
     try {
-      if (editing) {
-        await updateVehicle.mutateAsync({ id: editing.id, values: formValues });
+      if (wasEditing) {
+        await updateVehicle.mutateAsync({ id: wasEditing.id, values: formValues });
       } else {
         await createVehicle.mutateAsync(formValues);
       }
       setFormOpen(false);
+      toast.success(wasEditing ? "Vehicle saved" : "Vehicle created", {
+        description: formValues.rego.trim() || undefined,
+      });
     } catch (err) {
       setFormError(errorMessage(err));
+      toast.error(wasEditing ? "Failed to save vehicle" : "Failed to create vehicle", {
+        description: errorMessage(err),
+      });
     }
   }
 
   async function confirmDelete() {
     if (!deleteTarget) return;
+    const rego = deleteTarget.rego;
     try {
       await deleteVehicle.mutateAsync(deleteTarget.id);
       setDeleteTarget(null);
+      toast.success("Vehicle deleted", { description: rego });
     } catch (err) {
       setFormError(errorMessage(err));
       setDeleteTarget(null);
+      toast.error("Failed to delete vehicle", { description: errorMessage(err) });
     }
   }
 
@@ -365,12 +387,19 @@ export function VehiclesPanel() {
             onRowClick={openEdit}
             emptyState="No vehicles match these filters."
           />
-          <PaginationBar
-            skip={skip}
-            limit={PAGE_LIMIT}
-            total={vehiclesQuery.data?.total ?? 0}
-            onSkipChange={setSkip}
-          />
+          {/* Hidden while the whole list fits on one page. */}
+          {total > PAGE_LIMIT && (
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onPageChange={(p) => setSkip(p * PAGE_LIMIT)}
+              summary={
+                <>
+                  {rangeStart}–{rangeEnd} of {total} (page {page + 1} of {pageCount})
+                </>
+              }
+            />
+          )}
         </>
       )}
 
@@ -532,7 +561,17 @@ export function VehiclesPanel() {
                 Cancel
               </Button>
               <Button
-                onClick={() => pairingTarget && generatePairingCode.mutate(pairingTarget.id)}
+                onClick={() =>
+                  pairingTarget &&
+                  generatePairingCode.mutate(pairingTarget.id, {
+                    onSuccess: () =>
+                      toast.success("Pairing code generated", { description: pairingTarget.rego }),
+                    onError: (err) =>
+                      toast.error("Failed to generate pairing code", {
+                        description: errorMessage(err),
+                      }),
+                  })
+                }
                 disabled={generatePairingCode.isPending}
               >
                 Generate code

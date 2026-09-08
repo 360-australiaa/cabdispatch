@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui";
+import { Button, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TrailPoint } from "./FleetMapCanvas";
 
@@ -66,7 +66,11 @@ export function TrailControls({
         ))}
         {hours != null && (
           <span className="ml-1 text-xs text-muted-foreground">
-            {loading ? "Loading…" : `${trail.length} point${trail.length === 1 ? "" : "s"}`}
+            {loading ? (
+              <Spinner size="sm" label="Loading trail" />
+            ) : (
+              `${trail.length} point${trail.length === 1 ? "" : "s"}`
+            )}
           </span>
         )}
       </div>

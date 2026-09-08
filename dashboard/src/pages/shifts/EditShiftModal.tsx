@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import { useUpdateShiftMutation } from "./api";
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from "./format";
 import type { DriverLite, Shift, VehicleLite } from "./types";
@@ -170,15 +170,12 @@ export function EditShiftModal({
               onChange={(e) => setPslOwed(e.target.value)}
             />
           </Field>
-          <label className="mt-6 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border"
-              checked={reconciled}
-              onChange={(e) => setReconciled(e.target.checked)}
-            />
-            Reconciled
-          </label>
+          <Checkbox
+            label="Reconciled"
+            wrapperClassName="mt-6"
+            checked={reconciled}
+            onChange={(e) => setReconciled(e.target.checked)}
+          />
 
           {updateMutation.isError && (
             <p className="sm:col-span-2 text-sm text-destructive">

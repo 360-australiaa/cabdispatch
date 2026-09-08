@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { Plus, Trash2 } from "lucide-react";
-import { Button, Input, Modal, Select } from "@/components/ui";
+import { Button, Checkbox, Input, Modal, Select } from "@/components/ui";
 import {
   useCreateTripMutation,
   useUpdateTripMutation,
@@ -384,18 +384,12 @@ export function TripFormModal({
                 required
               />
             </div>
-            <div className="flex items-center gap-2 pt-5">
-              <input
-                id="is_peak"
-                type="checkbox"
-                checked={form.is_peak}
-                onChange={(e) => update("is_peak", e.target.checked)}
-                className="h-4 w-4 rounded border-input"
-              />
-              <label htmlFor="is_peak" className="text-sm text-foreground">
-                Peak surcharge applies
-              </label>
-            </div>
+            <Checkbox
+              label="Peak surcharge applies"
+              checked={form.is_peak}
+              onChange={(e) => update("is_peak", e.target.checked)}
+              wrapperClassName="pt-5"
+            />
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-muted-foreground">Passenger count</label>
               <Input
@@ -410,30 +404,18 @@ export function TripFormModal({
                 "maxi" — this never applies by request alone.
               </p>
             </div>
-            <div className="flex items-center gap-2 pt-5">
-              <input
-                id="wheelchair_hiring"
-                type="checkbox"
-                checked={form.wheelchair_hiring}
-                onChange={(e) => update("wheelchair_hiring", e.target.checked)}
-                className="h-4 w-4 rounded border-input"
-              />
-              <label htmlFor="wheelchair_hiring" className="text-sm text-foreground">
-                Wheelchair hiring (always overrides the maxi rate off)
-              </label>
-            </div>
-            <div className="flex items-center gap-2 pt-5">
-              <input
-                id="airport_rank_requested_maxi"
-                type="checkbox"
-                checked={form.airport_rank_requested_maxi}
-                onChange={(e) => update("airport_rank_requested_maxi", e.target.checked)}
-                className="h-4 w-4 rounded border-input"
-              />
-              <label htmlFor="airport_rank_requested_maxi" className="text-sm text-foreground">
-                Maxi specifically requested at a Sydney Airport rank
-              </label>
-            </div>
+            <Checkbox
+              label="Wheelchair hiring (always overrides the maxi rate off)"
+              checked={form.wheelchair_hiring}
+              onChange={(e) => update("wheelchair_hiring", e.target.checked)}
+              wrapperClassName="pt-5"
+            />
+            <Checkbox
+              label="Maxi specifically requested at a Sydney Airport rank"
+              checked={form.airport_rank_requested_maxi}
+              onChange={(e) => update("airport_rank_requested_maxi", e.target.checked)}
+              wrapperClassName="pt-5"
+            />
           </>
         )}
 

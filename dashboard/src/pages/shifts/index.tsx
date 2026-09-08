@@ -6,8 +6,10 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
   type TableColumn,
@@ -248,15 +250,12 @@ export default function ShiftsPage() {
               onChange={(e) => resetPageAnd(setReconciledFilter)(e.target.value)}
             />
           </div>
-          <label className="mb-2 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border"
-              checked={activeOnly}
-              onChange={(e) => resetPageAnd(setActiveOnly)(e.target.checked)}
-            />
-            Active shifts only
-          </label>
+          <Checkbox
+            label="Active shifts only"
+            wrapperClassName="mb-2"
+            checked={activeOnly}
+            onChange={(e) => resetPageAnd(setActiveOnly)(e.target.checked)}
+          />
           {filtersActive && (
             <Button
               variant="ghost"
@@ -294,29 +293,7 @@ export default function ShiftsPage() {
       />
 
       {pageCount > 1 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination page={page} pageCount={pageCount} onPageChange={setPage} />
       )}
 
       <StartShiftModal open={startOpen} onClose={() => setStartOpen(false)} drivers={drivers} vehicles={vehicles} />

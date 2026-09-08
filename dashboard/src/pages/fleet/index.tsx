@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, Car, Smartphone, Trash2, Users } from "lucide-react";
-import { Button, Input, Modal, PageHeader } from "@/components/ui";
+import { Button, Checkbox, Input, Modal, PageHeader, Tabs, type TabItem } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 import { VehiclesPanel } from "./VehiclesPanel";
 import { DriversPanel } from "./DriversPanel";
 import { DevicesPanel } from "./DevicesPanel";
@@ -20,13 +19,13 @@ import { canUseFleetTestTooling } from "./testTooling";
 
 type FleetTab = "vehicles" | "drivers" | "devices";
 
-const TABS: { key: FleetTab; label: string; icon: typeof Car }[] = [
-  { key: "vehicles", label: "Vehicles", icon: Car },
-  { key: "drivers", label: "Drivers", icon: Users },
-  { key: "devices", label: "Devices", icon: Smartphone },
+const TABS: TabItem<FleetTab>[] = [
+  { value: "vehicles", label: "Vehicles", icon: Car },
+  { value: "drivers", label: "Drivers", icon: Users },
+  { value: "devices", label: "Devices", icon: Smartphone },
 ];
 
-const VALID_TABS = new Set<string>(TABS.map((t) => t.key));
+const VALID_TABS = new Set<string>(TABS.map((t) => t.value));
 
 const WIPE_CONFIRM_PHRASE = "DELETE";
 
@@ -199,29 +198,28 @@ function WipeAllFleetDataButton() {
             )}
 
             {canForceWipe && (
-              <label className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4 rounded border-input"
-                  checked={destroyEvidence}
-                  onChange={(e) => setDestroyEvidence(e.target.checked)}
-                  disabled={wiping}
-                />
-                <span>
-                  <span className="font-medium text-destructive">
-                    Also permanently destroy financial/compliance evidence
-                  </span>
-                  <span className="mt-1 block text-muted-foreground">
-                    Off by default. A normal wipe correctly leaves behind any driver with real
-                    evidence on file. Ticking this box additionally and irreversibly destroys, for
-                    every driver being deleted: PSL levy ledger entries and top-up payments, wallet
-                    transactions, trip ratings, compliance documents, and tariff change-log entries.
-                    The tamper-evident audit trail is never touched, even with this box ticked — a
-                    driver who has ever been recorded there still cannot be deleted, reported as a
-                    failure below. There is no undo.
-                  </span>
-                </span>
-              </label>
+              <Checkbox
+                wrapperClassName="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2"
+                checked={destroyEvidence}
+                onChange={(e) => setDestroyEvidence(e.target.checked)}
+                disabled={wiping}
+                label={
+                  <>
+                    <span className="font-medium text-destructive">
+                      Also permanently destroy financial/compliance evidence
+                    </span>
+                    <span className="mt-1 block font-normal text-muted-foreground">
+                      Off by default. A normal wipe correctly leaves behind any driver with real
+                      evidence on file. Ticking this box additionally and irreversibly destroys, for
+                      every driver being deleted: PSL levy ledger entries and top-up payments,
+                      wallet transactions, trip ratings, compliance documents, and tariff
+                      change-log entries. The tamper-evident audit trail is never touched, even
+                      with this box ticked — a driver who has ever been recorded there still cannot
+                      be deleted, reported as a failure below. There is no undo.
+                    </span>
+                  </>
+                }
+              />
             )}
 
             <label className="flex flex-col gap-1 text-sm">
@@ -299,24 +297,14 @@ export default function FleetPage() {
       <FatigueAlertsBanner />
       <ComplianceExpiryBanner />
 
-      <div className="mb-6 flex gap-1 border-b border-border">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={cn(
-              "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors",
-              tab === key
-                ? "border-brand-primary text-brand-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        items={TABS}
+        value={tab}
+        onChange={setTab}
+        variant="underline"
+        label="Fleet sections"
+        className="mb-6"
+      />
 
       {tab === "vehicles" && <VehiclesPanel />}
       {tab === "drivers" && <DriversPanel />}

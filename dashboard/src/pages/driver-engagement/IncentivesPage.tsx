@@ -7,6 +7,7 @@ import {
   CardContent,
   Modal,
   PageHeader,
+  Pagination,
   Select,
   Table,
   type TableColumn,
@@ -156,24 +157,16 @@ export default function IncentivesPage() {
       />
 
       {pageCount > 1 && (
-        <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
-          <span>
-            Page {page + 1} of {pageCount} ({total} incentives)
-          </span>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          onPageChange={setPage}
+          summary={
+            <>
+              Page {page + 1} of {pageCount} ({total} incentives)
+            </>
+          }
+        />
       )}
 
       <IncentiveFormModal open={createOpen} onClose={() => setCreateOpen(false)} mode="create" />
