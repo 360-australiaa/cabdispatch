@@ -21,7 +21,13 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
+    },
+
+    // `test.globals` is on in vite.config.ts, so describe/it/expect are
+    // injected rather than imported; this is what tells tsc they exist.
+    // jest-dom's matchers (toHaveClass, toBeDisabled, ...) come with it via
+    // the `@testing-library/jest-dom/vitest` import in src/setupTests.ts.
+    "types": ["vitest/globals"]
   },
   "include": ["src"]
 }

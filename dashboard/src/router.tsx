@@ -25,7 +25,6 @@ import RatingsPage from "@/pages/driver-engagement/RatingsPage";
 import WhiteLabelPage from "@/pages/settings/white-label";
 import SecuritySettingsPage from "@/pages/settings/security";
 import PlatformConsolePage from "@/pages/platform";
-import AuditLogPage from "@/pages/audit-log";
 import PaymentReconciliationPage from "@/pages/payment-recon";
 
 /**
