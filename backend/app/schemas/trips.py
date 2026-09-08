@@ -191,6 +191,33 @@ class TripUpdate(BaseModel):
 
 class TripTickRequest(BaseModel):
     points: list[TelemetryPoint] = Field(..., min_length=1)
+    # Idempotency key for this tick (backend audit §4, "/tick has no
+    # idempotency"). A tick batch is NOT naturally idempotent: waiting time
+    # is safe (app.services.trips.apply_tick clamps a backwards elapsed to 0)
+    # but haversine distance ACCUMULATES, so a client retry after a mobile
+    # timeout, or a double-tap, replayed the same points and billed their
+    # distance twice — a silent overcharge nothing downstream caught (the
+    # online-close path used to set max_fare_check_passed unconditionally).
+    #
+    # The meter sends a strictly monotonic counter per trip. The server
+    # persists the highest it has seen on Trip.last_tick_seq and treats any
+    # tick_seq <= that as a replay: a 200 no-op returning the trip exactly as
+    # it already stands, never an error (a retrying client must be able to
+    # stop retrying). Optional purely for backwards compatibility with meter
+    # builds that predate this field — those clients still get the
+    # timestamp-based defence below, which needs no client cooperation at
+    # all: apply_tick independently drops every point whose `ts` is not
+    # strictly after Trip.last_ts, so a replayed batch contributes no
+    # distance even with no tick_seq at all.
+    tick_seq: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Monotonic per-trip tick counter. A tick_seq at or below the "
+            "highest already applied to this trip is a replay and is answered "
+            "with a 200 no-op."
+        ),
+    )
     # Sibling fields, NOT part of TelemetryPoint above -- these describe the
     # trip's destination (a single mid-trip decision), not one GPS sample.
     # See app.models.trips.Trip.planned_dest_lat/lng's doc comment (module
@@ -218,6 +245,26 @@ class TripCloseRequest(BaseModel):
     cleaning_fee: Decimal = Decimal(0)
     include_psl: bool = False
     receipt_ref: str | None = None
+    # The total the DEVICE's own meter arrived at for this trip, if the
+    # client knows it (backend audit §4: "max_fare_check_passed = True
+    # unconditionally on the online-close path — any trip closed online has
+    # an unverified fare by construction"). Supplying it makes an online
+    # close run exactly the same independent verification /sync already runs
+    # on an offline-replayed trip: the server closes the trip from its own
+    # accrued state, compares its grand_total against this figure, and
+    # records variance_pct / max_fare_check_passed / flagged_for_review
+    # accordingly. Optional — omitted (the pre-existing behaviour, and all
+    # any current client sends) means there is simply nothing to compare, and
+    # the check is recorded as passing rather than inventing a variance.
+    device_total: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "The device meter's own grand total for this trip. When supplied, the "
+            "server runs the same 1%-tolerance variance check as /sync and "
+            "auto-flags the trip if it fails."
+        ),
+    )
     tip_amount: Decimal | None = Field(
         default=None,
         description=(
@@ -403,9 +450,40 @@ class TripListResponse(BaseModel):
 
 
 class TripSyncResultItem(BaseModel):
+    """Per-item outcome of one `POST /v1/trips/sync` batch entry.
+
+    `status` is the authoritative field (backend audit §4, "the batch-abort
+    bug"). Before this pass every item that wasn't a duplicate had to
+    succeed: a single bad voucher/account/tariff/split-mismatch raised an
+    HTTPException from inside the per-item loop, FastAPI unwound the request
+    without ever reaching the single commit at the end, and **every already
+    flushed good trip in the same batch was lost**. The Android meter posts
+    a whole shift's queued offline trips as ONE batch, so one poisoned item
+    destroyed the shift. Each item now runs in its own SAVEPOINT and a
+    failure is reported here instead of aborting its siblings.
+
+    * `"synced"`   — a new trip row was created; `trip` is it.
+    * `"duplicate"` — this client_uuid was already synced (idempotent
+      replay, or a lost race against a concurrent sync); `trip` is the
+      pre-existing row. Not an error.
+    * `"failed"`   — this item was rejected on its own merits; `reason`
+      carries the human-readable why (the same text the endpoint used to
+      return as a 422 detail for the whole batch) and `trip` is None. Its
+      siblings are unaffected.
+
+    `duplicate` is kept as a derived mirror of `status == "duplicate"` purely
+    so meter builds that predate `status` keep parsing this response; new
+    callers should read `status`.
+    """
+
     client_uuid: str
     duplicate: bool
-    trip: TripRead
+    status: Literal["synced", "duplicate", "failed"] = "synced"
+    reason: str | None = Field(
+        default=None,
+        description="Why this item was rejected. Set only when status == 'failed'.",
+    )
+    trip: TripRead | None = None
 
 
 class TripSyncResponse(BaseModel):

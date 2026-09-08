@@ -79,6 +79,13 @@ async def start(
     against that tablet's paired vehicle (`fleet.Device.vehicle_id`) — a
     mismatch never blocks or alters the shift, it just sets
     `device_mismatch_warning` on the response and writes an audit-log row.
+
+    If `client_uuid` is supplied the call is idempotent on it: replaying the
+    same start (an offline start drained from the meter's outbox, a retry, a
+    racing second drain) returns the shift that uuid already opened rather
+    than opening a second one — see app.services.shift.start_shift. The
+    response is still 201 on a replay; the body is the original shift, so a
+    client that lost our first response can treat both outcomes identically.
     """
     try:
         return await start_shift(
@@ -88,6 +95,7 @@ async def start(
             vehicle_id=body.vehicle_id,
             start_at=body.start_at,
             inspection_json=body.inspection_json,
+            client_uuid=body.client_uuid,
             force_handover=body.force_handover,
             device_android_id=body.device_android_id,
             device_check_actor_user_id=user.id,

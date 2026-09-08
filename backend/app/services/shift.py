@@ -27,6 +27,7 @@ from decimal import Decimal
 
 from fpdf import FPDF
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fleet import Device
@@ -41,6 +42,11 @@ logger = logging.getLogger("cab_dispatch.shift")
 # Everything else observed on a trip (tap_to_pay, link, cabcharge, ttss, ...) is
 # counted into card_total. Mirrors the `payments.method` enum in the product spec.
 _CASH_METHOD = "cash"
+
+# Attributed leg-by-leg rather than counted wholesale into either bucket —
+# see _recompute_trip_aggregates. Mirrors the "split_fare" value in
+# app.schemas.trips.PaymentMethod / app.models.trips.Trip.payment_method.
+_SPLIT_METHOD = "split_fare"
 
 
 class ShiftConflictError(Exception):
@@ -84,7 +90,7 @@ async def _recompute_trip_aggregates(
     """Returns (trips_count, km_total, cash_total, card_total) computed fresh
     from the shift's own closed trips. Authoritative — never trusts client input."""
     try:
-        from app.models.trips import Trip
+        from app.models.trips import TRIP_STATUS_CLOSED, Trip
     except ImportError:  # pragma: no cover - defensive only, see module docstring
         logger.warning(
             "app.models.trips.Trip not importable — leaving shift %s aggregates at "
@@ -94,7 +100,18 @@ async def _recompute_trip_aggregates(
         )
         return 0, Decimal(0), Decimal(0), Decimal(0)
 
-    base_filter = (Trip.tenant_id == tenant_id, Trip.shift_id == shift_id)
+    # CLOSED trips only (backend audit §4, "Gap: _recompute_trip_aggregates
+    # sums ALL trips, not just closed"). An open trip has total = 0 and a
+    # distance that is still moving, so counting it deflated cash/card
+    # against trips_count and let a shift be reconciled against a fare that
+    # had not been struck yet. app.services.trips already filters this way
+    # for the driver's own earnings figure; this brings the shift report in
+    # line with it.
+    base_filter = (
+        Trip.tenant_id == tenant_id,
+        Trip.shift_id == shift_id,
+        Trip.status == TRIP_STATUS_CLOSED,
+    )
 
     trips_count = (
         await session.execute(select(func.count(Trip.id)).where(*base_filter))
@@ -107,26 +124,63 @@ async def _recompute_trip_aggregates(
     ).scalar_one() or 0
     km_total = (Decimal(distance_m_total) / Decimal(1000)).quantize(Decimal("0.001"))
 
+    # A split_fare trip is deliberately EXCLUDED from both sums here and
+    # attributed leg-by-leg below (backend audit §4, "Gap: split_fare counted
+    # 100% as card"). The old `payment_method != "cash"` catch-all put the
+    # whole of a part-cash trip into card_total, so a driver who took $30
+    # cash and $30 on a card handed over a drawer that was $30 short against
+    # the figure this function told the dashboard to expect — the shift then
+    # reconciled as a discrepancy every single time.
+    countable = (*base_filter, Trip.payment_method != _SPLIT_METHOD)
+
     cash_total = (
         await session.execute(
             select(func.coalesce(func.sum(Trip.total), 0)).where(
-                *base_filter, Trip.payment_method == _CASH_METHOD
+                *countable, Trip.payment_method == _CASH_METHOD
             )
         )
     ).scalar_one() or 0
     card_total = (
         await session.execute(
             select(func.coalesce(func.sum(Trip.total), 0)).where(
-                *base_filter, Trip.payment_method != _CASH_METHOD
+                *countable, Trip.payment_method != _CASH_METHOD
             )
         )
     ).scalar_one() or 0
 
+    cash_total = Decimal(str(cash_total))
+    card_total = Decimal(str(card_total))
+
+    # Split fares, attributed by their own components. `split_payments` is a
+    # JSON list of {method, amount} legs (amounts stringified — see
+    # app.services.trips.close_trip), so this cannot be a SQL SUM; the row
+    # count is bounded by one shift's trips, which is at most a few dozen.
+    # A split trip whose legs are missing entirely (a pre-split_payments row)
+    # falls back to counting as card, the old behaviour, rather than
+    # silently vanishing from the takings.
+    split_rows = (
+        await session.execute(
+            select(Trip.total, Trip.split_payments).where(
+                *base_filter, Trip.payment_method == _SPLIT_METHOD
+            )
+        )
+    ).all()
+    for total, legs in split_rows:
+        if not legs:
+            card_total += Decimal(str(total or 0))
+            continue
+        for leg in legs:
+            amount = Decimal(str(leg.get("amount", 0)))
+            if leg.get("method") == _CASH_METHOD:
+                cash_total += amount
+            else:
+                card_total += amount
+
     return (
         int(trips_count),
         km_total,
-        round_half_up(Decimal(str(cash_total))),
-        round_half_up(Decimal(str(card_total))),
+        round_half_up(cash_total),
+        round_half_up(card_total),
     )
 
 
@@ -201,6 +255,7 @@ async def start_shift(
     vehicle_id: str,
     start_at: datetime | None,
     inspection_json: dict | None,
+    client_uuid: str | None = None,
     force_handover: bool = False,
     device_android_id: str | None = None,
     device_check_actor_user_id: str | None = None,
@@ -237,7 +292,31 @@ async def start_shift(
     this shift; it only writes an audit-log row and sets the returned
     Shift's transient `device_mismatch_warning` attribute (also exposed on
     `ShiftRead`) for the API layer to surface to the driver.
+
+    If `client_uuid` is given this call is IDEMPOTENT on it (see
+    `app.models.shift.Shift.client_uuid`), by exactly the same two-part
+    pattern `app.api.v1.trips` uses for a trip's client_uuid: an up-front
+    read returns any shift already opened under that uuid, and the unique
+    `(tenant_id, client_uuid)` constraint catches the concurrent case that
+    read cannot, so a replay never opens a second shift. Critically, the
+    pre-check runs BEFORE any of the dangling-shift / handover side effects
+    below — replaying a start must not re-close a shift the first attempt
+    already closed, nor perform a second handover.
     """
+    if client_uuid is not None:
+        replay = await session.execute(
+            select(Shift).where(Shift.tenant_id == tenant_id, Shift.client_uuid == client_uuid)
+        )
+        existing = replay.scalar_one_or_none()
+        if existing is not None:
+            logger.info(
+                "start_shift: client_uuid %s already opened shift %s — returning it "
+                "unchanged rather than starting a second shift.",
+                client_uuid,
+                existing.id,
+            )
+            return existing
+
     effective_start_at = start_at or datetime.now(UTC)
 
     own_dangling_shift = await _find_open_shift(session, tenant_id=tenant_id, driver_id=driver_id)
@@ -283,6 +362,7 @@ async def start_shift(
         vehicle_id=vehicle_id,
         start_at=effective_start_at,
         inspection_json=inspection_json,
+        client_uuid=client_uuid,
     )
     session.add(shift)
     # Flush (not commit) so shift.id is populated before the device mismatch
@@ -290,7 +370,18 @@ async def start_shift(
     # row (if any) in the SAME transaction as the shift creation — see
     # app.services.audit_log.record_audit's own docstring on why it flushes
     # rather than commits.
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Lost a race on the unique (tenant_id, client_uuid) constraint: a
+        # concurrent replay of this same offline start won. Roll back and
+        # return the shift that won, so both callers see one shift — the
+        # 409-safe half of the idempotency contract above.
+        await session.rollback()
+        replay = await session.execute(
+            select(Shift).where(Shift.tenant_id == tenant_id, Shift.client_uuid == client_uuid)
+        )
+        return replay.scalar_one()
 
     device_mismatch_warning: str | None = None
     if device_android_id is not None:

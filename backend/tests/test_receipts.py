@@ -64,6 +64,19 @@ async def _tenant_of(headers: dict) -> str:
     return security.decode_token(token)["tenant_id"]
 
 
+def _user_id_of(headers: dict) -> str:
+    """The authenticated caller's own user id, straight out of the bearer
+    token. `POST /v1/trips` now enforces that a driver-role caller may only
+    open a trip in their OWN name (app.api.v1.trips._require_trip_write_access
+    - backend audit S4, "No role/ownership check on any trip write"), so a
+    trip fixture built for a driver must be attributed to that driver rather
+    than to a fresh random uuid."""
+    from app.core import security
+
+    token = headers["Authorization"].split(" ", 1)[1]
+    return security.decode_token(token)["sub"]
+
+
 def _trip_payload(*, tariff_id: str, **overrides) -> dict:
     payload = {
         "client_uuid": str(uuid.uuid4()),
@@ -81,7 +94,11 @@ def _trip_payload(*, tariff_id: str, **overrides) -> dict:
 
 
 async def _create_and_close_trip(client: AsyncClient, headers: dict, tariff_id: str) -> dict:
-    resp = await client.post("/v1/trips", json=_trip_payload(tariff_id=tariff_id), headers=headers)
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff_id, driver_id=_user_id_of(headers)),
+        headers=headers,
+    )
     assert resp.status_code == 201, resp.text
     trip = resp.json()
 
@@ -107,7 +124,11 @@ async def _create_and_close_trip(client: AsyncClient, headers: dict, tariff_id: 
 
 
 async def _open_trip(client: AsyncClient, headers: dict, tariff_id: str) -> dict:
-    resp = await client.post("/v1/trips", json=_trip_payload(tariff_id=tariff_id), headers=headers)
+    resp = await client.post(
+        "/v1/trips",
+        json=_trip_payload(tariff_id=tariff_id, driver_id=_user_id_of(headers)),
+        headers=headers,
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()
 

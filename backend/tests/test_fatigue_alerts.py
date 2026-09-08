@@ -62,6 +62,19 @@ async def _tenant_of(headers: dict) -> str:
     return security.decode_token(token)["tenant_id"]
 
 
+def _user_id_of(headers: dict) -> str:
+    """The authenticated caller's own user id, straight out of the bearer
+    token. `POST /v1/trips` now enforces that a driver-role caller may only
+    open a trip in their OWN name (app.api.v1.trips._require_trip_write_access
+    - backend audit S4, "No role/ownership check on any trip write"), so a
+    trip fixture built for a driver must be attributed to that driver rather
+    than to a fresh random uuid."""
+    from app.core import security
+
+    token = headers["Authorization"].split(" ", 1)[1]
+    return security.decode_token(token)["sub"]
+
+
 async def _start_shift(client: AsyncClient, headers: dict, *, driver_id: str, vehicle_id: str, start_at: datetime) -> dict:
     resp = await client.post(
         "/v1/shifts/start",
@@ -106,7 +119,7 @@ async def test_tick_past_shift_duration_threshold_creates_exactly_one_alert(
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     over_limit_start = datetime.now(UTC) - timedelta(hours=settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS + 1)
     shift = await _start_shift(client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=over_limit_start)
@@ -143,7 +156,7 @@ async def test_tick_under_shift_duration_threshold_creates_no_alert(client: Asyn
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     shift = await _start_shift(
         client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=datetime.now(UTC)
@@ -173,7 +186,7 @@ async def test_tick_past_no_break_threshold_with_no_break_creates_alert(
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
     over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
@@ -210,7 +223,7 @@ async def test_tick_past_no_break_threshold_with_break_taken_creates_no_alert(
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
     over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
@@ -246,7 +259,7 @@ async def test_tick_under_no_break_threshold_creates_no_alert(client: AsyncClien
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     shift = await _start_shift(
         client, headers, driver_id=driver_id, vehicle_id=vehicle_id, start_at=datetime.now(UTC)
@@ -277,7 +290,7 @@ async def test_tick_over_speed_threshold_creates_speed_alert(client: AsyncClient
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id)
 
@@ -304,7 +317,7 @@ async def test_tick_under_speed_threshold_creates_no_speed_alert(client: AsyncCl
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id)
 
@@ -327,7 +340,7 @@ async def test_list_and_acknowledge_fatigue_alerts(client: AsyncClient, session:
     tenant_id = await _tenant_of(headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    driver_id = str(uuid.uuid4())
+    driver_id = _user_id_of(headers)
     vehicle_id = str(uuid.uuid4())
     trip = await _create_trip(client, headers, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id)
     resp = await client.patch(
@@ -363,6 +376,8 @@ async def test_fatigue_alerts_are_tenant_isolated(client: AsyncClient, session: 
     tenant_a = await _tenant_of(headers_a)
     tariff = await _seed_tariff(session, tenant_id=tenant_a)
 
+    # Staff role (admin) here, so an arbitrary driver_id is still permitted -
+    # this test is about tenant isolation, not trip ownership.
     driver_id = str(uuid.uuid4())
     vehicle_id = str(uuid.uuid4())
     trip = await _create_trip(client, headers_a, tariff_id=tariff.id, driver_id=driver_id, vehicle_id=vehicle_id)

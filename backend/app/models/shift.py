@@ -65,7 +65,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -74,9 +74,32 @@ from app.core.database import Base, TenantScopedMixin, TimestampMixin
 class Shift(Base, TenantScopedMixin, TimestampMixin):
     __tablename__ = "shifts"
 
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "client_uuid", name="uq_shifts_tenant_client_uuid"),
+    )
+
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
+
+    # Device-generated idempotency key for `POST /v1/shifts/start`, mirroring
+    # `app.models.trips.Trip.client_uuid` exactly (same unique-per-tenant
+    # constraint, same pre-check-then-catch-IntegrityError race handling in
+    # the service layer). This is what makes an OFFLINE shift start real:
+    # until now the Android meter, unable to reach the server at the top of a
+    # shift, fabricated a synthetic shift id locally that was never persisted
+    # anywhere, so every trip closed under it referenced a shift that did not
+    # exist. The meter now mints this uuid offline, queues the start in its
+    # outbox, and replays it on reconnect — and because the same uuid can be
+    # replayed any number of times (a retry, a reinstall replaying the
+    # outbox, two racing drains) the second and later attempts must return
+    # the SAME shift rather than opening a second one or 500ing.
+    #
+    # Nullable: a shift opened from the dashboard, or by a meter build that
+    # predates this field, carries no client_uuid. NULLs are distinct under a
+    # unique constraint in both SQLite and Postgres, so any number of such
+    # rows coexist.
+    client_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     # --- assignment (unconstrained cross-domain refs, see module docstring) ---
     driver_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)

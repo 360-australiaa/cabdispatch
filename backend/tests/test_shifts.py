@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
 from app.models.fleet import Device, Vehicle
+from app.models.shift import Shift
 from app.models.trips import Trip
 from tests.conftest import auth_headers
 
@@ -753,3 +754,152 @@ async def test_omitted_device_android_id_behaves_exactly_as_before(
     assert body["driver_id"] == driver_id
     assert body["vehicle_id"] == vehicle_id
     assert body["device_mismatch_warning"] is None
+
+
+# --- WAVE-1 B1: idempotent shift start (backend audit §4 / plan S3) ---------
+
+
+async def test_shift_start_is_idempotent_on_client_uuid(client: AsyncClient, session: AsyncSession):
+    """`POST /v1/shifts/start` now accepts a device-generated `client_uuid`
+    and is idempotent on it. This is what makes an OFFLINE shift start real:
+    until now the meter, unable to reach the server at the top of a shift,
+    fabricated a synthetic shift that was never persisted, so every trip
+    closed under it referenced a shift that did not exist. The meter mints
+    this uuid offline, queues the start, and replays it on reconnect — and a
+    replay must return the SAME shift, not open a second one."""
+    headers = await auth_headers(client, session, role="driver")
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+    client_uuid = str(uuid.uuid4())
+    body = {"driver_id": driver_id, "vehicle_id": vehicle_id, "client_uuid": client_uuid}
+
+    first = await client.post("/v1/shifts/start", json=body, headers=headers)
+    assert first.status_code == 201, first.text
+    shift_id = first.json()["id"]
+
+    # Byte-identical replay — the outbox draining twice.
+    second = await client.post("/v1/shifts/start", json=body, headers=headers)
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] == shift_id, "a replayed start opened a SECOND shift"
+
+    # ...and a third, for good measure. Exactly one row exists.
+    third = await client.post("/v1/shifts/start", json=body, headers=headers)
+    assert third.status_code == 201, third.text
+    assert third.json()["id"] == shift_id
+
+    rows = (
+        await session.execute(
+            select(Shift).where(Shift.client_uuid == client_uuid)
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].id == shift_id
+    # The replay must not have re-run start_shift's side effects either — the
+    # shift is still open, not auto-closed and reopened by the second call's
+    # own dangling-shift handling.
+    assert rows[0].end_at is None
+
+
+async def test_shift_start_without_client_uuid_still_opens_separate_shifts(
+    client: AsyncClient, session: AsyncSession
+):
+    """client_uuid is optional, and NULLs are distinct under the unique
+    constraint — a dashboard-opened shift, or a meter build predating the
+    field, must be unaffected."""
+    headers = await auth_headers(client, session, role="driver")
+    vehicle_id = str(uuid.uuid4())
+
+    first = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    # A different driver on the same vehicle, with a real handover.
+    second = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": vehicle_id, "force_handover": True},
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] != first.json()["id"]
+
+
+async def test_shift_aggregates_ignore_open_trips_and_split_fares_by_component(
+    client: AsyncClient, session: AsyncSession
+):
+    """`_recompute_trip_aggregates` summed ALL trips including open ones
+    (total = 0, deflating the average and inflating trips_count) and
+    attributed a split_fare 100% to card (backend audit §4). A driver who
+    took $30 cash and $30 on a card handed over a drawer $30 short against
+    the figure the dashboard expected, so the shift reconciled as a
+    discrepancy every single time."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = (await client.get("/v1/shifts", headers=headers)) and None
+    from app.core import security as _security
+
+    token = headers["Authorization"].split(" ", 1)[1]
+    tenant_id = _security.decode_token(token)["tenant_id"]
+
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+    started = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    assert started.status_code == 201, started.text
+    shift_id = started.json()["id"]
+
+    now = datetime.now(UTC)
+
+    def _trip(**overrides) -> Trip:
+        base = {
+            "tenant_id": tenant_id,
+            "client_uuid": str(uuid.uuid4()),
+            "vehicle_id": vehicle_id,
+            "driver_id": driver_id,
+            "shift_id": shift_id,
+            "tariff_id": str(uuid.uuid4()),
+            "type": "rank_hail",
+            "start_at": now,
+            "start_lat": -33.8688,
+            "start_lng": 151.2093,
+            "status": "closed",
+            "distance_m": 1000,
+        }
+        base.update(overrides)
+        return Trip(**base)
+
+    session.add_all(
+        [
+            _trip(payment_method="cash", total=Decimal("20.00")),
+            _trip(payment_method="card", total=Decimal("30.00")),
+            # Counted at ZERO before this pass, and counted in trips_count.
+            _trip(status="open", payment_method="cash", total=Decimal("0.00"), distance_m=500),
+            # Attributed 100% to card before this pass.
+            _trip(
+                payment_method="split_fare",
+                total=Decimal("60.00"),
+                split_payments=[
+                    {"method": "cash", "amount": "25.00"},
+                    {"method": "card", "amount": "35.00"},
+                ],
+            ),
+        ]
+    )
+    await session.commit()
+
+    ended = await client.post(f"/v1/shifts/{shift_id}/end", json={}, headers=headers)
+    assert ended.status_code == 200, ended.text
+    body = ended.json()
+
+    # Three CLOSED trips, not four.
+    assert body["trips_count"] == 3
+    # The open trip's 500 m is excluded: 3 x 1000 m.
+    assert Decimal(body["km_total"]) == Decimal("3.000")
+    # cash: 20.00 + the split's 25.00 leg.
+    assert Decimal(body["cash_total"]) == Decimal("45.00")
+    # card: 30.00 + the split's 35.00 leg.
+    assert Decimal(body["card_total"]) == Decimal("65.00")
