@@ -41,6 +41,13 @@ android {
         applicationId = "au.com.threesixty.cabdispatch"
         minSdk = 29
         targetSdk = 35
+        // 10 / 0.6.1 (2026-09-08): the tablet recovers its vehicle binding instead of publishing
+        // to a uuid that no longer exists. A fleet wipe gives every car a new uuid under the same
+        // rego, and a session bound to the old one 404'd every 5s for the rest of the shift --
+        // silently, so the driver saw a working meter while the dispatcher saw a car that never
+        // appeared on the Live Map. A bind made with no signal had the same effect. This build
+        // should reach every tablet whose depot has ever re-seeded its fleet.
+        //
         // 9 / 0.6.0 (2026-09-08): the meter dial animates on the TARIFF's own bands -- waiting time
         // under 26 km/h, distance above it, energetic past 60 -- and the speed-reactive ember it
         // already had is fixed (it captured speed once at composition, so it had been static).
@@ -73,8 +80,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 9
-        versionName = "0.6.0"
+        versionCode = 10
+        versionName = "0.6.1"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
