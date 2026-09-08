@@ -114,6 +114,22 @@ services:
     # explicitly -- `- "127.0.0.1:8001:8001"` -- never 0.0.0.0.
     expose:
       - "8001"
+    # Readiness, overriding the image's own liveness HEALTHCHECK (backend/
+    # Dockerfile). `/health` really checks its dependencies now -- database
+    # SELECT 1, the database's alembic_version against this image's migration
+    # head, and a Redis PING -- and returns 503 when one is down. It used to
+    # return {"status":"ok"} without touching anything, which meant
+    # `docker compose up --wait` reported a green deploy for a backend with a
+    # dead Postgres or an un-migrated schema (backend audit §6).
+    # start_period covers the alembic upgrade entrypoint.sh runs before uvicorn
+    # binds; note that `restart: unless-stopped` does not act on health, so an
+    # unhealthy backend is reported, not restart-looped.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
     env_file:
       - .env.production
     environment:

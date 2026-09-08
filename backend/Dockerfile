@@ -45,7 +45,13 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 8001
 
+# LIVENESS, not readiness -- /health/live touches nothing and only says "this
+# process is up". The dependency check (/health: DB SELECT 1, alembic head
+# match, Redis ping) is wired as the *compose* healthcheck instead, so
+# `docker compose up --wait` still gates the deploy on real dependencies while
+# a slow Postgres can never mark this container unhealthy and drive a restart
+# loop that fixes nothing. See app/core/health.py.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-    CMD curl -fsS http://localhost:8001/health || exit 1
+    CMD curl -fsS http://localhost:8001/health/live || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

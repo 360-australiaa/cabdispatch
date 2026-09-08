@@ -104,6 +104,9 @@ and every install still needs one Android system confirmation tap (this
 app is not Device Owner, so it cannot install silently).
 """
 import logging
+import os
+import re
+import sys
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -144,10 +147,77 @@ from app.api.v1.vouchers import router as vouchers_router
 from app.api.v1.wallet import router as wallet_router
 from app.api.v1.zones import router as zones_router
 from app.core.config import settings
+from app.core.errors import ExceptionEnvelopeMiddleware, register_exception_handlers
+from app.core.health import health_report
+from app.core.logging import RequestIdMiddleware, configure_logging
 from app.core.ratelimit import RateLimitExceeded, limiter
 from app.core.ratelimit import backend as ratelimit_backend
 
+# FIRST, before anything logs. Until this call existed there was no logging
+# configuration in this project at all (backend audit §6): modules called
+# getLogger and the app inherited whatever uvicorn installed, which meant no
+# request correlation and no machine-parseable output. See app/core/logging.py.
+configure_logging()
+
 logger = logging.getLogger(__name__)
+
+
+# --- single-worker enforcement (backend audit §6 gap 9) ----------------------
+# docker-compose.yml carries a long comment explaining that this app MUST run
+# with exactly one worker, and entrypoint.sh spells `--workers 1` out. Both are
+# documentation: nothing *checks*. That is not enough for this failure, because
+# raising the worker count breaks things **silently** -- no error, just a live
+# map that stops updating for half the users and a revoked token that still
+# works. This turns the comment into an assertion.
+#
+# There is no portable way to ask "how many workers am I one of", so we detect
+# the three ways it can actually be set in this deployment: uvicorn's
+# `--workers/-w` argv flag, uvicorn/gunicorn's `WEB_CONCURRENCY` env var, and
+# gunicorn's `GUNICORN_CMD_ARGS`. A false negative is possible (an exotic
+# launcher); a false positive is not, which is the right way round for
+# something that refuses to boot in production.
+def _detected_worker_count() -> tuple[int, str] | None:
+    argv = " ".join(sys.argv)
+    match = re.search(r"(?:--workers|-w)[=\s]+(\d+)", argv)
+    if match:
+        return int(match.group(1)), "the --workers command line flag"
+
+    for env_var in ("WEB_CONCURRENCY", "GUNICORN_CMD_ARGS"):
+        raw = os.environ.get(env_var, "")
+        if not raw:
+            continue
+        env_match = re.search(r"(?:--workers|-w)[=\s]+(\d+)", raw) if env_var != "WEB_CONCURRENCY" else re.fullmatch(r"\s*(\d+)\s*", raw)
+        if env_match:
+            return int(env_match.group(1)), f"${env_var}"
+    return None
+
+
+def assert_single_worker() -> None:
+    detected = _detected_worker_count()
+    if detected is None or detected[0] <= 1:
+        return
+    count, source = detected
+    message = (
+        f"MULTI-WORKER DEPLOY DETECTED ({count} workers, from {source}). This backend is "
+        "correct only at exactly one worker. The three in-process broadcasters "
+        "(app/services/live_ops.py's position broadcaster, JobOfferBroadcaster, "
+        "message_broadcaster) hold their subscriber sets in this process's memory, so a "
+        "WebSocket client connected to one worker never sees an event published on "
+        "another -- the live map, job offers and messages silently stop for a share of "
+        "users. app/core/security.py's JWT revocation store has the same problem when "
+        "Redis is unreachable: a token revoked on one worker stays valid on every other. "
+        "Fix it by scaling horizontally behind Caddy with a shared Redis pub/sub backend "
+        "for the broadcasters (see docs/followups/2026-09-08-redis-pubsub-broadcasters.md), "
+        "not by raising the worker count."
+    )
+    if settings.ENV == "production":
+        # Refusing to boot is the honest response: the alternative is serving
+        # traffic that is wrong in a way nobody will notice for weeks.
+        raise RuntimeError(message)
+    logger.critical(message)
+
+
+assert_single_worker()
 
 app = FastAPI(title="Cab Dispatch API", version="0.1.0")
 
@@ -179,18 +249,71 @@ logger.info(
     "redis" if ratelimit_backend.using_redis else "in-memory fallback",
 )
 
+# --- middleware stack -------------------------------------------------------
+# ORDER MATTERS AND IS INVERTED. Starlette's `add_middleware` *prepends*, and
+# the stack is then built by wrapping in reverse -- so the LAST middleware added
+# here is the OUTERMOST at request time. Written out, requests flow:
+#
+#     client -> RequestIdMiddleware -> CORSMiddleware
+#            -> ExceptionEnvelopeMiddleware -> routes
+#
+# and responses come back out the same way. That specific arrangement is the
+# whole fix for the "phantom 503" (see app/core/errors.py and the postmortem at
+# the top of app/services/fleet.py): the envelope middleware must sit INSIDE
+# CORS so that the 500 it produces travels back out through the CORS layer and
+# gets `Access-Control-Allow-Origin` stamped on it. A plain
+# `@app.exception_handler(Exception)` cannot do this -- FastAPI hands that to
+# ServerErrorMiddleware, which is outside every user middleware, which is
+# exactly how the header went missing in the first place.
+#
+# RequestIdMiddleware is outermost so that even a CORS preflight and any error
+# CORS itself produces still carry (and log) a request id.
+app.add_middleware(ExceptionEnvelopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Browsers hide every non-safelisted response header from JS unless it is
+    # exposed. Without this the dashboard could not read the request id off a
+    # failed response, which is the id an operator needs in order to find the
+    # matching log line.
+    expose_headers=["X-Request-ID"],
 )
+app.add_middleware(RequestIdMiddleware)
+
+# Fallback only; the middleware above is the load-bearing half. See errors.py.
+register_exception_handlers(app)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": settings.ENV}
+    """Readiness: database `SELECT 1`, alembic head match, Redis ping.
+
+    Returns 503 when a required dependency is down, so `docker compose up
+    --wait` and the Dockerfile HEALTHCHECK actually gate on something. This
+    used to return `{"status": "ok"}` unconditionally -- see app/core/health.py
+    for what each check is for and why Redis is only fatal in production.
+    """
+    body, healthy = await health_report()
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=body,
+    )
+
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness: answers from process memory, touches nothing.
+
+    Deliberately trivial. Docker restarts a container whose HEALTHCHECK fails,
+    so if the liveness probe did dependency checks a slow Postgres would
+    restart a healthy API process -- dropping every live WebSocket and fixing
+    nothing. Point container liveness at this; point readiness/monitoring at
+    `/health`.
+    """
+    return {"status": "alive", "env": settings.ENV}
 
 
 app.include_router(auth_router)
