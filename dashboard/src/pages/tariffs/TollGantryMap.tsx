@@ -3,6 +3,7 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Table, type TableColumn } from "@/components/ui";
 import type { TollGantry, TollRoad } from "@/hooks/useTollRoads";
+import { orderAlongRoad } from "./tollCorridor";
 
 // Same public/publishable token pattern as the Live Map and the toll-zone
 // picker (src/pages/live-map/FleetMapCanvas.tsx, TollZoneMapPicker.tsx) —
@@ -275,7 +276,6 @@ function MapboxGantryCanvas({
   return (
     <div>
       <div ref={containerRef} className="h-[480px] w-full overflow-hidden rounded-md border border-border" />
-      <TollLegend roadNames={roadNames} gantries={gantries} />
     </div>
   );
 }
@@ -335,30 +335,15 @@ function corridorCollection(gantries: TollGantry[]): LineFeatureCollection {
     if (list.length < 2) continue;
     features.push({
       type: "Feature",
-      geometry: { type: "LineString", coordinates: list.map((g) => [g.longitude, g.latitude] as [number, number]) },
+      geometry: {
+        type: "LineString",
+        // Along the road, not in registry order -- see tollCorridor.ts.
+        coordinates: orderAlongRoad(list).map((g) => [g.longitude, g.latitude] as [number, number]),
+      },
       properties: { roadId, color: colorFor(roadId) },
     });
   }
   return { type: "FeatureCollection", features };
-}
-
-/** Road colour key under the map, with the gantry count per road -- the owner's "which line is
- * which" question answered without hovering. */
-function TollLegend({ roadNames, gantries }: { roadNames: Record<string, string>; gantries: TollGantry[] }) {
-  const counts = new Map<string, number>();
-  for (const g of gantries) counts.set(g.toll_road_id, (counts.get(g.toll_road_id) ?? 0) + 1);
-  const roads = [...counts.keys()].sort((a, b) => (roadNames[a] ?? a).localeCompare(roadNames[b] ?? b));
-  return (
-    <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground" aria-label="Toll road colour key">
-      {roads.map((id) => (
-        <li key={id} className="flex items-center gap-2">
-          <span className="inline-block h-2.5 w-2.5 rounded-full ring-2 ring-white/70" style={{ background: colorFor(id) }} aria-hidden />
-          <span className="text-foreground">{roadNames[id] ?? id}</span>
-          <span className="font-mono">{counts.get(id)}</span>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 /** Injected once: mapbox's default popup is a white card with dark text, unreadable on a dark
