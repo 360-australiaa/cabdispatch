@@ -12,6 +12,27 @@ package au.com.threesixty.cabdispatch.hardware.receipt
  */
 data class Receipt(
     val tripId: String,
+    /**
+     * The server-assigned trip id, once `/v1/trips/sync` (or an online close) has
+     * assigned one — `TripEntity.serverId`. Distinct from [tripId], which is the
+     * on-device `clientUuid` this offline-first app keys trips by and which the
+     * backend's `/v1/trips/{trip_id}/receipt/...` routes know nothing about.
+     * `null` while the trip is still unsynced; the SMS/email gateways refuse (with
+     * a message that says so) rather than posting an id the server cannot resolve.
+     */
+    val serverTripId: String? = null,
+    /**
+     * True when any part of this transaction ran through a simulated gateway
+     * (debug builds only — see
+     * [au.com.threesixty.cabdispatch.hardware.HardwareGateway]). When set, the
+     * rendered receipt MUST carry
+     * [au.com.threesixty.cabdispatch.hardware.TEST_RECEIPT_MARKER] and the
+     * confirmation MUST carry
+     * [au.com.threesixty.cabdispatch.hardware.SIMULATED_BANNER]. A passenger must
+     * never be handed something that reads like a real receipt for a payment that
+     * did not occur.
+     */
+    val simulated: Boolean = false,
     val vehicleId: String,
     val driverId: String,
     val startedAt: String,

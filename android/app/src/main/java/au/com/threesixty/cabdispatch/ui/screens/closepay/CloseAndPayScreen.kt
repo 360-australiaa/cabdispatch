@@ -65,6 +65,8 @@ import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.RatePassengerHandoff
 import au.com.threesixty.cabdispatch.domain.TripDetailHandoff
 import au.com.threesixty.cabdispatch.domain.fare.FareBreakdown
+import au.com.threesixty.cabdispatch.hardware.SIMULATED_BANNER
+import au.com.threesixty.cabdispatch.hardware.TEST_RECEIPT_MARKER
 import au.com.threesixty.cabdispatch.ui.deck.rememberDeckClock
 import au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
@@ -710,12 +712,21 @@ private fun MethodPickerScreen(
                         enabled = allowCash,
                         selected = state.paymentMethod == PaymentMethodOption.CASH,
                     ) { onSelect(PaymentMethodOption.CASH, PaymentSubScreen.CASH_CALCULATOR) }
-                    PayCard(
-                        Icons.Rounded.CreditCard,
-                        "CARD · TAP",
-                        CaptainPalette.accent,
-                        selected = state.paymentMethod == PaymentMethodOption.TAP_TO_PAY,
-                    ) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
+                    // A5 · Hardware honesty. Not rendered at all unless a REAL card-payment
+                    // gateway is present (AppContainer.cardPaymentGateway.isReal). No Stripe
+                    // Terminal SDK is a dependency of this app, so today it never is. This card
+                    // previously drove a mock that waited 1.5s and returned a synthetic approval,
+                    // and the driver got "Payment received" and a printable receipt for money that
+                    // had not moved. Removing the button is the honest failure mode; a disabled
+                    // one would still imply the capability exists and is merely switched off.
+                    if (state.cardPaymentIsReal) {
+                        PayCard(
+                            Icons.Rounded.CreditCard,
+                            "CARD · TAP",
+                            CaptainPalette.accent,
+                            selected = state.paymentMethod == PaymentMethodOption.TAP_TO_PAY,
+                        ) { onSelect(PaymentMethodOption.TAP_TO_PAY, PaymentSubScreen.CASH_CALCULATOR) }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     PayCard(
@@ -1298,7 +1309,6 @@ private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, se
 @Composable
 private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel) {
     val scope = rememberCoroutineScope2()
-    var apiNote by remember { mutableStateOf<String?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -1326,6 +1336,13 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                 val r = s.receipt
                 ReceiptMono(r.tripId.let { "LILLY CABS PTY LTD" }, bold = true, size = 20)
                 ReceiptMono("ABN 12 345 678 901")
+                if (r.simulated) {
+                    // A5 · Hardware honesty: the marker is on the docket itself, in the
+                    // passenger's line of sight, not only in the driver-facing chrome.
+                    ReceiptMono("*** $TEST_RECEIPT_MARKER ***", bold = true, size = 17, color = Color(0xFFB3261E))
+                    ReceiptMono(SIMULATED_BANNER, bold = true, color = Color(0xFFB3261E))
+                    ReceiptMono("This is not a valid tax invoice.", color = Color(0xFFB3261E))
+                }
                 ReceiptMono("TAX INVOICE / RECEIPT", bold = true, size = 15)
                 ReceiptMono("Receipt ${r.receiptRef ?: "—"}")
                 ReceiptMono("${r.startedAt} → ${r.closedAt}")
@@ -1343,41 +1360,93 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                     ReceiptMono(r.total, bold = true, size = 18)
                 }
                 ReceiptMono("GST included ${r.gstComponent}")
-                ReceiptMono("PAID — ${r.paymentMethod.uppercase()}", bold = true, color = Color(0xFF1C7C3E))
+                if (r.simulated) {
+                    ReceiptMono("NOT PAID — $SIMULATED_BANNER", bold = true, color = Color(0xFFB3261E))
+                } else {
+                    ReceiptMono("PAID — ${r.paymentMethod.uppercase()}", bold = true, color = Color(0xFF1C7C3E))
+                }
             }
             Spacer(Modifier.width(64.dp))
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // A5 · Hardware honesty. Persistent, non-dismissible banner in the driver-facing
+                // confirmation whenever the payment was taken through a simulated gateway (debug
+                // builds only — the simulated gateways are never constructed in a release build).
+                // The passenger-facing docket to the left carries the same warning; this one is so
+                // the driver cannot hand it over without having seen it.
+                if (s.receipt.simulated) {
+                    Box(
+                        modifier = Modifier
+                            .width(480.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFB3261E))
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                    ) {
+                        Column {
+                            Text(
+                                SIMULATED_BANNER,
+                                fontFamily = InterFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                                color = Color.White,
+                            )
+                            Text(
+                                "This trip was closed through a simulated payment gateway. " +
+                                    "The receipt is marked $TEST_RECEIPT_MARKER and must not be " +
+                                    "given to a passenger as proof of payment.",
+                                fontFamily = InterFamily,
+                                fontSize = 14.sp,
+                                color = Color.White,
+                            )
+                        }
+                    }
+                }
                 Text("Passenger copy", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)
                 Text(
-                    "Printer not paired — offer email or SMS. Reprint any time from Trip Detail.",
+                    if (s.printerIsReal) {
+                        "Print, or offer email or SMS. Reprint any time from Trip Detail."
+                    } else {
+                        // A5: stated, not implied. No printer integration exists in this build,
+                        // so the Print action below is absent rather than failing on press.
+                        "No receipt printer on this device — offer email or SMS. " +
+                            "Reprint any time from Trip Detail."
+                    },
                     fontFamily = InterFamily,
                     fontSize = 16.sp,
                     color = CaptainPalette.textSecondary,
                 )
+                // A5: these used to call AppContainer.apiService.emailReceipt/smsReceipt inline,
+                // IN ADDITION to the ViewModel's mock gateway, and fell back to a fabricated
+                // recipient ("passenger@example.com" / "0400000000") when the driver had typed
+                // nothing — so a blank field still reported a send. Both now go through the one
+                // real gateway (ApiEmailReceiptGateway/ApiSmsReceiptGateway), which posts to the
+                // same routes, refuses the blank/unsynced cases, and reports the backend's own
+                // mock=true (no provider configured) as a failure instead of a delivery.
                 ReceiptActionButton(Icons.Rounded.Email, "Email receipt", busy = s.emailState == ActionState.IN_PROGRESS) {
-                    scope.launch {
-                        vm.sendEmailReceipt()
-                        apiNote = runCatching {
-                            AppContainer.apiService.emailReceipt(
-                                s.receipt.tripId,
-                                au.com.threesixty.cabdispatch.data.remote.ReceiptEmailRequestDto(s.emailAddress.ifBlank { "passenger@example.com" }),
-                            )
-                        }.fold({ if (it.mock) "Email queued (mock — no provider configured)" else "Email sent" }, { "Email failed to send" })
-                    }
+                    scope.launch { vm.sendEmailReceipt() }
                 }
                 ReceiptActionButton(Icons.Rounded.Sms, "SMS receipt", busy = s.smsState == ActionState.IN_PROGRESS) {
-                    scope.launch {
-                        vm.sendSmsReceipt()
-                        apiNote = runCatching {
-                            AppContainer.apiService.smsReceipt(
-                                s.receipt.tripId,
-                                au.com.threesixty.cabdispatch.data.remote.ReceiptSmsRequestDto(s.phoneNumber.ifBlank { "0400000000" }),
-                            )
-                        }.fold({ if (it.mock) "SMS queued (mock — no provider configured)" else "SMS sent" }, { "SMS failed to send" })
-                    }
+                    scope.launch { vm.sendSmsReceipt() }
                 }
-                ReceiptActionButton(Icons.Rounded.Print, "Print (printer offline)", busy = s.printState == ActionState.IN_PROGRESS, onClick = vm::printReceipt)
-                apiNote?.let { Text(it, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted) }
+                // Absent unless a real printer gateway is present — see printerIsReal's doc.
+                if (s.printerIsReal) {
+                    ReceiptActionButton(
+                        Icons.Rounded.Print,
+                        "Print receipt",
+                        busy = s.printState == ActionState.IN_PROGRESS,
+                        onClick = vm::printReceipt,
+                    )
+                }
+                // Real per-channel outcomes from the gateways, never a fabricated confirmation.
+                listOfNotNull(
+                    s.emailError?.let { "Email: " + it }
+                        ?: "Email sent".takeIf { s.emailState == ActionState.SUCCESS },
+                    s.smsError?.let { "SMS: " + it }
+                        ?: "SMS sent".takeIf { s.smsState == ActionState.SUCCESS },
+                    s.printError?.let { "Print: " + it }
+                        ?: "Printed".takeIf { s.printState == ActionState.SUCCESS },
+                ).forEach { note ->
+                    Text(note, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textMuted)
+                }
                 CaptainButton(text = "Done — back to For Hire", heightDp = 72, widthDp = 480) {
                     vm.finishReceiptStep()
                 }

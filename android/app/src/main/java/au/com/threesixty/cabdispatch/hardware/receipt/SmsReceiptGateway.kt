@@ -1,32 +1,53 @@
 package au.com.threesixty.cabdispatch.hardware.receipt
 
-import android.util.Log
-import kotlinx.coroutines.delay
+import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.ReceiptSmsRequestDto
+import au.com.threesixty.cabdispatch.hardware.HardwareGateway
 
 /**
- * Sends a receipt summary by SMS to the passenger's phone number. A real
- * implementation should call a backend transactional-SMS endpoint (the spec
- * mentions Twilio for the duress SMS fallback, B7 — the receipt SMS likely
- * reuses the same provider account) rather than sending directly from the
- * device: most fleet tablets are Wi-Fi/data-only with no carrier SIM able to
- * send passenger-facing SMS. See [MockSmsReceiptGateway].
+ * Sends a receipt summary by SMS to the passenger's phone number. Sending goes
+ * through the backend's transactional-SMS provider rather than the device:
+ * most fleet tablets are Wi-Fi/data-only with no carrier SIM able to send
+ * passenger-facing SMS.
+ *
+ * A5: no longer a mock — [ApiSmsReceiptGateway] calls the existing route
+ * `POST /v1/trips/{trip_id}/receipt/sms`
+ * (`backend/app/api/v1/trips.py::sms_receipt`).
  */
-interface SmsReceiptGateway {
+interface SmsReceiptGateway : HardwareGateway {
     suspend fun sendReceipt(receipt: Receipt, phoneNumber: String): Result<Unit>
 }
 
 /**
- * *** MOCK / NO-OP *** — logs instead of calling a backend SMS endpoint.
- * No `/v1/receipts/sms`-style route exists yet in
- * [au.com.threesixty.cabdispatch.data.remote.ApiService]; wire this to a real
- * endpoint once the backend agent adds one.
+ * Real implementation: `POST /v1/trips/{trip_id}/receipt/sms`. Same two
+ * honesty rules as [ApiEmailReceiptGateway] — see that class's doc: the route
+ * needs [Receipt.serverTripId] (not the offline `clientUuid`), and the
+ * backend's own `mock=true` response (no Twilio credentials configured) is
+ * reported as a failure rather than dressed up as a delivery.
  */
-class MockSmsReceiptGateway : SmsReceiptGateway {
-    private val tag = "MockSmsReceiptGateway"
+class ApiSmsReceiptGateway(
+    private val api: () -> ApiService,
+) : SmsReceiptGateway {
+
+    override val isReal: Boolean = true
 
     override suspend fun sendReceipt(receipt: Receipt, phoneNumber: String): Result<Unit> {
-        Log.i(tag, "Sending SMS receipt (mock) to $phoneNumber for trip ${receipt.tripId}")
-        delay(600)
-        return Result.success(Unit)
+        val serverId = receipt.serverTripId
+            ?: return Result.failure(
+                IllegalStateException(
+                    "This trip has not synced to the server yet — SMS receipt is unavailable " +
+                        "until it has. Resend from Trip Detail once online.",
+                ),
+            )
+        return runCatching {
+            api().smsReceipt(serverId, ReceiptSmsRequestDto(toPhone = phoneNumber))
+        }.mapCatching { response ->
+            if (response.mock) {
+                throw IllegalStateException(
+                    "Server has no SMS provider configured — nothing was sent to $phoneNumber.",
+                )
+            }
+            Unit
+        }
     }
 }
