@@ -24,7 +24,14 @@ export function mergeLivePosition(
     ...vehicle,
     lat: live.lat,
     lng: live.lng,
-    live_status: live.status,
+    // The tablet's position publishes carry the literal placeholder "unknown"
+    // for status (LivePositionHeartbeat.HEARTBEAT_STATUS); the backend already
+    // refuses to let that override its composed live_status (on_trip from the
+    // open trip, the driver's dispatch toggle, ...) -- see
+    // app/services/live_ops.py::_compose_vehicle_live. Mirror that here, or the
+    // first socket frame flips every vehicle to "unknown", drops it out of the
+    // Available/On trip counters, and the Overview feed logs "is now unknown".
+    live_status: isPlaceholderStatus(live.status) ? vehicle.live_status : live.status,
     // Coalesce, don't overwrite: a position publish carrying no telemetry
     // (battery/network both null on the WS payload) must not blank out a
     // value the REST-fetched row already had from an earlier publish or a
@@ -49,6 +56,13 @@ export function mergeLivePosition(
 }
 
 const BUSY_STATUSES = new Set(["on_trip", "hired", "busy", "trip"]);
+
+/** A client-published status that carries no information: the tablet's
+ * heartbeat placeholder, or nothing at all. Kept in step with the backend's
+ * `_compose_vehicle_live` rule (not None, not the literal "unknown"). */
+export function isPlaceholderStatus(status: string | null | undefined): boolean {
+  return status == null || status.trim() === "" || status.trim().toLowerCase() === "unknown";
+}
 
 /** Whether a live_status value counts as "actively working a trip" -- shared
  * by statusColor/statusBadgeVariant below and by computeIdleInfo's own

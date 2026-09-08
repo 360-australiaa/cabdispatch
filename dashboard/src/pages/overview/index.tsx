@@ -344,12 +344,27 @@ export default function OverviewPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <FleetMapCanvas
-              vehicles={mapVehicles}
-              duressEvents={openDuress}
-              geofences={[]}
-              onSelectVehicle={(id) => navigate(`/live-map?vehicle=${id}`)}
-            />
+            {/* Mount the map only once the vehicle list has resolved: FleetMapCanvas
+                frames the fleet from the positions it sees at mount and never
+                re-fits (an operator's pan must win), so mounting it on an empty
+                list opened the owner's home on a view of the whole globe. Same
+                gate the Live Map page uses. */}
+            {vehiclesQuery.isLoading ? (
+              <div className="flex h-[460px] items-center justify-center text-sm text-muted-foreground">
+                Loading fleet positions…
+              </div>
+            ) : vehiclesQuery.isError ? (
+              <div className="flex h-[460px] items-center justify-center text-sm text-destructive">
+                Failed to load vehicle positions.
+              </div>
+            ) : (
+              <FleetMapCanvas
+                vehicles={mapVehicles}
+                duressEvents={openDuress}
+                geofences={[]}
+                onSelectVehicle={(id) => navigate(`/live-map?vehicle=${id}`)}
+              />
+            )}
           </CardContent>
         </Card>
 
