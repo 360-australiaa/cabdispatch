@@ -181,7 +181,7 @@
     <ID>FunctionNaming:EngagementTiles.kt$@Preview(widthDp = 340, heightDp = 980, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewEngagementTilesLoaded()</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun DeviceUnpairedBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun ForceUpdatePendingBanner(modifier: Modifier = Modifier)</ID>
-    <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun KioskLockedBanner(modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun KioskLockedBanner(pinConfirmed: Boolean, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun OfflineBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable private fun UpdateActionChip(label: String, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:GpsSimulatorPanel.kt$@Composable fun GpsSimulatorPanel(modifier: Modifier = Modifier)</ID>

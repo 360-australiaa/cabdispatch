@@ -81,6 +81,34 @@ object KioskLockController {
         }
     }
 
+    /**
+     * Whether a live [LockTaskMode] read — taken AFTER [applyKioskLock] has acted, or decided no
+     * action was needed — actually matches [desiredLocked]. Pure, exactly like [decideAction], so
+     * the "did the OS actually confirm it" question is unit-testable without a live [Activity]/
+     * [ActivityManager]: [applyKioskLock] only wires this to a real before/after read.
+     *
+     * This is the fix for the gap [KioskLockedBanner][au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner]
+     * used to have: [Activity.startLockTask] returns `void` and gives no result, so the old chip
+     * rendered "FLEET LOCKED" off the depot's REQUEST alone (`DeviceCommandState.kioskLocked`) with
+     * no OS-level confirmation the pin actually took. A device whose screen-pinning setting is
+     * disabled, or that hits any other OEM quirk, silently stays unpinned while both the dashboard
+     * and the tablet itself believed it was locked — invisible until someone noticed a driver could
+     * still leave the meter. [DeviceReadinessScreen]'s commissioning checklist already solved this
+     * exact problem for its one-time Kiosk row by comparing [currentLockTaskMode] against the
+     * depot's ask (see [DeviceReadiness.KioskState]); this reuses the identical comparison for the
+     * always-visible chip instead of inventing a second mechanism.
+     *
+     * [LockTaskMode.LOCKED] counts as confirmed for `desiredLocked = true` even though this app
+     * never starts it itself — a DPC/Knox-side lock is a *stronger* guarantee than the plain pin
+     * this app can request, so a tablet already locked that way has nothing left to confirm.
+     */
+    fun isPinConfirmed(modeAfterAction: LockTaskMode, desiredLocked: Boolean): Boolean =
+        if (desiredLocked) {
+            modeAfterAction == LockTaskMode.PINNED || modeAfterAction == LockTaskMode.LOCKED
+        } else {
+            modeAfterAction != LockTaskMode.PINNED
+        }
+
     /** Live [ActivityManager.getLockTaskModeState] mapped onto [LockTaskMode] — the only place in
      * this file that touches a real system service, kept separate from [decideAction] so that
      * function stays instrumentation-free.
@@ -88,7 +116,11 @@ object KioskLockController {
      * Public since 2026-09-08: the commissioning checklist reports whether the tablet is ACTUALLY
      * pinned, against what the depot asked for. That comparison is the only way to see a tablet
      * flagged `kiosk_locked` that the OS never pinned — silent until someone noticed the driver
-     * could still leave the meter. */
+     * could still leave the meter.
+     *
+     * Also read from [applyKioskLock] since 2026-09-09, for the same comparison on the
+     * always-visible chip rather than only the one-time commissioning screen — see that function's
+     * doc. This is the one live read both paths share; neither invents a second mechanism. */
     fun currentLockTaskMode(activity: Activity): LockTaskMode {
         val activityManager = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         return when (activityManager.lockTaskModeState) {
@@ -103,12 +135,29 @@ object KioskLockController {
      * [desiredLocked], and performs the resulting [KioskLockAction] (or does nothing). Called from
      * [MainActivity]'s composition root on every [DeviceCommandHeartbeat.state] change — see that
      * file's doc for the collection site.
+     *
+     * ### Return value — added 2026-09-09, closes the silent-failure gap
+     * [Activity.startLockTask] returns `void`: there is no way to learn from its return value alone
+     * whether the OS actually granted the pin. It can decline silently — screen pinning disabled in
+     * Settings, an OEM policy, or any other reason — leaving this app *believing* it locked the
+     * tablet when it did not, with nothing on-device ever contradicting that belief. So this now
+     * re-reads [currentLockTaskMode] after acting (or after deciding no action was needed) and
+     * reports [isPinConfirmed] against [desiredLocked], so the caller can tell "requested" apart
+     * from "requested AND the OS confirms it" — see
+     * [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner]'s doc for where that distinction
+     * now surfaces to the driver.
+     *
+     * [startLockTask]/[stopLockTask] are wrapped in [runCatching] for the same reason: an OEM that
+     * throws rather than silently declining must not crash the composition root on every poll tick.
+     * Either way the re-read below is what actually decides the return value, not whether the call
+     * itself threw.
      */
-    fun applyKioskLock(activity: Activity, desiredLocked: Boolean) {
+    fun applyKioskLock(activity: Activity, desiredLocked: Boolean): Boolean {
         when (decideAction(currentLockTaskMode(activity), desiredLocked)) {
-            KioskLockAction.START -> activity.startLockTask()
-            KioskLockAction.STOP -> activity.stopLockTask()
+            KioskLockAction.START -> runCatching { activity.startLockTask() }
+            KioskLockAction.STOP -> runCatching { activity.stopLockTask() }
             KioskLockAction.NONE -> Unit
         }
+        return isPinConfirmed(currentLockTaskMode(activity), desiredLocked)
     }
 }

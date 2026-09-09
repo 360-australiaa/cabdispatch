@@ -307,35 +307,58 @@ private fun UpdateActionChip(label: String, onClick: () -> Unit) {
  *
  * Exists so the lock is not silent: with the status and navigation bars hidden by the Knox kiosk
  * policy, a driver whose Home/Recents suddenly stop responding has no other way to tell an admin
- * action from a frozen tablet, and would reasonably report it as a fault. It says only that the
- * lock was *requested and applied for*; it deliberately does not claim the OS actually granted the
- * pin, because [android.app.Activity.startLockTask] returns `void` and gives no result — see
- * [au.com.threesixty.cabdispatch.MainActivity]'s doc for the full write-up of what screen pinning
- * does and does not guarantee.
+ * action from a frozen tablet, and would reasonably report it as a fault.
+ *
+ * ### Two states, not one — fixed 2026-09-09
+ * Until now this rendered "FLEET LOCKED" off the depot's REQUEST alone (`kioskLocked`), with no
+ * OS-level confirmation the pin actually took — because [android.app.Activity.startLockTask]
+ * returns `void` and gives no result. A device whose screen-pinning setting is off, or that hits
+ * any other OEM quirk, could stay silently unpinned while both the dashboard and this very chip
+ * told the driver it was locked — invisible until someone noticed a driver could still leave the
+ * meter, and reported as "why isn't it locking on the second tablet" with nothing on the tablet
+ * itself to point at. [pinConfirmed] is [au.com.threesixty.cabdispatch.domain.KioskLockController.applyKioskLock]'s
+ * own after-the-fact [au.com.threesixty.cabdispatch.domain.KioskLockController.currentLockTaskMode]
+ * read — the identical comparison the commissioning checklist's Kiosk row already used for this
+ * exact question (see [au.com.threesixty.cabdispatch.domain.DeviceReadiness.KioskState]), now also
+ * driving the chip a driver sees every session instead of only the one-time setup screen:
+ * - `pinConfirmed = true` — the common/success case, and the only one that says "FLEET LOCKED".
+ * - `pinConfirmed = false` — requested, but the OS has not (yet, or ever) confirmed it pinned.
+ *   Rendered in [Deck.stopped] amber with a border, matching [ForceUpdatePendingBanner]'s existing
+ *   warning-chip convention below, rather than inventing a new visual language for "something the
+ *   depot asked for did not actually happen".
+ *
+ * Not calling this "not locked" plainly: it is still latched exactly as before (see
+ * [au.com.threesixty.cabdispatch.domain.DeviceCommandState.kioskLocked]'s doc on the third,
+ * genuinely-unrequested state that never renders this composable at all — that one stays this
+ * composable's caller's `if`, unchanged).
  */
 @Composable
-fun KioskLockedBanner(modifier: Modifier = Modifier) {
+fun KioskLockedBanner(pinConfirmed: Boolean, modifier: Modifier = Modifier) {
+    val accent = if (pinConfirmed) Deck.info else Deck.stopped
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(Deck.R_SM.dp))
                 .background(Deck.panel.copy(alpha = 0.9f))
+                .let {
+                    if (pinConfirmed) it else it.border(1.dp, accent.copy(alpha = 0.8f), RoundedCornerShape(Deck.R_SM.dp))
+                }
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "🔒",
+                text = if (pinConfirmed) "🔒" else "⚠",
                 fontFamily = InterFamily,
                 fontSize = 12.sp,
-                color = Deck.info,
+                color = accent,
             )
             Text(
-                text = "FLEET LOCKED",
+                text = if (pinConfirmed) "FLEET LOCKED" else "LOCK PENDING",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 12.sp,
-                color = Deck.info,
+                color = accent,
             )
         }
     }

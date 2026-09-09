@@ -23,6 +23,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -52,7 +55,12 @@ import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
  *    can land the OS in `LOCK_TASK_MODE_LOCKED`. See [KioskLockController]'s class doc for the
  *    full pinning-vs-device-owner write-up and its decision table, in particular the rule that a
  *    `LOCK_TASK_MODE_LOCKED` state (a DPC/Knox lock this app did not start) is never released from
- *    here — only a pin this app itself put in `PINNED` mode ever is.
+ *    here — only a pin this app itself put in `PINNED` mode ever is. [applyKioskLock] returns
+ *    whether the OS actually confirmed the result, held here as `kioskPinConfirmed` — a sibling
+ *    to `commandState`, not a field on it, since `DeviceCommandState` is documented as a pure
+ *    report of the backend's last heartbeat and this is a live, local OS read with no server round
+ *    trip behind it — and threaded into [KioskLockedBanner] so the driver can tell "the depot asked
+ *    for this" apart from "and the OS actually granted it".
  * 2. **The fleet-command/connectivity banners** — [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner],
  *    [au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner],
  *    [au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner], and
@@ -185,12 +193,25 @@ private fun CabDispatchScreenRoot() {
     val activity = LocalContext.current as? Activity
     val commandState by AppContainer.deviceCommandHeartbeat.state.collectAsState()
 
+    // Whether the OS's live lock-task mode actually matches commandState.kioskLocked, as of the
+    // last time the effect below ran — a sibling to DeviceCommandState rather than a field on it,
+    // since that class is documented as a pure report of the backend's last heartbeat answer and
+    // this is a live, on-device OS read with no server round-trip behind it at all. Starts false
+    // (honest: nothing has confirmed anything yet) rather than assuming success, so a kiosk-locked
+    // cold start renders KioskLockedBanner's "not yet confirmed" state for the one frame before
+    // this effect's first run resolves it either way.
+    var kioskPinConfirmed by remember { mutableStateOf(false) }
+
     // Re-evaluate the pin every time the server's last-known kioskLocked flag changes (poll
     // landing, seed on cold start, or a factory-reset reset back to the DeviceCommandState()
     // default) — see KioskLockController's class doc for the decision this makes and why it can
-    // never release a LOCK_TASK_MODE_LOCKED state.
+    // never release a LOCK_TASK_MODE_LOCKED state. Also captures whether the OS actually confirmed
+    // the result, for KioskLockedBanner below — see KioskLockController.applyKioskLock's doc for
+    // why startLockTask() alone can never answer that question on its own.
     LaunchedEffect(activity, commandState.kioskLocked) {
-        activity?.let { KioskLockController.applyKioskLock(it, commandState.kioskLocked) }
+        kioskPinConfirmed = activity?.let {
+            KioskLockController.applyKioskLock(it, commandState.kioskLocked)
+        } ?: false
     }
 
     CabDispatchTheme {
@@ -226,7 +247,7 @@ private fun CabDispatchScreenRoot() {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         if (!gateVisible && commandState.kioskLocked) {
-                            KioskLockedBanner()
+                            KioskLockedBanner(pinConfirmed = kioskPinConfirmed)
                         }
                         if (!gateVisible &&
                             DevicePairingStatus.isUnpaired(commandState.deviceId, commandState.deviceRejected)
