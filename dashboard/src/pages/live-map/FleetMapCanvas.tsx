@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import { Checkbox } from "@/components/ui";
 import { circlePolygon } from "@/lib/geoCircle";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 import type { DuressEventRead } from "./types";
@@ -33,6 +34,23 @@ import {
 } from "./markers";
 import { TRAIL_SOURCE_ID, buildTrailFeatures } from "./trails";
 import { PlainCanvasMap } from "./PlainCanvasMap";
+import { useLiveTrafficCameras } from "./useLiveTrafficCameras";
+import { useLiveTrafficHazards } from "./useLiveTrafficHazards";
+import { bboxFromLngLatBounds, type TrafficBBox, type TrafficCamera, type TrafficHazard } from "./trafficTypes";
+import {
+  CAMERA_IMAGE_REFRESH_MS,
+  TRAFFIC_CAMERA_LAYER_ID,
+  TRAFFIC_CAMERA_SOURCE_ID,
+  TRAFFIC_HAZARD_LAYER_ID,
+  TRAFFIC_HAZARD_SOURCE_ID,
+  buildCameraFeatureCollection,
+  buildCameraPopupHtml,
+  buildHazardFeatureCollection,
+  buildHazardPopupHtml,
+  ensureTrafficPopupStyleInjected,
+  installTrafficLayers,
+  setTrafficLayersVisibility,
+} from "./trafficLayers";
 
 /**
  * The live fleet map: picks a renderer, owns the Mapbox instance, and keeps
@@ -227,6 +245,36 @@ function MapboxFleetMap({
   const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
   const [styleLoaded, setStyleLoaded] = useState(false);
 
+  // --- live traffic overlay (cameras + hazards from Transport for NSW) ----
+  //
+  // On by default -- a dispatcher routing around a closure benefits from
+  // seeing it without an extra step, and the toggle below is right there the
+  // moment it becomes clutter. Off stops both queries too (see the `enabled`
+  // args below), not just the drawing -- consistent with pollIntervals.ts's
+  // whole "don't poll for something nobody's looking at" stance.
+  const [trafficVisible, setTrafficVisible] = useState(true);
+  // The map's own current viewport, in the [minLng,minLat,maxLng,maxLat]
+  // shape the bbox query param wants -- null until the map has fired its
+  // first `load`, so both queries below stay disabled rather than asking
+  // for cameras/hazards across the entire planet. Set again on every
+  // `moveend`, so panning/zooming refreshes what a bbox-scoped feed shows.
+  const [trafficBbox, setTrafficBbox] = useState<TrafficBBox | null>(null);
+  const camerasQuery = useLiveTrafficCameras(trafficBbox, trafficVisible);
+  const hazardsQuery = useLiveTrafficHazards(trafficBbox, { enabled: trafficVisible });
+  // Memoized so the two effects below (each keyed on this array) don't
+  // re-run on every render just because `.data ?? []` makes a fresh empty
+  // array reference whenever the query has no data.
+  const cameras = useMemo(() => camerasQuery.data ?? [], [camerasQuery.data]);
+  const hazards = useMemo(() => hazardsQuery.data ?? [], [hazardsQuery.data]);
+  // Read inside the click handlers below, which are registered once on
+  // `load` and would otherwise close over whichever camera/hazard list
+  // happened to exist at that moment -- same ref-indirection idiom
+  // `onSelectDeviceRef` already uses just above for the same reason.
+  const camerasRef = useRef<TrafficCamera[]>(cameras);
+  camerasRef.current = cameras;
+  const hazardsRef = useRef<TrafficHazard[]>(hazards);
+  hazardsRef.current = hazards;
+
   // The tenant's own record carries the configured default map centre (in
   // `theme_json`, alongside the branding this dashboard already reads from
   // there). It is the same cached react-query entry the app shell and sidebar
@@ -251,6 +299,7 @@ function MapboxFleetMap({
     if (!containerRef.current || mapRef.current || !tenantSettled) return;
 
     ensurePopupStyleInjected();
+    ensureTrafficPopupStyleInjected();
 
     const { camera, source } = resolveInitialCamera(tenantTheme, [...plotted, ...devicePoints]);
     setCameraSource(source);
@@ -266,11 +315,79 @@ function MapboxFleetMap({
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(containerRef.current);
 
+    // One popup per feed, reused across clicks (same "one popup instance,
+    // moved and re-filled" idiom TollGantryMap.tsx's own `popup` const uses)
+    // -- a camera popup and a hazard popup are independent so clicking one
+    // never closes the other.
+    const cameraPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: true, className: "traffic-popup", offset: 14 });
+    const hazardPopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: true, className: "traffic-popup", offset: 14 });
+
+    // Re-keys the open camera popup's <img src> every CAMERA_IMAGE_REFRESH_MS
+    // so the live snapshot actually looks live while a dispatcher is looking
+    // at it -- no network call of our own, just a cache-busted query param
+    // that makes the browser refetch the same JPEG URL (see
+    // trafficLayers.ts's doc comment on CAMERA_IMAGE_REFRESH_MS). Stopped the
+    // moment the popup closes, so nothing keeps ticking in the background.
+    let cameraRefreshTimer: number | undefined;
+    const stopCameraRefresh = () => {
+      if (cameraRefreshTimer != null) {
+        window.clearInterval(cameraRefreshTimer);
+        cameraRefreshTimer = undefined;
+      }
+    };
+    cameraPopup.on("close", stopCameraRefresh);
+
+    map.on("click", TRAFFIC_CAMERA_LAYER_ID, (e) => {
+      const feature = e.features?.[0] as { properties?: Record<string, unknown> } | undefined;
+      const id = feature?.properties?.id;
+      const found = typeof id === "string" ? camerasRef.current.find((c) => c.id === id) : undefined;
+      if (!found) return;
+      stopCameraRefresh();
+      const render = () =>
+        cameraPopup.setLngLat([found.longitude, found.latitude]).setHTML(buildCameraPopupHtml(found, Date.now())).addTo(map);
+      render();
+      cameraRefreshTimer = window.setInterval(render, CAMERA_IMAGE_REFRESH_MS);
+    });
+    map.on("mouseenter", TRAFFIC_CAMERA_LAYER_ID, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", TRAFFIC_CAMERA_LAYER_ID, () => {
+      map.getCanvas().style.cursor = "";
+    });
+
+    map.on("click", TRAFFIC_HAZARD_LAYER_ID, (e) => {
+      const feature = e.features?.[0] as { properties?: Record<string, unknown> } | undefined;
+      const id = feature?.properties?.id;
+      const found = typeof id === "string" ? hazardsRef.current.find((h) => h.id === id) : undefined;
+      if (!found) return;
+      hazardPopup.setLngLat([found.longitude, found.latitude]).setHTML(buildHazardPopupHtml(found)).addTo(map);
+    });
+    map.on("mouseenter", TRAFFIC_HAZARD_LAYER_ID, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", TRAFFIC_HAZARD_LAYER_ID, () => {
+      map.getCanvas().style.cursor = "";
+    });
+
     map.on("load", () => {
       map.resize();
       fitToVehicles(map, plotted);
       installMapLayers(map, (id) => onSelectDeviceRef.current(id));
+      installTrafficLayers(map);
+      const bounds = map.getBounds();
+      if (bounds) setTrafficBbox(bboxFromLngLatBounds(bounds));
       setStyleLoaded(true);
+    });
+    // Keeps the bbox-scoped traffic queries in step with wherever the operator
+    // has actually panned/zoomed to, the same way a bbox-driven feed on any
+    // real map behaves -- fires once per pan/zoom gesture (not per frame),
+    // since `moveend` only fires after the gesture settles. `getBounds()` is
+    // typed nullable (no style loaded yet) but by `moveend` time the map
+    // always has one; the guard just keeps this from ever crashing on a
+    // theoretical race.
+    map.on("moveend", () => {
+      const bounds = map.getBounds();
+      if (bounds) setTrafficBbox(bboxFromLngLatBounds(bounds));
     });
 
     return () => {
@@ -280,6 +397,9 @@ function MapboxFleetMap({
         entry.marker.remove();
       });
       markersRef.current.clear();
+      stopCameraRefresh();
+      cameraPopup.remove();
+      hazardPopup.remove();
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
@@ -402,6 +522,32 @@ function MapboxFleetMap({
     });
   }, [geofences, styleLoaded]);
 
+  // Keep the two traffic sources in sync with their own queries -- separate
+  // effects (one per source), same "one effect per GeoJSON source" split as
+  // the geofence/device/trail/route effects elsewhere in this component.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleLoaded) return;
+    const source = map.getSource(TRAFFIC_CAMERA_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+    source?.setData(buildCameraFeatureCollection(cameras));
+  }, [cameras, styleLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleLoaded) return;
+    const source = map.getSource(TRAFFIC_HAZARD_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+    source?.setData(buildHazardFeatureCollection(hazards));
+  }, [hazards, styleLoaded]);
+
+  // The one "Live traffic" toggle flips all four layers' visibility together
+  // -- see setTrafficLayersVisibility's own doc for why this is a style
+  // property flip, not a mount/unmount of the layers.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !styleLoaded) return;
+    setTrafficLayersVisibility(map, trafficVisible);
+  }, [trafficVisible, styleLoaded]);
+
   // Keep the route overlay in sync with useVehicleRoutes' own cache -- a
   // separate effect from the marker-sync one below since it's keyed on a
   // different value (`routes`, not `plotted`) and updates the GL source
@@ -511,6 +657,8 @@ function MapboxFleetMap({
     // halo on the old one until its next position update.
   }, [plotted, duressByVehicleId, navigate, onSelectVehicle, selectedVehicleId]);
 
+  const trafficCount = cameras.length + hazards.length;
+
   return (
     <div className="relative">
       <div ref={containerRef} className="h-[460px] w-full rounded-md border border-border" />
@@ -520,6 +668,18 @@ function MapboxFleetMap({
           appear here once a device publishes via POST /v1/fleet/positions.
         </div>
       )}
+      {/* Live traffic overlay toggle -- real Transport for NSW cameras and
+          incidents/roadworks/closures, from GET /v1/traffic/cameras and
+          GET /v1/traffic/hazards. Bottom-left so it never fights the
+          top-right Mapbox nav control or the top-left empty-state caption. */}
+      <div className="absolute bottom-3 left-3 z-10">
+        <Checkbox
+          checked={trafficVisible}
+          onChange={(e) => setTrafficVisible(e.target.checked)}
+          label={`Live traffic${trafficVisible && styleLoaded ? ` (${trafficCount})` : ""}`}
+          wrapperClassName="rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-foreground shadow"
+        />
+      </div>
     </div>
   );
 }
