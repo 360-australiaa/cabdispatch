@@ -259,6 +259,207 @@ class MeterAccuracyTest {
     }
 
     // ================================================================================
+    // Known-corridor GPS blackout billing (owner's decision, 2026-09-09) — a blackout that can be
+    // explained by a known, mapped toll-road corridor bills the REAL distance along that road's own
+    // points at the normal distance rate, instead of F3's ordinary "accrue nothing" fallback. See
+    // [au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm]'s own doc for the geometry,
+    // and [KnownCorridorDistanceLookup]'s for why this is wired as its own injectable seam.
+    // ================================================================================
+
+    @Test
+    fun `a GPS blackout across a known toll tunnel bills the real corridor distance, not nothing`() = runTest {
+        val registry = bentTunnelRegistry()
+        val gps = FakeMeterGps(80.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(),
+            knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
+        )
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+
+        // Drive up to the tunnel mouth and establish it as the last live fix.
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG)
+        advanceOneTickWithNoNewFix()
+        val distanceAmountAtTunnelMouth = engine.state.value.breakdown.distanceAmount
+        val tollsAtTunnelMouth = engine.state.value.breakdown.tolls
+        assertFalse(engine.state.value.gpsLost)
+
+        // Into the tunnel -- GPS drops. The last fix stays believed for MAX_FIX_AGE_MS (5s, same
+        // grace period every F3 test accounts for), so a few seconds of ordinary speed-integrated
+        // accrual after it are expected here too; this test's own known-corridor arithmetic below is
+        // measured from the moment [gpsLost] is actually declared, not from the tunnel mouth itself.
+        gps.goDark()
+        repeat(6) { advanceOneTickWithNoNewFix() }
+        assertTrue("GPS must be known lost mid-tunnel", engine.state.value.gpsLost)
+        val distanceWhenLostDeclared = engine.state.value.distanceKm
+
+        // The remaining tunnel transit -- confirms nothing accrues purely from more dark ticks.
+        repeat(24) { advanceOneTickWithNoNewFix() }
+        assertEquals(
+            "nothing accrues from further dark ticks alone -- the catch-up only ever fires on recovery",
+            distanceWhenLostDeclared,
+            engine.state.value.distanceKm,
+        )
+
+        // Out the far end, at the known exit gantry.
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG)
+        advanceOneTickWithNoNewFix()
+
+        val state = engine.state.value
+        assertFalse("GPS is healthy again", state.gpsLost)
+
+        val expectedKnownKm = au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm(
+            registry, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG,
+        )!!
+        val straightLineKm = BigDecimal.valueOf(
+            au.com.threesixty.cabdispatch.domain.fare.tollHaversineM(
+                TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG,
+            ) / 1000.0,
+        )
+        assertTrue(
+            "the bent corridor's real path must bill more than the straight entry-exit chord",
+            expectedKnownKm > straightLineKm,
+        )
+
+        val billedThroughBlackout = state.distanceKm - distanceWhenLostDeclared
+        // The known corridor distance, plus this recovery tick's own ordinary ~1s of continued
+        // travel (never more than that -- no back-charging beyond the corridor itself).
+        assertTrue(
+            "the blackout must bill the known corridor distance (expected ~$expectedKnownKm km, " +
+                "billed $billedThroughBlackout km)",
+            (billedThroughBlackout - expectedKnownKm).toDouble() in -0.001..0.05,
+        )
+        assertTrue(
+            "distance must actually have been charged at the normal distance rate, through the same " +
+                "calcEngine.tick() path every ordinary GPS tick uses -- not a separate money path",
+            state.breakdown.distanceAmount > distanceAmountAtTunnelMouth,
+        )
+        assertEquals(
+            "toll charging is a separate, unaffected concern -- this unpriced tunnel is never charged",
+            tollsAtTunnelMouth,
+            state.breakdown.tolls,
+        )
+
+        // The catch-up must fire exactly ONCE per blackout, never again on ordinary ticks after
+        // recovery.
+        val distanceRightAfterRecovery = state.distanceKm
+        repeat(3) { advanceOneTickWithNoNewFix() }
+        val laterDistance = engine.state.value.distanceKm
+        assertTrue(
+            "the corridor bonus ($expectedKnownKm km) must not repeat on ordinary post-recovery " +
+                "ticks (only ~3 more seconds of ordinary 80km/h continuation is expected here)",
+            (laterDistance - distanceRightAfterRecovery).toDouble() < 0.15,
+        )
+    }
+
+    @Test
+    fun `a blackout with no known-corridor match accrues nothing, even with a real registry loaded`() = runTest {
+        val registry = bentTunnelRegistry()
+        val gps = FakeMeterGps(80.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(),
+            knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
+        )
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+
+        // Ordinary driving, nowhere near the known tunnel's own gantries.
+        repeat(10) { advanceOneTick(gps) }
+
+        gps.goDark()
+        // Grace period (MAX_FIX_AGE_MS) plus enough further dark ticks to be a genuine blackout.
+        repeat(6) { advanceOneTickWithNoNewFix() }
+        assertTrue(engine.state.value.gpsLost)
+        val distanceWhenLostDeclared = engine.state.value.distanceKm
+        repeat(24) { advanceOneTickWithNoNewFix() }
+
+        // Reacquire somewhere ordinary too -- nothing about this blackout touches the known tunnel.
+        gps.setSpeed(80.0)
+        advanceOneTick(gps)
+
+        val billed = (engine.state.value.distanceKm - distanceWhenLostDeclared).toDouble()
+        assertTrue(
+            "an unrelated blackout must accrue nothing beyond the ordinary post-recovery tick (billed $billed km)",
+            billed < 0.05,
+        )
+    }
+
+    @Test
+    fun `GPS reacquired far from where the known corridor would put it is never falsely matched`() = runTest {
+        val registry = bentTunnelRegistry()
+        val gps = FakeMeterGps(80.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(),
+            knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
+        )
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+
+        // Enter genuinely at the known tunnel's mouth...
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG)
+        advanceOneTickWithNoNewFix()
+
+        gps.goDark()
+        repeat(6) { advanceOneTickWithNoNewFix() }
+        assertTrue(engine.state.value.gpsLost)
+        val distanceWhenLostDeclared = engine.state.value.distanceKm
+        repeat(24) { advanceOneTickWithNoNewFix() }
+
+        // ...but reacquire miles from the tunnel's own exit gantry -- a fix that cannot plausibly be
+        // this corridor's continuation.
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG + 0.20)
+        advanceOneTickWithNoNewFix()
+
+        val billed = (engine.state.value.distanceKm - distanceWhenLostDeclared).toDouble()
+        assertTrue(
+            "a wildly-off reacquisition fix must never be billed as this corridor's known distance " +
+                "(billed $billed km)",
+            billed < 0.05,
+        )
+    }
+
+    @Test
+    fun `a stationary vehicle near a known corridor still only bills waiting time, never both`() = runTest {
+        // The double-billing trap this feature must avoid: F3 already bills WAITING time throughout
+        // a blackout where the vehicle was stationary when signal dropped. If the entry/exit fixes
+        // also happen to sit near a known corridor's gantries, the catch-up must NOT also add the
+        // corridor's distance on top of time already billed for the same minutes.
+        val registry = bentTunnelRegistry()
+        val gps = FakeMeterGps(0.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(),
+            knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
+        )
+        engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
+
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG)
+        advanceOneTickWithNoNewFix()
+        val waitingBefore = engine.state.value.breakdown.waitingAmount
+
+        gps.goDark()
+        repeat(30) { advanceOneTickWithNoNewFix() }
+        assertTrue(engine.state.value.gpsLost)
+        assertTrue(
+            "a stationary blackout keeps billing waiting time exactly as before this feature existed",
+            engine.state.value.breakdown.waitingAmount > waitingBefore,
+        )
+
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG)
+        advanceOneTickWithNoNewFix()
+
+        assertEquals(
+            "a stationary blackout must never ALSO pick up the corridor's known distance",
+            BigDecimal.ZERO.compareTo(engine.state.value.distanceKm),
+            0,
+        )
+    }
+
+    // ================================================================================
     // F8 — the dial shows the bill
     // ================================================================================
 
@@ -426,6 +627,41 @@ class MeterAccuracyTest {
                 roadsById = mapOf(road.id to road),
                 gantries = listOf(
                     au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("m5g1", road.id, M5_GANTRY_LAT, M5_GANTRY_LNG),
+                ),
+            )
+        }
+
+        // A bent three-gantry corridor -- entry near A, exit near C, with B off to the side between
+        // them (same shape [au.com.threesixty.cabdispatch.domain.fare.KnownCorridorTest] uses) so the
+        // real path through B is measurably longer than the straight A-C chord: a test that only
+        // checked "did SOME distance get billed" could not tell the correct behaviour apart from a
+        // regression back to the straight-line chord.
+        const val TUNNEL_ENTRY_LAT = -33.9200
+        const val TUNNEL_ENTRY_LNG = 151.1500
+        const val TUNNEL_MID_LAT = -33.9180
+        const val TUNNEL_MID_LNG = 151.1550
+        const val TUNNEL_EXIT_LAT = -33.9200
+        const val TUNNEL_EXIT_LNG = 151.1600
+
+        /** `unpriced` deliberately: toll charging is a wholly separate concern from the known-
+         * corridor distance catch-up (see that feature's own doc), and giving this road no real
+         * price makes "this path never adds a toll" a trivially checkable assertion rather than one
+         * that depends on also getting [au.com.threesixty.cabdispatch.domain.fare.onFix]'s own
+         * corroboration rules right in the same fixture. */
+        fun bentTunnelRegistry(): au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot {
+            val road = au.com.threesixty.cabdispatch.domain.fare.TollRoadRef(
+                id = "TUNNEL",
+                name = "Test Tunnel",
+                pricingModel = "unpriced",
+                directional = "both",
+                currentPrice = null,
+            )
+            return au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot(
+                roadsById = mapOf(road.id to road),
+                gantries = listOf(
+                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-A", road.id, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG),
+                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-B", road.id, TUNNEL_MID_LAT, TUNNEL_MID_LNG),
+                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-C", road.id, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG),
                 ),
             )
         }

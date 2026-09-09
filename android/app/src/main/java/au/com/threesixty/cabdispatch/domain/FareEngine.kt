@@ -5,6 +5,7 @@ import au.com.threesixty.cabdispatch.domain.fare.TollDetectionState
 import au.com.threesixty.cabdispatch.domain.fare.chargeDisplayName
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
+import au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm
 import au.com.threesixty.cabdispatch.domain.fare.onFix
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
@@ -145,6 +146,52 @@ fun interface TollRegistryProvider {
          * doc) — never a crash, never a guessed toll.
          */
         val EMPTY = TollRegistryProvider { TollRegistrySnapshot.EMPTY }
+    }
+}
+
+/**
+ * The seam [FareEngineImpl.tick] decides a GPS-blackout's known-corridor catch-up distance
+ * through — same "engine stays a plain-JVM-testable class with no Room/network dependency" reasoning
+ * [AirportZoneLookup] already gives, and the same shape: a pure function of two fixes, defaulted to
+ * an honest no-op.
+ *
+ * See [au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm]'s own doc for what this
+ * actually decides (the owner's 2026-09-09 ruling on billing a GPS blackout at the distance rate when
+ * it can be explained by a known, mapped toll-road corridor) and why a straight-line entry/exit
+ * distance is never good enough for a curving tunnel.
+ */
+fun interface KnownCorridorDistanceLookup {
+    /**
+     * Known real distance (km) travelled between ([entryLat],[entryLng]) — the last GPS fix before a
+     * blackout — and ([exitLat],[exitLng]) — the first fix after it — if, and only if, both fixes
+     * plausibly lie on the SAME mapped toll-road corridor. `null` means "cannot be explained by a
+     * known corridor" — [FareEngineImpl.tick] treats that exactly like today's conservative default:
+     * the blackout accrues nothing, never a dead-reckoning or waiting-time guess.
+     */
+    fun knownDistanceKm(entryLat: Double, entryLng: Double, exitLat: Double, exitLng: Double): BigDecimal?
+
+    companion object {
+        /**
+         * No-known-corridor default — every pre-existing call site (this file's own tests included)
+         * keeps its exact current behaviour: an unexplained blackout accrues nothing.
+         *
+         * Production needs no separate wiring for this to actually work end to end: this default is
+         * what a caller that never names the parameter gets, but [FareEngineImpl.tick] ALSO always
+         * tries the same already-loaded [TollRegistrySnapshot] it uses for toll detection (see that
+         * method's "known-corridor" section) whenever this constructor-injected lookup itself answers
+         * `null` — so a real device, which always has a real (possibly empty) cached registry, gets
+         * real corridor matching automatically. This constructor seam exists purely so a TEST can
+         * wire a fixture registry straight through [of], bypassing the async
+         * `TollRegistryProvider.snapshot()` load entirely.
+         */
+        val NONE = KnownCorridorDistanceLookup { _, _, _, _ -> null }
+
+        /** A lookup backed by a fixed [TollRegistrySnapshot] — what a test wires when it wants
+         * known-corridor matching without touching [TollRegistryProvider] at all. */
+        fun of(registry: TollRegistrySnapshot): KnownCorridorDistanceLookup =
+            KnownCorridorDistanceLookup { entryLat, entryLng, exitLat, exitLng ->
+                knownCorridorDistanceKm(registry, entryLat, entryLng, exitLat, exitLng)
+            }
     }
 }
 
@@ -344,6 +391,15 @@ class FareEngineImpl(
      * [au.com.threesixty.cabdispatch.sync.AirportZoneCache].
      */
     private val airportZoneLookup: AirportZoneLookup = AirportZoneLookup.UNSYNCED,
+    /**
+     * See [KnownCorridorDistanceLookup]'s own doc. Defaulted to [KnownCorridorDistanceLookup.NONE]
+     * so every pre-existing call site (this file's own tests included) keeps compiling and behaving
+     * exactly as before — an unexplained GPS blackout still accrues nothing. A test that wants
+     * known-corridor matching passes [KnownCorridorDistanceLookup.of] with a fixture registry; real
+     * production traffic gets it for free from [tollRegistry] (see [tick]'s "known-corridor"
+     * section) with no separate wiring needed here.
+     */
+    private val knownCorridorDistanceLookup: KnownCorridorDistanceLookup = KnownCorridorDistanceLookup.NONE,
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -410,6 +466,31 @@ class FareEngineImpl(
     private var lastKnownSpeedKmh: Double = 0.0
 
     /**
+     * The last known-good fix immediately before the CURRENT GPS blackout began, or `null` when no
+     * blackout is in progress right now.
+     *
+     * Captured once, on the very first tick a blackout is declared, from that tick's own
+     * `previousFix` — the prior tick's genuinely live fix (see [tick]'s "known-corridor" section for
+     * exactly why that value, at that moment, is the right one). Deliberately a SEPARATE field from
+     * [lastTickFix], which is nulled the instant GPS is lost (see that field's own doc) specifically
+     * so the ordinary F2 haversine path can never draw one segment across the whole blackout — this
+     * field's entire purpose is to survive past that null-out, to the recovery tick.
+     */
+    private var blackoutEntryFix: LocationFix? = null
+
+    /**
+     * Whether the vehicle was moving (i.e. NOT [wasStationaryWhenLost][tick]) at the exact instant
+     * [blackoutEntryFix] was captured — set alongside it, once, per blackout.
+     *
+     * Gates the known-corridor catch-up in [tick]: a blackout where the vehicle was already
+     * stationary when signal dropped bills WAITING time throughout it already (F3's existing "still
+     * genuinely waiting" branch) — layering a corridor's known distance on top of that would double-
+     * bill the same minutes. The catch-up only ever applies to the "distance frozen, nothing accrued"
+     * case a known corridor is meant to fix.
+     */
+    private var blackoutEntryWasMoving: Boolean = false
+
+    /**
      * Fractional-second accumulators behind [FareState.movingSeconds]/[FareState.waitingSeconds].
      *
      * Those two are `Int` because [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
@@ -457,6 +538,8 @@ class FareEngineImpl(
         waitingSecondsAccum = 0.0
         lastTickFix = null
         lastKnownSpeedKmh = 0.0
+        blackoutEntryFix = null
+        blackoutEntryWasMoving = false
         autoTollAlertSeq = 0L
         tollDetectionState.reset()
 
@@ -577,6 +660,8 @@ class FareEngineImpl(
         waitingSecondsAccum = waitingSeconds.toDouble()
         lastTickFix = null
         lastKnownSpeedKmh = 0.0
+        blackoutEntryFix = null
+        blackoutEntryWasMoving = false
         autoTollAlertSeq = 0L
         // Deliberately NOT repopulated from the persisted per-road audit trail: [TollDetectionState]
         // is in-memory dedup bookkeeping, and seeding it would require reconstructing gantry
@@ -852,6 +937,57 @@ class FareEngineImpl(
         val wasStationaryWhenLost = lastKnownSpeedKmh < threshold
         val accrueThisTick = !gpsLost || wasStationaryWhenLost
         val billedSpeedKmh = if (gpsLost) 0.0 else lastKnownSpeedKmh
+
+        // --- Known-corridor blackout catch-up (owner's decision, 2026-09-09) -----------------
+        // See KnownCorridorDistanceLookup's / knownCorridorDistanceKm's own doc for the full
+        // reasoning. Two things happen here, on opposite ends of one blackout:
+        //
+        //  - The FIRST tick a blackout is declared, [blackoutEntryFix] is captured from THIS tick's
+        //    own `previousFix` -- the prior tick's genuinely live fix, still sitting in
+        //    [lastTickFix] at this exact point (it is nulled a few lines above, but `previousFix`
+        //    was already read out before that happened) -- i.e. the last position the meter
+        //    actually believed before the sky closed over. [blackoutEntryWasMoving] is captured in
+        //    the same instant from [wasStationaryWhenLost] just above, which -- on this specific
+        //    tick -- still reflects the speed at the moment signal was lost (lastKnownSpeedKmh has
+        //    not been touched this tick, since gpsLost is true).
+        //  - The tick GPS is REACQUIRED (gpsLost just went false, and a blackout was in progress),
+        //    before any of the ordinary F1-F3 accrual below runs: ask whether the whole blackout can
+        //    be explained by a known, mapped toll-road corridor between [blackoutEntryFix] and this
+        //    tick's own fresh `fix`. A match bills the real corridor distance ONCE, through the exact
+        //    same [calcEngine].tick() distance-accrual path every ordinary GPS tick already uses
+        //    (never a second billing code path) -- at a speed comfortably over the tariff's own
+        //    threshold, so it always lands in the distance branch, never waiting. No match (the
+        //    common case: no corridor here, or the fixes don't plausibly continue one road) falls
+        //    straight through to today's existing behaviour -- the blackout accrues nothing.
+        //
+        // Gated on [blackoutEntryWasMoving]: a blackout where the vehicle was already stationary when
+        // signal dropped has been billing WAITING time throughout it already (the branch immediately
+        // below); adding a corridor's known distance on top of that would double-bill the same
+        // minutes, once as waiting and once as distance.
+        if (gpsLost) {
+            if (blackoutEntryFix == null) {
+                blackoutEntryFix = previousFix
+                blackoutEntryWasMoving = !wasStationaryWhenLost
+            }
+        } else if (blackoutEntryFix != null) {
+            val entryFix = blackoutEntryFix
+            if (blackoutEntryWasMoving && entryFix != null && fix != null) {
+                val knownKm = knownCorridorDistanceLookup.knownDistanceKm(entryFix.lat, entryFix.lng, fix.lat, fix.lng)
+                    ?: tollRegistry?.let { registry ->
+                        knownCorridorDistanceKm(registry, entryFix.lat, entryFix.lng, fix.lat, fix.lng)
+                    }
+                if (knownKm != null && knownKm.signum() > 0) {
+                    calcEngine.tick(
+                        cs,
+                        speedKmh = threshold + 1.0,
+                        distanceDeltaKm = knownKm,
+                        elapsedSeconds = BigDecimal.ZERO,
+                    )
+                }
+            }
+            blackoutEntryFix = null
+            blackoutEntryWasMoving = false
+        }
 
         // --- F2: distance from real positions, not integrated speed --------------------------
         val speedCapKm = billedSpeedKmh * dtSeconds / SECONDS_PER_HOUR * MAX_DISTANCE_OVERSHOOT_FACTOR
