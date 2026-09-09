@@ -55,6 +55,34 @@ def current_request_id() -> str:
     return _request_id.get()
 
 
+# Who is making the current request, once auth resolves it -- or None for an
+# unauthenticated request (login, health check) or before auth has run yet.
+# Set by app.core.security.get_current_user, read by RequestIdMiddleware's
+# own request-completion log line below. A driver/owner reports "it broke
+# around 14:32" and the request_id alone answers "which request" but not
+# "whose" -- every OTHER log line a request emits already carries request_id
+# (see JsonFormatter), so this closes the one line that matters most for
+# "find everything this user did today", the request-completion line itself,
+# without having to make every individual logger.info() call thread the user
+# through by hand.
+_actor: ContextVar[tuple[str, str] | None] = ContextVar("actor", default=None)
+
+
+def set_current_actor(user_id: str, tenant_id: str) -> None:
+    """Called once per request, from get_current_user, the instant a token
+    resolves to a real row -- never guessed, never set for a request that
+    never authenticated (login attempts, health checks stay "-"/"-" in the
+    log line)."""
+    _actor.set((user_id, tenant_id))
+
+
+def current_actor() -> tuple[str, str] | None:
+    """(user_id, tenant_id) for the request currently being handled, or
+    `None` if no auth dependency has resolved one yet (or ever will, for a
+    public route)."""
+    return _actor.get()
+
+
 # Attributes `logging` puts on every LogRecord. Anything a caller passed via
 # `extra=` will NOT be in this set, which is how we forward structured fields
 # into the JSON object without having to enumerate them here.
@@ -185,6 +213,10 @@ class RequestIdMiddleware:
         # line or a response header (CR/LF in particular).
         request_id = _sanitise(_header(scope, REQUEST_ID_HEADER)) or uuid.uuid4().hex
         token = _request_id.set(request_id)
+        # Reset fresh for this request's task -- see current_actor's own doc
+        # on why a stale value from an earlier request on a reused task must
+        # never leak into this one's completion line.
+        actor_token = _actor.set(None)
 
         status_code: int | None = None
 
@@ -206,6 +238,7 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             if scope["type"] == "http":
+                actor = current_actor()
                 self._logger.info(
                     "%s %s -> %s",
                     scope.get("method", "?"),
@@ -215,8 +248,13 @@ class RequestIdMiddleware:
                         "http_method": scope.get("method"),
                         "http_path": scope.get("path"),
                         "http_status": status_code,
+                        # "-" for an unauthenticated request (login, health
+                        # check), never a guess -- see current_actor's doc.
+                        "user_id": actor[0] if actor else "-",
+                        "tenant_id": actor[1] if actor else "-",
                     },
                 )
+            _actor.reset(actor_token)
             _request_id.reset(token)
 
 

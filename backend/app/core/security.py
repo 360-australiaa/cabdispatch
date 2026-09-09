@@ -351,6 +351,13 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise _CREDENTIALS_EXCEPTION
+    # So the request-completion log line (app.core.logging.RequestIdMiddleware)
+    # can say WHO made this request, not just its request_id -- see
+    # set_current_actor's own doc. Set only here, once auth has genuinely
+    # resolved a real row -- never for a request that never authenticates.
+    from app.core.logging import set_current_actor
+
+    set_current_actor(user.id, user.tenant_id)
     return user
 
 
