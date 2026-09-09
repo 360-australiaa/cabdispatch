@@ -10,6 +10,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_9_10
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_10_11
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_11_12
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_12_13
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_13_14
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -78,6 +79,7 @@ import au.com.threesixty.cabdispatch.sync.SyncWorker
 import au.com.threesixty.cabdispatch.sync.TariffCache
 import au.com.threesixty.cabdispatch.sync.TariffSigningKeyCache
 import au.com.threesixty.cabdispatch.sync.TollRegistryCache
+import au.com.threesixty.cabdispatch.sync.TrafficCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -261,7 +263,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
             .build()
 
         // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
@@ -328,6 +330,16 @@ object AppContainer {
         startupScope.launch {
             runCatching { airportZoneCache.warmUp() }
             runCatching { airportZoneCache.refresh() }
+        }
+        // Live traffic cameras/hazards (live-map redesign, 2026-09-09): same warm-up-then-refresh
+        // shape as the airport zones immediately above, but no synchronous-lookup reasoning to
+        // carry — nothing here is ever read off the fare-engine's hot path, so this is purely
+        // "have something cached before the driver's first trip of the shift opens the map".
+        // `refresh(null, null)` at this point in boot (no GPS fix yet) resolves to the wide NSW
+        // fallback bbox — see [TrafficCache.refresh]'s own doc.
+        startupScope.launch {
+            runCatching { trafficCache.warmUp() }
+            runCatching { trafficCache.refresh(null, null) }
         }
         // F4's restart half: a process that died mid-hiring left an OPEN trip row behind, and the
         // passenger is very likely still in the car. Rebuild the live meter from it and resume
@@ -509,6 +521,8 @@ object AppContainer {
     val tariffSigningKeyDao by lazy { database.tariffSigningKeyDao() }
     val tollRegistryDao by lazy { database.tollRegistryDao() }
     val airportZoneDao by lazy { database.airportZoneDao() }
+    val trafficCameraDao by lazy { database.trafficCameraDao() }
+    val trafficHazardDao by lazy { database.trafficHazardDao() }
 
     val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService) }
 
@@ -527,6 +541,11 @@ object AppContainer {
      * [AirportZoneCache]'s own doc. [au.com.threesixty.cabdispatch.domain.FareEngineImpl] reads
      * it (as an [AirportZoneLookup]) exactly once per trip, at `startTrip`, from memory. */
     val airportZoneCache by lazy { AirportZoneCache(airportZoneDao, apiService) }
+
+    /** Local cache of live NSW traffic cameras + hazards (live-map redesign, 2026-09-09) — see
+     * [TrafficCache]'s own doc. Read only by [au.com.threesixty.cabdispatch.ui.screens.hired.MeterBackdropMap]'s
+     * decorative markers; unlike every cache above, never by the fare engine. */
+    val trafficCache by lazy { TrafficCache(trafficCameraDao, trafficHazardDao, apiService) }
 
     /**
      * Fire-and-forget toll-registry refresh — T2 (architecture audit 2026-09-08, §2.3).
@@ -548,6 +567,31 @@ object AppContainer {
      * leaves the previously cached zones (or the compiled precinct-circle fallback) in force. */
     fun refreshAirportZones() {
         startupScope.launch { runCatching { airportZoneCache.refresh() } }
+    }
+
+    /** Fire-and-forget traffic-cache refresh (live-map redesign, 2026-09-09) — same shape as
+     * [refreshTollRegistry]/[refreshAirportZones], called from the same non-suspending trigger
+     * points (login, reconnect, the 15-minute sync worker). Resolves the bbox from whatever
+     * position is already known ([au.com.threesixty.cabdispatch.domain.SpeedSource.locationFix]'s
+     * current value, `null` fixes included — see [TrafficCache.refresh]'s own fallback) rather
+     * than requiring a caller to supply one, since none of those three trigger points have a
+     * screen-specific position of their own to hand in. [au.com.threesixty.cabdispatch.ui.screens.hired.MeterBackdropMap]'s
+     * own "map panel open" refresh calls [TrafficCache.refresh] directly instead, with the real
+     * vehicle position it already has on hand — see that file's doc. */
+    fun refreshTrafficData() {
+        // Both the [speedSource] read AND the refresh call are inside the SAME runCatching,
+        // unlike a first draft of this function that read speedSource synchronously before
+        // launching — that version threw straight out of this function (not just inside the
+        // background coroutine) whenever [speedSource]'s lazy init needed [appContext] before it
+        // was ever set, which every caller of this best-effort function must never risk (real
+        // failure: DriverAuthRepositoryTest, which exercises the login path this is called from
+        // without a full AppContainer.init having run).
+        startupScope.launch {
+            runCatching {
+                val fix = speedSource.locationFix.value
+                trafficCache.refresh(fix?.lat, fix?.lng)
+            }
+        }
     }
 
     // --- S4-S6 agent: fare-breakdown engine + hardware gateways ---

@@ -75,6 +75,11 @@ class ConnectivitySyncTrigger(context: Context) {
             // against — a tablet that booted offline otherwise runs the shift on the compiled
             // precinct-circle fallback (see AirportZoneCache's doc) instead of the real ranks.
             AppContainer.refreshAirportZones()
+            // Same moment again for the live traffic cameras/hazards the meter map draws
+            // (live-map redesign, 2026-09-09) — informational only, so this one is lower-stakes
+            // than the two above, but reconnecting is still the right moment to stop showing a
+            // driver whatever was cached (possibly nothing) before the tablet last had signal.
+            AppContainer.refreshTrafficData()
             // S5: reconnecting is also the single best moment to refresh the tariff — it is exactly
             // when a tablet that has been offline (a shift in a dead-spot, a tablet left parked) is
             // most likely to be holding a stale one. Best-effort and fire-and-forget; see

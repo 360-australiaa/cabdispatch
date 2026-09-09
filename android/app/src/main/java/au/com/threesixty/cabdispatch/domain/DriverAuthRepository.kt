@@ -144,6 +144,11 @@ class SharedPreferencesDriverAuthRepository internal constructor(
                 // The airport-fee zones are tenant-scoped, so the first authenticated moment is
                 // the FIRST moment they can be fetched at all — see AirportZoneCache's doc.
                 AppContainer.refreshAirportZones()
+                // Same "never-logged-in tablet gets a 401 at boot" gap as the toll registry above
+                // applies to the live traffic cameras/hazards too (live-map redesign, 2026-09-09) —
+                // authenticated but not tenant-scoped, so login is the first moment this succeeds,
+                // not the first moment it's relevant.
+                AppContainer.refreshTrafficData()
                 // Real gap closed 2026-09-06: this field existed on the response the whole time
                 // and was simply never read — see AppContainer.refreshToken's doc for the 401s
                 // that went unrecovered without it.

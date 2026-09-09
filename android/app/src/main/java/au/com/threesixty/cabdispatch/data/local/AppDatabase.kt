@@ -10,6 +10,8 @@ import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffDao
 import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
 import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
+import au.com.threesixty.cabdispatch.data.local.dao.TrafficCameraDao
+import au.com.threesixty.cabdispatch.data.local.dao.TrafficHazardDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.AirportZoneEntity
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
@@ -19,6 +21,8 @@ import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TrafficCameraEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TrafficHazardEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
 /**
@@ -73,6 +77,14 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * trip's `tolls` total, so Close & Pay / Trip Detail / the printed receipt can name it under the
  * "Tolls" line (see [TripEntity.airportAccessFeeJson]). Real `Migration` ([MIGRATION_12_13]).
  *
+ * Version bumped 13 -> 14 (live map redesign, 2026-09-09) adding two new entities —
+ * [TrafficCameraEntity]/[TrafficHazardEntity], the local cache of `GET /v1/traffic/cameras` and
+ * `GET /v1/traffic/hazards` that lets [au.com.threesixty.cabdispatch.ui.screens.hired.MeterBackdropMap]
+ * draw camera/hazard markers on the live meter map with zero connectivity (see
+ * [au.com.threesixty.cabdispatch.sync.TrafficCache]). Purely informational reference data — unlike
+ * every earlier entity added to this database, neither table is ever read by the fare engine, so
+ * there is no accompanying [TripEntity] column this time. Real `Migration` ([MIGRATION_13_14]).
+ *
  * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
  * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
  * installed base to migrate)" — that assumption held only as long as every test device got a
@@ -107,8 +119,10 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TollPointEntity::class,
         TollGantryEntity::class,
         AirportZoneEntity::class,
+        TrafficCameraEntity::class,
+        TrafficHazardEntity::class,
     ],
-    version = 13,
+    version = 14,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -128,6 +142,56 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tariffSigningKeyDao(): TariffSigningKeyDao
     abstract fun tollRegistryDao(): TollRegistryDao
     abstract fun airportZoneDao(): AirportZoneDao
+    abstract fun trafficCameraDao(): TrafficCameraDao
+    abstract fun trafficHazardDao(): TrafficHazardDao
+}
+
+/**
+ * 13 -> 14: the two live-traffic cache tables — see [AppDatabase]'s doc for the pass. Both start
+ * empty, which is a safe state ([au.com.threesixty.cabdispatch.sync.TrafficCache]'s own
+ * "informational only" cache never blocks or fabricates anything while empty — see that class's
+ * doc) until the first successful [au.com.threesixty.cabdispatch.sync.TrafficCache.refresh].
+ *
+ * Verified against Room's own generated `createAllTables` per [MIGRATION_9_10]'s "How to check
+ * this SQL is right" note (KSP output: `app/build/generated/ksp/debug/java/.../AppDatabase_Impl.java`),
+ * matching column order/types straight off [TrafficCameraEntity]/[TrafficHazardEntity]'s own
+ * declarations (both plain, no foreign keys, no indices beyond the primary key).
+ */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `traffic_cameras` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `latitude` REAL NOT NULL,
+                `longitude` REAL NOT NULL,
+                `direction` TEXT,
+                `imageUrl` TEXT,
+                `region` TEXT,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `traffic_hazards` (
+                `id` TEXT NOT NULL,
+                `category` TEXT NOT NULL,
+                `latitude` REAL NOT NULL,
+                `longitude` REAL NOT NULL,
+                `headline` TEXT,
+                `closureType` TEXT,
+                `direction` TEXT,
+                `speedLimit` INTEGER,
+                `expectedDelayMinutes` INTEGER,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
 }
 
 /**

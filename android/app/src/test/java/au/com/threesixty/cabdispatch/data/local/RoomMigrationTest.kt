@@ -315,7 +315,13 @@ class RoomMigrationTest {
         // method to a production DAO interface.
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+            // MIGRATION_13_14 (live map redesign, 2026-09-09) added so this real Room open —
+            // which always targets AppDatabase's compiled CURRENT version, 14 now — can complete
+            // the 13->14 step too; runMigrationsAndValidate above deliberately still stops at 13
+            // (the last version with an exported/asset-copied schema JSON this test hand-verifies
+            // against), so the raw file handed to this builder is genuinely at 13 and needs this
+            // one extra step, exactly mirroring AppContainer's own migrations list.
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
             .build()
         try {
             val raw = db.openHelper.readableDatabase

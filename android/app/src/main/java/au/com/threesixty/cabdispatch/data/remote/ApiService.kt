@@ -288,6 +288,34 @@ interface ApiService {
     @GET("/v1/geofences/presets/airport")
     suspend fun airportGeofencePresets(): List<GeofencePresetDto>
 
+    // ---- Live NSW traffic (`backend/app/api/v1/traffic.py`) — cameras + hazards, platform-wide
+    // reference data with no tenant filtering, same visibility rule as the toll registry above.
+    // OUR backend is the only thing that ever calls livetraffic.com; this device calls ONLY these
+    // two routes (see [au.com.threesixty.cabdispatch.sync.TrafficCache], the on-device cache that
+    // is the one caller of both). ----
+
+    /** `GET /v1/traffic/cameras?bbox=...` — live cameras inside [bbox] ("minLng,minLat,maxLng,maxLat",
+     * the backend's own format; `null` returns the whole table, which [au.com.threesixty.cabdispatch.sync.TrafficCache]
+     * never does — see that class's doc for why a bbox is always supplied). `limit` is capped at
+     * 200 server-side (422 above that). */
+    @GET("/v1/traffic/cameras")
+    suspend fun trafficCameras(
+        @Query("bbox") bbox: String? = null,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): TrafficCameraPageDto
+
+    /** `GET /v1/traffic/hazards?bbox=...&active_only=true` — live hazards inside [bbox]. Same
+     * bbox format/cap as [trafficCameras]. [activeOnly] defaults `true` server-side too (matched
+     * here so an explicit `false` is a deliberate caller choice, not this app's default). */
+    @GET("/v1/traffic/hazards")
+    suspend fun trafficHazards(
+        @Query("bbox") bbox: String? = null,
+        @Query("active_only") activeOnly: Boolean = true,
+        @Query("skip") skip: Int = 0,
+        @Query("limit") limit: Int = 200,
+    ): TrafficHazardPageDto
+
     // ---- Trips (offline-first: app is source of truth, server validates —
     // B7. Sibling sync-engine agent drives tick/close/sync from the Room queue) ----
 

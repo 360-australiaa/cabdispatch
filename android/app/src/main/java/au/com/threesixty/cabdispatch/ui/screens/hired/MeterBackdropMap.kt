@@ -1,9 +1,16 @@
 package au.com.threesixty.cabdispatch.ui.screens.hired
 
+import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -26,8 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -36,7 +46,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
+import au.com.threesixty.cabdispatch.domain.TrafficCamera
+import au.com.threesixty.cabdispatch.domain.TrafficHazard
+import au.com.threesixty.cabdispatch.domain.TrafficHazardCategories
+import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
+import au.com.threesixty.cabdispatch.domain.fare.UpcomingToll
+import au.com.threesixty.cabdispatch.domain.fare.upcomingToll
+import au.com.threesixty.cabdispatch.domain.toMoneyString
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
+import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.createGlowLine
@@ -46,14 +64,16 @@ import com.mapbox.android.gestures.StandardScaleGestureDetector
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
-import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.annotation.annotations
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManager
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.createCircleAnnotationManager
+import com.mapbox.maps.plugin.annotation.generated.createPointAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.createPolylineAnnotationManager
 import com.mapbox.maps.plugin.compass.compass
 import com.mapbox.maps.plugin.gestures.OnMoveListener
@@ -145,6 +165,49 @@ internal data class MapPoint(val lat: Double, val lng: Double)
  * ([dimAlpha]) + radial vignette on top keeps the dial legible over street detail — the mockup-#4
  * "TRIP IN PROGRESS" pane, where the map is the content rather than a backdrop, passes a lighter
  * wash.
+ *
+ * **Custom style + live traffic overlay (live-map redesign, 2026-09-09 — owner: "I want to show
+ * them the updated map so they can see the cameras icon, they can see the toll price, toll gate
+ * is coming on the road upcoming... Not like you are just copying or pasting the Mapbox. It
+ * should be proper custom design map and properly visible to the driver.").**
+ *
+ * Interpretation used here, stated explicitly because "not just Mapbox" has no literal reading —
+ * this app has no other map engine, and building one from scratch was never in scope: Mapbox stays
+ * the RENDERER; what had to stop being generic is the STYLE and the ON-MAP INFORMATION.
+ * - **Style**: [BACKDROP_MAP_STYLE_URI] swaps in this app's own custom dark Mapbox Studio style —
+ *   the SAME one the dashboard's Live Map / Trip Route Map / Toll Zone picker already ship
+ *   (`dashboard/src/pages/live-map/mapInit.ts`'s `MAP_STYLE_URL`) — in place of the bare built-in
+ *   `Style.DARK` this file used before. A suitable custom style already existed from that
+ *   dashboard work; this reuses it rather than commissioning a second one, so the driver's meter
+ *   map and the dispatcher's map read as one product.
+ * - **Information**: three new custom-drawn layers, all sourced from data this app's own backend
+ *   (never livetraffic.com/any third party directly) already routes through it —
+ *   [au.com.threesixty.cabdispatch.sync.TrafficCache] (cameras + hazards, `GET /v1/traffic`) and
+ *   the SAME on-device toll registry [au.com.threesixty.cabdispatch.domain.fare.onFix] auto-detects
+ *   tolls against ([au.com.threesixty.cabdispatch.domain.fare.upcomingToll]):
+ *   1. **Camera markers** — [rememberTrafficMarkerBitmaps]'s hand-drawn "lens" glyph (three nested
+ *      circles: neon-cyan ring, dark body, light iris — no emoji/font glyph, so it renders
+ *      identically on every device including the older tablets this fleet runs), filtered to
+ *      roughly the current visible map bounds (see the marker-drawing [LaunchedEffect] below) so a
+ *      small screen never tries to plot a whole region's cameras at once.
+ *   2. **Hazard markers** — the same bitmap technique, a filled warning triangle, tinted by
+ *      severity ([CaptainPalette.danger] for `incident`/`fire`, [CaptainPalette.warning] for
+ *      `roadwork`/`flood`/`alpine`/`majorevent`).
+ *   3. **Toll-ahead chip** ([TollAheadChip]) — "Toll ahead: <road> — <price>" when
+ *      [au.com.threesixty.cabdispatch.domain.fare.upcomingToll] finds a real gantry within 2km
+ *      roughly ahead of the vehicle's heading (see that function's own doc for why 2km). A
+ *      one-shot fade in/out, never a loop — this screen's own precedent (`GlowingSpeedometer`'s
+ *      "calm animations" doc in `Hud.kt`) after decorative looping motion was explicitly reverted
+ *      here before for being distracting.
+ *
+ * **Never a tap target.** Cameras and hazards are drawn on [BackdropHolder.markers], a
+ * [PointAnnotationManager] that NEVER gets a click listener added anywhere in this file — a tap
+ * on a marker falls straight through to the map's own default handling, exactly as if nothing
+ * were drawn there. [TollAheadChip] is likewise plain, non-interactive `Text`/`GlassCard` with no
+ * `clickable` of its own. Both live inside THIS composable's own `MapView`/`Box`; the meter's real
+ * Start/Stop/Close Fare controls are separate Compose composables elsewhere in `HiredScreen.kt`,
+ * never children of this one — so nothing added here can ever sit in front of, or steal a gesture
+ * from, those controls.
  */
 @Composable
 internal fun MeterBackdropMap(
@@ -180,6 +243,20 @@ internal fun MeterBackdropMap(
     // keys on this, not on the raw fix, so a stationary cab jittering by a metre or two doesn't
     // restart a camera ease every second.
     val followKey = vehicle?.let { "${(it.lat * 1e4).roundToInt()}:${(it.lng * 1e4).roundToInt()}" }
+
+    // --- Live map redesign (2026-09-09): cameras, hazards, upcoming-toll advisory. See this
+    // file's class doc, "Custom style + live traffic overlay" section, for the full design.
+    val trafficOverlay = rememberTrafficOverlay(vehicle)
+    val tollRegistry = rememberTollRegistrySnapshot()
+    val upcoming = remember(tollRegistry, vehicle, liveFix?.heading) {
+        vehicle?.let { v -> upcomingToll(tollRegistry, v.lat, v.lng, liveFix?.heading) }
+    }
+    // Held across the fade-out (see [TollAheadChip]'s own call site below) so the chip's content
+    // doesn't blank instantly the moment [upcoming] itself goes null — it keeps showing the last
+    // real advisory while the one-shot fade animates out.
+    var displayedUpcoming by remember { mutableStateOf<UpcomingToll?>(null) }
+    LaunchedEffect(upcoming) { if (upcoming != null) displayedUpcoming = upcoming }
+    val markerBitmaps = rememberTrafficMarkerBitmaps()
 
     Box(modifier = modifier) {
         if (vehicle != null) {
@@ -221,10 +298,17 @@ internal fun MeterBackdropMap(
                     })
                     mapView.scalebar.enabled = false
                     mapView.compass.enabled = false
-                    mapView.mapboxMap.loadStyle(Style.DARK) {
+                    mapView.mapboxMap.loadStyle(BACKDROP_MAP_STYLE_URI) {
                         val lines = mapView.annotations.createPolylineAnnotationManager()
                         val circles = mapView.annotations.createCircleAnnotationManager()
-                        mapHolder.value = BackdropHolder(mapView, lines, circles)
+                        // Cameras + hazards only — decorative, no click listener ever added (see
+                        // this file's class doc, "Custom style + live traffic overlay" section):
+                        // a tap here is never consumed, so it can never intercept a tap meant for
+                        // the meter's own Start/Stop/Close Fare controls (those are separate
+                        // Compose composables layered elsewhere in HiredScreen, not on this
+                        // manager at all).
+                        val markers = mapView.annotations.createPointAnnotationManager()
+                        mapHolder.value = BackdropHolder(mapView, lines, circles, markers)
                         mapReady = true
                     }
                     mapView
@@ -245,17 +329,92 @@ internal fun MeterBackdropMap(
                     ),
                 ),
         )
-        // The one explicit way back to auto-follow — see [followSuspended]'s doc (class doc,
-        // "Gestures" section) for why there is no automatic resume. Top-end corner: the
-        // trip/nav status pills and destination search bar already dock top-start (see
-        // `HiredScreen.kt`'s map-panel layout), so this is the one consistently-empty corner
-        // regardless of nav mode.
-        if (followSuspended) {
-            RecentreButton(
-                onClick = { followSuspended = false },
-                modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
-            )
+        // Top-end corner column: the trip/nav status pills and destination search bar already
+        // dock top-start (see `HiredScreen.kt`'s map-panel layout) and the nav bottom bar docks
+        // bottom-center, so this is the one consistently-empty corner regardless of nav mode —
+        // now shared by two independent affordances, chip above button:
+        // - The toll-ahead advisory (see this file's class doc) — a calm, one-shot fade-in/out,
+        //   never a looping/pulsing animation (this screen's own "calm animations" precedent —
+        //   see [GlowingSpeedometer]'s doc in Hud.kt for the same rule applied to the dial).
+        // - [RecentreButton] — the one explicit way back to auto-follow, see [followSuspended]'s
+        //   doc (class doc, "Gestures" section) for why there is no automatic resume.
+        Column(
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AnimatedVisibility(
+                visible = upcoming != null,
+                enter = fadeIn(tween(TOLL_CHIP_FADE_MS)),
+                exit = fadeOut(tween(TOLL_CHIP_FADE_MS / 2)),
+            ) {
+                displayedUpcoming?.let { TollAheadChip(it) }
+            }
+            if (followSuspended) {
+                RecentreButton(onClick = { followSuspended = false })
+            }
         }
+    }
+
+    // Camera/hazard markers — see this file's class doc, "Custom style + live traffic overlay"
+    // section. Recomputed whenever the cached data changes or the camera settles on a new
+    // position (mirroring the follow effects' own `followKey`/`hasPlannedRoute` keys), never on a
+    // timer — decorative markers redraw when there is new data or the view has moved, nothing
+    // else. deleteAll + recreate, same cost/shape as the lines+circles effect above: a handful of
+    // markers per screen (filtered to the visible bounds below), nowhere near expensive.
+    LaunchedEffect(mapReady, cameraFramed, trafficOverlay, followKey, hasPlannedRoute) {
+        val holder = mapHolder.value ?: return@LaunchedEffect
+        if (!mapReady) return@LaunchedEffect
+        holder.markers.deleteAll()
+        if (trafficOverlay.cameras.isEmpty() && trafficOverlay.hazards.isEmpty()) return@LaunchedEffect
+
+        // The map's own real current viewport, not a guessed radius — see this file's class doc
+        // for why "roughly the visible bounds" means asking Mapbox rather than assuming a fixed
+        // window. Safe to call once the style/camera has actually settled (guarded by `mapReady`
+        // above and `cameraFramed` in this effect's keys).
+        if (!cameraFramed) return@LaunchedEffect
+        val cam = holder.mapView.mapboxMap.cameraState
+        val bounds = holder.mapView.mapboxMap.coordinateBoundsForCamera(
+            CameraOptions.Builder()
+                .center(cam.center)
+                .zoom(cam.zoom)
+                .bearing(cam.bearing)
+                .pitch(cam.pitch)
+                .build(),
+        )
+        val south = bounds.southwest.latitude()
+        val west = bounds.southwest.longitude()
+        val north = bounds.northeast.latitude()
+        val east = bounds.northeast.longitude()
+        fun withinView(lat: Double, lng: Double) = lat in south..north && lng in west..east
+
+        val options = buildList {
+            trafficOverlay.cameras.filter { withinView(it.latitude, it.longitude) }.forEach { camera ->
+                add(
+                    PointAnnotationOptions()
+                        .withPoint(Point.fromLngLat(camera.longitude, camera.latitude))
+                        .withIconImage(markerBitmaps.camera),
+                )
+            }
+            trafficOverlay.hazards.filter { withinView(it.latitude, it.longitude) }.forEach { hazard ->
+                val bitmap = if (hazard.category == TrafficHazardCategories.INCIDENT ||
+                    hazard.category == TrafficHazardCategories.FIRE
+                ) {
+                    markerBitmaps.hazardSevere
+                } else {
+                    markerBitmaps.hazardCaution
+                }
+                add(
+                    PointAnnotationOptions()
+                        .withPoint(Point.fromLngLat(hazard.longitude, hazard.latitude))
+                        .withIconImage(bitmap),
+                )
+            }
+        }
+        // No click listener is EVER added to `holder.markers` (see this file's class doc) — these
+        // are pure decoration; a tap here falls through to the map's own default handling exactly
+        // as if nothing were drawn, so it can never intercept a tap meant for the meter itself.
+        if (options.isNotEmpty()) holder.markers.create(options)
     }
 
     // One-time initial framing (follow-cam mode only — see class doc), exactly like
@@ -463,6 +622,9 @@ private data class BackdropHolder(
     val mapView: MapView,
     val lines: PolylineAnnotationManager,
     val circles: CircleAnnotationManager,
+    /** Camera/hazard markers only — see this file's class doc, "Custom style + live traffic
+     * overlay" section. No click listener is ever added to this manager, anywhere in this file. */
+    val markers: PointAnnotationManager,
 )
 
 /**
@@ -487,3 +649,218 @@ internal fun rememberLiveTrace(): List<MapPoint> {
 }
 
 private const val LIVE_TRACE_MAX = 4000
+
+// ============================================================================================
+// Live map redesign (2026-09-09) — custom style, camera/hazard markers, toll-ahead advisory.
+// See [MeterBackdropMap]'s class doc, "Custom style + live traffic overlay" section, for the
+// full design and the explicit "not just Mapbox" interpretation this implements.
+// ============================================================================================
+
+/**
+ * This app's own custom dark Mapbox Studio style — the SAME style the dashboard's Live Map / Trip
+ * Route Map / Toll Zone picker already use (`dashboard/src/pages/live-map/mapInit.ts`'s
+ * `MAP_STYLE_URL`), reused here rather than referenced fresh so the driver's meter map and the
+ * dispatcher's dashboard map are visibly one product. Replaces the bare built-in `Style.DARK`
+ * this file used before this pass.
+ */
+private const val BACKDROP_MAP_STYLE_URI = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za"
+
+/** [TollAheadChip]'s fade-in duration; fade-out is half this — a quick, calm exit once the
+ * gantry is behind the vehicle, never a lingering banner. */
+private const val TOLL_CHIP_FADE_MS = 400
+
+/** Cameras + hazards this composition currently has cached — see [rememberTrafficOverlay]. Both
+ * lists are the FULL cached set (every bbox-fetched row), not yet filtered to the visible map
+ * bounds; the marker-drawing effect in [MeterBackdropMap] does that filtering right before
+ * drawing, against the map's real current viewport. */
+private data class TrafficOverlayState(
+    val cameras: List<TrafficCamera> = emptyList(),
+    val hazards: List<TrafficHazard> = emptyList(),
+)
+
+/**
+ * Loads [AppContainer.trafficCache]'s cached cameras/hazards into this composition, and performs
+ * the "map panel open" refresh trigger — see `AppContainer.refreshTrafficData`'s own doc for why
+ * every OTHER trigger point (login, reconnect, the 15-minute sync worker) goes through that
+ * shared fire-and-forget helper while this one calls [au.com.threesixty.cabdispatch.sync.TrafficCache.refresh]
+ * directly: this composable already has a real position (the trip's vehicle) to build a
+ * locally-relevant bbox from, which none of those three non-Compose trigger points do.
+ *
+ * `LaunchedEffect(Unit)` — runs once per time this composable enters composition (i.e. once per
+ * hired trip's map panel appearing), never on a timer and never re-triggered by [vehicle] moving
+ * afterwards; a mid-trip refresh would need a genuinely new trigger point this task's own
+ * instructions rule out inventing.
+ */
+@Composable
+private fun rememberTrafficOverlay(vehicle: MapPoint?): TrafficOverlayState {
+    var state by remember { mutableStateOf(TrafficOverlayState()) }
+    LaunchedEffect(Unit) {
+        runCatching { AppContainer.trafficCache.warmUp() }
+        state = TrafficOverlayState(
+            cameras = AppContainer.trafficCache.cachedCameras().orEmpty(),
+            hazards = AppContainer.trafficCache.cachedHazards().orEmpty(),
+        )
+        runCatching { AppContainer.trafficCache.refresh(vehicle?.lat, vehicle?.lng) }
+        state = TrafficOverlayState(
+            cameras = AppContainer.trafficCache.cachedCameras().orEmpty(),
+            hazards = AppContainer.trafficCache.cachedHazards().orEmpty(),
+        )
+    }
+    return state
+}
+
+/**
+ * The on-device toll registry snapshot [au.com.threesixty.cabdispatch.domain.fare.upcomingToll]
+ * reads — the SAME cache [au.com.threesixty.cabdispatch.domain.fare.onFix] already uses for
+ * auto-toll detection, loaded once per trip (matching that call site's own "loaded once, never
+ * per GPS fix" contract — see [au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot]'s
+ * doc). This file never refreshes the registry itself: it already refreshes on login, reconnect,
+ * the sync worker and the pricing/GPS-simulator panels opening (see `AppContainer.kt`) — reading
+ * whatever is already cached here is all the toll-ahead advisory needs.
+ */
+@Composable
+private fun rememberTollRegistrySnapshot(): TollRegistrySnapshot {
+    var snapshot by remember { mutableStateOf(TollRegistrySnapshot.EMPTY) }
+    LaunchedEffect(Unit) {
+        snapshot = runCatching { AppContainer.tollRegistryCache.snapshot() }.getOrDefault(TollRegistrySnapshot.EMPTY)
+    }
+    return snapshot
+}
+
+/** Calm, non-interactive "toll ahead" advisory — see [MeterBackdropMap]'s class doc for the
+ * one-shot fade-in/out this is always shown through, never on its own clock. Plain [GlassCard]
+ * (this kit's one floating-over-map surface), warm amber glow to read as an advisory without
+ * competing with the danger-red destination pin already on the map. No `clickable` — informational
+ * only, per this file's "never a tap target" rule. */
+@Composable
+private fun TollAheadChip(upcoming: UpcomingToll) {
+    GlassCard(cornerRadiusDp = 14, glow = CaptainPalette.warning) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                buildString {
+                    append("Toll ahead: ")
+                    append(upcoming.roadName)
+                    upcoming.price?.let { append(" — ").append(it.toMoneyString()) }
+                },
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                style = Type.tiny,
+                color = CaptainPalette.textPrimary,
+            )
+        }
+    }
+}
+
+/** The three small custom-drawn marker bitmaps this file's camera/hazard layer uses — built once
+ * per composition (colours resolved from [CaptainPalette] at the point of construction, so a
+ * light/dark app-theme switch still redraws them, exactly like every other themed value here). */
+private class TrafficMarkerBitmaps(
+    val camera: Bitmap,
+    val hazardCaution: Bitmap,
+    val hazardSevere: Bitmap,
+)
+
+/**
+ * See [TrafficMarkerBitmaps]. Deliberately drawn from plain [android.graphics] primitives (nested
+ * circles for the camera "lens", a filled triangle for a hazard) rather than an emoji glyph or a
+ * Material icon glyph rendered to a bitmap: primitives render pixel-identically on every device
+ * (this fleet's own memory notes an older SM-T575 tablet in service — emoji-font coverage is not
+ * something to gamble a live meter screen's legibility on), and drawing the shape itself, not
+ * borrowing a system glyph, is the literal "this app draws its own icons" reading of the owner's
+ * "proper custom design" request.
+ */
+@Composable
+private fun rememberTrafficMarkerBitmaps(): TrafficMarkerBitmaps {
+    val density = LocalDensity.current
+    val cameraRing = CaptainPalette.neonCyan.toArgb()
+    val cameraBody = CaptainPalette.raised.toArgb()
+    val cameraIris = CaptainPalette.textPrimary.toArgb()
+    val cameraPupil = CaptainPalette.bg.toArgb()
+    val hazardCautionFill = CaptainPalette.warning.toArgb()
+    val hazardSevereFill = CaptainPalette.danger.toArgb()
+    val hazardGlyph = CaptainPalette.textPrimary.toArgb()
+    val hazardGlyphOutline = CaptainPalette.bg.toArgb()
+    return remember(cameraRing, cameraBody, cameraIris, cameraPupil, hazardCautionFill, hazardSevereFill, hazardGlyph, hazardGlyphOutline, density) {
+        TrafficMarkerBitmaps(
+            camera = buildCameraMarkerBitmap(density, cameraRing, cameraBody, cameraIris, cameraPupil),
+            hazardCaution = buildHazardMarkerBitmap(density, hazardCautionFill, hazardGlyph, hazardGlyphOutline),
+            hazardSevere = buildHazardMarkerBitmap(density, hazardSevereFill, hazardGlyph, hazardGlyphOutline),
+        )
+    }
+}
+
+/** Marker diameter, dp — small and deliberately unobtrusive on a tablet screen (see this file's
+ * class doc, "never a tap target" rule: these are decoration, not buttons, and are sized like it). */
+private val MARKER_DIAMETER_DP = 24.dp
+
+/** Three concentric circles — outer neon-cyan ring, dark body, light iris, dark pupil — reading as
+ * a stylised camera lens without any text/emoji glyph. See [rememberTrafficMarkerBitmaps]'s doc. */
+private fun buildCameraMarkerBitmap(density: Density, ringArgb: Int, bodyArgb: Int, irisArgb: Int, pupilArgb: Int): Bitmap {
+    val d = with(density) { MARKER_DIAMETER_DP.toPx() }.roundToInt().coerceAtLeast(1)
+    val bitmap = Bitmap.createBitmap(d, d, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val r = d / 2f
+    val strokeW = d * 0.12f
+    val bodyPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = bodyArgb
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(r, r, r - strokeW / 2f, bodyPaint)
+    val ringPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = ringArgb
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = strokeW
+    }
+    canvas.drawCircle(r, r, r - strokeW / 2f, ringPaint)
+    val irisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = irisArgb
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(r, r, r * 0.46f, irisPaint)
+    val pupilPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = pupilArgb
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(r, r, r * 0.20f, pupilPaint)
+    return bitmap
+}
+
+/** A filled circle badge (severity-tinted) with a filled warning triangle on top, plus a thin dark
+ * outline on the triangle for contrast against either fill colour in either app theme. See
+ * [rememberTrafficMarkerBitmaps]'s doc. */
+private fun buildHazardMarkerBitmap(density: Density, fillArgb: Int, glyphArgb: Int, outlineArgb: Int): Bitmap {
+    val d = with(density) { MARKER_DIAMETER_DP.toPx() }.roundToInt().coerceAtLeast(1)
+    val bitmap = Bitmap.createBitmap(d, d, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val r = d / 2f
+    val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = fillArgb
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(r, r, r, fillPaint)
+
+    val triHalfW = r * 0.42f
+    val triTop = r * 0.48f
+    val triBottom = d - r * 0.55f
+    val path = android.graphics.Path().apply {
+        moveTo(r, triTop)
+        lineTo(r - triHalfW, triBottom)
+        lineTo(r + triHalfW, triBottom)
+        close()
+    }
+    val outlinePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = outlineArgb
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = d * 0.05f
+    }
+    canvas.drawPath(path, outlinePaint)
+    val glyphPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = glyphArgb
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawPath(path, glyphPaint)
+    return bitmap
+}

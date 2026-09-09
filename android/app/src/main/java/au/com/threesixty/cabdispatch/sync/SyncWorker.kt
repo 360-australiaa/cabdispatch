@@ -52,6 +52,11 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         // The airport-fee zones ride the same wakeup for the same reasons, and are equally not
         // allowed to fail the drain — see AirportZoneCache's own doc.
         runCatching { AppContainer.airportZoneCache.refresh() }
+        // Live traffic cameras/hazards (live-map redesign, 2026-09-09) ride the same wakeup too —
+        // informational only, so a failure here is even lower-stakes than the two above, but
+        // there's no reason to leave a kiosked tablet's camera/hazard markers stale for days when
+        // this worker already wakes up every ~15 min regardless.
+        AppContainer.refreshTrafficData()
         // S5: the tariff rides the same wakeup for the same reasons — it already runs on a
         // schedule, already requires connectivity, and until this pass nothing outside the
         // dashboard's own composition ever refreshed the tariff at all. Also best-effort: neither

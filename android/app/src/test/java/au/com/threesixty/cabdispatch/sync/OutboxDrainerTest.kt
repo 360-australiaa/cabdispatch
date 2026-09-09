@@ -1032,5 +1032,10 @@ private class FakeApiService : ApiService {
     override suspend fun listGeofences(kind: String?, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.GeofenceListResponseDto = notUsed()
     override suspend fun airportGeofencePresets(): List<au.com.threesixty.cabdispatch.data.remote.GeofencePresetDto> = notUsed()
 
+    // Live NSW traffic cameras/hazards (live-map redesign, 2026-09-09) — pulled by TrafficCache
+    // on its own schedule, never by the outbox drainer under test here.
+    override suspend fun trafficCameras(bbox: String?, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.TrafficCameraPageDto = notUsed()
+    override suspend fun trafficHazards(bbox: String?, activeOnly: Boolean, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.TrafficHazardPageDto = notUsed()
+
     private fun notUsed(): Nothing = throw UnsupportedOperationException("not exercised by this test")
 }
