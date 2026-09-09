@@ -59,8 +59,14 @@ pytestmark = pytest.mark.asyncio
 # Excluded, and why, so the gaps are visible rather than silently untested:
 #   M5E                  priced, but the dataset has zero gantry coordinates for
 #                        it, so it cannot be auto-detected by any rule.
-#   ROZELLE_INTERCHANGE  real gantries, but genuinely unpriced in the source data.
-#   M12                  gantry-only stub, no published pricing.
+#   ROZELLE_INTERCHANGE  genuinely unpriced in the source data, and (as of the
+#                        2026-09-09 correction) has zero gantry coordinates of
+#                        its own -- see scripts/seed_toll_roads.py.
+#   M12, IRON_COVE_LINK  real gantries, but `pricing_model="toll_free"` --
+#                        `test_...still_charges` below asserts tolls > 0, which
+#                        is never true for these two by design. Covered
+#                        instead by test_driving_m12_and_iron_cove_link_
+#                        charges_nothing_and_is_never_flagged_unpriced below.
 _ROADS_UNDER_TEST = [
     "CCT", "ED", "LCT", "M2", "M4", "M4M8_LINK", "M5SW", "M7", "M8",
     "NORTHCONNEX", "SHB_SHT",
@@ -203,3 +209,37 @@ async def test_driving_parallel_to_a_real_road_charges_nothing(
         f"{road_id} charged {body['tolls']} to a vehicle that never left the adjacent road"
     )
     assert body["auto_tolled_roads"] == {}
+
+
+# --- toll_free roads (2026-09-09 correction): M12, Iron Cove Link -----------------
+#
+# Both used to be modelled `pricing_model="unpriced"`, which meant a trip that
+# genuinely drove either of them got flagged in `unpriced_toll_road_ids` -- the
+# tablet's "this toll needs a price, enter manually" prompt -- for a road that is
+# confirmed, by real government/Linkt policy, to never charge a cent. This proves
+# the fix against the REAL seeded registry, not a synthetic fixture: driving every
+# one of M12's 4 real gantries, and every one of Iron Cove Link's 6, must charge
+# exactly $0.00 and must never appear in `unpriced_toll_road_ids`.
+@pytest.mark.parametrize("road_id", ["M12", "IRON_COVE_LINK"])
+async def test_driving_m12_and_iron_cove_link_charges_nothing_and_is_never_flagged_unpriced(
+    client: AsyncClient, session: AsyncSession, road_id: str
+):
+    await seed_toll_roads()
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    gantries = await _real_gantries(session, road_id)
+    assert gantries, f"{road_id} has no seeded gantries -- fixture assumption broken"
+
+    body = await _drive(client, headers, tariff.id, gantries)
+
+    assert Decimal(body["tolls"]) == Decimal("0.00"), (
+        f"{road_id} is toll_free but charged {body['tolls']}"
+    )
+    assert body["unpriced_toll_road_ids"] == [], (
+        f"{road_id} is toll_free (a confirmed zero) but was flagged as unpriced (an unknown price)"
+    )
+    # Detected and charged $0.00 -- NOT silently absent from auto_tolled_roads,
+    # which would look identical to "never detected at all" on the dashboard.
+    assert body["auto_tolled_roads"].get(road_id) == "0.00"

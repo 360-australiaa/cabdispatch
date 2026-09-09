@@ -26,6 +26,33 @@ registry, both documented in detail in `scripts/seed_toll_roads.py` and
      network-wide cap across the whole WestConnex network for one trip (see
      `TollRoad.network_group` / `apply_toll_detection`'s network-cap step).
 
+A follow-up pass on 2026-09-09 fixed two further real defects, this time in
+`app.services.tolls` and this registry's own road/gantry assignments (see
+that module and `scripts/seed_toll_roads.py` for the full detail):
+
+  3. M12 Motorway (permanently toll-free by government policy, opened 14
+     March 2026) and the Anzac Bridge/Iron Cove Bridge/City West Link
+     gantries formerly assigned to "ROZELLE_INTERCHANGE" (which are on the
+     Iron Cove Link — the one WestConnex/Rozelle Interchange component that
+     is toll-free, NOT the genuinely still-unpriced Rozelle Interchange
+     tolled tunnels) were both modelled `pricing_model="unpriced"`,
+     wrongly triggering a "this toll needs a price, enter manually" driver
+     prompt for a road that never charges anything. Both now use the new
+     `pricing_model="toll_free"` (see `TOLL_PRICING_MODELS` below) —
+     detected, zero charge, no prompt. The genuine Rozelle Interchange
+     tolled segment (St Peters to Rozelle) stays `unpriced`, now correctly
+     carrying zero gantries of its own rather than someone else's.
+  4. A "distance_metered" road's running per-km distance
+     (`Trip.toll_road_progress`) used to be revised only on a tick that
+     also matched one of that SAME road's own gantries — silently freezing
+     the bill at the last-gantry snapshot for the rest of the corridor on a
+     road like Westlink M7 or WestConnex, whose real gantries sit
+     kilometres apart. `apply_toll_detection` now keeps an already-charged
+     distance-metered road's bill current on every tick while the vehicle
+     is plausibly still on its corridor, finalizing it the tick that
+     measures a genuine corridor exit (or, if none arrives first, at
+     whatever the last real tick before the trip closes left it at).
+
 A real NSW toll road is priced by one of several distinct MODELS (flat /
 per_point / distance / distance_with_flagfall / time_of_day), is sometimes
 directional (one-way, or northbound/southbound-only), and is detected by
@@ -118,15 +145,34 @@ _RATE = Numeric(10, 4)
 
 # Real pricing models present in the authoritative dataset, plus "unpriced"
 # (this codebase's own label, not the source data's) for a road with no
-# captured price at all (Rozelle Interchange, M12) or a toll point whose own
-# revision is missing/incomplete — see app.services.tolls for why that's
-# deliberately never auto-charged a guessed number.
+# captured price at all (the genuine Rozelle Interchange tolled segment,
+# St Peters to Rozelle — see nsw_toll_roads.json's ROZELLE_INTERCHANGE
+# entry) or a toll point whose own revision is missing/incomplete — see
+# app.services.tolls for why that's deliberately never auto-charged a
+# guessed number.
+#
+# "toll_free" (2026-09-09 correction pass) is a DIFFERENT, distinct concept
+# from "unpriced": a road in this state is not missing a price, it has a
+# real, confirmed price of exactly zero (M12 Motorway — permanently
+# toll-free by government policy; Iron Cove Link — the one WestConnex/
+# Rozelle Interchange component that is toll-free). Before this pass both
+# of these were incorrectly modelled as "unpriced", which made
+# app.services.tolls treat a genuinely free road exactly like one whose
+# price is merely unknown — flagging it in `Trip.unpriced_toll_road_ids`
+# and surfacing a "this toll needs a price, enter manually" prompt to the
+# driver for a road that should simply never charge anything. A
+# "toll_free" road carries no TollRoadPriceRevision row at all (there is
+# nothing to price) and is charged $0.00 the instant it's detected, with no
+# revision lookup and no manual-price prompt — see
+# app.services.tolls.apply_toll_detection's own docstring for the exact
+# mechanism.
 #
 # "zone_flat" (a single ambiguous min-max range spanning a road's cheapest
 # ramp toll to its full mainline toll, with no way to tell which gantry was
-# which) is RETIRED as of this correction pass — every road that used to
-# carry it (M2, CCT) now has the real per-toll-point prices Linkt actually
-# publishes, modelled as "per_point" instead. See this module's docstring.
+# which) is RETIRED as of the 2026-09-07 correction pass — every road that
+# used to carry it (M2, CCT) now has the real per-toll-point prices Linkt
+# actually publishes, modelled as "per_point" instead. See this module's
+# docstring.
 TOLL_PRICING_MODELS = {
     "flat",
     "per_point",
@@ -134,6 +180,7 @@ TOLL_PRICING_MODELS = {
     "distance_with_flagfall",
     "time_of_day",
     "unpriced",
+    "toll_free",
 }
 
 # Real `directional` values from the source dataset.

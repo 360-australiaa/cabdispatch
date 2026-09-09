@@ -391,6 +391,77 @@ async def test_distance_model_respects_cap(client: AsyncClient, session: AsyncSe
     assert body2["auto_tolled_roads"] == {"TESTM7": "10.00"}
 
 
+async def test_distance_model_bills_the_stretch_past_the_last_gantry_to_the_real_exit(
+    client: AsyncClient, session: AsyncSession
+):
+    """The under-billing defect this pins: the OLD code only ever revised a
+    distance-metered road's bill on a tick that ALSO matched
+    find_nearby_gantries -- i.e. only while within GANTRY_DETECTION_RADIUS_M
+    (150m) of one of THAT road's own gantries. On a road like Westlink M7 or
+    WestConnex, whose real gantries sit kilometres apart, every tick past the
+    LAST gantry silently never updated the bill again -- the final charge
+    froze at whatever it was at the last gantry actually passed, permanently
+    missing the fare for the rest of the corridor.
+
+    This road has only 2 real gantries, 2km apart, and the trip continues a
+    further ~500m past the second (last) one with NO gantry there at all --
+    well outside GANTRY_DETECTION_RADIUS_M (150m), so a pre-fix
+    apply_toll_detection would return early and do nothing on that tick,
+    leaving `tolls` pinned at the 2km amount. It is well inside
+    CORRIDOR_EXIT_RADIUS_M (750m) though, so the fix keeps tracking distance
+    all the way to this real exit point and bills the full ~2.5km."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # $1.00/km, cap generous enough to never bind -- this test is about
+    # DISTANCE TRACKING, not the cap (test_distance_model_respects_cap covers
+    # the cap already).
+    road = await _make_road(
+        session, road_id="TESTM7GAP", pricing_model="distance", directional="both",
+        price_class_a=None, cap_class_a="100.00", rate_per_km_class_a="1.00",
+    )
+    zone_lat, zone_lng = _next_zone()
+    entry = (zone_lat, zone_lng)
+    last_gantry = (zone_lat + 0.018, zone_lng)  # ~2km along the corridor from entry
+    real_exit = (zone_lat + 0.0225, zone_lng)   # ~2.5km along -- ~500m past the last
+                                                 # gantry, where NO gantry exists at all
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTM7GAP:entry", lat=entry[0], lng=entry[1])
+    await _add_gantry(session, road_id=road.id, gantry_id="TESTM7GAP:last", lat=last_gantry[0], lng=last_gantry[1])
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=entry[0], start_lng=entry[1])
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    # Entry gantry (1st confirmation of 2 required -- see TOLL_MIN_CONFIRMATIONS):
+    # not yet corroborated, so zero charge so far.
+    await _tick(client, headers, trip["id"], lat=entry[0], lng=entry[1], ts=t0 + timedelta(seconds=1))
+
+    # Last gantry (2nd confirmation -> corroborated -> charged): exactly ~2km in.
+    last_distance_km = Decimal(str(round(haversine_m(*entry, *last_gantry) / 1000.0, 6)))
+    body_at_last_gantry = await _tick(
+        client, headers, trip["id"], lat=last_gantry[0], lng=last_gantry[1], ts=t0 + timedelta(minutes=3)
+    )
+    expected_at_last_gantry = (last_distance_km * Decimal("1.00")).quantize(Decimal("0.01"))
+    assert Decimal(body_at_last_gantry["tolls"]) == expected_at_last_gantry
+    assert 1 < expected_at_last_gantry < 3  # sanity: really ~$2, not the cap
+
+    # Past the last gantry -- no gantry anywhere near this tick -- but still
+    # genuinely on the corridor.
+    real_exit_distance_km = Decimal(str(round(haversine_m(*entry, *real_exit) / 1000.0, 6)))
+    body_at_exit = await _tick(
+        client, headers, trip["id"], lat=real_exit[0], lng=real_exit[1], ts=t0 + timedelta(minutes=4)
+    )
+    expected_at_exit = (real_exit_distance_km * Decimal("1.00")).quantize(Decimal("0.01"))
+    assert Decimal(body_at_exit["tolls"]) == expected_at_exit
+    # The whole point of this test: strictly MORE than the last-gantry snapshot
+    # a pre-fix apply_toll_detection would have silently frozen this at.
+    assert Decimal(body_at_exit["tolls"]) > expected_at_last_gantry, (
+        "the stretch past the last gantry to the real exit was never billed -- "
+        "this is exactly the under-billing defect this test exists to catch"
+    )
+    assert body_at_exit["auto_tolled_roads"] == {"TESTM7GAP": str(expected_at_exit)}
+
+
 # --- time-of-day pricing (Sydney Harbour Bridge/Tunnel-style) -------------------
 
 

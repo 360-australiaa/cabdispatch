@@ -72,6 +72,47 @@ here against exactly what this script does differently):
    two segments' own named endpoints on Linkt's page. Any leftover
    'M4M5_ROZELLE' row from a pre-this-pass database is likewise retired by
    `_retire_superseded_roads`.
+
+--- 2026-09-09 correction pass: what changed here and why -------------------
+
+This pass corrected a modelling defect in point 4 above and a related
+gantry-only-stub gap, both stemming from the same root cause: `app.models.
+toll` had no way to say "real, confirmed price of zero" as distinct from
+"unpriced" (price simply not captured) — see `TOLL_PRICING_MODELS`'s new
+`"toll_free"` value and `app.services.tolls.apply_toll_detection`'s
+`toll_free` branch for the mechanism this now drives.
+
+5. M12 Motorway is no longer seeded by a bespoke stub function
+   (`_seed_m12_stub`, retired outright — its logic is gone, not merely
+   unused) that carried `pricing_model="unpriced"` purely because no PRICE
+   had been captured for it at seed-writing time. M12 is permanently
+   toll-free by government policy (opened 14 March 2026) — a real,
+   confirmed zero, not a missing price — and is now a genuine entry in
+   `app/data/nsw_toll_roads.json` with `pricing_model="toll_free"`, seeded
+   through the same `_seed_roads_and_revisions` path as every other road.
+   `_MOTORWAY_CODE_TO_ROAD_ID["M12"] = "M12"` is unchanged; only where that
+   id's `TollRoad` row comes from has changed.
+
+6. The 6 gantries the 2026-09-07 pass (point 4 above) assigned to
+   "ROZELLE_INTERCHANGE" (Anzac Bridge / Iron Cove Bridge / City West Link)
+   are, on closer reading of the real Rozelle Interchange geometry, the
+   Iron Cove Link — a physically distinct, explicitly toll-free WestConnex
+   component (it connects the Western Distributor/Anzac Bridge to Victoria
+   Road at Iron Cove Bridge, with NO connection to the M4/M8 tunnels) — not
+   the genuinely still-unpriced "Rozelle Interchange (St Peters to Rozelle)"
+   segment Linkt's own page separately names with no price shown. Those 6
+   rows' `motorway_code` in `app/data/nsw_toll_gantries.csv` is now
+   "IRON_COVE_LINK", mapped to a new `pricing_model="toll_free"` road of
+   that same id. "ROZELLE_INTERCHANGE" keeps its own `TollRoad` row (still
+   `pricing_model="unpriced"`, still a real, unresolved data gap — Linkt's
+   page truly shows no price for it) but now correctly has ZERO gantries of
+   its own — added to `_ORPHAN_ROADS_WITH_NO_GANTRY_DATA` below. Like point
+   4, this location-based split is an INTERPRETATION (the source CSV does
+   not itself label gantries by segment name), corroborated against the
+   Rozelle Interchange Wikipedia article's own description of the Iron Cove
+   Link's endpoints and toll-free status — see
+   `app/data/nsw_toll_roads.json`'s `IRON_COVE_LINK` entry for the exact
+   source cited.
 """
 from __future__ import annotations
 
@@ -104,7 +145,7 @@ _GANTRIES_CSV = _DATA_DIR / "nsw_toll_gantries.csv"
 
 # Maps the gantry CSV's own `motorway_code` column to the matching
 # `TollRoad.id` (the JSON dataset's own `id` field) they physically belong
-# to. Almost all are an identity mapping; three are not, and are called out
+# to. Almost all are an identity mapping; a few are not, and are called out
 # here rather than silently guessed:
 #
 #   "M8" -> "M8": the CSV's "M8" gantries are explicitly labelled
@@ -116,21 +157,36 @@ _GANTRIES_CSV = _DATA_DIR / "nsw_toll_gantries.csv"
 #   `_ORPHAN_ROADS_WITH_NO_GANTRY_DATA` note below. UNCHANGED by this pass
 #   -- no new information resolved this ambiguity.
 #
-#   "M4M8_LINK" -> "M4M8_LINK" / "ROZELLE_INTERCHANGE" -> "ROZELLE_
-#   INTERCHANGE": CORRECTED in this pass. The CSV used to tag all 10 of
-#   these gantries "M4M5_LINK", mapped to one road "M4M5_ROZELLE" that
-#   conflated two different real, separately-named Linkt segments (see this
-#   module's docstring, point 4). The CSV itself has been split by gantry
-#   location into these two distinct `motorway_code` values -- this
-#   crosswalk is now a plain identity mapping for both.
+#   "M4M8_LINK" -> "M4M8_LINK" / "IRON_COVE_LINK" -> "IRON_COVE_LINK": the
+#   2026-09-07 pass had split what used to be one conflated "M4M5_LINK"
+#   motorway_code into "M4M8_LINK" (Haberfield/St Peters gantries) and
+#   "ROZELLE_INTERCHANGE" (Anzac Bridge/Iron Cove Bridge/City West Link
+#   gantries) -- correctly separating the priced M4-M8 Link from what it
+#   believed was the unpriced Rozelle Interchange segment. The 2026-09-09
+#   pass corrected that second half FURTHER: those Anzac Bridge/Iron Cove
+#   Bridge/City West Link gantries are on the Iron Cove Link -- a
+#   physically distinct, explicitly toll-free WestConnex component, not
+#   the genuinely still-unpriced "Rozelle Interchange (St Peters to
+#   Rozelle)" segment Linkt's own page separately names with no price shown.
+#   The CSV's `motorway_code` for those 6 rows is now "IRON_COVE_LINK"
+#   (their `gantry_id` natural keys are left as-is, still prefixed
+#   "M4M5_LINK:", for the same reason the 2026-09-07 split already kept
+#   that prefix on M4M8_LINK's own gantries -- a stable natural key, not a
+#   segment label). "ROZELLE_INTERCHANGE" itself is retired from this
+#   crosswalk (see `_ORPHAN_ROADS_WITH_NO_GANTRY_DATA` below): it keeps its
+#   `TollRoad` row (still unpriced, still a real data gap) but now
+#   correctly has zero gantries of its own.
 #
-#   "M12" -> "M12": NOT one of the roads in nsw_toll_roads.json at all --
-#   see `_seed_m12_stub` below for why it still gets a `TollRoad` row.
+#   "M12" -> "M12": now a real entry in nsw_toll_roads.json
+#   (`pricing_model="toll_free"`, added in the 2026-09-09 pass) -- this
+#   crosswalk entry is unchanged, but the gantry-only stub this comment
+#   used to point to (`_seed_m12_stub`) has been retired; see this module's
+#   docstring.
 _MOTORWAY_CODE_TO_ROAD_ID = {
     "M4": "M4",
     "M8": "M8",
     "M4M8_LINK": "M4M8_LINK",
-    "ROZELLE_INTERCHANGE": "ROZELLE_INTERCHANGE",
+    "IRON_COVE_LINK": "IRON_COVE_LINK",
     "M2": "M2",
     "M5SW": "M5SW",
     "ED": "ED",
@@ -142,13 +198,17 @@ _MOTORWAY_CODE_TO_ROAD_ID = {
     "M12": "M12",
 }
 
-# Real, priced roads/points with ZERO matching gantries in the source gantry
-# dataset -- left that way deliberately, not papered over with an invented
-# coordinate. A road/point with zero gantries can never be GPS-auto-detected
-# by app.services.tolls (nothing to match against) -- it stays correctly
-# priced and visible on the dashboard, just not auto-chargeable until real
-# gantry coordinates are supplied.
-_ORPHAN_ROADS_WITH_NO_GANTRY_DATA = ("M5E",)
+# Roads/points with ZERO matching gantries in the source gantry dataset --
+# left that way deliberately, not papered over with an invented coordinate.
+# A road/point with zero gantries can never be GPS-auto-detected by
+# app.services.tolls (nothing to match against) -- it stays correctly
+# priced (or, for "ROZELLE_INTERCHANGE", correctly still unpriced) and
+# visible on the dashboard, just not auto-chargeable until real gantry
+# coordinates are supplied. "ROZELLE_INTERCHANGE" added in the 2026-09-09
+# pass: its former 6 gantries were reassigned to "IRON_COVE_LINK" (see
+# `_MOTORWAY_CODE_TO_ROAD_ID` above) -- it was never a road with real
+# gantry data of its own, only ever someone else's.
+_ORPHAN_ROADS_WITH_NO_GANTRY_DATA = ("M5E", "ROZELLE_INTERCHANGE")
 _ORPHAN_TOLL_POINTS_WITH_NO_GANTRY_DATA = ("LCT:military_e_ramp",)
 
 # `TollRoad` ids seeded by a version of this script PRIOR to the 2026-09-07
@@ -319,43 +379,6 @@ async def _seed_roads_and_revisions(session, roads_data: dict) -> dict[str, Toll
     return roads_by_id
 
 
-async def _seed_m12_stub(session, roads_by_id: dict[str, TollRoad]) -> None:
-    """M12 Motorway is NOT one of the roads in nsw_toll_roads.json -- it has
-    4 real gantries in the gantry dataset but no published pricing record
-    was captured in this data pass at all (not even a "not_captured"
-    placeholder entry the way the WestConnex roads used to have). Rather
-    than silently dropping those 4 real gantries on the floor (or worse,
-    inventing a price for them), this creates a minimal `TollRoad` stub
-    carrying ONLY what the gantry CSV itself states (id, name) so they have
-    a real parent row to attach to, `pricing_model="unpriced"`, and an
-    explicit `source_note` flagging exactly why -- so a dashboard viewer
-    sees "M12 Motorway -- not priced -- no published pricing captured"
-    rather than a road that looks just like the others."""
-    if "M12" in roads_by_id:
-        return
-    road = await _get_or_create_road(
-        session,
-        road_id="M12",
-        api_code=None,
-        name="M12 Motorway",
-        operator=None,
-        pricing_model="unpriced",
-        charging_policy="once_per_road",
-        network_group=None,
-        directional=None,
-        description=None,
-        source_note=(
-            "Not one of the roads in the authoritative nsw_toll_roads.json pricing "
-            "dataset -- these 4 gantry coordinates come only from the gantry CSV "
-            "(app/data/nsw_toll_gantries.csv). No operator, directionality, or price "
-            "has been captured for this road in any data pass; left deliberately "
-            "unpriced rather than guessed."
-        ),
-    )
-    roads_by_id["M12"] = road
-    print("  toll_road 'M12' (stub -- gantry data only, no published pricing)")
-
-
 def _compute_m7_corridor_km(m7_gantry_rows: list[dict]) -> Decimal:
     """The M7's real physical corridor length, derived from the max pairwise
     haversine distance across all of M7's own real gantry coordinates (not
@@ -429,7 +452,6 @@ async def seed_toll_roads() -> None:
     async with AsyncSessionLocal() as session:
         await _retire_superseded_roads(session)
         roads_by_id = await _seed_roads_and_revisions(session, roads_data)
-        await _seed_m12_stub(session, roads_by_id)
         await _seed_gantries(session, roads_by_id)
 
     print(f"Done: {len(roads_by_id)} toll roads seeded.")

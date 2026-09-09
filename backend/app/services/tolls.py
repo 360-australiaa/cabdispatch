@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import combinations
 from math import asin, atan2, cos, degrees, radians, sin, sqrt
 
 from sqlalchemy import func, select
@@ -79,6 +80,34 @@ TOLL_CONFIRM_RADIUS_M = 60.0
 # chargeable rather than becoming permanently un-billable.
 TOLL_MIN_CONFIRMATIONS = 2
 
+# How far (lat/lng distance, via _distance_to_road_corridor_m) a "distance_
+# metered" road's OPEN per-km progress may drift from that road's own real
+# gantries/gantry-to-gantry chords before the vehicle is treated as having
+# genuinely LEFT the corridor -- see apply_toll_detection's open-progress
+# loop, which is what this constant exists to gate.
+#
+# Field defect, 2026-09-09: a per-km road's running distance
+# (`trip.toll_road_progress`) used to be revised ONLY on a tick that also
+# matched find_nearby_gantries -- i.e. only while within
+# GANTRY_DETECTION_RADIUS_M (150m) of one of that SAME road's own gantries.
+# On a road like Westlink M7 or WestConnex, whose real gantries sit
+# kilometres apart (an interchange ramp here, another kilometres down the
+# corridor), every tick in between silently never revised the bill, and the
+# final charge froze at whatever it was at the LAST gantry actually passed
+# -- permanently missing the fare for the stretch from there to wherever the
+# vehicle really exits. This constant is deliberately generous (5x the
+# gantry-detection radius) because there is no real polyline for these
+# roads in the source data -- only the gantry POINTS themselves --  so the
+# corridor between two real gantries several kilometres apart is only ever
+# APPROXIMATED by the straight-line chord joining them (see
+# _distance_to_road_corridor_m), and a real motorway's actual alignment
+# bows away from that chord by well more than 150m over a multi-kilometre
+# span. Too tight here reintroduces exactly the under-billing this exists
+# to fix (a real corridor point wrongly read as "left"); too loose only
+# delays finalization, it never invents a charge, so this errs generous on
+# purpose.
+CORRIDOR_EXIT_RADIUS_M = GANTRY_DETECTION_RADIUS_M * 5  # 750.0
+
 _EARTH_RADIUS_M = 6_371_008.8
 
 # Minimum movement between consecutive GPS points before a computed bearing
@@ -103,6 +132,63 @@ def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlambda / 2) ** 2
     c = 2 * asin(sqrt(a))
     return _EARTH_RADIUS_M * c
+
+
+def _local_xy_m(lat: float, lng: float, ref_lat: float, ref_lng: float) -> tuple[float, float]:
+    """(lat, lng) as flat (east, north) metres relative to (ref_lat, ref_lng)
+    — a simple equirectangular projection, accurate enough over the few-
+    kilometre spans between two of one road's own real gantries (NOT a
+    geodesic projection — deliberately simple, the same "small table, no
+    PostGIS" trade-off haversine_m itself already accepts for this module)."""
+    x = radians(lng - ref_lng) * cos(radians(ref_lat)) * _EARTH_RADIUS_M
+    y = radians(lat - ref_lat) * _EARTH_RADIUS_M
+    return x, y
+
+
+def distance_to_segment_m(
+    lat: float, lng: float, lat1: float, lng1: float, lat2: float, lng2: float
+) -> float:
+    """Distance in metres from (lat, lng) to the line SEGMENT between
+    (lat1, lng1) and (lat2, lng2) (not the infinite line through them) —
+    projects all three points to local flat metres around (lat1, lng1) via
+    `_local_xy_m`, then ordinary 2D point-to-segment distance. Used by
+    `_distance_to_road_corridor_m` to approximate a road's corridor as the
+    chord between two of its own real gantries, since the source data has
+    no polyline for these roads."""
+    px, py = _local_xy_m(lat, lng, lat1, lng1)
+    bx, by = _local_xy_m(lat2, lng2, lat1, lng1)
+    length_sq = bx * bx + by * by
+    if length_sq == 0:
+        return sqrt(px * px + py * py)
+    t = max(0.0, min(1.0, (px * bx + py * by) / length_sq))
+    proj_x, proj_y = t * bx, t * by
+    return sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+
+
+async def _distance_to_road_corridor_m(
+    session: AsyncSession, *, road_id: str, lat: float, lng: float
+) -> float:
+    """Approximates how far (lat, lng) is from `road_id`'s own real
+    corridor: the smaller of (a) the distance to road_id's nearest single
+    gantry, and (b) the distance to the straight-line chord between any TWO
+    of road_id's gantries (every pair, not just some assumed "next along
+    the corridor" order — the source data does not itself record gantry
+    sequence). `float("inf")` for a road with zero gantries (can't be on a
+    corridor that has no known coordinates at all).
+
+    Used ONLY to decide whether a "distance_metered" road's OPEN per-km
+    progress is still genuinely accruing (see CORRIDOR_EXIT_RADIUS_M in
+    apply_toll_detection) — actual gantry CROSSING detection is unrelated
+    and still uses the tight, point-only `find_nearby_gantries`/
+    TOLL_CONFIRM_RADIUS_M tests, unchanged by this function."""
+    result = await session.execute(select(TollGantry).where(TollGantry.toll_road_id == road_id))
+    gantries = result.scalars().all()
+    if not gantries:
+        return float("inf")
+    best = min(haversine_m(lat, lng, g.latitude, g.longitude) for g in gantries)
+    for g1, g2 in combinations(gantries, 2):
+        best = min(best, distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude))
+    return best
 
 
 def bearing_degrees(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -421,11 +507,36 @@ async def apply_toll_detection(
         and, for a `network_group` road, additionally clamped so the group's
         shared network-wide cap for this trip is never exceeded (see
         `_network_capped_amount`).
-    """
-    hits = await find_nearby_gantries(session, lat=lat, lng=lng)
-    if not hits:
-        return
 
+    A `pricing_model == "toll_free"` road (M12, Iron Cove Link — see
+    `app.models.toll.TOLL_PRICING_MODELS`) is charged $0.00 the moment it is
+    detected at all, with no direction/corroboration gate and no revision
+    lookup: there is no false-charge risk to guard against when the amount
+    is always zero, and gating it would only delay clearing it out of
+    `unpriced_toll_road_ids` — the dashboard/tablet prompt this whole status
+    exists to suppress.
+
+    2026-09-09 fix — per-km ("distance_metered") under-billing: this
+    function used to revise a distance-metered road's bill ONLY on a tick
+    that also matched `find_nearby_gantries` below, i.e. only while within
+    GANTRY_DETECTION_RADIUS_M of one of THAT road's own gantries. Real
+    gantries on a road like Westlink M7 or WestConnex sit kilometres apart,
+    so every tick in between silently never revised `toll_road_progress` /
+    `auto_tolled_roads`, and the final bill froze at whatever it was at the
+    LAST gantry actually passed — never overbilling, always potentially
+    undercharging the stretch from there to wherever the vehicle really
+    exits the corridor. The open-progress loop directly below now keeps
+    every already-charged distance-metered road's bill current on EVERY
+    tick while the vehicle is still plausibly on that road's corridor (see
+    `_distance_to_road_corridor_m` / `CORRIDOR_EXIT_RADIUS_M`), and finalizes
+    (freezes, stops tracking) it the first tick that measures the vehicle as
+    having genuinely left the corridor. A trip that closes while a per-km
+    toll is still open is finalized implicitly: `app.services.trips.
+    close_trip` bills `trip.tolls` exactly as this function last left it, so
+    once this function keeps that figure current every tick (not just at
+    gantries), the last tick before close IS the finalization — no separate
+    "on close" step is needed or added in trips.py.
+    """
     charged_roads: dict[str, str] = dict(trip.auto_tolled_roads or {})
     progress: dict[str, str] = dict(trip.toll_road_progress or {})
     unpriced: set[str] = set(trip.unpriced_toll_road_ids or [])
@@ -435,7 +546,75 @@ async def apply_toll_detection(
     }
     tolls: Decimal = trip.tolls or Decimal(0)
 
+    # --- keep every OPEN per-km toll's distance current, every tick --------
+    # Unconditional (not gated on find_nearby_gantries matching anything
+    # this tick) — see this function's own docstring for why that
+    # unconditional-ness is the fix. `progress` doubles as the "still open"
+    # marker: a road_id present in it has a confirmed entry not yet
+    # finalized. Only a road already CHARGED at least once (`road_id in
+    # charged_roads`, i.e. corroborated — see TOLL_MIN_CONFIRMATIONS) is
+    # finalized here; one merely confirmed-but-not-yet-corroborated keeps
+    # its entry_km anchor untouched, exactly as before this fix, so a road
+    # that never corroborates never gets a spurious "exit" that would reset
+    # its true entry point later.
+    for road_id in [r for r in progress if r in charged_roads]:
+        road = await session.get(TollRoad, road_id)
+        if road is None or road.pricing_model not in _DISTANCE_METERED_PRICING_MODELS:
+            continue  # defensive -- progress is only ever written for these
+
+        distance_to_corridor = await _distance_to_road_corridor_m(session, road_id=road_id, lat=lat, lng=lng)
+        if distance_to_corridor > CORRIDOR_EXIT_RADIUS_M:
+            # Finalize: the vehicle has genuinely left this road's corridor.
+            # Freeze the bill at whatever it already is (this OFF-corridor
+            # point must never itself count as distance driven ON the
+            # road) and stop tracking -- deleting the entry is what lets a
+            # LATER re-entry (a fresh gantry hit on this same road, later in
+            # this same trip) open a brand new entry_km anchor rather than
+            # revise a segment that has already been billed and closed.
+            del progress[road_id]
+            continue
+
+        revision = await current_price_revision(session, toll_road_id=road_id, as_of=ts.date())
+        if revision is None or revision.confidence == "not_captured":
+            continue  # can't reprice this tick -- leave the existing charge as-is
+        rate = effective_rate_per_km_class_a(road, revision)
+        if rate is None:
+            continue
+
+        entry_km = Decimal(progress[road_id])
+        travelled_km = max(cumulative_distance_km - entry_km, Decimal(0))
+        flagfall = revision.flagfall_class_a or Decimal(0)
+        raw = flagfall + rate * travelled_km if travelled_km > 0 else Decimal(0)
+        amount = min(raw, revision.cap_class_a) if revision.cap_class_a is not None else raw
+        amount = await _network_capped_amount(
+            session,
+            road=road,
+            road_id=road_id,
+            raw_amount=amount,
+            revision=revision,
+            charged_roads=charged_roads,
+        )
+        amount = round_half_up(amount)
+        previous_amount = Decimal(charged_roads[road_id])
+        # Never let a re-tick REDUCE what's already billed -- a distance-
+        # metered road's charge only ever grows within one continuous
+        # corridor pass (see the finalize-then-fresh-anchor note above for
+        # the one case a smaller number could otherwise arise from: a
+        # later, separate re-entry after this road was already finalized).
+        amount = max(amount, previous_amount)
+        tolls = tolls - previous_amount + amount
+        charged_roads[road_id] = str(amount)
+
     compass = classify_bearing(prev_lat, prev_lng, lat, lng)
+
+    hits = await find_nearby_gantries(session, lat=lat, lng=lng)
+    if not hits:
+        trip.tolls = tolls
+        trip.auto_tolled_roads = charged_roads
+        trip.toll_road_progress = progress
+        trip.unpriced_toll_road_ids = sorted(unpriced)
+        trip.toll_confirmed_gantries = {road_id: sorted(ids) for road_id, ids in confirmed.items()}
+        return
 
     # Record close-range evidence BEFORE any pricing -- see TOLL_CONFIRM_RADIUS_M
     # for the adjacent-road false charge this prevents. The distance anchor for a
@@ -454,6 +633,13 @@ async def apply_toll_detection(
 
         if road.pricing_model == "unpriced":
             unpriced.add(road_id)
+            continue
+
+        if road.pricing_model == "toll_free":
+            # Detected at all -> zero charge, never a manual-price prompt.
+            # See this function's docstring for why no gate is needed here.
+            charged_roads.setdefault(road_id, "0.00")
+            unpriced.discard(road_id)
             continue
 
         allowed = direction_allows_charge(road.directional, compass)
@@ -568,6 +754,14 @@ async def apply_toll_detection(
 
         amount = round_half_up(amount)
         previous_amount = Decimal(charged_roads.get(road_id, "0"))
+        if distance_metered:
+            # Never let a re-tick REDUCE what's already billed -- see the
+            # open-progress loop above's identical clamp/comment for the
+            # one case this guards: a road finalized (corridor-exit) and
+            # then re-entered later in the same trip opens a FRESH entry_km
+            # anchor, whose own travelled_km could otherwise compute smaller
+            # than the amount already billed for the earlier pass.
+            amount = max(amount, previous_amount)
         tolls = tolls - previous_amount + amount
         charged_roads[road_id] = str(amount)
         unpriced.discard(road_id)

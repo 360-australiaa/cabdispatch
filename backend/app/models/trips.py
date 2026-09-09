@@ -320,12 +320,19 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # this trip has genuinely crossed (GPS-detected via a real gantry) but
     # that app.services.tolls deliberately did NOT auto-charge a dollar
     # amount for -- either because the source dataset has no captured price
-    # at all for that road (e.g. Rozelle Interchange, confidence=
-    # "not_captured"), or because a specific toll point's own revision is
-    # missing/incomplete. Surfaced on the dashboard/meter so a driver/
+    # at all for that road, or because a specific toll point's own revision
+    # is missing/incomplete. Surfaced on the dashboard/meter so a driver/
     # dispatcher knows to add a manual toll for these rather than the
     # passenger being silently undercharged. Deliberately never populated
-    # with a guessed dollar amount.
+    # with a guessed dollar amount, and — as of the 2026-09-09 correction
+    # pass — never populated for a road that is genuinely `pricing_model ==
+    # "toll_free"` (M12, Iron Cove Link) either: that status means a real,
+    # confirmed price of zero, not a missing one, and is never flagged here.
+    # The genuine "Rozelle Interchange" tolled segment (St Peters to
+    # Rozelle, confidence="not_captured") is a true, still-unresolved
+    # example of this field's purpose in the source data, but currently has
+    # zero real gantry coordinates captured (see scripts/seed_toll_roads.py)
+    # so cannot actually reach this field via GPS detection yet either.
     unpriced_toll_road_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
 
     # --- dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema,
