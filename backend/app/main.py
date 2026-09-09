@@ -141,6 +141,7 @@ from app.api.v1.tariffs import fares_order_router
 from app.api.v1.tariffs import router as tariffs_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.toll_roads import router as toll_roads_router
+from app.api.v1.traffic import router as traffic_router
 from app.api.v1.trips import router as trips_router
 from app.api.v1.users import router as users_router
 from app.api.v1.vouchers import router as vouchers_router
@@ -321,6 +322,7 @@ app.include_router(users_router)
 app.include_router(fleet_router)
 app.include_router(geofences_router)
 app.include_router(toll_roads_router)
+app.include_router(traffic_router)
 app.include_router(tariffs_router)
 app.include_router(fares_order_router)
 app.include_router(trips_router)

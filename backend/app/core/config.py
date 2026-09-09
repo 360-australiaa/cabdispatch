@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     # wants escalation to be a human decision every time.
     DURESS_AUTO_ESCALATION_ENABLED: bool = True
 
+    # --- Live NSW traffic cameras/hazards (app.services.live_traffic) --------
+    # Same "no scheduler in this codebase, refresh lazily off the next read"
+    # pattern as the block above -- these are the two cadences that pattern
+    # needs. Cameras rarely move (an hour-ish is plenty); hazards genuinely
+    # churn minute to minute.
+    LIVE_TRAFFIC_CAMERAS_REFRESH_MINUTES: int = 60
+    LIVE_TRAFFIC_HAZARDS_REFRESH_MINUTES: int = 3
+
     # --- CabCharge ---
     # Authorization -> Docket creation -> Settlement batch (blueprint 5.2.5).
     CABCHARGE_API_KEY: str = "cabcharge_test_placeholder"

@@ -44,6 +44,7 @@ from app.models.toll import (
     TollRoad,
     TollRoadPriceRevision,
 )
+from app.models.traffic import TrafficCamera, TrafficHazard
 from app.models.trips import Trip, TripGpsTrace
 from app.models.user import User
 from app.models.user_session import UserSession
@@ -92,6 +93,8 @@ __all__ = [
     "TollPointPriceRevision",
     "TollRoad",
     "TollRoadPriceRevision",
+    "TrafficCamera",
+    "TrafficHazard",
     "Trip",
     "TripGpsTrace",
     "TripRating",
