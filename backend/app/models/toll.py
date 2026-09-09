@@ -119,7 +119,12 @@ Four tables:
   data recorded a per-gantry carriageway direction (roughly a third of them
   — see `scripts/seed_toll_roads.py`); NULL otherwise, in which case a
   directional road's direction check falls back to the trip's own GPS
-  bearing (see `app.services.tolls.classify_bearing`).
+  bearing (see `app.services.tolls.classify_bearing`). `sequence_position` /
+  `cumulative_distance_km` (2026-09-09 cross-check pass) carry a REAL
+  position/distance along the road for the handful of roads whose source
+  chain data resolves cleanly (see `scripts/seed_toll_roads.py`'s
+  `_REAL_ROAD_CHAIN_WAYPOINTS`); NULL for every other road, which keeps
+  using the pre-existing chord approximation in `app.services.tolls`.
 
 All four tables are platform-wide reference data with NO tenant_id column at
 all — unlike `app.models.geofence.Geofence` (which supports tenant-owned ad
@@ -431,6 +436,31 @@ class TollGantry(Base, TimestampMixin):
     latitude: Mapped[float] = mapped_column(nullable=False)
     longitude: Mapped[float] = mapped_column(nullable=False)
     source_sheet: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # REAL sequence position / cumulative distance along this gantry's own
+    # road, sourced (2026-09-09 cross-check pass) from the official NSW toll
+    # CartoDB source's `tollpoints_data` table -- a genuine ordered
+    # point-chain with real point-to-point distances (`closest_cw` /
+    # `km_to_closest_cw`), which `app/data/nsw_toll_gantries.csv` itself does
+    # not carry at all (see `app.services.tolls`'s module docstring and
+    # `_distance_to_road_corridor_m`'s docstring for the chord-approximation
+    # gap this exists to close).
+    #
+    # NULL for every gantry whose road's real chain data does not resolve to
+    # a single, consistent, non-cyclic sequence (see
+    # `scripts/seed_toll_roads.py`'s `_REAL_ROAD_CHAIN_WAYPOINTS` for exactly
+    # which roads qualified and which didn't, and why) -- a road left NULL
+    # here falls back to the pre-existing chord approximation
+    # (`_distance_to_road_corridor_m`), unchanged. `sequence_position` is
+    # 0-based along the road's real chain (the direction the source data
+    # itself walks it in, arbitrary but consistent); `cumulative_distance_km`
+    # is the real distance from position 0 to this gantry along that chain,
+    # NOT a straight-line/haversine distance. Both are set identically on
+    # every gantry that shares one real waypoint location regardless of
+    # carriageway direction (a position along the road does not depend on
+    # which way traffic is moving past it).
+    sequence_position: Mapped[int | None] = mapped_column(nullable=True)
+    cumulative_distance_km: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
 
     road: Mapped[TollRoad] = relationship(back_populates="gantries")
     toll_point: Mapped[TollPoint | None] = relationship(back_populates="gantries")

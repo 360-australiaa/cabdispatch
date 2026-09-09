@@ -113,6 +113,26 @@ toll` had no way to say "real, confirmed price of zero" as distinct from
    Link's endpoints and toll-free status — see
    `app/data/nsw_toll_roads.json`'s `IRON_COVE_LINK` entry for the exact
    source cited.
+
+--- 2026-09-09 CROSS-CHECK pass: what changed here and why ------------------
+
+A second, independent official source (the same public CartoDB endpoint
+backing the TfNSW Sydney Motorways Toll Calculator) was pulled and compared
+row-by-row against every gantry coordinate and every price already in this
+registry. Full results are in `app/data/nsw_toll_roads.json`'s own `notes`;
+this script changed in two ways:
+
+7. `_MOTORWAY_CODE_TO_ROAD_ID`'s "IRON_COVE_LINK" gantries (Anzac Bridge /
+   Iron Cove Bridge / City West Link) had coordinates 600m-2000m from the
+   official source's own same-named gantries, two of the three locations
+   collapsed to duplicate lat/lng pairs — corrected in
+   `app/data/nsw_toll_gantries.csv` directly (this script's crosswalk logic
+   is unaffected; it just seeds the corrected coordinates now).
+8. `TollGantry` gained two new real-data columns, `sequence_position` /
+   `cumulative_distance_km` — see that model's own docstring and
+   `_REAL_ROAD_CHAIN_WAYPOINTS` below for the real source chain data this
+   populates them from, exactly which roads qualified, and why every other
+   road is deliberately left NULL (chord approximation, unchanged).
 """
 from __future__ import annotations
 
@@ -224,6 +244,90 @@ _ORPHAN_TOLL_POINTS_WITH_NO_GANTRY_DATA = ("LCT:military_e_ramp",)
 # as an LCT toll point; M4M5_ROZELLE's "not_captured" revision was never a
 # real price at all).
 _SUPERSEDED_ROAD_IDS = ("MILITARY_E_RAMP", "M4M5_ROZELLE")
+
+# --- real chain sequence/cumulative-distance (2026-09-09 cross-check pass) --
+#
+# `app.services.tolls._distance_to_road_corridor_m` has always had to
+# approximate a per-km road's corridor as the chord between pairs of its OWN
+# gantries, because this CSV carries no path order at all (see that
+# function's docstring). The official NSW toll CartoDB source's
+# `tollpoints_data` table is the real thing: for each named toll point it
+# names the adjacent point in each direction (`closest_cw`/`closest_ccw`) and
+# the EXACT real distance to it (`km_to_closest_cw`/`km_to_closest_ccw`) --
+# i.e. a genuine ordered point-chain with real point-to-point distances.
+#
+# Walking that chain (start at the point with no `closest_ccw` inside its own
+# motorway, sum `km_to_closest_cw` at each step) was tried against EVERY road
+# in this registry with real gantry coordinates. Only ONE produced a single,
+# consistent, non-cyclic chain covering every one of its real toll points:
+#
+#   M5SW (source `motorway_name="M5"`): Belmore Rd -> Fairford Rd -> The
+#   River Rd -> Henry Lawson Dr -> M5 TOLLGATES (Hammondville), a clean
+#   monotonic west-to-east chain with real km_to_closest_cw distances 1.8,
+#   1.6, 3.5, 3.4 between consecutive points -- exactly the 5 named
+#   locations this CSV's M5SW gantries already model (2 gantries -- one per
+#   direction -- per location).
+#
+# Every other road with real gantries genuinely does NOT resolve cleanly and
+# is deliberately left NULL here (falls back to the pre-existing chord
+# approximation, unchanged):
+#   - M7: the walk hits a real BRANCH at "220"/"240" (Beech Rd/Camden Valley
+#     Way -- two in-motorway closest_ccw candidates, one flagged
+#     final_for_motorway_ccw=TRUE and the other FALSE for the SAME point),
+#     a genuine Y-junction in the source data, not a data-entry ambiguity.
+#   - "New M4" (WestConnex M4): branches at "620" (Homebush Bay Drive), which
+#     has two in-motorway closest_cw candidates ("600"/"610", the Parramatta
+#     Road and Concord Road forks) -- a real interchange split.
+#   - "M5 East"/M8 (WestConnex M8, and M5E which has no gantries anyway):
+#     branches at "100" (Marsh St), the real M5E/M8 Y-junction.
+#   - M4-M8 Link / Iron Cove Link: the source's own "M4-M8 Link"
+#     motorway_name group is only 3 points (991/992/993, actually Iron Cove
+#     Link's own Anzac Bridge/City West Link/Iron Cove Bridge points --
+#     itself a real naming conflation matching the one this registry's own
+#     2026-09-09 gantry-assignment correction already had to untangle, see
+#     this module's docstring), with two candidate starts -- ambiguous, and
+#     in any case not the "M4-M8 Link" (Haberfield-St Peters) road at all.
+#   - M2: the source data splits Hills M2 into several small, disconnected
+#     "M2 - <ramp>" motorway_name groups of only 1-3 points each with no
+#     single resolvable start -- and M2 is `cumulative_per_point`, not
+#     distance-metered, so this gap does not affect its (already correct)
+#     charging anyway.
+#   - NorthConnex: branches at "405" (two in-motorway closest_cw candidates).
+#   - Lane Cove Tunnel / Cross City Tunnel: 1-3 disconnected/cyclic points
+#     each, too sparse to form a chain at all (and both are `once_per_road`
+#     per_point roads, not distance-metered, so this gap is likewise moot).
+#   - ED, SHB, SHT: 1-2 real toll points each (or, for ED, 2 of its toll
+#     points are unreachable dead-end ramp spurs the walk never visits) --
+#     nothing to chain.
+#
+# Each tuple below is (substring to match against this CSV's own `location`
+# column -- case-insensitive, road-scoped so it can never cross-match another
+# road's gantries -- sequence_position, cumulative_distance_km). Every
+# gantry at that location (both directions) gets the same position/distance:
+# a position along the road does not depend on which way traffic moves past
+# it. Sourced from the real tollpoints_data chain above; NOT re-derived from
+# this CSV's own (less precise, ramp-cluster) coordinates.
+_REAL_ROAD_CHAIN_WAYPOINTS: dict[str, list[tuple[str, int, str]]] = {
+    "M5SW": [
+        ("Belmore Road", 0, "0.000"),
+        ("Fairford Road", 1, "1.800"),
+        ("River Road", 2, "3.400"),
+        ("Henry Lawson Dr", 3, "6.900"),
+        ("Hammondville", 4, "10.300"),
+    ],
+}
+
+
+def _real_chain_position(road_id: str, location: str) -> tuple[int, Decimal] | None:
+    """(sequence_position, cumulative_distance_km) for a gantry at `location`
+    on `road_id`, if that road has real chain data AND this location is one
+    of its real waypoints -- else None (this gantry keeps NULL/NULL, and its
+    road keeps using the chord approximation). See
+    `_REAL_ROAD_CHAIN_WAYPOINTS` above for exactly which roads qualify."""
+    for needle, position, cumulative_km in _REAL_ROAD_CHAIN_WAYPOINTS.get(road_id, ()):
+        if needle.lower() in location.lower():
+            return position, Decimal(cumulative_km)
+    return None
 
 
 async def _retire_superseded_roads(session) -> None:
@@ -415,6 +519,7 @@ async def _seed_gantries(session, roads_by_id: dict[str, TollRoad]) -> None:
             )
 
         toll_point_id = (row.get("toll_point_id") or "").strip() or None
+        real_chain = _real_chain_position(road_id, row["location"])
 
         result = await session.execute(select(TollGantry).where(TollGantry.id == row["gantry_id"]))
         gantry = result.scalar_one_or_none()
@@ -427,6 +532,13 @@ async def _seed_gantries(session, roads_by_id: dict[str, TollRoad]) -> None:
             "latitude": float(row["latitude"]),
             "longitude": float(row["longitude"]),
             "source_sheet": row["source_sheet"] or None,
+            # Real chain position/distance (see _REAL_ROAD_CHAIN_WAYPOINTS)
+            # -- explicitly set on EVERY gantry, including None for the
+            # roads that don't qualify, so re-seeding after a future chain
+            # correction/retraction always reflects the current table, never
+            # a stale value from an earlier run.
+            "sequence_position": real_chain[0] if real_chain else None,
+            "cumulative_distance_km": real_chain[1] if real_chain else None,
         }
         if gantry is None:
             session.add(TollGantry(id=row["gantry_id"], **fields))
@@ -438,6 +550,15 @@ async def _seed_gantries(session, roads_by_id: dict[str, TollRoad]) -> None:
 
     await session.commit()
     print(f"  gantries: {created} created, {updated} updated (of {len(rows)} total real gantries)")
+
+    n_real_chain = sum(
+        1 for r in rows if _real_chain_position(_MOTORWAY_CODE_TO_ROAD_ID.get(r["motorway_code"]), r["location"])
+    )
+    print(
+        f"  real chain sequence/cumulative_distance_km: {n_real_chain} of {len(rows)} gantries "
+        f"(roads: {sorted(_REAL_ROAD_CHAIN_WAYPOINTS)}) -- every other road keeps the chord "
+        "approximation, see _REAL_ROAD_CHAIN_WAYPOINTS above for why"
+    )
 
     for road_id in _ORPHAN_ROADS_WITH_NO_GANTRY_DATA:
         print(f"  NOTE: toll_road {road_id!r} has 0 gantries in this dataset -- priced but not GPS-auto-detectable yet")

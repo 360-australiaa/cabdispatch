@@ -240,3 +240,83 @@ async def test_seed_toll_roads_uses_published_m7_rate_not_the_derived_one(sessio
     assert revision.rate_per_km_class_a is not None
     assert float(revision.rate_per_km_class_a) == pytest.approx(0.5252)
     assert m7.derived_corridor_km is not None and m7.derived_corridor_km > 0
+
+
+async def test_seed_toll_roads_uses_a_distance_with_flagfall_formula_for_m4m8_link_not_a_flat_toll(session):
+    """2026-09-09 cross-check correction: M4-M8 Link was modelled `flat` at a
+    single $6.48 figure, but a SECOND independent source (the official
+    CartoDB toll-calculator table AND Linkt's own real origin-destination
+    trip table) both show it is priced by the same flagfall+per-km formula
+    as M4/M8/M5E -- the flat figure only ever matched Linkt's own number for
+    the link's FULL length end to end, and silently overcharged every
+    shorter partial trip through it. See app/data/nsw_toll_roads.json's
+    M4M8_LINK entry for the full evidence."""
+    await seed_toll_roads()
+
+    road = await session.get(TollRoad, "M4M8_LINK")
+    assert road.pricing_model == "distance_with_flagfall"
+    assert road.charging_policy == "distance_metered"
+
+    revision = await current_price_revision(session, toll_road_id="M4M8_LINK")
+    assert revision is not None
+    assert float(revision.rate_per_km_class_a) == pytest.approx(0.6667)
+    assert float(revision.flagfall_class_a) == pytest.approx(1.80)
+    # This road's own cap is Linkt's full-length segment price -- the same
+    # figure the old (wrong) flat model charged unconditionally.
+    assert float(revision.cap_class_a) == pytest.approx(6.48)
+    assert float(revision.network_cap_class_a) == pytest.approx(12.74)
+
+
+async def test_seed_toll_roads_gives_m5sw_real_chain_sequence_and_cumulative_distance(session):
+    """2026-09-09 cross-check upgrade: M5SW is the one real road whose
+    source chain data (official CartoDB `tollpoints_data`) resolves to a
+    single, consistent, non-cyclic sequence -- see
+    `scripts/seed_toll_roads.py`'s `_REAL_ROAD_CHAIN_WAYPOINTS` for exactly
+    why every other real road does not. Its 5 named toll points (10
+    gantries, one pair per direction) must carry the REAL cumulative
+    distances from the source chain, not a chord-approximation guess."""
+    await seed_toll_roads()
+
+    gantries = (
+        await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))
+    ).scalars().all()
+    assert len(gantries) == 10
+
+    by_cumulative = {float(g.cumulative_distance_km): g.sequence_position for g in gantries if g.cumulative_distance_km is not None}
+    assert by_cumulative == {0.0: 0, 1.8: 1, 3.4: 2, 6.9: 3, 10.3: 4}
+
+    # Every gantry actually has one -- this is a fully-resolved real chain,
+    # not a partial one.
+    assert all(g.sequence_position is not None for g in gantries)
+    assert all(g.cumulative_distance_km is not None for g in gantries)
+
+    # A road NOT in `_REAL_ROAD_CHAIN_WAYPOINTS` (e.g. M7, whose real source
+    # chain genuinely branches -- see that dict's own docstring) must stay
+    # NULL, i.e. still on the pre-existing chord approximation.
+    m7_gantries = (
+        await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M7"))
+    ).scalars().all()
+    assert m7_gantries  # sanity: M7 really does have real gantries
+    assert all(g.sequence_position is None for g in m7_gantries)
+    assert all(g.cumulative_distance_km is None for g in m7_gantries)
+
+
+async def test_seed_toll_roads_real_chain_backfill_is_idempotent(session):
+    """Re-running the loader (the same idempotent mechanism that populates
+    every other real fact on TollGantry) must reproduce the exact same
+    sequence_position/cumulative_distance_km values, not duplicate rows or
+    drift on a second pass."""
+    await seed_toll_roads()
+    first_pass = {
+        g.id: (g.sequence_position, g.cumulative_distance_km)
+        for g in (await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))).scalars().all()
+    }
+
+    await seed_toll_roads()
+    second_pass = {
+        g.id: (g.sequence_position, g.cumulative_distance_km)
+        for g in (await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))).scalars().all()
+    }
+
+    assert first_pass == second_pass
+    assert len(second_pass) == 10  # no duplicate rows either

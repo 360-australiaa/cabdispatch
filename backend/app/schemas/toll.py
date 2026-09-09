@@ -26,6 +26,21 @@ class TollGantryRead(BaseModel):
     direction: str | None
     latitude: float
     longitude: float
+    # REAL position/distance along this gantry's own road (2026-09-09
+    # cross-check pass) — see `app.models.toll.TollGantry`'s docstring. Both
+    # NULL for every road whose real chain data doesn't resolve cleanly (the
+    # majority today — see `scripts/seed_toll_roads.py`'s
+    # `_REAL_ROAD_CHAIN_WAYPOINTS`), which still means exactly what it always
+    # has: "no real order known for this road", not an error. Exposed here
+    # (a tiny addition — `from_attributes=True` reads it straight off the
+    # ORM row, no route logic changed) so the on-device registry sync this
+    # endpoint already feeds can eventually read real chain order instead of
+    # reconstructing a nearest-neighbour guess client-side — see Android's
+    # `KnownCorridor.kt`, which explicitly flags that reconstruction as its
+    # own "honest limitation" for exactly this reason. Not consumed there
+    # yet; this pass only makes the data available on the existing response.
+    sequence_position: int | None = None
+    cumulative_distance_km: Decimal | None = None
 
 
 class TollRoadPriceRevisionRead(BaseModel):

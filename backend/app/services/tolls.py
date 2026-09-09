@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from itertools import combinations
+from itertools import combinations, pairwise
 from math import asin, atan2, cos, degrees, radians, sin, sqrt
 
 from sqlalchemy import func, select
@@ -106,6 +106,18 @@ TOLL_MIN_CONFIRMATIONS = 2
 # to fix (a real corridor point wrongly read as "left"); too loose only
 # delays finalization, it never invents a charge, so this errs generous on
 # purpose.
+#
+# 2026-09-09 cross-check pass: for the handful of roads whose real chain
+# data resolves cleanly (see `app.models.toll.TollGantry.sequence_position`
+# / `scripts/seed_toll_roads.py`'s `_REAL_ROAD_CHAIN_WAYPOINTS`), this radius
+# is now tested against `_distance_to_real_chain_corridor_m`'s REAL
+# chain-adjacent-segment distance instead of `_distance_to_road_corridor_m`'s
+# any-two-gantries chord — a strictly tighter approximation of the actual
+# road — before falling back to the chord approximation for every other
+# road, unchanged. The constant itself is kept the same for both: it is
+# already a generous, GPS-error-driven buffer, and the real-chain distance
+# it is now sometimes compared against is more accurate, never less, so
+# nothing about widening/narrowing this figure was required to adopt it.
 CORRIDOR_EXIT_RADIUS_M = GANTRY_DETECTION_RADIUS_M * 5  # 750.0
 
 _EARTH_RADIUS_M = 6_371_008.8
@@ -163,6 +175,42 @@ def distance_to_segment_m(
     t = max(0.0, min(1.0, (px * bx + py * by) / length_sq))
     proj_x, proj_y = t * bx, t * by
     return sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+
+
+async def _distance_to_real_chain_corridor_m(
+    session: AsyncSession, *, road_id: str, lat: float, lng: float
+) -> float | None:
+    """The REAL upgrade to `_distance_to_road_corridor_m` below: for a road
+    whose gantries carry real `TollGantry.sequence_position` /
+    `cumulative_distance_km` (see that model's docstring and
+    `scripts/seed_toll_roads.py`'s `_REAL_ROAD_CHAIN_WAYPOINTS` for exactly
+    which roads qualify), (lat, lng)'s distance from the road's corridor is
+    the smaller of (a) distance to the nearest real waypoint itself, and (b)
+    distance to the chord segment between each pair of CHAIN-ADJACENT real
+    waypoints (consecutive `sequence_position`, NOT every pairwise
+    combination the chord approximation below has to use) — a strictly
+    tighter, more faithful approximation of the real road than a chord
+    between two arbitrary gantries, because it only ever draws a line
+    between two points genuinely adjacent along the real corridor.
+
+    Returns `None` — NOT `float("inf")` — when `road_id` has zero gantries
+    with real chain data at all, which the caller (`apply_toll_detection`)
+    reads as "fall back to `_distance_to_road_corridor_m`'s chord
+    approximation for this road" rather than "this road's corridor is
+    infinitely far away"; those are two different facts and must not share
+    a sentinel."""
+    result = await session.execute(
+        select(TollGantry)
+        .where(TollGantry.toll_road_id == road_id, TollGantry.sequence_position.is_not(None))
+        .order_by(TollGantry.sequence_position)
+    )
+    waypoints = result.scalars().all()
+    if not waypoints:
+        return None
+    best = min(haversine_m(lat, lng, g.latitude, g.longitude) for g in waypoints)
+    for g1, g2 in pairwise(waypoints):
+        best = min(best, distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude))
+    return best
 
 
 async def _distance_to_road_corridor_m(
@@ -562,7 +610,12 @@ async def apply_toll_detection(
         if road is None or road.pricing_model not in _DISTANCE_METERED_PRICING_MODELS:
             continue  # defensive -- progress is only ever written for these
 
-        distance_to_corridor = await _distance_to_road_corridor_m(session, road_id=road_id, lat=lat, lng=lng)
+        real_distance = await _distance_to_real_chain_corridor_m(session, road_id=road_id, lat=lat, lng=lng)
+        distance_to_corridor = (
+            real_distance
+            if real_distance is not None
+            else await _distance_to_road_corridor_m(session, road_id=road_id, lat=lat, lng=lng)
+        )
         if distance_to_corridor > CORRIDOR_EXIT_RADIUS_M:
             # Finalize: the vehicle has genuinely left this road's corridor.
             # Freeze the bill at whatever it already is (this OFF-corridor

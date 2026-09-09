@@ -136,10 +136,18 @@ async def _add_gantry(
     lat: float,
     lng: float,
     toll_point_id: str | None = None,
+    sequence_position: int | None = None,
+    cumulative_distance_km: str | None = None,
 ) -> TollGantry:
+    """`sequence_position`/`cumulative_distance_km` model a REAL chain
+    waypoint (see `app.models.toll.TollGantry`'s docstring) — both default
+    to `None`, an ordinary gantry with no known real chain position, same as
+    every pre-existing caller of this helper."""
     gantry = TollGantry(
         id=gantry_id, toll_road_id=road_id, location=gantry_id, ramp=None, direction=None,
         latitude=lat, longitude=lng, toll_point_id=toll_point_id,
+        sequence_position=sequence_position,
+        cumulative_distance_km=Decimal(cumulative_distance_km) if cumulative_distance_km else None,
     )
     session.add(gantry)
     await session.commit()
