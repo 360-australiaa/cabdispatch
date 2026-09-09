@@ -12,6 +12,7 @@ import {
   ShieldOff,
   Trash2,
   Unlock,
+  XCircle,
 } from "lucide-react";
 import { EntityLink } from "@/components/EntityLink";
 import { EntityPage } from "@/components/layout/EntityPage";
@@ -22,6 +23,7 @@ import { useAuditLogQuery } from "@/pages/audit-log/api";
 import { useLatestAppRelease } from "@/hooks/useAppReleases";
 import { RESTART_APP_REASON } from "@/pages/fleet/DevicesPanel";
 import {
+  useCancelForceUpdate,
   useDeleteDevice,
   useDeviceDetailQuery,
   useForceUpdate,
@@ -151,6 +153,7 @@ export default function DevicePage() {
 
   const kioskLock = useKioskLock();
   const forceUpdate = useForceUpdate();
+  const cancelForceUpdate = useCancelForceUpdate();
   const locateDevice = useLocateDevice();
   const restartApp = useRestartApp();
   const rotateSecret = useRotateDeviceSecret();
@@ -193,6 +196,22 @@ export default function DevicePage() {
       toast.success("Update queued", { description: device.android_id });
     } catch (err) {
       toast.error("Failed to queue update", { description: errorMessage(err) });
+    }
+  }
+
+  /**
+   * Clears a pending update with no matching action to satisfy it -- e.g. the flag was set with
+   * no release ever published, or the build was installed by hand (over USB) instead of through
+   * the tablet's own self-update flow. Before this, the only way to clear it was a raw API call;
+   * see useCancelForceUpdate's own doc.
+   */
+  async function triggerCancelForceUpdate() {
+    if (!device) return;
+    try {
+      await cancelForceUpdate.mutateAsync(device.id);
+      toast.success("Pending update cleared", { description: device.android_id });
+    } catch (err) {
+      toast.error("Failed to clear pending update", { description: errorMessage(err) });
     }
   }
 
@@ -272,6 +291,7 @@ export default function DevicePage() {
   const actionBusy =
     kioskLock.isPending ||
     forceUpdate.isPending ||
+    cancelForceUpdate.isPending ||
     locateDevice.isPending ||
     restartApp.isPending ||
     updateDevice.isPending ||
@@ -454,6 +474,16 @@ export default function DevicePage() {
                 disabled={device.force_update_pending}
                 tooltip={device.force_update_pending ? "Force-update already pending" : undefined}
               />
+              {device.force_update_pending && (
+                <ActionButton
+                  icon={XCircle}
+                  label="Cancel update"
+                  onClick={triggerCancelForceUpdate}
+                  canManage={canManage}
+                  actionBusy={actionBusy}
+                  tooltip="Clears the pending flag without waiting for the tablet to pull a build -- use this when it was set with no release to point to, or the build was already installed by hand."
+                />
+              )}
               <ActionButton
                 icon={MapPin}
                 label="Locate"

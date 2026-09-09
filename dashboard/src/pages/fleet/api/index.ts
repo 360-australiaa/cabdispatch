@@ -43,6 +43,7 @@ export {
 } from "./drivers";
 
 export {
+  useCancelForceUpdate,
   useCreateDevice,
   useDeleteDevice,
   useDeviceDetailQuery,

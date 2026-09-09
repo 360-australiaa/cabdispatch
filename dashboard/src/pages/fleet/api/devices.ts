@@ -209,6 +209,26 @@ export function useForceUpdate() {
   });
 }
 
+/**
+ * Clears `force_update_pending` (`POST .../force-update {enabled: false}`) without waiting for
+ * the tablet to actually pull a build -- the endpoint has always accepted this, but until now
+ * nothing in the dashboard ever called it with `enabled: false`, so a flag set with no release
+ * to point to (or one satisfied by hand, e.g. installing the APK directly over USB) had no way
+ * to clear except a raw API call. Same query invalidation as [useForceUpdate].
+ */
+export function useCancelForceUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post<Device>(`/v1/fleet/devices/${id}/force-update`, {
+        enabled: false,
+      });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["fleet", "devices"] }),
+  });
+}
+
 /** Flags every registered device for update in one action — there is no
  * bulk endpoint on the backend, so this fetches up to `LOOKUP_LIMIT` devices
  * (same "good enough for one fleet" cap `useDeviceOptions` already accepts)
