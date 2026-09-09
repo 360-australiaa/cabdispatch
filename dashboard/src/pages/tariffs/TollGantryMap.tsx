@@ -3,7 +3,7 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Table, type TableColumn } from "@/components/ui";
 import type { TollGantry, TollRoad } from "@/hooks/useTollRoads";
-import { orderAlongRoad } from "./tollCorridor";
+import { resolveCorridorSegments } from "./tollCorridor";
 
 // Same public/publishable token pattern as the Live Map and the toll-zone
 // picker (src/pages/live-map/FleetMapCanvas.tsx, TollZoneMapPicker.tsx) —
@@ -167,9 +167,12 @@ function MapboxGantryCanvas({
       // markers are individually positioned on every frame of a pan/zoom,
       // which at this count visibly stutters; a circle layer is drawn by the
       // GPU in one pass.
-      // Corridor lines FIRST (so they draw under the points): one LineString per road through
-      // its gantries in registry order. A toll road is a route, not a scatter of dots, and the
-      // owner could not tell entry from exit when it was only dots on black.
+      // Corridor lines FIRST (so they draw under the points): the real official road geometry
+      // cloned from the NSW Government's own toll calculator map wherever it exists for a road
+      // (see officialTollGeometry.ts / tollCorridor.ts's resolveCorridorSegments), falling back
+      // to a nearest-neighbour reconstruction through this road's own gantries otherwise. A toll
+      // road is a route, not a scatter of dots, and the owner could not tell entry from exit when
+      // it was only dots on black.
       map.addSource(LINE_SOURCE_ID, { type: "geojson", data: corridorCollection(dataRef.current.gantries) });
       map.addLayer({
         id: LINE_LAYER_ID,
@@ -311,8 +314,11 @@ function featureCollection(
   };
 }
 
-/** One LineString per road, through its gantries in registry order. Roads with a single gantry
- * draw no line -- there is no corridor to show. */
+/** One LineString per resolved corridor segment for a road -- the real official geometry
+ * (possibly several segments: parallel carriageways, ramp forks, a gap the source doesn't
+ * cover) when available, else one reconstructed line through this road's own gantries in
+ * along-the-road order. A road with neither (fewer than 2 gantries and no official data)
+ * draws no line -- there is no corridor to show. */
 interface LineFeature {
   type: "Feature";
   geometry: { type: "LineString"; coordinates: [number, number][] };
@@ -323,7 +329,10 @@ interface LineFeatureCollection {
   features: LineFeature[];
 }
 
-function corridorCollection(gantries: TollGantry[]): LineFeatureCollection {
+/** Exported for TollGantryMap.test.ts -- proving which corridor lines the map actually
+ * draws (real official geometry vs. the reconstructed fallback) needs this function's
+ * output, not a rendered Mapbox canvas. */
+export function corridorCollection(gantries: TollGantry[]): LineFeatureCollection {
   const byRoad = new Map<string, TollGantry[]>();
   for (const g of gantries) {
     const list = byRoad.get(g.toll_road_id) ?? [];
@@ -332,16 +341,18 @@ function corridorCollection(gantries: TollGantry[]): LineFeatureCollection {
   }
   const features: LineFeature[] = [];
   for (const [roadId, list] of byRoad) {
-    if (list.length < 2) continue;
-    features.push({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        // Along the road, not in registry order -- see tollCorridor.ts.
-        coordinates: orderAlongRoad(list).map((g) => [g.longitude, g.latitude] as [number, number]),
-      },
-      properties: { roadId, color: colorFor(roadId) },
-    });
+    const segments = resolveCorridorSegments(roadId, list);
+    for (const segment of segments) {
+      if (segment.length < 2) continue;
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: segment.map((g) => [g.longitude, g.latitude] as [number, number]),
+        },
+        properties: { roadId, color: colorFor(roadId) },
+      });
+    }
   }
   return { type: "FeatureCollection", features };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { orderAlongRoad } from "./tollCorridor";
+import { orderAlongRoad, resolveCorridorSegments } from "./tollCorridor";
+import { officialGeometryFor } from "./officialTollGeometry";
 
 // Five points on a north-south road, listed in a scrambled registry order.
 const road = [
@@ -44,5 +45,40 @@ describe("orderAlongRoad", () => {
     const copy = road.map((p) => ({ ...p }));
     orderAlongRoad(road);
     expect(road).toEqual(copy);
+  });
+});
+
+describe("resolveCorridorSegments", () => {
+  // Two gantries that are nowhere near M2's real geometry -- if the reconstruction
+  // were used instead of the official data, the resolved line would run through them.
+  const decoyGantries = [
+    { latitude: -10, longitude: 10 },
+    { latitude: -11, longitude: 11 },
+  ];
+
+  it("prefers real official geometry over the reconstruction for a road the source covers", () => {
+    const official = officialGeometryFor("M2");
+    expect(official).not.toBeNull();
+
+    const resolved = resolveCorridorSegments("M2", decoyGantries);
+    expect(resolved).toEqual(official);
+    // Confirms it's the real path, not a reconstruction through decoyGantries: neither
+    // decoy point appears anywhere in what was resolved.
+    for (const segment of resolved) {
+      for (const point of segment) {
+        expect(decoyGantries).not.toContainEqual(point);
+      }
+    }
+  });
+
+  it("falls back to the orderAlongRoad reconstruction for a road the source does not cover", () => {
+    expect(officialGeometryFor("M8")).toBeNull();
+    const resolved = resolveCorridorSegments("M8", road);
+    expect(resolved).toEqual([orderAlongRoad(road)]);
+  });
+
+  it("draws nothing for an uncovered road with fewer than two gantries", () => {
+    expect(resolveCorridorSegments("M8", road.slice(0, 1))).toEqual([]);
+    expect(resolveCorridorSegments("M8", [])).toEqual([]);
   });
 });
