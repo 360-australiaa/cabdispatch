@@ -3,15 +3,46 @@ speed-exceeded alert detection, called from the trip/shift tick flow.
 
 Kept out of the trips/shifts routers so the "has an alert of this kind
 already been raised for this shift" dedup logic lives in exactly one place.
-Functions here only `session.add()` — they never commit; the caller (the
-trip-tick router) owns the transaction, same convention as
-`app.services.trips.apply_tick`/`close_trip`.
+Functions here only `session.add()`/flush within their own SAVEPOINT — they
+never commit the caller's transaction; the caller (the trip-tick router, or
+`app.services.lazy_maintenance`) still owns and commits the outer transaction,
+same convention as `app.services.trips.apply_tick`/`close_trip`.
+
+RACE-SAFE DEDUP INSERT (production incident fix, request_id
+cd2486bb63374e4384e20cdde6dc3558): the shift-duration and no-break-taken
+checks below dedupe on "does an alert of this kind already exist for this
+shift" via a plain check-then-insert. That is a classic TOCTOU race whenever
+two calls can run concurrently for the same shift — which they can: the
+position heartbeat (`POST /v1/fleet/positions`, every ~5s per on-shift
+tablet) and a shift-list read (`GET /v1/shifts`) both trigger these same
+checks (see `app.services.lazy_maintenance`), and nothing serialises them.
+Two such calls landing close together can each run
+`_shift_duration_alert_exists`, each see zero rows (neither has committed
+yet), and each `session.add()` a row — leaving TWO `shift_duration_exceeded`
+rows for one shift. That is confirmed to have actually happened in
+production: `_shift_duration_alert_exists`'s `scalar_one_or_none()` then
+raises `MultipleResultsFound` the next time anything checks this shift again,
+which is what actually took `GET /v1/shifts` down.
+
+Fixed at the DB level with a real uniqueness guard — a partial unique index
+on `fatigue_alerts (tenant_id, shift_id, kind)`, scoped to exactly these two
+bounded-per-shift kinds (see the migration that adds it, and the module-level
+DEVIATION note below on why `speed_exceeded` must NOT be covered by it) — and
+at the application level by inserting through `_insert_alert_if_new` below,
+which adds+flushes inside its own SAVEPOINT so a concurrent duplicate is
+caught as an `IntegrityError` on THIS insert alone (not the caller's whole
+transaction) and treated as "someone else already raised it," same effective
+outcome as a real `get_or_create`. The existence pre-check stays as a
+fast-path (skips the query+flush round trip on every one of the many calls
+that are NOT the first past the threshold) but is no longer relied on for
+correctness by itself.
 """
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -70,14 +101,49 @@ def shift_duration_limit_hours(tenant_id: str) -> float:
 
 
 async def _shift_duration_alert_exists(session: AsyncSession, *, tenant_id: str, shift_id: str) -> bool:
+    # Defensive belt-and-braces fix, independent of the uniqueness guard
+    # above: `.limit(1)` + `.scalar()` (never `scalar_one_or_none()`) means
+    # this existence check itself can NEVER raise `MultipleResultsFound`,
+    # even against rows that already violate the invariant (e.g. duplicates
+    # already sitting in production from before the fix below existed, until
+    # the cleanup migration runs against them). A dedup *check* has no
+    # business being the thing that turns "an alert already exists" into a
+    # 500 on every future read of this shift.
     result = await session.execute(
-        select(FatigueAlert.id).where(
+        select(FatigueAlert.id)
+        .where(
             FatigueAlert.tenant_id == tenant_id,
             FatigueAlert.shift_id == shift_id,
             FatigueAlert.kind == FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
         )
+        .limit(1)
     )
-    return result.scalar_one_or_none() is not None
+    return result.scalar() is not None
+
+
+async def _insert_alert_if_new(session: AsyncSession, alert: FatigueAlert) -> FatigueAlert | None:
+    """Adds `alert` and flushes it inside its own SAVEPOINT, so a concurrent
+    duplicate insert for the same dedup key (see module docstring — the
+    TOCTOU race the plain existence-check above cannot close by itself) is
+    caught HERE as an `IntegrityError` against the partial unique index on
+    `fatigue_alerts (tenant_id, shift_id, kind)`, rather than surfacing later
+    as a `MultipleResultsFound` the next time anything checks this shift.
+
+    Only this one SAVEPOINT rolls back on conflict — the caller's outer
+    transaction, and any other rows already added to it (e.g. alerts for
+    other shifts in the same `run_checks_for_shifts` batch), are untouched.
+    Returns `None` if a duplicate was rejected (someone else already raised
+    this exact alert), `alert` otherwise. Still never commits — same
+    add()-only contract as the rest of this module; the caller commits the
+    outer transaction.
+    """
+    try:
+        async with session.begin_nested():
+            session.add(alert)
+            await session.flush()
+    except IntegrityError:
+        return None
+    return alert
 
 
 async def get_shift_or_none(session: AsyncSession, *, tenant_id: str, shift_id: str) -> Shift | None:
@@ -124,8 +190,7 @@ async def check_shift_duration(
         },
         acknowledged=False,
     )
-    session.add(alert)
-    return alert
+    return await _insert_alert_if_new(session, alert)
 
 
 # --- no-break-taken alert -------------------------------------------------------
@@ -142,14 +207,19 @@ NO_BREAK_ALERT_FRACTION_OF_SHIFT_LIMIT = 0.5
 
 
 async def _no_break_taken_alert_exists(session: AsyncSession, *, tenant_id: str, shift_id: str) -> bool:
+    # Same defensive fix as `_shift_duration_alert_exists` above, for the
+    # identical fragile pattern on the sibling check — see that function's
+    # comment.
     result = await session.execute(
-        select(FatigueAlert.id).where(
+        select(FatigueAlert.id)
+        .where(
             FatigueAlert.tenant_id == tenant_id,
             FatigueAlert.shift_id == shift_id,
             FatigueAlert.kind == FATIGUE_ALERT_NO_BREAK_TAKEN,
         )
+        .limit(1)
     )
-    return result.scalar_one_or_none() is not None
+    return result.scalar() is not None
 
 
 async def check_no_break_taken(
@@ -195,11 +265,19 @@ async def check_no_break_taken(
         },
         acknowledged=False,
     )
-    session.add(alert)
-    return alert
+    return await _insert_alert_if_new(session, alert)
 
 
 # --- speed alert ---------------------------------------------------------------
+# DEVIATION (interaction with the dedup uniqueness guard above): `check_speed`
+# is deliberately NOT deduped — see the "sustained speed" simplification note
+# earlier in this module — so, unlike shift_duration_exceeded/no_break_taken,
+# MANY `speed_exceeded` rows are expected for one shift_id. The partial unique
+# index this pass adds on `fatigue_alerts (tenant_id, shift_id, kind)` is
+# therefore explicitly scoped to `kind IN ('shift_duration_exceeded',
+# 'no_break_taken')` only — it must never be widened to cover
+# `speed_exceeded`, or every second qualifying telemetry point on an already-
+# speeding shift would start raising `IntegrityError`s here.
 
 
 async def check_speed(

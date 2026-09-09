@@ -10,14 +10,16 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.audit_log import AuditLog
+from app.models.fatigue_alert import FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED, FatigueAlert
 from app.models.fleet import Device, Vehicle
 from app.models.shift import Shift
 from app.models.trips import Trip
@@ -903,3 +905,140 @@ async def test_shift_aggregates_ignore_open_trips_and_split_fares_by_component(
     assert Decimal(body["cash_total"]) == Decimal("45.00")
     # card: 30.00 + the split's 35.00 leg.
     assert Decimal(body["card_total"]) == Decimal("65.00")
+
+
+# ===========================================================================
+# Regression: GET /v1/shifts must survive duplicate fatigue-alert rows
+# (production outage fix, request_id cd2486bb63374e4384e20cdde6dc3558)
+# ===========================================================================
+#
+# The bug this reproduces: `GET /v1/shifts` (both unfiltered and
+# `?driver_id=`) runs `app.services.lazy_maintenance.run_checks_for_shifts`
+# on every open shift it returns. That called
+# `app.services.fatigue._shift_duration_alert_exists`, which used to do
+# `result.scalar_one_or_none()` -- if TWO `shift_duration_exceeded` rows
+# already existed for one shift (a real TOCTOU race between two lazy checks,
+# see `app.services.fatigue`'s module docstring), that raised
+# `MultipleResultsFound`. The caller's `except Exception: ... await
+# session.rollback()` caught it -- but on the OLD code that `rollback()` ran
+# on the SAME session `GET /v1/shifts` had just used to fetch the `Shift`
+# rows it was about to serialize, and `AsyncSession.rollback()` expires every
+# object already loaded on that session by default. The very next attribute
+# read on any of those `Shift` objects (`.id`, `.tenant_id`, ... -- literally
+# every column) then tried to lazily refresh from the DB outside the async
+# context FastAPI/Pydantic's synchronous serialization runs in, raising
+# `sqlalchemy.exc.MissingGreenlet` -- an unconditional 500, even though the
+# original exception had already been caught and logged.
+#
+# This is fixed at three layers (see `app.services.fatigue` and
+# `app.services.lazy_maintenance` module docstrings + the migration that adds
+# `uq_fatigue_alerts_tenant_shift_kind_bounded`):
+#   1. a real DB-level uniqueness guard so duplicates can no longer be
+#      created going forward;
+#   2. `_shift_duration_alert_exists`/`_no_break_taken_alert_exists` now use
+#      `.limit(1)` + `.scalar()`, never `scalar_one_or_none()`, so they
+#      cannot raise `MultipleResultsFound` even if duplicates exist anyway;
+#   3. the lazy checks now run on their OWN isolated session, so even an
+#      unhandled failure inside them can never expire/detach the `Shift`
+#      objects the request's own session still needs to serialize.
+#
+# The test below constructs duplicate rows DESPITE the new DB constraint (by
+# temporarily dropping the partial unique index, inserting two rows, then
+# deleting them again before recreating it) specifically to prove fixes #2
+# and #3 hold even against rows that predate this migration (the exact state
+# production was in) -- not merely that fix #1 stops new duplicates. On the
+# pre-fix code, this test reproduces the original crash exactly; after the
+# fix, both request shapes return 200 with the shift correctly serialized.
+
+
+async def test_get_shifts_survives_duplicate_fatigue_alert_rows_for_open_shift(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+    driver_id = str(uuid.uuid4())
+    vehicle_id = str(uuid.uuid4())
+
+    over_limit_start = datetime.now(UTC) - timedelta(
+        hours=settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS + 2
+    )
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={
+            "driver_id": driver_id,
+            "vehicle_id": vehicle_id,
+            "start_at": over_limit_start.isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    # Drop the guard so two conflicting rows can be inserted directly,
+    # simulating duplicates that already exist in the database (e.g. rows
+    # from before this fix shipped) rather than ones the app just created.
+    await session.execute(text("DROP INDEX uq_fatigue_alerts_tenant_shift_kind_bounded"))
+    await session.commit()
+
+    try:
+        for _ in range(2):
+            session.add(
+                FatigueAlert(
+                    tenant_id=tenant_id,
+                    driver_id=driver_id,
+                    shift_id=shift_id,
+                    kind=FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
+                    triggered_at=datetime.now(UTC),
+                    details_json={"elapsed_hours": 999.0, "limit_hours": 12.0},
+                    acknowledged=False,
+                )
+            )
+        await session.commit()
+
+        # Sanity check: the duplicate really is sitting in the DB right now,
+        # so the assertions below are proving what they claim to prove.
+        dup_count = (
+            await session.execute(
+                select(FatigueAlert).where(
+                    FatigueAlert.tenant_id == tenant_id,
+                    FatigueAlert.shift_id == shift_id,
+                    FatigueAlert.kind == FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
+                )
+            )
+        ).scalars().all()
+        assert len(dup_count) == 2, "test setup failed to create the duplicate it needs"
+
+        # Unfiltered form.
+        resp = await client.get("/v1/shifts", headers=headers)
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["items"]
+        match = next(i for i in items if i["id"] == shift_id)
+        assert match["driver_id"] == driver_id
+        assert match["vehicle_id"] == vehicle_id
+        assert match["tenant_id"] == tenant_id
+
+        # `?driver_id=` form -- the traceback names this shape explicitly too.
+        resp = await client.get("/v1/shifts", params={"driver_id": driver_id}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["items"]
+        match = next(i for i in items if i["id"] == shift_id)
+        assert match["driver_id"] == driver_id
+
+        # Single-shift read (`GET /v1/shifts/{id}`) hits the identical path.
+        resp = await client.get(f"/v1/shifts/{shift_id}", headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["id"] == shift_id
+    finally:
+        # Restore the schema for the rest of the (session-scoped) test DB:
+        # the duplicates must be gone before the unique index can be
+        # recreated over this table again.
+        await session.execute(delete(FatigueAlert).where(FatigueAlert.shift_id == shift_id))
+        await session.commit()
+        await session.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_fatigue_alerts_tenant_shift_kind_bounded "
+                "ON fatigue_alerts (tenant_id, shift_id, kind) "
+                "WHERE kind IN ('shift_duration_exceeded', 'no_break_taken')"
+            )
+        )
+        await session.commit()

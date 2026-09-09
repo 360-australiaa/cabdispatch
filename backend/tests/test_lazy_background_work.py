@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.models import Tenant
 from app.models.audit_log import AuditLog
 from app.models.duress import ESCALATION_STAGES, DuressEvent
 from app.models.fatigue_alert import (
@@ -713,3 +714,141 @@ async def test_audit_chain_lock_uses_a_postgres_advisory_lock(session: AsyncSess
 
     await audit_log_service._acquire_chain_lock(_FakeSession(), tenant_id="tenant-abc")
     assert issued == ["SELECT pg_advisory_xact_lock(:key)"]
+
+
+# ===========================================================================
+# 7 · Fatigue-alert dedup cannot be raced into a duplicate
+#     (production outage fix, request_id cd2486bb63374e4384e20cdde6dc3558)
+# ===========================================================================
+
+
+async def test_check_shift_duration_concurrent_calls_never_create_a_duplicate(
+    session: AsyncSession,
+):
+    """Layer 1 root-cause fix, proven under real concurrency: two callers
+    racing to raise `shift_duration_exceeded` for the SAME shift, each on its
+    OWN session (the real shape of the production race -- the position
+    heartbeat and a shift-list read, or two heartbeats close together, can
+    each land inside `app.services.fatigue.check_shift_duration` for the same
+    shift before either has committed), must still end up with exactly ONE
+    alert row, never two.
+
+    Before this fix this was a genuine TOCTOU race:
+    `_shift_duration_alert_exists` (plain check-then-insert, no DB guard
+    behind it) could return `False` to every one of several concurrent
+    callers, since none of them had committed yet, and each would then
+    `session.add()` its own row. This is the exact mechanism that put two
+    `shift_duration_exceeded` rows in production for one shift.
+    """
+    tenant = Tenant(name="Fatigue Race Tenant", plan="standard")
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    tenant_id = tenant.id
+
+    over_limit_start = datetime.now(UTC) - timedelta(
+        hours=settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS + 1
+    )
+    shift = Shift(
+        tenant_id=tenant_id,
+        driver_id=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        start_at=over_limit_start,
+        end_at=None,
+    )
+    session.add(shift)
+    await session.commit()
+    shift_id = shift.id
+
+    from app.services import fatigue as fatigue_service
+
+    async def _attempt() -> None:
+        # Own session per attempt -- two independent connections/transactions,
+        # exactly like two separate HTTP requests, each with its own
+        # `Shift` instance loaded fresh (not sharing the outer `session`
+        # fixture's identity map).
+        async with AsyncSessionLocal() as own_session:
+            own_shift = (
+                await own_session.execute(select(Shift).where(Shift.id == shift_id))
+            ).scalar_one()
+            await fatigue_service.check_shift_duration(
+                own_session, tenant_id=tenant_id, shift=own_shift
+            )
+            await own_session.commit()
+
+    concurrency = 8
+    await asyncio.gather(*(_attempt() for _ in range(concurrency)))
+
+    rows = (
+        (
+            await session.execute(
+                select(FatigueAlert).where(
+                    FatigueAlert.tenant_id == tenant_id,
+                    FatigueAlert.shift_id == shift_id,
+                    FatigueAlert.kind == FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1, f"expected exactly one alert row from {concurrency} racing callers, got {len(rows)}"
+
+
+async def test_check_no_break_taken_concurrent_calls_never_create_a_duplicate(
+    session: AsyncSession,
+):
+    """Same claim as the shift-duration test above, for the sibling
+    `no_break_taken` check -- it mirrors `check_shift_duration`'s exact shape
+    (same dedup pattern, same latent race, same fix)."""
+    from app.models.fatigue_alert import FATIGUE_ALERT_NO_BREAK_TAKEN
+
+    tenant = Tenant(name="No-Break Race Tenant", plan="standard")
+    session.add(tenant)
+    await session.commit()
+    await session.refresh(tenant)
+    tenant_id = tenant.id
+
+    half_limit_hours = settings.FATIGUE_SHIFT_DURATION_LIMIT_HOURS / 2
+    over_half_start = datetime.now(UTC) - timedelta(hours=half_limit_hours + 1)
+    shift = Shift(
+        tenant_id=tenant_id,
+        driver_id=str(uuid.uuid4()),
+        vehicle_id=str(uuid.uuid4()),
+        start_at=over_half_start,
+        end_at=None,
+        break_taken=False,
+    )
+    session.add(shift)
+    await session.commit()
+    shift_id = shift.id
+
+    from app.services import fatigue as fatigue_service
+
+    async def _attempt() -> None:
+        async with AsyncSessionLocal() as own_session:
+            own_shift = (
+                await own_session.execute(select(Shift).where(Shift.id == shift_id))
+            ).scalar_one()
+            await fatigue_service.check_no_break_taken(
+                own_session, tenant_id=tenant_id, shift=own_shift
+            )
+            await own_session.commit()
+
+    concurrency = 8
+    await asyncio.gather(*(_attempt() for _ in range(concurrency)))
+
+    rows = (
+        (
+            await session.execute(
+                select(FatigueAlert).where(
+                    FatigueAlert.tenant_id == tenant_id,
+                    FatigueAlert.shift_id == shift_id,
+                    FatigueAlert.kind == FATIGUE_ALERT_NO_BREAK_TAKEN,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1, f"expected exactly one alert row from {concurrency} racing callers, got {len(rows)}"

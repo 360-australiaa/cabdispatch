@@ -32,7 +32,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, String
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -124,3 +124,30 @@ class FatigueAlert(Base, TenantScopedMixin, TimestampMixin):
     details_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # PRODUCTION INCIDENT FIX (request_id cd2486bb63374e4384e20cdde6dc3558; see
+    # `app.services.fatigue`'s module docstring and migration c774793b6619):
+    # a real DB-level uniqueness guard on the two BOUNDED-per-shift dedup
+    # kinds (shift_duration_exceeded, no_break_taken) — nothing previously
+    # stopped two concurrent lazy checks from each inserting one, which is
+    # confirmed to have actually happened and is what took `GET /v1/shifts`
+    # down. Deliberately a PARTIAL index (`WHERE kind IN (...)`), not a
+    # plain table-wide unique constraint: `speed_exceeded` intentionally
+    # raises many rows per shift (see the DEVIATION note in
+    # `app.services.fatigue` next to `check_speed`) and must never be
+    # constrained by this. Mirrored here (not just in the migration) so this
+    # model's description of the schema matches what the migration actually
+    # creates — see `tests/test_migrations.py::
+    # test_migrated_schema_matches_the_orm_models`, which fails loudly if the
+    # two ever drift apart.
+    __table_args__ = (
+        Index(
+            "uq_fatigue_alerts_tenant_shift_kind_bounded",
+            "tenant_id",
+            "shift_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("kind IN ('shift_duration_exceeded', 'no_break_taken')"),
+            sqlite_where=text("kind IN ('shift_duration_exceeded', 'no_break_taken')"),
+        ),
+    )
