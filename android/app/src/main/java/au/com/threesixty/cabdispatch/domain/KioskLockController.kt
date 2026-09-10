@@ -3,6 +3,9 @@ package au.com.threesixty.cabdispatch.domain
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The current OS-reported lock-task state, as a plain enum so the decision logic below
@@ -57,8 +60,47 @@ enum class KioskLockAction {
  * start one), so it has no business releasing one either — see [DeviceCommandHeartbeat]'s doc,
  * "One limit on that, cross-referencing MainActivity's deliberate `LOCK_TASK_MODE_LOCKED` trade".
  * Only a pin this app itself put in [LockTaskMode.PINNED] is ever stopped.
+ *
+ * ### Why [liveLockTaskMode] exists — a poll-with-timeout can never bound this correctly
+ * Found live on a real Samsung SM-T575 (2026-09-10): calling [Activity.startLockTask] does not
+ * mean the OS has pinned by the time it returns, or even shortly after. One UI shows its OWN
+ * "App is pinned" system dialog FIRST (`SamsungScreenPinningRequest`, a separate focused window --
+ * confirmed via `dumpsys window`), and [ActivityManager.getLockTaskModeState] genuinely stays
+ * [LockTaskMode.NONE] until a *human* taps OK on it. That wait is unbounded -- an unattended
+ * tablet may sit on it for minutes -- so no fixed retry-with-delay loop (this file's first two
+ * attempts at this fix, both wrong) can ever cover every real device.
+ *
+ * There is no plain `Activity` override for "lock-task mode changed" on a non-device-owner app --
+ * that callback (`DeviceAdminReceiver.onLockTaskModeEntering/Exiting`) only exists for a DPC this
+ * app is not (a first, wrong attempt at this fix tried `Activity.onLockTaskModeChanged`, which
+ * does not exist in the public SDK and does not compile). The real, public-SDK signal is the pair
+ * of protected system broadcasts `Intent.ACTION_LOCK_TASK_ENTERING`/`ACTION_LOCK_TASK_EXITING`,
+ * sent to any app the instant the OS actually changes the mode, however long that takes.
+ * [MainActivity] registers a receiver for both and calls [refreshLiveLockTaskMode] from it, so
+ * [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner]'s confirmation is event-driven and
+ * correct regardless of how long a human takes to dismiss that dialog.
  */
 object KioskLockController {
+
+    private val _liveLockTaskMode = MutableStateFlow(LockTaskMode.NONE)
+
+    /** The OS's live lock-task mode, updated only from [MainActivity.onLockTaskModeChanged] (the
+     * real callback) plus one seed read in [applyKioskLock] so this has a sane value before the
+     * first OS callback ever fires. See this object's class doc, "Why liveLockTaskMode exists",
+     * for why nothing here is a poll or a timed retry. */
+    val liveLockTaskMode: StateFlow<LockTaskMode> = _liveLockTaskMode.asStateFlow()
+
+    /** Called only from [MainActivity]'s `ACTION_LOCK_TASK_ENTERING`/`ACTION_LOCK_TASK_EXITING`
+     * broadcast receiver -- those two protected system broadcasts are the real, public-SDK signal
+     * that a lock-task mode change has actually happened (there is no plain `Activity` override
+     * for this on a non-device-owner app; that only exists on `DeviceAdminReceiver`, which this
+     * app cannot use -- see this object's class doc). Re-reads [currentLockTaskMode] rather than
+     * trying to infer PINNED/NONE from which action fired, so this stays correct even for a
+     * LOCKED tablet (a DPC/Knox lock this app did not start) crossing paths with the same
+     * broadcast. */
+    fun refreshLiveLockTaskMode(activity: Activity) {
+        _liveLockTaskMode.value = currentLockTaskMode(activity)
+    }
 
     /**
      * Pure decision table — no [Activity]/[ActivityManager] dependency, so this is unit-testable
@@ -158,6 +200,12 @@ object KioskLockController {
             KioskLockAction.STOP -> runCatching { activity.stopLockTask() }
             KioskLockAction.NONE -> Unit
         }
-        return isPinConfirmed(currentLockTaskMode(activity), desiredLocked)
+        val modeAfterAction = currentLockTaskMode(activity)
+        // Seeds liveLockTaskMode with a real read so it is never left at its NONE default before
+        // the first Activity.onLockTaskModeChanged callback ever fires -- see that flow's own doc.
+        // A genuine mode change past this point (the common case: a human has not yet dismissed
+        // Samsung's own pinning dialog) arrives through that callback instead, not from here.
+        _liveLockTaskMode.value = modeAfterAction
+        return isPinConfirmed(modeAfterAction, desiredLocked)
     }
 }

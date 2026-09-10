@@ -1,10 +1,15 @@
 package au.com.threesixty.cabdispatch
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,9 +29,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,11 +59,13 @@ import kotlinx.coroutines.delay
  *    can land the OS in `LOCK_TASK_MODE_LOCKED`. See [KioskLockController]'s class doc for the
  *    full pinning-vs-device-owner write-up and its decision table, in particular the rule that a
  *    `LOCK_TASK_MODE_LOCKED` state (a DPC/Knox lock this app did not start) is never released from
- *    here — only a pin this app itself put in `PINNED` mode ever is. [applyKioskLock] returns
- *    whether the OS actually confirmed the result, held here as `kioskPinConfirmed` — a sibling
- *    to `commandState`, not a field on it, since `DeviceCommandState` is documented as a pure
- *    report of the backend's last heartbeat and this is a live, local OS read with no server round
- *    trip behind it — and threaded into [KioskLockedBanner] so the driver can tell "the depot asked
+ *    here — only a pin this app itself put in `PINNED` mode ever is. Whether the OS actually
+ *    confirmed the result — `kioskPinConfirmed` — is read from [KioskLockController.liveLockTaskMode],
+ *    fed by this Activity's own [onLockTaskModeChanged] override below, NOT from [applyKioskLock]'s
+ *    return value: see [KioskLockController]'s "Why liveLockTaskMode exists" doc for why a real
+ *    Samsung tablet can leave that confirmation pending for however long a human takes to dismiss
+ *    One UI's own pinning dialog — an unbounded wait no poll-with-timeout in [CabDispatchScreenRoot]
+ *    could ever cover. Threaded into [KioskLockedBanner] so the driver can tell "the depot asked
  *    for this" apart from "and the OS actually granted it".
  * 2. **The fleet-command/connectivity banners** — [au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner],
  *    [au.com.threesixty.cabdispatch.ui.overlays.DeviceUnpairedBanner],
@@ -107,6 +111,46 @@ class MainActivity : ComponentActivity() {
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
         AppContainer.idleLogoutSupervisor.recordInteraction()
         return super.dispatchTouchEvent(ev)
+    }
+
+    /** Fires the instant the OS actually changes lock-task mode — see [KioskLockController]'s
+     * "Why liveLockTaskMode exists" doc for why [CabDispatchScreenRoot]'s kiosk-lock confirmation
+     * is driven off this rather than a poll with a timeout: on a real Samsung tablet, the wait
+     * between [KioskLockController.applyKioskLock] calling startLockTask() and this actually
+     * firing is however long a human takes to dismiss One UI's own pinning dialog, not a fixed
+     * delay. There is no plain `Activity.onLockTaskModeChanged` override in the public SDK for a
+     * non-device-owner app (a first attempt at this fix tried exactly that and did not compile) --
+     * `ACTION_LOCK_TASK_ENTERING`/`ACTION_LOCK_TASK_EXITING` are the real, documented signal. */
+    private val lockTaskModeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            KioskLockController.refreshLiveLockTaskMode(this@MainActivity)
+        }
+    }
+
+    /** Registered/unregistered around the foreground window, same lifecycle shape as any other
+     * receiver this Activity would only care about while visible — there is nothing for a
+     * backgrounded tablet to confirm on-screen anyway. */
+    override fun onResume() {
+        super.onResume()
+        val filter = IntentFilter().apply {
+            // Intent.ACTION_LOCK_TASK_ENTERING/EXITING are real, protected system broadcasts the
+            // OS actually sends (confirmed live), but the constants themselves are @SystemApi --
+            // hidden from the public android.jar this app compiles against, so the compiler
+            // cannot resolve the symbol even though the broadcast fires at runtime. Their string
+            // values are stable AOSP platform contract, not this app's own invention.
+            addAction("android.app.action.LOCK_TASK_ENTERING")
+            addAction("android.app.action.LOCK_TASK_EXITING")
+        }
+        ContextCompat.registerReceiver(this, lockTaskModeReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        // Cold start / returning to the foreground can both miss the window where the broadcast
+        // fired (e.g. it fired while backgrounded, before this receiver was registered) -- one
+        // direct read here catches that, exactly as applyKioskLock's own seed read does.
+        KioskLockController.refreshLiveLockTaskMode(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        runCatching { unregisterReceiver(lockTaskModeReceiver) }
     }
 }
 
@@ -214,51 +258,38 @@ private fun CabDispatchScreenRoot() {
     val activity = LocalContext.current as? Activity
     val commandState by AppContainer.deviceCommandHeartbeat.state.collectAsState()
 
-    // Whether the OS's live lock-task mode actually matches commandState.kioskLocked, as of the
-    // last time the effect below ran — a sibling to DeviceCommandState rather than a field on it,
-    // since that class is documented as a pure report of the backend's last heartbeat answer and
-    // this is a live, on-device OS read with no server round-trip behind it at all. Starts false
-    // (honest: nothing has confirmed anything yet) rather than assuming success, so a kiosk-locked
-    // cold start renders KioskLockedBanner's "not yet confirmed" state for the one frame before
-    // this effect's first run resolves it either way.
-    var kioskPinConfirmed by remember { mutableStateOf(false) }
-
-    // Re-evaluate the pin every time the server's last-known kioskLocked flag changes (poll
-    // landing, seed on cold start, or a factory-reset reset back to the DeviceCommandState()
-    // default) — see KioskLockController's class doc for the decision this makes and why it can
-    // never release a LOCK_TASK_MODE_LOCKED state. Also captures whether the OS actually confirmed
-    // the result, for KioskLockedBanner below — see KioskLockController.applyKioskLock's doc for
-    // why startLockTask() alone can never answer that question on its own.
-    LaunchedEffect(activity, commandState.kioskLocked) {
-        kioskPinConfirmed = activity?.let {
-            KioskLockController.applyKioskLock(it, commandState.kioskLocked)
-        } ?: false
-        // Real bug, found live on the SM-T575 (2026-09-10): startLockTask()/stopLockTask() are
-        // requests to the system server, not synchronous state changes -- the OS's own "App is
-        // pinned" toast fired seconds AFTER this effect had already read back
-        // getLockTaskModeState() and latched kioskPinConfirmed = false, permanently, because this
-        // effect only re-runs on the NEXT kioskLocked change (a poll landing or a cold start), not
-        // on a timer. A tablet the OS had genuinely just pinned sat showing "LOCK PENDING" through
-        // an entire session and multiple app restarts.
-        //
-        // A single 400ms retry (this fix's first attempt) was not enough -- confirmed live: even
-        // ~2 real seconds after the OS's own "App is pinned" toast, `dumpsys activity activities`
-        // already reported `mLockTaskModeState=PINNED` while this effect's one retry had already
-        // given up and latched false. So this polls -- of state only, never re-calling
-        // start/stop, which would re-trigger that OS toast a second time for no reason -- a
-        // handful of times over a longer window. If the OS still has not settled after that,
-        // LOCK PENDING is the honest, exhausted-retries answer, same as before this fix existed.
-        if (!kioskPinConfirmed && activity != null) {
-            repeat(6) {
-                delay(500)
-                kioskPinConfirmed = KioskLockController.isPinConfirmed(
-                    KioskLockController.currentLockTaskMode(activity),
-                    commandState.kioskLocked,
-                )
-                if (kioskPinConfirmed) return@LaunchedEffect
-            }
+    // Issues the actual startLockTask()/stopLockTask() call (via decideAction's own gating, a
+    // no-op when the OS is already in the desired mode) and re-seeds liveLockTaskMode below with a
+    // fresh direct read. Loops forever rather than running once per commandState change: a
+    // DeviceCommandState data class poll that comes back byte-for-byte identical to the last one
+    // (the common case: kioskLocked sitting at true across many consecutive polls) is conflated
+    // by MutableStateFlow and never reaches collectAsState() as a new value at all, so keying this
+    // on commandState (tried, and reverted) reruns no more often than keying on just .kioskLocked
+    // did -- neither actually re-checks the OS periodically. A real timer, independent of whether
+    // the server's answer ever changes, is the only thing that can. Backstops
+    // MainActivity's ACTION_LOCK_TASK_ENTERING/EXITING receiver for whatever reason it does not
+    // fire on a given OEM/OS combo (unconfirmed why, live-tested one that did not): polls quickly
+    // while still unconfirmed (a human dismissing One UI's own pinning dialog is the expected
+    // unbounded wait), then coarsely once confirmed, matching DeviceCommandHeartbeat's own poll
+    // cadence -- there is nothing left to catch quickly once the OS agrees with the depot.
+    LaunchedEffect(activity) {
+        while (true) {
+            val confirmed = activity?.let { KioskLockController.applyKioskLock(it, commandState.kioskLocked) } ?: false
+            delay(if (confirmed) 60_000L else 2_000L)
         }
     }
+
+    // Whether the OS's live lock-task mode actually matches commandState.kioskLocked — fed by
+    // MainActivity's lock-task broadcast receiver AND the poll-interval backstop above, never a
+    // fixed-delay guess. See KioskLockController's "Why liveLockTaskMode exists" doc: on a real
+    // Samsung tablet the OS does not actually enter PINNED until a human dismisses One UI's own
+    // confirmation dialog, an unbounded wait no fixed retry-with-delay loop can ever cover (this
+    // file's two earlier, wrong attempts at exactly that). This being a plain derived value rather
+    // than remember/mutableStateOf means KioskLockedBanner below is always exactly as fresh as the
+    // last real update, cold start included (applyKioskLock seeds it with one direct read before
+    // either update path has had the chance to fire).
+    val liveLockTaskMode by KioskLockController.liveLockTaskMode.collectAsState()
+    val kioskPinConfirmed = KioskLockController.isPinConfirmed(liveLockTaskMode, commandState.kioskLocked)
 
     CabDispatchTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
