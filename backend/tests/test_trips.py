@@ -22,7 +22,7 @@ point, tariff rows needed as fixtures here are inserted directly via the
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.fleet import VEHICLE_CLASS_MAXI, Vehicle
 from app.models.geofence import GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
+from app.models.toll import TollGantry, TollRoad, TollRoadPriceRevision
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip, TripGpsTrace
 from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
@@ -860,6 +861,42 @@ def _sync_item(*, tariff_id: str, gps_trace: list[dict], device_total: str, **ov
     return item
 
 
+def _continuous_trace(
+    *,
+    start_lat: float,
+    start_lng: float,
+    end_lat: float,
+    end_lng: float,
+    start_at: datetime,
+    speed_kmh: float = 40,
+    total_seconds: int = 60,
+    step_seconds: int = 5,
+) -> list[dict]:
+    """A ~1Hz-realistic GPS trace (points every `step_seconds`, well under
+    `trips.BLACKOUT_GAP_THRESHOLD_S`) walking the straight meridian line from
+    start to end, standing in for a single sparse point `total_seconds`
+    later. Since start/end share the same longitude, linear interpolation of
+    latitude lies exactly on the same great-circle path haversine measures,
+    so the sum of these consecutive-point distances equals the direct
+    start->end haversine distance the tests' own `expected_dist_amount`
+    is computed from -- unlike a lone point `total_seconds` away, which (post
+    corridor-blackout fix) is a >5s gap with no toll registry to match against
+    in these tests, and so would be billed for zero distance instead."""
+    steps = total_seconds // step_seconds
+    trace = []
+    for i in range(1, steps + 1):
+        frac = i / steps
+        trace.append(
+            {
+                "lat": start_lat + (end_lat - start_lat) * frac,
+                "lng": start_lng + (end_lng - start_lng) * frac,
+                "speed_kmh": speed_kmh,
+                "ts": (start_at + timedelta(seconds=i * step_seconds)).isoformat(),
+            }
+        )
+    return trace
+
+
 async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     client: AsyncClient, session: AsyncSession
 ):
@@ -870,7 +907,9 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     start_lat, start_lng = -33.8688, 151.2093
     end_lat, end_lng = -33.8600, 151.2093
     now = _FIXED_DAY_START_AT  # see this constant's own doc — keeps the day dist_rate_1 assertion below deterministic
-    trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    trace = _continuous_trace(
+        start_lat=start_lat, start_lng=start_lng, end_lat=end_lat, end_lng=end_lng, start_at=now
+    )
 
     distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
     expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order
@@ -900,6 +939,117 @@ async def test_sync_creates_trip_and_flags_variance_within_tolerance(
     assert trip["max_fare_check_passed"] is True
     assert Decimal(trip["variance_pct"]) <= Decimal("1.0")
     assert Decimal(trip["total"]) == expected_fare_total
+
+
+async def test_sync_bills_the_known_corridor_distance_across_a_real_gps_blackout(
+    client: AsyncClient, session: AsyncSession
+):
+    """A genuine GPS blackout (elapsed time between two consecutive trace
+    points above `trips.BLACKOUT_GAP_THRESHOLD_S`) whose entry and exit
+    fixes both land on a real, registered toll road's own gantries must be
+    billed that road's real (bent) corridor distance through
+    `POST /v1/trips/sync` -- not the shorter straight-line chord between the
+    two fixes, and not nothing. Direct-function coverage of the geometry
+    itself (including the "no match" / "shortest candidate wins" cases) is
+    in `tests.test_tolls_known_corridor`; this is the same behaviour
+    end-to-end through the real sync path a device's own offline queue
+    actually calls. See `app.services.tolls.known_corridor_distance_km`'s
+    own doc for the real production trip (2026-09-10, 43% over the
+    device's own total) this closes."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    # A 3-gantry `distance` road bent like a real tunnel corridor: entry and
+    # exit exactly at the two trace fixes, with a middle gantry that puts
+    # the real corridor path meaningfully longer than the direct chord
+    # between the two fixes -- so a test that only checked "billed more
+    # than zero" couldn't pass by accident from the chord alone.
+    entry_lat, entry_lng = -35.50, 150.90
+    bend_lat, bend_lng = -35.48, 150.90
+    exit_lat, exit_lng = -35.48, 150.92
+
+    road = TollRoad(
+        id="TESTSYNCBLACKOUT",
+        api_code=None,
+        name="Test Blackout Tunnel",
+        operator="Test Operator",
+        pricing_model="distance",
+        charging_policy="once_per_road",
+        directional="both",
+    )
+    session.add(road)
+    await session.commit()
+    session.add(
+        TollRoadPriceRevision(
+            toll_road_id="TESTSYNCBLACKOUT",
+            price_class_a_min=None,
+            price_class_a_max=None,
+            price_class_b_min=None,
+            price_class_b_max=None,
+            cap_class_a=Decimal("100.00"),
+            cap_class_b=None,
+            rate_per_km_class_a=Decimal("1.00"),
+            flagfall_class_a=None,
+            network_cap_class_a=None,
+            time_of_day_rates_class_a=None,
+            currency="AUD",
+            gst_included=True,
+            effective_date=date(2026, 7, 1),
+            indexation="quarterly",
+            confidence="verified",
+        )
+    )
+    for gid, lat, lng in [
+        ("TESTSYNCBLACKOUT:g0", entry_lat, entry_lng),
+        ("TESTSYNCBLACKOUT:g1", bend_lat, bend_lng),
+        ("TESTSYNCBLACKOUT:g2", exit_lat, exit_lng),
+    ]:
+        session.add(
+            TollGantry(
+                id=gid,
+                toll_road_id="TESTSYNCBLACKOUT",
+                location=gid,
+                ramp=None,
+                direction=None,
+                latitude=lat,
+                longitude=lng,
+            )
+        )
+    await session.commit()
+
+    now = _FIXED_DAY_START_AT
+    # A single sparse point 60s later -- a real blackout, well past
+    # trips.BLACKOUT_GAP_THRESHOLD_S (5s) -- landing exactly on the exit
+    # gantry, the same shape a real tunnel transit's only two usable fixes
+    # take (nothing in between; that is what "blackout" means).
+    trace = [
+        {"lat": exit_lat, "lng": exit_lng, "speed_kmh": 80, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=entry_lat, start_lng=entry_lng,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["status"] == "closed"
+
+    leg1_km = haversine_km(entry_lat, entry_lng, bend_lat, bend_lng)
+    leg2_km = haversine_km(bend_lat, bend_lng, exit_lat, exit_lng)
+    chord_km = haversine_km(entry_lat, entry_lng, exit_lat, exit_lng)
+    expected_corridor_m = round(float(leg1_km + leg2_km) * 1000)
+    chord_m = round(float(chord_km) * 1000)
+
+    # The real bent path was billed (within metre-level rounding) -- not
+    # the shorter direct chord, and not the "blackout = free" zero the old
+    # code (before this fix) would have billed for an UNKNOWN blackout, nor
+    # the opposite bug (before this fix) of billing the raw haversine chord
+    # across a KNOWN one, which for THIS bent shape would have undercharged.
+    assert abs(trip["distance_m"] - expected_corridor_m) <= 5, (trip["distance_m"], expected_corridor_m)
+    assert trip["distance_m"] > chord_m + 200, (trip["distance_m"], chord_m)
 
 
 async def test_sync_records_a_simulated_trip_as_simulated(client: AsyncClient, session: AsyncSession):
@@ -2017,7 +2167,9 @@ async def test_sync_persists_tip_amount_without_affecting_device_total_variance(
     start_lat, start_lng = -33.8688, 151.2093
     end_lat, end_lng = -33.8600, 151.2093
     now = _FIXED_DAY_START_AT
-    trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    trace = _continuous_trace(
+        start_lat=start_lat, start_lng=start_lng, end_lat=end_lat, end_lng=end_lng, start_at=now
+    )
 
     distance_km = haversine_km(start_lat, start_lng, end_lat, end_lng)
     expected_dist_amount = round_half_up(distance_km * Decimal("2.61"))  # urban day dist_rate_1, 2026 Order

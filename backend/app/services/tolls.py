@@ -21,6 +21,7 @@ ALONGSIDE (not instead of) the pre-existing ad hoc-geofence toll detection —
 the two dedup mechanisms are independent and additive (see
 `app.models.trips.Trip.auto_tolled_roads` vs `.auto_tolls_applied`).
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
@@ -209,7 +210,10 @@ async def _distance_to_real_chain_corridor_m(
         return None
     best = min(haversine_m(lat, lng, g.latitude, g.longitude) for g in waypoints)
     for g1, g2 in pairwise(waypoints):
-        best = min(best, distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude))
+        best = min(
+            best,
+            distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude),
+        )
     return best
 
 
@@ -235,8 +239,133 @@ async def _distance_to_road_corridor_m(
         return float("inf")
     best = min(haversine_m(lat, lng, g.latitude, g.longitude) for g in gantries)
     for g1, g2 in combinations(gantries, 2):
-        best = min(best, distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude))
+        best = min(
+            best,
+            distance_to_segment_m(lat, lng, g1.latitude, g1.longitude, g2.latitude, g2.longitude),
+        )
     return best
+
+
+# Sized like GANTRY_DETECTION_RADIUS_M but larger, deliberately -- mirrors
+# Android's CORRIDOR_PORTAL_MATCH_RADIUS_M (domain/fare/KnownCorridor.kt) and
+# for the identical reason: the EXIT side of a real GPS blackout can take a
+# fix cycle or two longer than ordinary jitter to re-lock after a genuine
+# signal loss, so the vehicle can be materially further past the tunnel
+# mouth before the first usable post-blackout point lands. Kept as its own
+# named constant, not reused from GANTRY_DETECTION_RADIUS_M, so the two can
+# drift independently if either one's real-world tuning need ever diverges.
+CORRIDOR_BLACKOUT_PORTAL_RADIUS_M = 250.0
+
+
+def _greedy_chain_distance_m(
+    gantries: list[TollGantry], start: TollGantry, end: TollGantry
+) -> float | None:
+    """Sums the real, consecutive haversine legs of a greedy nearest-neighbour
+    walk from `start` to `end` over `gantries` (one road's own points) --
+    the same reconstruction Android's `greedyChainDistanceM`
+    (domain/fare/KnownCorridor.kt) uses, and for the identical reason: this
+    table carries no stored path order (`TollGantry.sequence_position` is
+    null for nearly every real road today -- see
+    `scripts/seed_toll_roads.py`'s `_REAL_ROAD_CHAIN_WAYPOINTS`), so a road's
+    own point sequence has to be reconstructed per lookup from whichever
+    gantries it actually has. `None` if the walk cannot reach `end` within
+    `gantries`' own size (a defensive bound, not an expected outcome for a
+    finite, correctly-tagged road)."""
+    if start.id == end.id:
+        return 0.0
+    remaining = [g for g in gantries if g.id != start.id]
+    current = start
+    total = 0.0
+    steps_left = len(gantries)
+    while current.id != end.id:
+        if steps_left <= 0 or not remaining:
+            return None
+        steps_left -= 1
+        nxt = min(
+            remaining,
+            key=lambda g: haversine_m(current.latitude, current.longitude, g.latitude, g.longitude),
+        )
+        total += haversine_m(current.latitude, current.longitude, nxt.latitude, nxt.longitude)
+        remaining = [g for g in remaining if g.id != nxt.id]
+        current = nxt
+    return total
+
+
+async def known_corridor_distance_km(
+    session: AsyncSession, *, entry_lat: float, entry_lng: float, exit_lat: float, exit_lng: float
+) -> Decimal | None:
+    """Server-side port of Android's `knownCorridorDistanceKm`
+    (domain/fare/KnownCorridor.kt) -- the SAME question, asked here for
+    `app.services.trips.recompute_from_trace`'s benefit rather than the
+    live on-device meter's: given the last point before a real GPS gap in a
+    submitted trace and the first point after it, is there a real mapped
+    road whose own gantry points both points plausibly sit on, and if so,
+    what is the real distance along THAT road's own points between them?
+
+    Exists because `recompute_from_trace` previously had no concept of a
+    GPS blackout at all -- it replayed every trace point through
+    `plausible_distance_km`'s speed-cap alone, which exists to catch a
+    SHORT-timeframe glitch (Sydney-to-Perth in 5 seconds) and has nothing to
+    say about a genuinely long gap (a real tunnel: the device lost signal
+    for real, for minutes, not seconds). A gap that long stays "plausible"
+    to a 300km/h speed cap for a perfectly ordinary tunnel-length haversine
+    jump, so the server billed the FULL straight-line distance across a
+    blackout the device itself had already, correctly, refused to bill
+    anything for -- a real trip found live (2026-09-10) recomputed to
+    43% more than the device's own total purely from this one gap, auto-
+    flagged for review instead of silently overcharging, but wrong either
+    way. This function is `recompute_from_trace`'s side of the same fix
+    Android already shipped: for a gap this function cannot match to a real
+    road, the caller must bill nothing extra for it (see that call site) --
+    rejection, not fabrication, is the default here exactly as it is there.
+
+    Same geometry, same tolerances, same "shortest candidate wins" rule as
+    the Android original; see that file's own doc for the full reasoning
+    this deliberately does not re-derive. `None` -- no known distance, no
+    charge -- whenever: no road's gantries lie within
+    `CORRIDOR_BLACKOUT_PORTAL_RADIUS_M` of BOTH points; the two points match
+    to the very same single gantry; or a road has fewer than two gantries at
+    all."""
+    result = await session.execute(select(TollGantry))
+    all_gantries = result.scalars().all()
+
+    by_road: dict[str, list[TollGantry]] = {}
+    for g in all_gantries:
+        by_road.setdefault(g.toll_road_id, []).append(g)
+
+    best_km: Decimal | None = None
+    for gantries in by_road.values():
+        if len(gantries) < 2:
+            continue  # nothing to interpolate a path along
+
+        entry_nearest = min(
+            gantries, key=lambda g: haversine_m(entry_lat, entry_lng, g.latitude, g.longitude)
+        )
+        entry_gap_m = haversine_m(
+            entry_lat, entry_lng, entry_nearest.latitude, entry_nearest.longitude
+        )
+        if entry_gap_m > CORRIDOR_BLACKOUT_PORTAL_RADIUS_M:
+            continue  # entry point is not near this road at all
+
+        exit_nearest = min(
+            gantries, key=lambda g: haversine_m(exit_lat, exit_lng, g.latitude, g.longitude)
+        )
+        exit_gap_m = haversine_m(exit_lat, exit_lng, exit_nearest.latitude, exit_nearest.longitude)
+        if exit_gap_m > CORRIDOR_BLACKOUT_PORTAL_RADIUS_M:
+            continue  # exit point does not plausibly continue this road
+
+        if entry_nearest.id == exit_nearest.id:
+            continue  # same single point both ends -- no real path
+
+        path_m = _greedy_chain_distance_m(gantries, entry_nearest, exit_nearest)
+        if path_m is None:
+            continue
+
+        total_km = Decimal(str((entry_gap_m + path_m + exit_gap_m) / 1000.0))
+        if best_km is None or total_km < best_km:
+            best_km = total_km
+
+    return best_km if best_km is not None and best_km > 0 else None
 
 
 def bearing_degrees(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -418,7 +547,9 @@ def distance_rate_per_km_class_a(road: TollRoad, revision: TollRoadPriceRevision
     return revision.cap_class_a / road.derived_corridor_km
 
 
-def effective_rate_per_km_class_a(road: TollRoad, revision: TollRoadPriceRevision) -> Decimal | None:
+def effective_rate_per_km_class_a(
+    road: TollRoad, revision: TollRoadPriceRevision
+) -> Decimal | None:
     """The $/km rate actually used to price a "distance" or
     "distance_with_flagfall" road — the revision's own published
     `rate_per_km_class_a` (Linkt's real, cited figure) if present, else the
@@ -610,7 +741,9 @@ async def apply_toll_detection(
         if road is None or road.pricing_model not in _DISTANCE_METERED_PRICING_MODELS:
             continue  # defensive -- progress is only ever written for these
 
-        real_distance = await _distance_to_real_chain_corridor_m(session, road_id=road_id, lat=lat, lng=lng)
+        real_distance = await _distance_to_real_chain_corridor_m(
+            session, road_id=road_id, lat=lat, lng=lng
+        )
         distance_to_corridor = (
             real_distance
             if real_distance is not None
@@ -711,7 +844,9 @@ async def apply_toll_detection(
 
         # --- per_point roads (M2 cumulative; CCT/LCT once-per-road) --------
         if road.pricing_model == "per_point":
-            road_points = [g.toll_point_id for g in hits if g.toll_road_id == road_id and g.toll_point_id]
+            road_points = [
+                g.toll_point_id for g in hits if g.toll_road_id == road_id and g.toll_point_id
+            ]
             if not road_points:
                 # A gantry matched this road but carries no toll_point_id —
                 # a per_point road can't be priced without one; flag it.

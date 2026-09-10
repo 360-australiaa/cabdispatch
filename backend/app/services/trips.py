@@ -6,6 +6,7 @@ Kept separate from the router so the fare-reconstruction logic (build a
 totals) has exactly one implementation, used by both the online tick/close
 endpoints and the offline sync recompute path.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ from app.services.fare_engine import (
 )
 from app.services.geofence import detect_geofences
 from app.services.tariffs import to_fare_engine_tariff
-from app.services.tolls import apply_toll_detection
+from app.services.tolls import apply_toll_detection, known_corridor_distance_km
 
 engine = FareEngine()
 
@@ -82,7 +83,9 @@ async def resolve_tariff(session: AsyncSession, *, tenant_id: str, tariff_id: st
         raise UnknownTariffError(str(exc)) from exc
 
 
-async def resolve_is_maxi_vehicle(session: AsyncSession, *, tenant_id: str, vehicle_id: str) -> bool:
+async def resolve_is_maxi_vehicle(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str
+) -> bool:
     """The authoritative source of "is this vehicle a maxi-cab" — the real
     `Vehicle.vehicle_class` row, scoped to the requesting tenant. Deliberately
     never derived from a client-supplied boolean: a device claiming
@@ -115,6 +118,19 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
 # same flagging convention this codebase uses elsewhere for a business/engineering judgement
 # call rather than a physical constant.
 MAX_PLAUSIBLE_SPEED_KMH = Decimal(300)
+
+# Matches Android's MAX_FIX_AGE_MS (domain/FareEngine.kt, 5_000L) exactly, converted to seconds --
+# the same threshold the on-device meter uses to decide "GPS lost" rather than "ordinary 1Hz
+# jitter". Real bug, found live (2026-09-10): a genuine multi-minute GPS blackout (a real
+# tunnel) still reads as "plausible" to MAX_PLAUSIBLE_SPEED_KMH's speed cap alone -- that cap
+# exists to catch a SHORT-timeframe glitch, not to decide whether a gap this long is a blackout
+# at all. `recompute_from_trace` uses this to route a gap this long through
+# `app.services.tolls.known_corridor_distance_km` instead of `plausible_distance_km` -- see that
+# call site's own doc for why, and `known_corridor_distance_km`'s own doc for the exact
+# real trip (43% over the device's own total) that exposed the gap. Kept as a distinct constant
+# rather than reusing MAX_PLAUSIBLE_SPEED_KMH's own doc comment's number, so the two can be
+# re-tuned independently if either one's real-world need ever diverges.
+BLACKOUT_GAP_THRESHOLD_S = Decimal(5)
 
 
 def plausible_distance_km(
@@ -519,7 +535,9 @@ class CloseParams:
     tip_amount: Decimal | None = None
 
 
-async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, params: CloseParams) -> FareBreakdown:
+async def close_trip(
+    session: AsyncSession, *, tenant_id: str, trip: Trip, params: CloseParams
+) -> FareBreakdown:
     """Finalizes `trip` via the fare engine's close(), storing the breakdown.
     Does NOT commit — caller owns the session/transaction. Returns the
     breakdown for the caller to surface if desired."""
@@ -539,7 +557,9 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     # agreed). So for those two fare types, cleaning_fee is left out of
     # `extras` and passed straight through to engine.close()'s own
     # `cleaning_fee` parameter instead, which both branches always add on top.
-    is_all_inclusive_fare = trip.type == TRIP_TYPE_AIRPORT_FIXED or trip.negotiated_total is not None
+    is_all_inclusive_fare = (
+        trip.type == TRIP_TYPE_AIRPORT_FIXED or trip.negotiated_total is not None
+    )
     if params.cleaning_fee and not is_all_inclusive_fare:
         trip.extras = (trip.extras or Decimal(0)) + params.cleaning_fee
 
@@ -560,7 +580,9 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
     # already-established "raise before mutating anything" contract in this
     # function's callers (they never commit on an exception, but not
     # mutating `trip` in the first place is still the safer invariant to hold).
-    resolved_voucher_code = params.voucher_code if params.voucher_code is not None else trip.voucher_code
+    resolved_voucher_code = (
+        params.voucher_code if params.voucher_code is not None else trip.voucher_code
+    )
     resolved_account_reference = (
         params.account_reference if params.account_reference is not None else trip.account_reference
     )
@@ -575,14 +597,17 @@ async def close_trip(session: AsyncSession, *, tenant_id: str, trip: Trip, param
         )
     elif params.payment_method == "split_fare":
         if not params.split_payments:
-            raise SplitPaymentMismatchError("split_fare requires at least one sub-payment in split_payments")
+            raise SplitPaymentMismatchError(
+                "split_fare requires at least one sub-payment in split_payments"
+            )
         subtotal = sum((Decimal(str(item["amount"])) for item in params.split_payments), Decimal(0))
         if round_half_up(subtotal) != round_half_up(breakdown.grand_total):
             raise SplitPaymentMismatchError(
                 f"split_payments sum to {subtotal} but trip total is {breakdown.grand_total}"
             )
         split_payments_to_store = [
-            {"method": item["method"], "amount": str(item["amount"])} for item in params.split_payments
+            {"method": item["method"], "amount": str(item["amount"])}
+            for item in params.split_payments
         ]
 
     trip.flag_fall = breakdown.flag_fall
@@ -712,9 +737,29 @@ async def recompute_from_trace(
         ts_prev = prev_ts if prev_ts.tzinfo else prev_ts.replace(tzinfo=UTC)
         ts_point = point.ts if point.ts.tzinfo else point.ts.replace(tzinfo=UTC)
         elapsed_seconds = Decimal(str(max((ts_point - ts_prev).total_seconds(), 0)))
-        distance_km = plausible_distance_km(
-            prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
-        )
+
+        # A gap this long is a real GPS blackout (matches the on-device meter's own
+        # MAX_FIX_AGE_MS threshold for "GPS lost"), not the short-timeframe glitch
+        # plausible_distance_km's speed cap exists to catch -- see BLACKOUT_GAP_THRESHOLD_S's
+        # own doc for the real trip this fixes. known_corridor_distance_km answers the same
+        # question the device's own known-corridor catch-up does: is there a real mapped road
+        # whose gantries bracket both the pre- and post-blackout fix? A match bills that road's
+        # real distance; no match bills NOTHING extra for the gap -- rejection, not a fallback
+        # to the raw haversine, exactly matching the device's own conservative default so the
+        # two sides agree instead of one silently overcharging the other's deliberate blackout.
+        if elapsed_seconds > BLACKOUT_GAP_THRESHOLD_S:
+            corridor_km = await known_corridor_distance_km(
+                session,
+                entry_lat=prev_lat,
+                entry_lng=prev_lng,
+                exit_lat=point.lat,
+                exit_lng=point.lng,
+            )
+            distance_km = corridor_km if corridor_km is not None else Decimal(0)
+        else:
+            distance_km = plausible_distance_km(
+                prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
+            )
 
         state = engine.tick(
             state,
@@ -820,7 +865,9 @@ def flag_trip_for_review(*, trip: Trip, flagged: bool, reason: str | None) -> Tr
         if trip.status != TRIP_STATUS_CLOSED:
             raise TripNotClosedError("Only a closed trip can be flagged for review")
         if not reason or not reason.strip():
-            raise DisputeReasonRequiredError("A non-empty reason is required to flag a trip for review")
+            raise DisputeReasonRequiredError(
+                "A non-empty reason is required to flag a trip for review"
+            )
         trip.flagged_for_review = True
         trip.review_notes = reason.strip()
     else:
@@ -859,7 +906,9 @@ class DriverEarningsToday:
         fabricated 0%/100%."""
         if self.yesterday_total == 0:
             return None
-        return round(float((self.today_total - self.yesterday_total) / self.yesterday_total) * 100, 1)
+        return round(
+            float((self.today_total - self.yesterday_total) / self.yesterday_total) * 100, 1
+        )
 
 
 async def driver_earnings_today(
