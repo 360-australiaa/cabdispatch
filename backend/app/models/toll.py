@@ -140,7 +140,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import JSON, Date, ForeignKey, Numeric, String
+from sqlalchemy import JSON, Date, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, TimestampMixin
@@ -232,7 +232,15 @@ class TollRoad(Base, TimestampMixin):
         String(32), nullable=False, default="once_per_road", server_default="once_per_road"
     )
     directional: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Text, not a length-capped String: real bug found live (2026-09-10) -- this is a genuine
+    # audit trail of pricing-correction history (the seeding script's own worked-through
+    # evidence for why a road is modelled the way it is, e.g. M4M8_LINK's real cross-check
+    # against Linkt's origin-destination trip table), not a short label, and a real entry
+    # already ran 1856 chars against the old 1000-char cap -- the seed script's own commit
+    # crashed the container mid-deploy on a StringDataRightTruncationError. Truncating
+    # genuinely useful documentation to fit an arbitrary cap would be the wrong fix; this
+    # column has no legitimate length ceiling to begin with.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Groups roads that share a single NETWORK-WIDE cap for one trip on top
     # of their own per-road cap -- today only WestConnex ("WESTCONNEX": M4,
@@ -373,7 +381,9 @@ class TollPoint(Base, TimestampMixin):
         String(32), ForeignKey("toll_roads.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Text, not a length-capped String -- same reasoning as TollRoad.description's own doc
+    # (this is the identical free-text audit-trail pattern, one level down).
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
     road: Mapped[TollRoad] = relationship(back_populates="toll_points")

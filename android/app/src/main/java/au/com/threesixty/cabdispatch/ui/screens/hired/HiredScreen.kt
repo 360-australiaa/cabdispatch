@@ -851,9 +851,15 @@ internal fun RowScope.MeterPaneLayout(
             destLat = destination?.lat,
             destLng = destination?.lng,
             plannedRoute = if (hasDestination) navState.route?.points?.map { MapPoint(it.lat, it.lng) } ?: emptyList() else emptyList(),
-            // Lighter wash than the old dial-backdrop default: the map is the content here, not
-            // scenery behind a dial, so it needs to actually be legible (direct user correction).
-            dimAlpha = 0.30f,
+            // Real bug, found live (2026-09-10): the first pass down from the 0.62 dial-backdrop
+            // default to 0.30 was still too dark for a real content panel a driver reads in a
+            // real car (direct, repeated user correction — "not visible properly" persisted after
+            // the first fix). Every driver-facing text element on top of this map (the Trip/Zone
+            // pills, the toll-ahead chip, RecentreButton) already draws on its own opaque/near-
+            // opaque GlassCard, so it needs no help from the map's own wash to stay legible — the
+            // wash's only remaining job is a faint brand-dark tint for visual consistency with the
+            // rest of the UI, not contrast protection. Dropped hard.
+            dimAlpha = 0.08f,
             modifier = Modifier.fillMaxSize(),
         )
         Column(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
