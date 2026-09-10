@@ -43,6 +43,7 @@ import au.com.threesixty.cabdispatch.ui.overlays.ForceUpdatePendingBanner
 import au.com.threesixty.cabdispatch.ui.overlays.KioskLockedBanner
 import au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner
 import au.com.threesixty.cabdispatch.ui.theme.CabDispatchTheme
+import kotlinx.coroutines.delay
 
 /**
  * Single-activity Compose host, and the composition root for the two app-wide fleet-command
@@ -232,6 +233,23 @@ private fun CabDispatchScreenRoot() {
         kioskPinConfirmed = activity?.let {
             KioskLockController.applyKioskLock(it, commandState.kioskLocked)
         } ?: false
+        // Real bug, found live on the SM-T575 (2026-09-10): startLockTask()/stopLockTask() are
+        // requests to the system server, not synchronous state changes -- the OS's own "App is
+        // pinned" toast fired seconds AFTER this effect had already read back
+        // getLockTaskModeState() and latched kioskPinConfirmed = false, permanently, because this
+        // effect only re-runs on the NEXT kioskLocked change (a poll landing or a cold start), not
+        // on a timer. A tablet the OS had genuinely just pinned sat showing "LOCK PENDING" through
+        // an entire session and multiple app restarts. One short delayed re-read -- of state only,
+        // never re-calling start/stop, which would re-trigger that OS toast a second time for no
+        // reason -- catches the OS actually settling; if it still has not by then, LOCK PENDING is
+        // the honest, unretried answer, same as before this fix.
+        if (!kioskPinConfirmed && activity != null) {
+            delay(400)
+            kioskPinConfirmed = KioskLockController.isPinConfirmed(
+                KioskLockController.currentLockTaskMode(activity),
+                commandState.kioskLocked,
+            )
+        }
     }
 
     CabDispatchTheme {
