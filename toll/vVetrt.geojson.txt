@@ -1,0 +1,2827 @@
+{
+ "type": "FeatureCollection",
+ "name": "nsw_toll_gantries",
+ "attribution": "© Transport for NSW (CC-BY). Coordinates provided on a no-liability basis.",
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.00338,
+     -33.82729
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:m4_mainline:exit:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "M4 Mainline",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.00334,
+     -33.82712
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:m4_mainline:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "M4 Mainline",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.02027,
+     -33.82879
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:james_ruse_drive:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "James Ruse Drive",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.02021,
+     -33.82875
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:james_ruse_drive:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "James Ruse Drive",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.02095,
+     -33.83102
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:james_ruse_drive:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "James Ruse Drive",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.02045,
+     -33.83177
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:james_ruse_drive:exit:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "James Ruse Drive",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04231,
+     -33.84162
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:silverwater_road:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Silverwater Road",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04181,
+     -33.84198
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:silverwater_road:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Silverwater Road",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04498,
+     -33.84286
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:silverwater_road:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Silverwater Road",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04536,
+     -33.84387
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:silverwater_road:exit:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Silverwater Road",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.05312,
+     -33.84897
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:hill_road:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Hill Road",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.05644,
+     -33.8513
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:hill_road:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Hill Road",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.05469,
+     -33.85116
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:hill_road:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Hill Road",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.0689,
+     -33.85628
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:homebush_bay_drive:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Homebush Bay Drive",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.06794,
+     -33.8569
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:homebush_bay_drive_n_b:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Homebush Bay Drive (N/B)",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.06801,
+     -33.85661
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:m4_mainline_1:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "M4 Mainline (1)",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.06798,
+     -33.85674
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:homebush_bay_drive_s_b_2:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "Homebush Bay Drive (S/B) (2)",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.06805,
+     -33.85646
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:m4_mainline_3:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 West",
+    "location": "M4 Mainline (3)",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4W",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07322,
+     -33.85706
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:homebush_bay_dr:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Homebush Bay Dr",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07244,
+     -33.85803
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:homebush_bay_dr:exit:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Homebush Bay Dr",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.08482,
+     -33.86328
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:concord_strath:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Concord/Strath",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.08487,
+     -33.86321
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:concord_strath:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Concord/Strath",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.09354,
+     -33.86429
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:concord_strath:exit:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Concord/Strath",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.09354,
+     -33.86415
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:concord_strath:entry:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Concord/Strath",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13458,
+     -33.87548
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:haberfield:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Haberfield",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13431,
+     -33.8752
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:haberfield:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Haberfield",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13174,
+     -33.88083
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:ashfield:entry:westbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Ashfield",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13201,
+     -33.88071
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4:ashfield:exit:eastbound",
+    "motorway_code": "M4",
+    "motorway_name": "WestConnex M4 East",
+    "location": "Ashfield",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M4E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.17522,
+     -33.91577
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:st_peters:exit:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "St Peters",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.17541,
+     -33.91602
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:st_peters:entry:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "St Peters",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.15391,
+     -33.93844
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:general_holmes:exit:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "General Holmes",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.15244,
+     -33.93715
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:marsh_st:exit:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Marsh St",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.15384,
+     -33.93848
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:general_holmes:entry:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "General Holmes",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.15221,
+     -33.93741
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:marsh_st:entry:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Marsh St",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.14935,
+     -33.93612
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:princes_hwy:exit:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Princes Hwy",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.10928,
+     -33.93622
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:bexley_rd:exit:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Bexley Rd",
+    "ramp": "exit",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.10938,
+     -33.93647
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:bexley_rd:entry:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Bexley Rd",
+    "ramp": "entry",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.10292,
+     -33.93737
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:kingsgrove_rd:entry:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Kingsgrove Rd",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.10301,
+     -33.93753
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:kingsgrove_rd:exit:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "Kingsgrove Rd",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07818,
+     -33.94285
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:kgr_m5w_ml:entry:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "KGR (M5W ML)",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07795,
+     -33.94268
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:king_georges_rd:entry:eastbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "King Georges Rd",
+    "ramp": "entry",
+    "direction": "eastbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07821,
+     -33.94293
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:kgr_m5w_ml:exit:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "KGR (M5W ML)",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.07838,
+     -33.94314
+    ]
+   },
+   "properties": {
+    "gantry_id": "M8:king_georges_rd:exit:westbound",
+    "motorway_code": "M8",
+    "motorway_name": "WestConnex M8 / M5 East",
+    "location": "King Georges Rd",
+    "ramp": "exit",
+    "direction": "westbound",
+    "source_sheet": "M8M5E",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13462,
+     -33.87516
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:haberfield:entry:southbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Haberfield",
+    "ramp": "entry",
+    "direction": "southbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.13471,
+     -33.87524
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:haberfield:exit:northbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Haberfield",
+    "ramp": "exit",
+    "direction": "northbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16509,
+     -33.87716
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:anzac_bridge:exit:southbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Anzac Bridge",
+    "ramp": "exit",
+    "direction": "southbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16282,
+     -33.87919
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:anzac_bridge:entry:northbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Anzac Bridge",
+    "ramp": "entry",
+    "direction": "northbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16352,
+     -33.87979
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:iron_cove_bridge:exit:northbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Iron Cove Bridge",
+    "ramp": "exit",
+    "direction": "northbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16441,
+     -33.87633
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:iron_cove_bridge:entry:southbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "Iron Cove Bridge",
+    "ramp": "entry",
+    "direction": "southbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16352,
+     -33.87979
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:city_west_link:exit:northbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "City West Link",
+    "ramp": "exit",
+    "direction": "northbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.16441,
+     -33.87633
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:city_west_link:entry:southbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "City West Link",
+    "ramp": "entry",
+    "direction": "southbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.18055,
+     -33.91316
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:st_peters:exit:southbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "St Peters",
+    "ramp": "exit",
+    "direction": "southbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.18028,
+     -33.91306
+    ]
+   },
+   "properties": {
+    "gantry_id": "M4M5_LINK:st_peters:entry:northbound",
+    "motorway_code": "M4M5_LINK",
+    "motorway_name": "M4-M5 Link / Rozelle Interchange",
+    "location": "St Peters",
+    "ramp": "entry",
+    "direction": "northbound",
+    "source_sheet": "Link",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.1138029,
+     -33.7671247
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_north_ryde_east",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 North Ryde East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.1138226,
+     -33.7673126
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_north_ryde_west",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 North Ryde West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.046008,
+     -33.758765
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_pennant_hills_rd_east",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Pennant Hills Rd East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.047657,
+     -33.759065
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_pennant_hills_rd_west",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Pennant Hills Rd West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.045986,
+     -33.758623
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_eastbound_to_northconnex",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Eastbound to NorthConnex",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.043995,
+     -33.759618
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_westbound_from_northconnex",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Westbound from NorthConnex",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.1208354,
+     -33.7729197
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_christie_rd_east",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Christie Rd East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.1231693,
+     -33.7746288
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_herring_rd_west",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Herring Rd West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9959413,
+     -33.7681243
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_windsor_rd_east",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Windsor Rd East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9972723,
+     -33.7683055
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_windsor_rd_west",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Windsor Rd West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.1335276,
+     -33.7818489
+    ]
+   },
+   "properties": {
+    "gantry_id": "M2:m2_lane_cove_rd_east",
+    "motorway_code": "M2",
+    "motorway_name": "Hills M2 Motorway",
+    "location": "M2 Lane Cove Rd East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M2",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.055042,
+     -33.942507
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_belmore_road_eastbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Belmore Road Eastbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.055085,
+     -33.943147
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_belmore_road_westbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Belmore Road Westbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.037816,
+     -33.940409
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_fairford_road_eastbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Fairford Road Eastbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.038151,
+     -33.94093
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_fairford_road_westbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Fairford Road Westbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.984783,
+     -33.943981
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_henry_lawson_dr_eastbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Henry Lawson Dr Eastbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.985207,
+     -33.944366
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_henry_lawson_dr_westbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Henry Lawson Dr Westbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.965999,
+     -33.947411
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_hammondville_eastbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Hammondville Eastbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.965998,
+     -33.947486
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_hammondville_westbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW Hammondville Westbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.020615,
+     -33.940794
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_river_road_eastbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW River Road Eastbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.020124,
+     -33.941266
+    ]
+   },
+   "properties": {
+    "gantry_id": "M5SW:m5_sw_river_road_westbound",
+    "motorway_code": "M5SW",
+    "motorway_name": "M5 South-West Motorway",
+    "location": "M5 SW River Road Westbound",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M5SW",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.218413,
+     -33.869775
+    ]
+   },
+   "properties": {
+    "gantry_id": "ED:m1_woolloomooloo",
+    "motorway_code": "ED",
+    "motorway_name": "M1 Eastern Distributor",
+    "location": "M1 Woolloomooloo",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "ED",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.217257,
+     -33.87583
+    ]
+   },
+   "properties": {
+    "gantry_id": "ED:m1_william_street",
+    "motorway_code": "ED",
+    "motorway_name": "M1 Eastern Distributor",
+    "location": "M1 William Street",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "ED",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.207387,
+     -33.874336
+    ]
+   },
+   "properties": {
+    "gantry_id": "CCT:cct_mainline_east",
+    "motorway_code": "CCT",
+    "motorway_name": "Cross City Tunnel",
+    "location": "CCT Mainline East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "CCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.20955,
+     -33.873354
+    ]
+   },
+   "properties": {
+    "gantry_id": "CCT:cct_mainline_west",
+    "motorway_code": "CCT",
+    "motorway_name": "Cross City Tunnel",
+    "location": "CCT Mainline West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "CCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.216508,
+     -33.871353
+    ]
+   },
+   "properties": {
+    "gantry_id": "CCT:cct_sir_john_young_crescent",
+    "motorway_code": "CCT",
+    "motorway_name": "Cross City Tunnel",
+    "location": "CCT Sir John Young Crescent",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "CCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.2138254,
+     -33.8284256
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_falcon_st_north",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel Falcon St North",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.2138254,
+     -33.8284256
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_falcon_st_north#2",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel Falcon St North",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.2145595,
+     -33.8285794
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_falcon_st_south",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel Falcon St South",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.145577,
+     -33.801922
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_east",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel East",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.145577,
+     -33.801922
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_west",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.145486,
+     -33.802044
+    ]
+   },
+   "properties": {
+    "gantry_id": "LCT:lane_cove_tunnel_west#2",
+    "motorway_code": "LCT",
+    "motorway_name": "Lane Cove Tunnel",
+    "location": "Lane Cove Tunnel West",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "LCT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.048115,
+     -33.758044
+    ]
+   },
+   "properties": {
+    "gantry_id": "NORTHCONNEX:nxtp1_tp1a_m2_to_ncx",
+    "motorway_code": "NORTHCONNEX",
+    "motorway_name": "NorthConnex",
+    "location": "NXTP1 (TP1A) – M2 to NCX",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "NCX",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04636,
+     -33.759454
+    ]
+   },
+   "properties": {
+    "gantry_id": "NORTHCONNEX:nxtp2_tp2a_ncx_to_m2",
+    "motorway_code": "NORTHCONNEX",
+    "motorway_name": "NorthConnex",
+    "location": "NXTP2 (TP2A) – NCX to M2",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "NCX",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.04844,
+     -33.756122
+    ]
+   },
+   "properties": {
+    "gantry_id": "NORTHCONNEX:nxtp3_tp2b_ncx_to_phr",
+    "motorway_code": "NORTHCONNEX",
+    "motorway_name": "NorthConnex",
+    "location": "NXTP3 (TP2B) – NCX to PHR",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "NCX",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.047986,
+     -33.756056
+    ]
+   },
+   "properties": {
+    "gantry_id": "NORTHCONNEX:nxtp4_tp1b_phr_to_ncx",
+    "motorway_code": "NORTHCONNEX",
+    "motorway_name": "NorthConnex",
+    "location": "NXTP4 (TP1B) – PHR to NCX",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "NCX",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.212,
+     -33.8454
+    ]
+   },
+   "properties": {
+    "gantry_id": "SHB_SHT:shmils_bridge_milsons_point",
+    "motorway_code": "SHB_SHT",
+    "motorway_name": "Sydney Harbour Bridge / Tunnel",
+    "location": "SHMILS - Bridge (Milsons Point)",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "SHB-SHT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.206,
+     -33.861
+    ]
+   },
+   "properties": {
+    "gantry_id": "SHB_SHT:shrks_bridge_the_rocks",
+    "motorway_code": "SHB_SHT",
+    "motorway_name": "Sydney Harbour Bridge / Tunnel",
+    "location": "SHRKS - Bridge (The Rocks)",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "SHB-SHT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     151.2108075,
+     -33.8415687
+    ]
+   },
+   "properties": {
+    "gantry_id": "SHB_SHT:shtun_tunnel_nth_sydney",
+    "motorway_code": "SHB_SHT",
+    "motorway_name": "Sydney Harbour Bridge / Tunnel",
+    "location": "SHTUN - Tunnel Nth (Sydney)",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "SHB-SHT",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.854615,
+     -33.9210497
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_cowpasture_rd_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Cowpasture Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8510063,
+     -33.91654
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_cowpasture_rd_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Cowpasture Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8512315,
+     -33.9158992
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_cowpasture_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Cowpasture Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8537275,
+     -33.9208569
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_cowpasture_rd_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Cowpasture Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8422768,
+     -33.8789024
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_elizabeth_dve_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Elizabeth Dve entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8459831,
+     -33.8704338
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_elizabeth_dve_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Elizabeth Dve entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8455416,
+     -33.8736622
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_elizabeth_dve_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Elizabeth Dve exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8415671,
+     -33.8788853
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_elizabeth_dve_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Elizabeth Dve exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8557112,
+     -33.7929001
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_great_western_hwy_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Great Western Hwy exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.854904,
+     -33.8448208
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_horsley_dve_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Horsley Dve entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8558047,
+     -33.8382242
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_horsley_dve_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Horsley Dve entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8560206,
+     -33.8401019
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_horsley_dve_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Horsley Dve exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8542017,
+     -33.8450135
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_horsley_dve_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Horsley Dve exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8538078,
+     -33.8025731
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m4_interchange_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - M4 Interchange exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8522933,
+     -33.8155418
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_wallgrove_rd_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Old Wallgrove Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8517921,
+     -33.8101787
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_wallgrove_rd_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Old Wallgrove Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8523467,
+     -33.810672
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_wallgrove_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Old Wallgrove Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8516326,
+     -33.8139497
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_wallgrove_rd_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Old Wallgrove Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8456904,
+     -33.7505164
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_power_st_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Power St entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.845786,
+     -33.750125
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_power_st_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Power St exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.846,
+     -33.8704
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_villers_road_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Villers Road Entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.846991,
+     -33.7619724
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_woodstock_ave_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Woodstock Ave entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8466113,
+     -33.7628111
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_woodstock_ave_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7 - Woodstock Ave exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8683994,
+     -33.9317924
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_bernera_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Bernera Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8679375,
+     -33.9326253
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_bernera_rd_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Bernera Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8555663,
+     -33.7914923
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_great_western_hwy_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Great Western Hwy entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9623328,
+     -33.7637654
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m2_interchange",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- M2 Interchange",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.855839,
+     -33.7929778
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m4_interchange_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- M4 Interchange entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8553199,
+     -33.7916124
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m4_interchange_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- M4 Interchange entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8528885,
+     -33.8027091
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m4_interchange_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- M4 Interchange exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8785015,
+     -33.9430477
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_m5_interchange",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- M5 Interchange",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9369529,
+     -33.7439968
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_norwest_blvd_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Norwest Blvd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9371446,
+     -33.744584
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_norwest_blvd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Norwest Blvd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.962441,
+     -33.7640953
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_windsor_rd_enrty",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Old Windsor Rd enrty",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.962441,
+     -33.7640953
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_old_windsor_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Old Windsor Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8777827,
+     -33.7336183
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_quakers_hill_pwy_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Quakers Hill Pwy entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8771425,
+     -33.7340412
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_quakers_hill_pwy_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Quakers Hill Pwy exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8519414,
+     -33.7312845
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_richmond_rd_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Richmond Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8529517,
+     -33.7300802
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_richmond_rd_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Richmond Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.848483,
+     -33.7359846
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_richmond_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Richmond Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8484047,
+     -33.7360532
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_richmond_rd_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Richmond Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9143461,
+     -33.7379634
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_sunnyholt_rd_entry",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Sunnyholt Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.922009,
+     -33.7392432
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_sunnyholt_rd_entry#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Sunnyholt Rd entry",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9220718,
+     -33.7398469
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_sunnyholt_rd_exit",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Sunnyholt Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.9144342,
+     -33.7374764
+    ]
+   },
+   "properties": {
+    "gantry_id": "M7:m7_sunnyholt_rd_exit#2",
+    "motorway_code": "M7",
+    "motorway_name": "Westlink M7",
+    "location": "M7- Sunnyholt Rd exit",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M7",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8390932,
+     -33.8821627
+    ]
+   },
+   "properties": {
+    "gantry_id": "M12:m7_nb_to_m12",
+    "motorway_code": "M12",
+    "motorway_name": "M12 Motorway",
+    "location": "M7 NB to M12",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M12",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8455152,
+     -33.8716783
+    ]
+   },
+   "properties": {
+    "gantry_id": "M12:m12_to_m7_nb",
+    "motorway_code": "M12",
+    "motorway_name": "M12 Motorway",
+    "location": "M12 to M7 NB",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M12",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8468628,
+     -33.8694039
+    ]
+   },
+   "properties": {
+    "gantry_id": "M12:ms_nb_to_m12",
+    "motorway_code": "M12",
+    "motorway_name": "M12 Motorway",
+    "location": "MS NB to M12",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M12",
+    "quality_flags": ""
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     150.8400434,
+     -33.8820951
+    ]
+   },
+   "properties": {
+    "gantry_id": "M12:m12_to_m7_nb#2",
+    "motorway_code": "M12",
+    "motorway_name": "M12 Motorway",
+    "location": "M12 to M7 NB",
+    "ramp": "",
+    "direction": "",
+    "source_sheet": "M12",
+    "quality_flags": ""
+   }
+  }
+ ]
+}

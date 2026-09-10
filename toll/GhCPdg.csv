@@ -1,0 +1,14 @@
+id,name,api_code,operator,pricing_model,directional,class_a_min,class_a_max,class_b_min,class_b_max,cap_class_a,cap_class_b,effective_date,indexation,confidence,note
+M2,Hills M2 Motorway,M2,Transurban,zone_flat,both,3.15,10.64,9.44,31.91,,,2026-07-01,quarterly,verified,"Flat toll at the main toll point plus separate, cheaper ramp tolls. The range spans ramp toll to full main-line toll."
+LCT,Lane Cove Tunnel,LCT,Transurban,flat,both,4.3,4.3,14.94,14.94,,,2026-07-01,quarterly,verified,
+MILITARY_E_RAMP,Military Road E-Ramp,LCT,Transurban,flat,one_way,2.15,2.15,7.47,7.47,,,2026-07-01,quarterly,verified,Tolled ramp associated with the Lane Cove Tunnel concession.
+ED,M1 Eastern Distributor,ED,Transurban,flat,northbound_only,10.48,10.48,20.97,20.97,,,2026-07-01,quarterly,verified,Tolled northbound only.
+CCT,Cross City Tunnel,CCT,Transurban,zone_flat,both,3.5,7.41,6.99,14.82,,,2026-07-01,quarterly,verified,Main tunnel toll plus cheaper portal/ramp tolls; range spans the two.
+M5SW,M5 South-West Motorway,M5,Transurban,flat,both,6.06,6.06,18.19,18.19,,,2026-07-01,quarterly,verified,
+M7,Westlink M7,M7,Transurban,distance,both,0.71,10.5,2.13,31.5,10.5,31.5,2026-07-01,quarterly,verified,"Per-kilometre charge with a capped maximum trip toll. Min value is the shortest tolled movement, max is the trip cap."
+NORTHCONNEX,NorthConnex,,Transurban,flat,both,10.64,10.64,31.91,31.91,,,2026-07-01,quarterly,verified,Same price both directions. Concession runs to 2048.
+SHB_SHT,Sydney Harbour Bridge & Sydney Harbour Tunnel,,Transport for NSW,time_of_day,southbound_only,,,,,,,2026-07-01,annual_or_scheduled,needs_verification,Source page listed both a pre-July and a from-1-July-2026 figure; the from-July values are used here. Confirm against the Toll Calculator API before production.
+M4,WestConnex M4,M4,Transurban,distance_with_flagfall,,,,,,,,2026-01-01,annual_1_january,not_captured,Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing
+M8,WestConnex M8,M8,Transurban,distance_with_flagfall,,,,,,,,2026-01-01,annual_1_january,not_captured,Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing
+M5E,M5 East,M5E,Transurban,distance_with_flagfall,,,,,,,,2026-01-01,annual_1_january,not_captured,Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing
+M4M5_ROZELLE,M4-M5 Link / Rozelle Interchange,,Transurban,distance_with_flagfall,,,,,,,,2026-01-01,annual_1_january,not_captured,Figures not captured in this pass. Source: https://www.linkt.com.au/using-toll-roads/about-sydney-toll-roads/westconnex/toll-pricing
