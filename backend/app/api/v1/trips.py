@@ -582,6 +582,7 @@ async def earnings_today(
         yesterday_total=result.yesterday_total,
         pct_change=result.pct_change,
         trips_completed_today=result.trips_completed_today,
+        flagged_count=result.flagged_count,
     )
 
 

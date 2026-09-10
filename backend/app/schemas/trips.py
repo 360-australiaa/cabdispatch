@@ -580,13 +580,17 @@ class DriverEarningsTodayRead(BaseModel):
     caller's own `driver_id` (see app.api.v1.trips.earnings_today), same
     convention as app.api.v1.me.
 
-    `today`/`yesterday` are UTC calendar days (this codebase's one existing
-    "today" convention — see app.services.platform.get_platform_health's
-    `total_trips_today`), bucketed by `Trip.start_at` like every other
-    date-bucketed aggregate in this codebase (app.services.reports,
-    app.services.platform) — NOT `Trip.end_at`. Only `status == "closed"`
-    trips are counted (an open trip has no final `total` yet, same rule
-    app.services.reports.revenue_report already applies).
+    `today`/`yesterday` are NSW-local calendar days (`app.services.fare_engine.
+    NSW_FARE_ZONE`) — the same midnight every other fare-affecting
+    classification and every on-device "today" screen already breaks on; see
+    `app.services.trips.driver_earnings_today`'s own doc for the real
+    UTC-vs-NSW mismatch this fixed (2026-09-10). Bucketed by `Trip.start_at`
+    like every other date-bucketed aggregate in this codebase
+    (app.services.reports, app.services.platform) — NOT `Trip.end_at`. Only
+    `status == "closed"` trips are counted (an open trip has no final `total`
+    yet, same rule app.services.reports.revenue_report already applies), and
+    a `flagged_for_review` trip's total is excluded from `today_total` (see
+    `flagged_count` below) rather than shown as settled income.
 
     `pct_change` is `None` whenever there is no non-zero yesterday total to
     compare against (no yesterday trips, or yesterday's total was exactly
@@ -595,8 +599,18 @@ class DriverEarningsTodayRead(BaseModel):
     """
 
     driver_id: str
-    date: str = Field(description="Today's UTC calendar date, ISO-8601 (YYYY-MM-DD)")
+    date: str = Field(description="Today's NSW-local calendar date, ISO-8601 (YYYY-MM-DD)")
     today_total: Decimal
     yesterday_total: Decimal
     pct_change: float | None = None
     trips_completed_today: int
+    flagged_count: int = Field(
+        default=0,
+        description=(
+            "Closed trips today with flagged_for_review=true — NOT included in today_total "
+            "or trips_completed_today above (a fare still under review has no confirmed total "
+            "yet). Surfaced as a count so a driver never wonders where a trip went; render as "
+            "e.g. '+ N trip(s) pending review' rather than silently dropping it or folding an "
+            "unconfirmed total into the headline figure."
+        ),
+    )

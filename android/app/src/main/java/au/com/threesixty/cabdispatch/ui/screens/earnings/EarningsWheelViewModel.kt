@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.local.dao.TripPeriod
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import au.com.threesixty.cabdispatch.domain.format.toBigDecimalOrZero
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,7 +19,6 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 
 /** One day's real earnings total — backs [EarningsWheelUiState.trend]'s hand-drawn chart. */
 data class DailyEarnings(val date: LocalDate, val total: BigDecimal)
@@ -62,7 +62,15 @@ data class EarningsWheelUiState(
 class EarningsWheelViewModel : ViewModel() {
 
     private val tripDao = AppContainer.tripDao
-    private val zone = ZoneId.systemDefault()
+    // Real bug, found live (2026-09-10): this used to be ZoneId.systemDefault() — the tablet's
+    // own configured zone — while TripsWheelViewModel's identical observeTripsInRange call one
+    // screen over uses TripPeriod.startEpochMillis's NSW_FARE_ZONE default (the same midnight
+    // every fare-affecting classification already breaks on, per that file's own F12 doc). On a
+    // tablet whose system zone sits far from Sydney (this one physically in Karachi, UTC+5) the
+    // two screens' "TODAY" pills disagreed about which trips counted — a driver comparing History
+    // (7 trips) against Earnings (5 trips) for the same day, with nothing on either screen to
+    // explain why. Pinned to the same constant so this pane can never drift from History again.
+    private val zone = NSW_FARE_ZONE
 
     private val _period = MutableStateFlow(TripPeriod.TODAY)
     private val _uiState = MutableStateFlow(EarningsWheelUiState())

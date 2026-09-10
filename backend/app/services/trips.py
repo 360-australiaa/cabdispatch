@@ -23,6 +23,7 @@ from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, 
 from app.schemas.trips import TelemetryPoint
 from app.services import payments as payments_service
 from app.services.fare_engine import (
+    NSW_FARE_ZONE,
     FareBreakdown,
     FareEngine,
     FareState,
@@ -106,6 +107,45 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
     a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlambda / 2) ** 2
     c = 2 * asin(sqrt(a))
     return _EARTH_RADIUS_KM * Decimal(str(c))
+
+
+# The fastest a real NSW-taxi trip could plausibly cover ground between two consecutive GPS
+# fixes -- well above the fastest posted motorway limit (110 km/h) to leave real headroom for
+# GPS jitter/lag, but nowhere near what a single corrupt fix implies. Chosen, not derived --
+# same flagging convention this codebase uses elsewhere for a business/engineering judgement
+# call rather than a physical constant.
+MAX_PLAUSIBLE_SPEED_KMH = Decimal(300)
+
+
+def plausible_distance_km(
+    prev_lat: float, prev_lng: float, lat: float, lng: float, elapsed_seconds: Decimal
+) -> Decimal:
+    """[haversine_km] between two consecutive GPS fixes, clamped to what a real vehicle could
+    plausibly have covered in `elapsed_seconds` -- the defence [apply_tick] and
+    [recompute_from_trace] both need against a single corrupt/glitched fix (a stale location-
+    provider result on a cold start, a real-GPS/simulated-GPS handoff, a coordinate
+    wraparound) implying thousands of km of "travel" between one point and the next. Real bug,
+    found live (2026-09-10): a GPS glitch during testing produced two trips billed -- and
+    persisted -- against an 11,000+ km distance from a single bad trace point. The fare-
+    variance auto-flag caught the resulting trip as suspicious, but flagging is a REVIEW
+    signal, not a correction: the bad distance/total were still what got written to `Trip.
+    distance_m`/`Trip.total` and summed into the dashboard's earnings-today aggregate. This
+    stops the impossible number from ever being computed, rather than only flagging it after
+    the fact.
+
+    Elapsed-time-aware rather than a flat per-point cap: a fix with a long gap since the
+    previous one (a real intercity dispatch between rare polls, or a device that slept) can
+    legitimately cover more ground than one a second later. `elapsed_seconds <= 0` (a
+    duplicate timestamp, or two points that raced) can never plausibly carry real distance
+    regardless of what the raw haversine says -- treated as zero rather than dividing by zero.
+    """
+    raw_km = haversine_km(prev_lat, prev_lng, lat, lng)
+    if elapsed_seconds <= 0:
+        return Decimal(0)
+    implied_speed_kmh = raw_km / (elapsed_seconds / Decimal(3600))
+    if implied_speed_kmh <= MAX_PLAUSIBLE_SPEED_KMH:
+        return raw_km
+    return MAX_PLAUSIBLE_SPEED_KMH * (elapsed_seconds / Decimal(3600))
 
 
 async def build_fare_state(session: AsyncSession, *, tenant_id: str, trip: Trip) -> FareState:
@@ -299,12 +339,14 @@ async def apply_tick(
         # to tell which way a directional road was crossed.
         bearing_prev_lat, bearing_prev_lng = prev_lat, prev_lng
 
-        distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
         elapsed_seconds = Decimal(0)
         if prev_ts is not None:
             elapsed_seconds = Decimal(
                 str(max((_as_utc(point.ts) - _as_utc(prev_ts)).total_seconds(), 0))
             )
+        distance_km = plausible_distance_km(
+            prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
+        )
 
         state = engine.tick(
             state,
@@ -667,10 +709,12 @@ async def recompute_from_trace(
     waiting_s = 0
 
     for point in gps_trace:
-        distance_km = haversine_km(prev_lat, prev_lng, point.lat, point.lng)
         ts_prev = prev_ts if prev_ts.tzinfo else prev_ts.replace(tzinfo=UTC)
         ts_point = point.ts if point.ts.tzinfo else point.ts.replace(tzinfo=UTC)
         elapsed_seconds = Decimal(str(max((ts_point - ts_prev).total_seconds(), 0)))
+        distance_km = plausible_distance_km(
+            prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
+        )
 
         state = engine.tick(
             state,
@@ -794,6 +838,19 @@ class DriverEarningsToday:
     today_total: Decimal
     yesterday_total: Decimal
     trips_completed_today: int
+    # Closed-but-flagged_for_review trips for today, EXCLUDED from today_total/
+    # trips_completed_today above (and from yesterday_total) rather than folded in at face
+    # value — deliberately different from app.services.fleet_reports' own admin-facing gross
+    # revenue sum, which does include a flagged trip's total alongside a separate flagged
+    # count: that is a fleet-wide accounting report where an admin wants the true gross with a
+    # caveat, this is a DRIVER's own personal earnings tile, and a fare still under review has
+    # no confirmed total yet to show as settled income. Real bug, found live (2026-09-10): a
+    # single corrupt GPS trace point (see plausible_distance_km's own doc) produced a trip
+    # billed at an ~11,000km distance; it was correctly auto-flagged, but this tile still
+    # summed its wild total at face value, showing a driver "$25,231 today" for an ordinary
+    # shift. Reported as a count (not silently dropped) so a driver never wonders where a trip
+    # went — see DriverEarningsTodayRead.flagged_count's own doc for how this surfaces.
+    flagged_count: int = 0
 
     @property
     def pct_change(self) -> float | None:
@@ -810,27 +867,38 @@ async def driver_earnings_today(
 ) -> DriverEarningsToday:
     """The calling driver's real completed-trip earnings for "today".
 
-    "Today" is the UTC calendar day — this codebase's one existing "today"
-    convention (see app.services.platform.get_platform_health's own
-    `start_of_today = datetime.now(UTC).replace(hour=0, ...)`, docstringed
-    there as "UTC calendar day"), not a Sydney-local day: there is no
-    Sydney-timezone helper anywhere in this codebase to reuse, and inventing
-    one for a single dashboard tile would be exactly the kind of
-    unreviewed new convention this pass was told not to introduce.
+    "Today" is the NSW-local calendar day (`app.services.fare_engine.
+    NSW_FARE_ZONE`, `Australia/Sydney`) — the same midnight every fare-affecting
+    classification in this codebase already breaks on (see that module's own
+    doc, and the Android client's identically-named, identically-pinned
+    constant). This function used to use the UTC calendar day instead, on the
+    stated reasoning that "there is no Sydney-timezone helper anywhere in this
+    codebase" — which was simply wrong by the time this ran live: a real
+    tablet whose system clock sits far from Sydney (this one physically in
+    Karachi, UTC+5) showed a materially different "today" on this tile than on
+    every other screen reading the same NSW-pinned local Room data, with
+    nothing on either screen to explain the mismatch — the exact class of bug
+    `TripPeriod`'s own F12 doc (Android, `data/local/dao/TripDao.kt`) already
+    fixed everywhere else. This is the one place that fix never reached.
 
     Bucketed by `Trip.start_at`, like every other date-bucketed money
     aggregate in this codebase (app.services.reports.revenue_report,
     app.services.platform.get_platform_health) — deliberately NOT
     `Trip.end_at`. Only `status == "closed"` trips are counted (an open
     trip has no final `total` yet, same rule `revenue_report` already
-    applies). All aggregation (SUM/COUNT) runs in SQL, never summed
-    Python-side over a fetched trip list, matching app.services.reports'
-    own "no float for money" rule; `today_total`/`yesterday_total` stay
-    `Decimal` all the way out.
+    applies), and — unlike those two, and unlike `app.services.fleet_reports`'
+    own admin-facing gross revenue sum — a `flagged_for_review` trip's total
+    is EXCLUDED from `today_total`/`yesterday_total` and from
+    `trips_completed_today`, surfaced instead as `flagged_count`; see
+    `DriverEarningsToday.flagged_count`'s own doc for why this tile's
+    convention deliberately differs from the admin report's. All aggregation
+    (SUM/COUNT) runs in SQL, never summed Python-side over a fetched trip
+    list, matching app.services.reports' own "no float for money" rule;
+    `today_total`/`yesterday_total` stay `Decimal` all the way out.
     """
     now = now or datetime.now(UTC)
-    today = now.date()
-    start_of_today = datetime.combine(today, time.min, tzinfo=UTC)
+    today = now.astimezone(NSW_FARE_ZONE).date()
+    start_of_today = datetime.combine(today, time.min, tzinfo=NSW_FARE_ZONE)
     start_of_tomorrow = start_of_today + timedelta(days=1)
     start_of_yesterday = start_of_today - timedelta(days=1)
 
@@ -839,11 +907,15 @@ async def driver_earnings_today(
         Trip.driver_id == driver_id,
         Trip.status == TRIP_STATUS_CLOSED,
     )
+    not_flagged = Trip.flagged_for_review.is_(False)
 
     today_total, trips_completed_today = (
         await session.execute(
             select(func.sum(Trip.total), func.count(Trip.id)).where(
-                *base_filters, Trip.start_at >= start_of_today, Trip.start_at < start_of_tomorrow
+                *base_filters,
+                not_flagged,
+                Trip.start_at >= start_of_today,
+                Trip.start_at < start_of_tomorrow,
             )
         )
     ).one()
@@ -851,7 +923,21 @@ async def driver_earnings_today(
     (yesterday_total,) = (
         await session.execute(
             select(func.sum(Trip.total)).where(
-                *base_filters, Trip.start_at >= start_of_yesterday, Trip.start_at < start_of_today
+                *base_filters,
+                not_flagged,
+                Trip.start_at >= start_of_yesterday,
+                Trip.start_at < start_of_today,
+            )
+        )
+    ).one()
+
+    (flagged_count,) = (
+        await session.execute(
+            select(func.count(Trip.id)).where(
+                *base_filters,
+                Trip.flagged_for_review.is_(True),
+                Trip.start_at >= start_of_today,
+                Trip.start_at < start_of_tomorrow,
             )
         )
     ).one()
@@ -862,4 +948,5 @@ async def driver_earnings_today(
         today_total=today_total or Decimal("0.00"),
         yesterday_total=yesterday_total or Decimal("0.00"),
         trips_completed_today=trips_completed_today or 0,
+        flagged_count=flagged_count or 0,
     )

@@ -37,7 +37,7 @@ from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, Trip, TripGps
 from app.models.vouchers import CorporateAccount, Voucher
 from app.services import fare_engine as fe
 from app.services.fare_engine import NSW_FARE_ZONE, round_down, round_half_up
-from app.services.trips import compute_variance_pct, haversine_km
+from app.services.trips import compute_variance_pct, haversine_km, plausible_distance_km
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -962,6 +962,51 @@ def test_compute_variance_pct_clamps_to_column_precision():
     # A realistic, in-range variance is untouched by the clamp.
     normal = compute_variance_pct(Decimal("5.00"), Decimal("6.00"))
     assert normal == Decimal("20.00")
+
+
+def test_plausible_distance_km_clamps_a_glitched_gps_jump():
+    # Real bug found live (2026-09-10): a single corrupt GPS fix (a stale location-provider
+    # result on a cold start, a real-GPS/simulated-GPS handoff) implied an 11,000+ km jump
+    # between two consecutive trace points a few seconds apart. Unclamped, that distance was
+    # billed, persisted onto Trip.distance_m/total, auto-flagged for review (a signal, not a
+    # correction), and summed at face value into the dashboard's earnings-today aggregate.
+    # Sydney to roughly Perth in 5 seconds -- physically impossible for a taxi.
+    jump_km = plausible_distance_km(-33.8688, 151.2093, -31.9523, 115.8613, elapsed_seconds=Decimal(5))
+    # Clamped to MAX_PLAUSIBLE_SPEED_KMH (300) for 5 seconds: 300 * 5/3600 km.
+    assert jump_km == Decimal(300) * Decimal(5) / Decimal(3600)
+    assert jump_km < Decimal(1)
+
+    # A real, ordinary movement between two fixes a second apart is untouched by the clamp.
+    ordinary_km = plausible_distance_km(-33.8688, 151.2093, -33.8683, 151.2093, elapsed_seconds=Decimal(1))
+    assert ordinary_km == haversine_km(-33.8688, 151.2093, -33.8683, 151.2093)
+
+    # Two fixes with the same timestamp (a duplicate, or two points that raced) can never
+    # plausibly carry real distance, regardless of what the raw haversine says.
+    assert plausible_distance_km(-33.8688, 151.2093, -31.9523, 115.8613, elapsed_seconds=Decimal(0)) == Decimal(0)
+
+
+async def test_sync_rejects_a_glitched_gps_jump_in_the_trace(client: AsyncClient, session: AsyncSession):
+    # Integration-level proof: POST /v1/trips/sync's trace replay must not turn one corrupt
+    # point into an 11,000+ km fare. Two points a few seconds apart, the second one on the
+    # opposite side of the country -- reproduces the exact live bug shape.
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [
+        {"lat": -33.8688, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=1)).isoformat()},
+        {"lat": -31.9523, "lng": 115.8613, "speed_kmh": 40, "ts": (now + timedelta(seconds=6)).isoformat()},
+    ]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    # The glitched jump is clamped to a physically-plausible distance for the elapsed time
+    # (well under 1 km for a 5-second gap), never the ~3,400 km the raw two points imply.
+    assert trip["distance_m"] < 1000
 
 
 async def test_sync_survives_absurd_device_total_without_500(client: AsyncClient, session: AsyncSession):
@@ -2019,7 +2064,13 @@ async def test_tip_amount_is_tenant_isolated(client: AsyncClient, session: Async
 
 
 def _seed_closed_trip(
-    *, tenant_id: str, driver_id: str, start_at: datetime, total: Decimal, status: str = TRIP_STATUS_CLOSED
+    *,
+    tenant_id: str,
+    driver_id: str,
+    start_at: datetime,
+    total: Decimal,
+    status: str = TRIP_STATUS_CLOSED,
+    flagged_for_review: bool = False,
 ) -> Trip:
     """Inserts a trip row directly (bypassing the fare engine/create+close
     API) — only the columns `driver_earnings_today` reads matter here, same
@@ -2039,6 +2090,7 @@ def _seed_closed_trip(
         start_lat=-33.8688,
         start_lng=151.2093,
         total=total,
+        flagged_for_review=flagged_for_review,
     )
 
 
@@ -2051,17 +2103,21 @@ async def test_earnings_today_sums_only_the_callers_own_closed_trips_started_tod
     client: AsyncClient, session: AsyncSession
 ):
     """Real, honest aggregate: sums `total` for CLOSED trips whose `start_at`
-    falls in today's UTC calendar day for the CALLING driver only — an open
-    trip today, a closed trip today for a different driver, and a closed
-    trip from yesterday must all be excluded from `today_total`."""
+    falls in today's NSW-local calendar day for the CALLING driver only — an
+    open trip today, a closed trip today for a different driver, and a closed
+    trip from yesterday must all be excluded from `today_total`. Fixture
+    timestamps are NSW-local (not UTC) so this is deterministic regardless of
+    what UTC time the suite happens to run at — see
+    app.services.trips.driver_earnings_today's own doc for why NSW, not UTC,
+    is the real "today" convention here."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     driver_id = _user_id_of(headers)
 
-    today = datetime.now(UTC).date()
-    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
-    today_evening = datetime.combine(today, time(18, 0), tzinfo=UTC)
-    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+    today = datetime.now(NSW_FARE_ZONE).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=NSW_FARE_ZONE)
+    today_evening = datetime.combine(today, time(18, 0), tzinfo=NSW_FARE_ZONE)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=NSW_FARE_ZONE)
 
     other_driver_id = str(uuid.uuid4())
     session.add_all(
@@ -2092,6 +2148,82 @@ async def test_earnings_today_sums_only_the_callers_own_closed_trips_started_tod
     assert Decimal(body["today_total"]) == Decimal("65.50")
     assert body["trips_completed_today"] == 2
     assert Decimal(body["yesterday_total"]) == Decimal("30.00")
+    assert body["flagged_count"] == 0
+
+
+async def test_earnings_today_breaks_on_nsw_midnight_not_utc_midnight(
+    client: AsyncClient, session: AsyncSession
+):
+    """Real bug, found live (2026-09-10): this endpoint used to bucket by the
+    UTC calendar day while every on-device "today" screen already broke on
+    NSW-local midnight, so a driver's own tablet disagreed with its own
+    dashboard tile about which trips were "today" — worse the further the
+    tablet's real-world timezone sits from Sydney (this one physically in
+    Karachi, UTC+5). This trip's start_at is chosen to land on a DIFFERENT
+    UTC calendar day than the current NSW one — 1am NSW-local is 2-3pm UTC
+    the PREVIOUS day — proving the endpoint buckets on NSW time, not UTC."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_nsw = datetime.now(NSW_FARE_ZONE).date()
+    just_after_nsw_midnight = datetime.combine(today_nsw, time(1, 0), tzinfo=NSW_FARE_ZONE)
+    # Sanity check on the test's own premise: 1am NSW is a different UTC calendar day.
+    assert just_after_nsw_midnight.astimezone(UTC).date() != today_nsw
+
+    session.add(
+        _seed_closed_trip(
+            tenant_id=tenant_id, driver_id=driver_id, start_at=just_after_nsw_midnight, total=Decimal("12.00")
+        )
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["date"] == today_nsw.isoformat()
+    assert Decimal(body["today_total"]) == Decimal("12.00")
+    assert body["trips_completed_today"] == 1
+
+
+async def test_earnings_today_excludes_flagged_trips_from_the_total(
+    client: AsyncClient, session: AsyncSession
+):
+    """Real bug, found live (2026-09-10): a single corrupt GPS trace point
+    produced a trip billed at an ~11,000km distance (see
+    app.services.trips.plausible_distance_km's own doc). It was correctly
+    auto-flagged for review, but this endpoint still summed its wild total
+    at face value, showing a driver "$25,231 today" for an ordinary shift.
+    A flagged trip's total must be excluded from today_total/
+    trips_completed_today and surfaced instead as flagged_count, so the
+    driver sees their real, confirmed earnings plus an honest "N pending
+    review" rather than either a fabricated-looking total or a silently
+    vanished trip."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    today_morning = datetime.combine(datetime.now(NSW_FARE_ZONE).date(), time(9, 0), tzinfo=NSW_FARE_ZONE)
+    session.add_all(
+        [
+            _seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("18.50")),
+            _seed_closed_trip(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                start_at=today_morning,
+                total=Decimal("48213.90"),
+                flagged_for_review=True,
+            ),
+        ]
+    )
+    await session.commit()
+
+    resp = await client.get("/v1/trips/earnings/today", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(body["today_total"]) == Decimal("18.50")
+    assert body["trips_completed_today"] == 1
+    assert body["flagged_count"] == 1
 
 
 async def test_earnings_today_pct_change_is_null_without_a_yesterday_baseline(
@@ -2104,7 +2236,7 @@ async def test_earnings_today_pct_change_is_null_without_a_yesterday_baseline(
     tenant_id = await _tenant_of(client, headers)
     driver_id = _user_id_of(headers)
 
-    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    today_morning = datetime.combine(datetime.now(NSW_FARE_ZONE).date(), time(9, 0), tzinfo=NSW_FARE_ZONE)
     session.add(_seed_closed_trip(tenant_id=tenant_id, driver_id=driver_id, start_at=today_morning, total=Decimal("20.00")))
     await session.commit()
 
@@ -2120,9 +2252,9 @@ async def test_earnings_today_pct_change_is_computed_against_yesterday(client: A
     tenant_id = await _tenant_of(client, headers)
     driver_id = _user_id_of(headers)
 
-    today = datetime.now(UTC).date()
-    today_morning = datetime.combine(today, time(9, 0), tzinfo=UTC)
-    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=UTC)
+    today = datetime.now(NSW_FARE_ZONE).date()
+    today_morning = datetime.combine(today, time(9, 0), tzinfo=NSW_FARE_ZONE)
+    yesterday_morning = datetime.combine(today - timedelta(days=1), time(9, 0), tzinfo=NSW_FARE_ZONE)
 
     session.add_all(
         [
@@ -2153,7 +2285,7 @@ async def test_earnings_today_never_reads_another_drivers_trips_even_via_query_p
     tenant_id = await _tenant_of(client, headers)
     driver_id = _user_id_of(headers)
 
-    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    today_morning = datetime.combine(datetime.now(NSW_FARE_ZONE).date(), time(9, 0), tzinfo=NSW_FARE_ZONE)
     other_driver_id = str(uuid.uuid4())
     session.add_all(
         [
@@ -2184,7 +2316,7 @@ async def test_earnings_today_only_counts_closed_trips_status_and_tenant(client:
     headers_b = await auth_headers(client, session, role="driver", tenant_name="Earnings Tenant B")
     tenant_b = await _tenant_of(client, headers_b)
 
-    today_morning = datetime.combine(datetime.now(UTC).date(), time(9, 0), tzinfo=UTC)
+    today_morning = datetime.combine(datetime.now(NSW_FARE_ZONE).date(), time(9, 0), tzinfo=NSW_FARE_ZONE)
     session.add_all(
         [
             _seed_closed_trip(tenant_id=tenant_a, driver_id=driver_id, start_at=today_morning, total=Decimal("15.00")),
