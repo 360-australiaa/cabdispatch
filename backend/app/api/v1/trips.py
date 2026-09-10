@@ -269,7 +269,7 @@ async def sync_trips(
                 # own doc comment; it resolves both authoritatively itself, from
                 # the tariff it looks up and item.start_at, and hands the
                 # resolved values back below for the Trip row.
-                breakdown, distance_m, moving_s, waiting_s, time_class, is_peak = await recompute_from_trace(
+                breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events = await recompute_from_trace(
                     session,
                     tenant_id=tenant_id,
                     tariff_id=item.tariff_id,
@@ -372,6 +372,7 @@ async def sync_trips(
                     distance_m=distance_m,
                     moving_s=moving_s,
                     waiting_s=waiting_s,
+                    gps_blackout_events=gps_blackout_events or None,
                     flag_fall=breakdown.flag_fall,
                     dist_amount=breakdown.distance_charge,
                     wait_amount=breakdown.waiting_charge,

@@ -6,6 +6,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui";
 import { API, server, startMockServer } from "@/test/server";
+import type { Trip } from "@/hooks/useTrips";
 import TripPage from "./TripPage";
 
 startMockServer();
@@ -37,7 +38,7 @@ const TRIP_ID = "trip1";
 const DRIVER_ID = "d1";
 const VEHICLE_ID = "v1";
 
-const TRIP = {
+const TRIP: Trip = {
   id: TRIP_ID,
   tenant_id: "t1",
   client_uuid: "c1",
@@ -87,6 +88,7 @@ const TRIP = {
   auto_tolled_roads: null,
   auto_tolls_applied: null,
   unpriced_toll_road_ids: null,
+  gps_blackout_events: null,
   created_at: NOW_ISO,
   updated_at: NOW_ISO,
 };
@@ -163,11 +165,12 @@ const AUDIT_ENTRY = {
 
 interface HandlerOpts {
   ratingsMatch?: boolean;
+  tripOverrides?: Partial<typeof TRIP>;
 }
 
 function installHandlers(opts: HandlerOpts = {}) {
   server.use(
-    http.get(`${API}/v1/trips/${TRIP_ID}`, () => HttpResponse.json(TRIP)),
+    http.get(`${API}/v1/trips/${TRIP_ID}`, () => HttpResponse.json({ ...TRIP, ...opts.tripOverrides })),
     http.get(`${API}/v1/trips/${TRIP_ID}/gps-trace`, () =>
       HttpResponse.json({ trip_id: TRIP_ID, points: [], point_count: 0 }),
     ),
@@ -272,6 +275,24 @@ describe("TripPage", () => {
 
     await user.click(screen.getByRole("tab", { name: "Audit" }));
     expect(await screen.findByText("trip_closed")).toBeInTheDocument();
+  });
+
+  it("shows the GPS blackout audit trail on the Fare tab when the trip has one", async () => {
+    installHandlers({
+      ratingsMatch: true,
+      tripOverrides: {
+        gps_blackout_events: [
+          { start: "2026-09-09T10:00:00.000Z", end: "2026-09-09T10:01:30.000Z", elapsed_s: 90, matched_km: "1.23" },
+          { start: "2026-09-09T10:05:00.000Z", end: "2026-09-09T10:06:00.000Z", elapsed_s: 60, matched_km: null },
+        ],
+      },
+    });
+    renderPage();
+    await screen.findByText("Fare breakdown");
+
+    expect(screen.getByText("GPS blackouts")).toBeInTheDocument();
+    expect(screen.getByText("1.23 km via known corridor")).toBeInTheDocument();
+    expect(screen.getByText("No known corridor — billed $0 for this gap")).toBeInTheDocument();
   });
 
   it("degrades honestly on the Rating tab when no rating matches this trip", async () => {

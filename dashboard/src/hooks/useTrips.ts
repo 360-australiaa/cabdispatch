@@ -25,6 +25,15 @@ export interface SplitPaymentItem {
   amount: string;
 }
 
+export interface GpsBlackoutEvent {
+  start: string;
+  end: string;
+  elapsed_s: number;
+  /** Real corridor distance billed for this gap, as a decimal string — `null`
+   * when no known toll-road corridor explained it (billed nothing extra). */
+  matched_km: string | null;
+}
+
 export interface Trip {
   id: string;
   tenant_id: string;
@@ -105,6 +114,15 @@ export interface Trip {
    * auto-charged (no captured price for that road) -- surfaced so a
    * dispatcher knows a manual toll may be missing, never a guessed amount. */
   unpriced_toll_road_ids?: string[] | null;
+  /** One entry per real GPS blackout (a road tunnel) this trip's telemetry
+   * passed through — see backend/app/models/trips.py::Trip.gps_blackout_events's
+   * own doc comment for the exact shape. `matched_km` is the real distance
+   * billed for that gap if a known, mapped toll-road corridor explained it,
+   * `null` if none did (the gap was billed nothing extra) — either way, this
+   * is the audit trail a dispute over a tunnel-crossed fare is checked
+   * against. Optional for the same "absent means not known here yet" reason
+   * as the toll fields above. */
+  gps_blackout_events?: GpsBlackoutEvent[] | null;
   created_at: string;
   updated_at: string;
 }

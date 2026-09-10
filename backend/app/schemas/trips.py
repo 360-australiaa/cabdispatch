@@ -431,6 +431,9 @@ class TripRead(BaseModel):
     # app.models.trips.Trip's doc comments on these three columns.
     auto_tolled_roads: dict[str, str] | None = Field(default_factory=dict)
     unpriced_toll_road_ids: list[str] | None = Field(default_factory=list)
+    # GPS-blackout audit trail (app.services.trips.BLACKOUT_GAP_THRESHOLD_S) -- see
+    # app.models.trips.Trip.gps_blackout_events's own doc comment for the exact shape.
+    gps_blackout_events: list[dict] | None = Field(default_factory=list)
     flagged_for_review: bool
     review_notes: str | None
     voucher_code: str | None

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { EmptyState, ErrorBanner, Skeleton } from "@/components/ui";
-import { errorMessage, formatMoney, formatPercent } from "@/lib/format";
+import { errorMessage, formatDurationSeconds, formatMoney, formatPercent, formatTimeShort } from "@/lib/format";
 import { useGeofencesQuery } from "@/hooks/useGeofences";
 import { useTollRoadsQuery } from "@/hooks/useTollRoads";
 import type { Trip } from "@/hooks/useTrips";
@@ -35,6 +35,13 @@ function FareRow({ label, value, muted }: { label: string; value: string; muted?
  * `trip.tolls` after subtracting both is real money the API cannot
  * attribute to a road -- shown as its own honest "Other / unitemised" line,
  * never folded silently into a road it may not belong to.
+ *
+ * Also renders `trip.gps_blackout_events` (only when the trip actually has
+ * any -- the overwhelming majority don't) so a disputed tunnel fare has an
+ * answer on this same page: exactly when the meter lost GPS, for how long,
+ * and whether a known toll-road corridor explained the gap (real distance
+ * billed) or not (nothing extra billed for it). See
+ * backend/app/models/trips.py::Trip.gps_blackout_events's own doc comment.
  */
 export function FareTab({ trip }: FareTabProps) {
   const tollRoadsQuery = useTollRoadsQuery();
@@ -164,6 +171,29 @@ export function FareTab({ trip }: FareTabProps) {
           </div>
         )}
       </div>
+
+      {(trip.gps_blackout_events?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-border p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            GPS blackouts
+          </p>
+          <div className="flex flex-col gap-2">
+            {trip.gps_blackout_events!.map((event, i) => (
+              <div key={`${event.start}-${i}`} className="flex items-center justify-between text-sm">
+                <span className="text-foreground">
+                  {formatTimeShort(event.start)} – {formatTimeShort(event.end)}
+                  <span className="text-muted-foreground"> ({formatDurationSeconds(event.elapsed_s)})</span>
+                </span>
+                <span className={event.matched_km != null ? "font-medium text-foreground" : "text-muted-foreground"}>
+                  {event.matched_km != null
+                    ? `${Number(event.matched_km).toFixed(2)} km via known corridor`
+                    : "No known corridor — billed $0 for this gap"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1051,6 +1051,16 @@ async def test_sync_bills_the_known_corridor_distance_across_a_real_gps_blackout
     assert abs(trip["distance_m"] - expected_corridor_m) <= 5, (trip["distance_m"], expected_corridor_m)
     assert trip["distance_m"] > chord_m + 200, (trip["distance_m"], chord_m)
 
+    # The audit trail records the blackout too -- not just the distance it
+    # produced -- so a disputed tunnel fare has an answer on file. One
+    # event, matching the corridor it billed.
+    events = trip["gps_blackout_events"]
+    assert events is not None and len(events) == 1, events
+    event = events[0]
+    assert event["elapsed_s"] == 60
+    assert event["matched_km"] is not None
+    assert abs(Decimal(event["matched_km"]) - (leg1_km + leg2_km)) < Decimal("0.01"), event
+
 
 async def test_sync_records_a_simulated_trip_as_simulated(client: AsyncClient, session: AsyncSession):
     """A trip driven on the meter's GPS simulator must arrive flagged.

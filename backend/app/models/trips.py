@@ -335,6 +335,37 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # so cannot actually reach this field via GPS detection yet either.
     unpriced_toll_road_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
 
+    # --- GPS blackout audit trail (app.services.trips.BLACKOUT_GAP_THRESHOLD_S /
+    # app.services.tolls.known_corridor_distance_km). A real GPS blackout (a road
+    # tunnel: Cross City Tunnel, Lane Cove Tunnel, NorthConnex, M5 East, the
+    # WestConnex tunnels) bills the real distance along a matched, mapped toll-road
+    # corridor if one is found, or nothing at all if not -- see that module's own
+    # doc for why (rejection, not fabrication, is the default; matches Android's
+    # domain/fare/KnownCorridor.kt). Neither outcome was ever recorded anywhere
+    # before this column: a driver or passenger disputing a tunnel fare had no
+    # server-side evidence of *why* a gap in the trace was billed the way it was.
+    #
+    # One entry per real gap (elapsed time between two consecutive telemetry
+    # points, live tick or offline sync trace, above BLACKOUT_GAP_THRESHOLD_S):
+    # {"start": "<iso ts before the gap>", "end": "<iso ts after it>",
+    #  "elapsed_s": <int>, "matched_km": "<decimal string>" | null}.
+    # `matched_km` is null when no known corridor explained the gap (the common
+    # case for a genuine loss of signal with nothing mapped nearby -- the gap
+    # billed zero extra distance), else the real corridor distance that WAS
+    # billed. Maintained exclusively by app.services.trips.recompute_from_trace
+    # (the offline-sync replay path, written whole per sync) -- never exposed
+    # for direct editing via TripUpdate.
+    #
+    # Deliberately NOT populated by app.services.trips.apply_tick (the live
+    # online tick path): that endpoint's `points` arrive at whatever cadence
+    # the device's network layer batches/sends them, unrelated to real GPS
+    # fix availability -- trying to read a blackout out of THAT gap broke
+    # real, ordinary ticks in testing (a 30-60s gap between two online tick
+    # calls is normal, not a blackout). recompute_from_trace replays the
+    # device's own recorded gps_trace instead, at real GPS-fix cadence, which
+    # is what makes this threshold meaningful there.
+    gps_blackout_events: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True, default=list)
+
     # --- dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema,
     # module docstring deviation #4). Settable via PATCH /v1/trips/{id}/flag by
     # the trip's own driver or a staff role (owner/admin/dispatcher) — see

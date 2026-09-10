@@ -688,10 +688,14 @@ async def recompute_from_trace(
     surcharge_pct: Decimal | None,
     include_psl: bool,
     negotiated_total: Decimal | None = None,
-) -> tuple[FareBreakdown, int, int, int, TimeClass, bool]:
+) -> tuple[FareBreakdown, int, int, int, TimeClass, bool, list[dict]]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
-    Returns (breakdown, distance_m, moving_s, waiting_s, time_class, is_peak).
+    Returns (breakdown, distance_m, moving_s, waiting_s, time_class, is_peak,
+    gps_blackout_events) -- the last exactly Trip.gps_blackout_events' own
+    shape, for the caller to persist whole onto the new Trip row (a sync item
+    replays the WHOLE trace in one call, unlike apply_tick's incremental
+    append, so there is nothing to merge with here).
 
     No `time_class`/`is_peak` parameters here (unlike the trip-type/passenger/
     maxi ones) — deliberately: this is the offline-sync path's own version of
@@ -732,6 +736,7 @@ async def recompute_from_trace(
     prev_lat, prev_lng, prev_ts = start_lat, start_lng, start_at
     moving_s = 0
     waiting_s = 0
+    gps_blackout_events: list[dict] = []
 
     for point in gps_trace:
         ts_prev = prev_ts if prev_ts.tzinfo else prev_ts.replace(tzinfo=UTC)
@@ -747,6 +752,11 @@ async def recompute_from_trace(
         # real distance; no match bills NOTHING extra for the gap -- rejection, not a fallback
         # to the raw haversine, exactly matching the device's own conservative default so the
         # two sides agree instead of one silently overcharging the other's deliberate blackout.
+        # Either way, Trip.gps_blackout_events records what was decided -- deliberately only
+        # here, not in apply_tick's online-tick path: THIS is the device's own recorded
+        # gps_trace, at real GPS-fix cadence, unlike apply_tick's `points`, whose gap between
+        # calls is set by the device's network-batching policy, not GPS availability (a real
+        # regression caught by the pre-existing tick test suite when this was tried there too).
         if elapsed_seconds > BLACKOUT_GAP_THRESHOLD_S:
             corridor_km = await known_corridor_distance_km(
                 session,
@@ -756,6 +766,14 @@ async def recompute_from_trace(
                 exit_lng=point.lng,
             )
             distance_km = corridor_km if corridor_km is not None else Decimal(0)
+            gps_blackout_events.append(
+                {
+                    "start": ts_prev.isoformat(),
+                    "end": ts_point.isoformat(),
+                    "elapsed_s": int(elapsed_seconds),
+                    "matched_km": str(corridor_km) if corridor_km is not None else None,
+                }
+            )
         else:
             distance_km = plausible_distance_km(
                 prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
@@ -782,7 +800,7 @@ async def recompute_from_trace(
         include_psl=include_psl,
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))
-    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak
+    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events
 
 
 def build_gps_trace_row(
