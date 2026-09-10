@@ -2,6 +2,7 @@ package au.com.threesixty.cabdispatch
 
 import android.app.Activity
 import android.os.Bundle
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -86,6 +87,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             CabDispatchScreenRoot()
         }
+    }
+
+    /** The app (re)entering the foreground — see [AppContainer.idleLogoutSupervisor]'s own doc
+     * for why this, not just [dispatchTouchEvent] below, feeds its clock: time spent with the
+     * screen off or the app backgrounded ("we close the tablet") must count against the same
+     * idle budget as time spent untouched in the foreground. Fires on the very first launch too,
+     * which is exactly right — a fresh sign-in should not be judged idle from process-start time. */
+    override fun onStart() {
+        super.onStart()
+        AppContainer.idleLogoutSupervisor.recordForegroundResume()
+    }
+
+    /** Every touch anywhere in the app, including a dialog or the on-screen keypad hosted outside
+     * this Activity's own Compose tree — see [AppContainer.idleLogoutSupervisor]'s own doc for why
+     * this lives here rather than as a `pointerInput` on one screen's root. Never consumes the
+     * event: this is purely an observer, [dispatchTouchEvent]'s real job is unaffected. */
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        AppContainer.idleLogoutSupervisor.recordInteraction()
+        return super.dispatchTouchEvent(ev)
     }
 }
 

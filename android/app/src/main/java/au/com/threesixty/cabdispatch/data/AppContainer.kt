@@ -25,6 +25,7 @@ import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
 import au.com.threesixty.cabdispatch.domain.DriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
+import au.com.threesixty.cabdispatch.domain.IdleLogoutSupervisor
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
 import au.com.threesixty.cabdispatch.domain.SessionHolder
@@ -362,6 +363,11 @@ object AppContainer {
         // instance of it, so an admin's dashboard toggle changed a server-side flag no running
         // code anywhere ever polled.
         deviceCommandHeartbeat.start()
+
+        // Begins supervising SessionHolder.session for the idle-logout auto-sign-out — see
+        // [idleLogoutSupervisor]'s own doc. Same "must start unconditionally here" reasoning as
+        // [livePositionHeartbeat]/[deviceCommandHeartbeat] immediately above.
+        idleLogoutSupervisor.start()
     }
 
     /** Fire-and-forget process-lifetime scope for one-shot startup tasks that must kick off
@@ -893,6 +899,21 @@ object AppContainer {
             appContext,
             devicePairingStore,
         )
+    }
+
+    /**
+     * Auto-signs a driver out of an unattended tablet — see [IdleLogoutSupervisor]'s own class
+     * doc for the full write-up (what counts as "unattended", and the one case — a running
+     * fare — that never triggers it). Own `SupervisorJob`-backed `CoroutineScope`, same
+     * "must keep running across screen navigation, not tied to any one screen's ViewModel scope"
+     * reasoning as [livePositionHeartbeat]/[deviceCommandHeartbeat] above. [init] calls
+     * [IdleLogoutSupervisor.start] on this unconditionally, and
+     * [au.com.threesixty.cabdispatch.MainActivity] calls [IdleLogoutSupervisor.recordInteraction]
+     * (every touch, via `dispatchTouchEvent`) and [IdleLogoutSupervisor.recordForegroundResume]
+     * (`Activity.onStart`) to feed it the two real signals it acts on.
+     */
+    val idleLogoutSupervisor: IdleLogoutSupervisor by lazy {
+        IdleLogoutSupervisor(CoroutineScope(SupervisorJob() + Dispatchers.Default), tripRepository)
     }
 
     // --- Zones (Plot / Statistics screens — named dispatch zones, "plot into a zone", live
