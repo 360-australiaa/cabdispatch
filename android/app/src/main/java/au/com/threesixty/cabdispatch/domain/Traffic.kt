@@ -31,6 +31,12 @@ object TrafficHazardCategories {
     const val FIRE = "fire"
     const val ALPINE = "alpine"
     const val MAJOR_EVENT = "majorevent"
+
+    /** Every real category, for a caller that needs to build one bitmap/entry per category (see
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.MeterBackdropMap]'s per-category hazard
+     * icons) rather than enumerating the six constants above by hand and risking one drifting out
+     * of sync if a seventh is ever added. */
+    val ALL: Set<String> = setOf(INCIDENT, ROADWORK, FLOOD, FIRE, ALPINE, MAJOR_EVENT)
 }
 
 /** One live NSW hazard — incident, roadwork, flood, fire, alpine closure or major-event closure. */

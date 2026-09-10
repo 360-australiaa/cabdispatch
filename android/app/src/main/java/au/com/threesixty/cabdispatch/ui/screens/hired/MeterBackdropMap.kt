@@ -32,8 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -51,7 +49,9 @@ import au.com.threesixty.cabdispatch.domain.TrafficCamera
 import au.com.threesixty.cabdispatch.domain.TrafficHazard
 import au.com.threesixty.cabdispatch.domain.TrafficHazardCategories
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
+import au.com.threesixty.cabdispatch.domain.fare.UpcomingHazard
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingToll
+import au.com.threesixty.cabdispatch.domain.fare.upcomingHazard
 import au.com.threesixty.cabdispatch.domain.fare.upcomingToll
 import au.com.threesixty.cabdispatch.domain.toMoneyString
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
@@ -162,10 +162,16 @@ internal data class MapPoint(val lat: Double, val lng: Double)
  * coherent with, not a special case of, the ordinary-mode behaviour.
  *
  * Scale bar and compass are hidden (they'd sit under the dim overlay looking broken); Mapbox's
- * logo/attribution are left enabled per its terms, dimmed like the rest of the map. A dark overlay
- * ([dimAlpha]) + radial vignette on top keeps the dial legible over street detail — the mockup-#4
- * "TRIP IN PROGRESS" pane, where the map is the content rather than a backdrop, passes a lighter
- * wash.
+ * logo/attribution are left enabled per its terms, dimmed like the rest of the map. A flat dark
+ * overlay ([dimAlpha]) is the only wash now — the radial vignette this used to also draw (for a
+ * dial that used to float ON TOP of this map as a backdrop) was removed outright once the current
+ * two-column layout gave the dial its own separate `GlassCard` (see [HiredScreen]'s class doc):
+ * `HiredScreen.kt`'s "TRIP IN PROGRESS" pane is this composable's one and only caller, the map is
+ * always the content here, never a backdrop, and a vignette darkening the corners of a driver-
+ * facing map panel was pure lost legibility with nothing left depending on the look it made.
+ * [dimAlpha] itself is a low, uniform brand-dark tint (0.08 at this call site) — real bug, found
+ * live: the first turn-down from the historical 0.62 default was still "not visible properly" by
+ * direct, repeated owner correction.
  *
  * **Custom style + live traffic overlay (live-map redesign, 2026-09-09 — owner: "I want to show
  * them the updated map so they can see the cameras icon, they can see the toll price, toll gate
@@ -256,6 +262,14 @@ internal fun MeterBackdropMap(
     // doesn't blank instantly the moment [upcoming] itself goes null — it keeps showing the last
     // real advisory while the one-shot fade animates out.
     var displayedUpcoming by remember { mutableStateOf<UpcomingToll?>(null) }
+    // Same pattern, one level over -- see [UpcomingHazardAdvisor.kt]'s own class doc for why this
+    // exists (a marker icon alone names nothing) and [HazardAheadChip]'s call site for why it
+    // stacks with, not replaces, the toll-ahead chip above it.
+    val upcomingHazardAhead = remember(trafficOverlay.hazards, vehicle, liveFix?.heading) {
+        vehicle?.let { v -> upcomingHazard(trafficOverlay.hazards, v.lat, v.lng, liveFix?.heading) }
+    }
+    var displayedUpcomingHazard by remember { mutableStateOf<UpcomingHazard?>(null) }
+    LaunchedEffect(upcomingHazardAhead) { if (upcomingHazardAhead != null) displayedUpcomingHazard = upcomingHazardAhead }
     LaunchedEffect(upcoming) { if (upcoming != null) displayedUpcoming = upcoming }
     val markerBitmaps = rememberTrafficMarkerBitmaps()
 
@@ -316,24 +330,31 @@ internal fun MeterBackdropMap(
                 },
             )
         }
-        // Dim + vignette so the dial reads on top of street detail. Two layers: a flat bg wash
-        // ([dimAlpha], ~62% by default), then a radial fade that's near-transparent behind the
-        // dial's centre and darker at the corners — the "map recedes, dial floats" look from the
-        // mockup.
+        // Real bug, found live (2026-09-10), repeated user correction ("not visible properly")
+        // even after [dimAlpha] itself had already been turned down once for this screen (see
+        // HiredScreen.kt's own call site doc): this used to ALSO draw an unconditional radial
+        // vignette here — near-transparent centre, ~55% opaque at the corners — regardless of
+        // [dimAlpha]. That vignette dates from the 2026-09-04b-and-earlier "dial floats over the
+        // map" mockup (`MeterBackdropMap` as literal backdrop BEHIND the dial), which this file's
+        // own class doc already documents as superseded: [HiredScreen]'s current two-column
+        // layout gives the dial its own separate `GlassCard` and uses this composable only as a
+        // real, clearly bounded map PANEL, never scenery behind anything. `HiredScreen.kt` is the
+        // one and only caller of this composable in the app, so nothing still depends on the old
+        // look — the vignette was pure dead weight darkening a quarter of a panel whose entire
+        // job is being read by the driver. Removed outright rather than just tuned down; only the
+        // flat [dimAlpha] wash remains, for a faint, uniform brand-dark tint.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(CaptainPalette.hudBg.copy(alpha = dimAlpha.coerceIn(0f, 1f)))
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(Color.Transparent, CaptainPalette.bg.copy(alpha = 0.55f)),
-                    ),
-                ),
+                .background(CaptainPalette.hudBg.copy(alpha = dimAlpha.coerceIn(0f, 1f))),
         )
         // Top-end corner column: the trip/nav status pills and destination search bar already
         // dock top-start (see `HiredScreen.kt`'s map-panel layout) and the nav bottom bar docks
         // bottom-center, so this is the one consistently-empty corner regardless of nav mode —
-        // now shared by two independent affordances, chip above button:
+        // now shared by three independent affordances, chips above button:
+        // - The hazard-ahead advisory ([HazardAheadChip], 2026-09-10) — same calm one-shot
+        //   fade-in/out as the toll chip below it, stacked ABOVE it: a real hazard on the road
+        //   ahead is the more time-sensitive of the two to notice first.
         // - The toll-ahead advisory (see this file's class doc) — a calm, one-shot fade-in/out,
         //   never a looping/pulsing animation (this screen's own "calm animations" precedent —
         //   see [GlowingSpeedometer]'s doc in Hud.kt for the same rule applied to the dial).
@@ -344,6 +365,13 @@ internal fun MeterBackdropMap(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            AnimatedVisibility(
+                visible = upcomingHazardAhead != null,
+                enter = fadeIn(tween(TOLL_CHIP_FADE_MS)),
+                exit = fadeOut(tween(TOLL_CHIP_FADE_MS / 2)),
+            ) {
+                displayedUpcomingHazard?.let { HazardAheadChip(it) }
+            }
             AnimatedVisibility(
                 visible = upcoming != null,
                 enter = fadeIn(tween(TOLL_CHIP_FADE_MS)),
@@ -398,13 +426,11 @@ internal fun MeterBackdropMap(
                 )
             }
             trafficOverlay.hazards.filter { withinView(it.latitude, it.longitude) }.forEach { hazard ->
-                val bitmap = if (hazard.category == TrafficHazardCategories.INCIDENT ||
-                    hazard.category == TrafficHazardCategories.FIRE
-                ) {
-                    markerBitmaps.hazardSevere
-                } else {
-                    markerBitmaps.hazardCaution
-                }
+                // Falls back to the INCIDENT bitmap (the plain triangle) for a category this app
+                // does not recognise yet -- see glyphPathFor's own doc for why that is the right
+                // default rather than skipping the marker outright.
+                val bitmap = markerBitmaps.hazardByCategory[hazard.category]
+                    ?: markerBitmaps.hazardByCategory.getValue(TrafficHazardCategories.INCIDENT)
                 add(
                     PointAnnotationOptions()
                         .withPoint(Point.fromLngLat(hazard.longitude, hazard.latitude))
@@ -763,13 +789,84 @@ private fun TollAheadChip(upcoming: UpcomingToll) {
     }
 }
 
-/** The three small custom-drawn marker bitmaps this file's camera/hazard layer uses — built once
- * per composition (colours resolved from [CaptainPalette] at the point of construction, so a
- * light/dark app-theme switch still redraws them, exactly like every other themed value here). */
+/**
+ * Calm, non-interactive "hazard ahead" advisory — see [UpcomingHazardAdvisor.kt]'s own class doc
+ * for why this exists and [MeterBackdropMap]'s class doc for the one-shot fade this is always
+ * shown through. Same shape as [TollAheadChip] (a plain [GlassCard], width-capped so a long
+ * headline wraps rather than reaching across the panel), glow tinted by severity — danger-red for
+ * [TrafficHazardCategories.INCIDENT]/[TrafficHazardCategories.FIRE], the same split the marker
+ * icons themselves use, warning-amber otherwise — so a driver reads urgency from the chip's own
+ * colour before reading a single word of it.
+ *
+ * [UpcomingHazard.speedLimitKmh], when present, is rendered as "reduced to N km/h here" —
+ * deliberately not bare "N km/h" or "speed limit N", which would read as this road's ordinary
+ * posted limit (a real, separate, larger data gap this app does not fill yet — see that field's
+ * own doc). This is a temporary zone tied to the hazard itself, and must never be confused with
+ * one.
+ */
+@Composable
+private fun HazardAheadChip(upcoming: UpcomingHazard) {
+    val severe = upcoming.category == TrafficHazardCategories.INCIDENT || upcoming.category == TrafficHazardCategories.FIRE
+    GlassCard(cornerRadiusDp = 14, glow = if (severe) CaptainPalette.danger else CaptainPalette.warning) {
+        Column(
+            modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                buildString {
+                    append(hazardCategoryLabel(upcoming.category))
+                    append(" ahead")
+                    upcoming.speedLimitKmh?.let { append(" — reduced to ").append(it).append(" km/h here") }
+                },
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                style = Type.tiny,
+                color = CaptainPalette.textPrimary,
+            )
+            // Real feed text only, never a fabricated summary -- see UpcomingHazard.headline's
+            // own doc. Omitted entirely (not shown as an empty line) when the source published
+            // none.
+            upcoming.headline?.takeIf { it.isNotBlank() }?.let { headline ->
+                Text(
+                    headline,
+                    fontFamily = InterFamily,
+                    style = Type.tiny,
+                    color = CaptainPalette.textSecondary,
+                    maxLines = 2,
+                )
+            }
+        }
+    }
+}
+
+/** Human-readable label for a [TrafficHazardCategories] constant — the one place this file turns
+ * the feed's own lowercase machine category into words a driver reads at a glance. Falls back to
+ * the raw [category] string (still real feed data, never fabricated) for one this app does not
+ * yet recognise, same "degrade to honest, not blank" posture [glyphPathFor] already uses for the
+ * matching icon. */
+private fun hazardCategoryLabel(category: String): String = when (category) {
+    TrafficHazardCategories.INCIDENT -> "Incident"
+    TrafficHazardCategories.ROADWORK -> "Roadwork"
+    TrafficHazardCategories.FLOOD -> "Flooding"
+    TrafficHazardCategories.FIRE -> "Fire"
+    TrafficHazardCategories.ALPINE -> "Alpine closure"
+    TrafficHazardCategories.MAJOR_EVENT -> "Major event"
+    else -> category
+}
+
+/** The custom-drawn marker bitmaps this file's camera/hazard layer uses — built once per
+ * composition (colours resolved from [CaptainPalette] at the point of construction, so a
+ * light/dark app-theme switch still redraws them, exactly like every other themed value here).
+ *
+ * [hazardByCategory] is keyed by [TrafficHazardCategories]'s own constants — one visually distinct
+ * glyph per real category (see [buildHazardMarkerBitmap]'s own doc for why category, not just
+ * severity, now decides the icon: real bug/gap found live 2026-09-10, owner asked for "road
+ * closure, or accident... all needs to be load in our system" as visually distinguishable
+ * information, and a flood closure drawing the identical plain triangle as a crash told a driver
+ * nothing about which kind of hazard was ahead). */
 private class TrafficMarkerBitmaps(
     val camera: Bitmap,
-    val hazardCaution: Bitmap,
-    val hazardSevere: Bitmap,
+    val hazardByCategory: Map<String, Bitmap>,
 )
 
 /**
@@ -793,10 +890,21 @@ private fun rememberTrafficMarkerBitmaps(): TrafficMarkerBitmaps {
     val hazardGlyph = CaptainPalette.textPrimary.toArgb()
     val hazardGlyphOutline = CaptainPalette.bg.toArgb()
     return remember(cameraRing, cameraBody, cameraIris, cameraPupil, hazardCautionFill, hazardSevereFill, hazardGlyph, hazardGlyphOutline, density) {
+        // Severity (fill colour) and category (glyph) are independent axes — see
+        // TrafficMarkerBitmaps' own doc. Same severity split MeterBackdropMap's class doc already
+        // documents (incident/fire = danger, everything else = warning); only the glyph inside
+        // changes per category now.
+        fun fillFor(category: String) = if (category == TrafficHazardCategories.INCIDENT || category == TrafficHazardCategories.FIRE) {
+            hazardSevereFill
+        } else {
+            hazardCautionFill
+        }
+        val hazardByCategory = TrafficHazardCategories.ALL.associateWith { category ->
+            buildHazardMarkerBitmap(density, fillFor(category), hazardGlyph, hazardGlyphOutline, category)
+        }
         TrafficMarkerBitmaps(
             camera = buildCameraMarkerBitmap(density, cameraRing, cameraBody, cameraIris, cameraPupil),
-            hazardCaution = buildHazardMarkerBitmap(density, hazardCautionFill, hazardGlyph, hazardGlyphOutline),
-            hazardSevere = buildHazardMarkerBitmap(density, hazardSevereFill, hazardGlyph, hazardGlyphOutline),
+            hazardByCategory = hazardByCategory,
         )
     }
 }
@@ -837,10 +945,25 @@ private fun buildCameraMarkerBitmap(density: Density, ringArgb: Int, bodyArgb: I
     return bitmap
 }
 
-/** A filled circle badge (severity-tinted) with a filled warning triangle on top, plus a thin dark
- * outline on the triangle for contrast against either fill colour in either app theme. See
- * [rememberTrafficMarkerBitmaps]'s doc. */
-private fun buildHazardMarkerBitmap(density: Density, fillArgb: Int, glyphArgb: Int, outlineArgb: Int): Bitmap {
+/**
+ * A filled circle badge (severity-tinted) with a category-specific glyph on top, plus a thin dark
+ * outline on the glyph for contrast against either fill colour in either app theme. See
+ * [rememberTrafficMarkerBitmaps]'s doc for the fill-colour (severity) side of this.
+ *
+ * Real gap found live (2026-09-10): every hazard used to draw the identical plain triangle
+ * regardless of [category] — a flood closure, a bushfire and an ordinary incident were visually
+ * indistinguishable on the map, telling a driver only "something, somewhere" rather than which
+ * kind of hazard is ahead (owner: "road closure, or accident... all needs to be load in our
+ * system", asked as visually distinct information, not just one generic warning triangle). Each
+ * glyph below is still a plain-primitives shape — no emoji/system glyph — same "this app draws
+ * its own icons" reasoning [rememberTrafficMarkerBitmaps]'s own doc already gives for the camera
+ * icon: a triangle (incident, the ordinary case), a flame (fire), a diamond (roadwork — the same
+ * silhouette a real roadside roadwork sign uses), stacked wave lines (flood), a six-point asterisk
+ * (alpine closure — reads as "snow/ice" without needing a snowflake's fine detail at 24dp), and a
+ * five-point star (major event — the one category that is a scheduled closure, not a hazard, and
+ * reads distinctly from all the ad hoc ones above).
+ */
+private fun buildHazardMarkerBitmap(density: Density, fillArgb: Int, glyphArgb: Int, outlineArgb: Int, category: String): Bitmap {
     val d = with(density) { MARKER_DIAMETER_DP.toPx() }.roundToInt().coerceAtLeast(1)
     val bitmap = Bitmap.createBitmap(d, d, Bitmap.Config.ARGB_8888)
     val canvas = android.graphics.Canvas(bitmap)
@@ -851,15 +974,7 @@ private fun buildHazardMarkerBitmap(density: Density, fillArgb: Int, glyphArgb: 
     }
     canvas.drawCircle(r, r, r, fillPaint)
 
-    val triHalfW = r * 0.42f
-    val triTop = r * 0.48f
-    val triBottom = d - r * 0.55f
-    val path = android.graphics.Path().apply {
-        moveTo(r, triTop)
-        lineTo(r - triHalfW, triBottom)
-        lineTo(r + triHalfW, triBottom)
-        close()
-    }
+    val path = glyphPathFor(category, d, r)
     val outlinePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = outlineArgb
         style = android.graphics.Paint.Style.STROKE
@@ -872,4 +987,97 @@ private fun buildHazardMarkerBitmap(density: Density, fillArgb: Int, glyphArgb: 
     }
     canvas.drawPath(path, glyphPaint)
     return bitmap
+}
+
+/** The one glyph [buildHazardMarkerBitmap] draws for [category] — see that function's own doc for
+ * why each is a distinct plain-primitives shape. Falls back to the plain triangle (the existing,
+ * pre-this-pass shape) for [TrafficHazardCategories.INCIDENT] and for any category this app does
+ * not yet recognise, rather than drawing nothing — an unrecognised-but-real category from a future
+ * feed change should still read as "a hazard, kind unspecified", never a blank/missing marker. */
+private fun glyphPathFor(category: String, d: Int, r: Float): android.graphics.Path = when (category) {
+    TrafficHazardCategories.FIRE -> android.graphics.Path().apply {
+        // A flame: a rounded teardrop, point up, via two symmetric quadratic curves from the tip
+        // down to a wide, flat-ish base — reads as "fire" at 24dp without needing an inner
+        // highlight the way a two-tone flame icon normally would.
+        val tipY = r * 0.30f
+        val baseY = d - r * 0.42f
+        val baseHalfW = r * 0.44f
+        moveTo(r, tipY)
+        quadTo(r + baseHalfW * 1.15f, r * 1.05f, r + baseHalfW, baseY)
+        quadTo(r + baseHalfW * 0.4f, d - r * 0.18f, r, d - r * 0.22f)
+        quadTo(r - baseHalfW * 0.4f, d - r * 0.18f, r - baseHalfW, baseY)
+        quadTo(r - baseHalfW * 1.15f, r * 1.05f, r, tipY)
+        close()
+    }
+    TrafficHazardCategories.ROADWORK -> android.graphics.Path().apply {
+        // A diamond (rotated square) — the same silhouette a real roadside roadwork/warning sign
+        // uses, visually distinct from the incident triangle at a glance.
+        val half = r * 0.46f
+        moveTo(r, r - half)
+        lineTo(r + half, r)
+        lineTo(r, r + half)
+        lineTo(r - half, r)
+        close()
+    }
+    TrafficHazardCategories.FLOOD -> android.graphics.Path().apply {
+        // Two stacked wave lines, each a short S-curve given real width by tracing it there and
+        // partway back at a slight vertical offset — a filled Path needs a closed, positive-area
+        // outline; a single stroked line is not an option here since every other glyph in this
+        // function is filled, not stroked, for a consistent weight in both app themes.
+        val waveHalfW = r * 0.5f
+        val waveThickness = d * 0.09f
+        for (waveY in floatArrayOf(r * 0.72f, r * 1.28f)) {
+            moveTo(r - waveHalfW, waveY)
+            quadTo(r - waveHalfW * 0.4f, waveY - waveThickness * 1.6f, r, waveY)
+            quadTo(r + waveHalfW * 0.4f, waveY + waveThickness * 1.6f, r + waveHalfW, waveY)
+            lineTo(r + waveHalfW, waveY + waveThickness)
+            quadTo(r + waveHalfW * 0.4f, waveY + waveThickness * 1.6f + waveThickness, r, waveY + waveThickness)
+            quadTo(r - waveHalfW * 0.4f, waveY - waveThickness * 1.6f + waveThickness, r - waveHalfW, waveY + waveThickness)
+            close()
+        }
+    }
+    TrafficHazardCategories.ALPINE -> android.graphics.Path().apply {
+        // A six-point asterisk (three crossing bars), each bar a thin filled rectangle rotated
+        // 60deg from the last — reads as "snow/ice" at 24dp without a snowflake's fine detail,
+        // which a 24dp bitmap cannot resolve cleanly anyway.
+        val armLen = r * 0.62f
+        val armHalfW = d * 0.045f
+        for (angleDeg in intArrayOf(90, 30, 150)) {
+            val rad = Math.toRadians(angleDeg.toDouble())
+            val dx = (kotlin.math.cos(rad) * armLen).toFloat()
+            val dy = (kotlin.math.sin(rad) * armLen).toFloat()
+            val px = (-kotlin.math.sin(rad) * armHalfW).toFloat()
+            val py = (kotlin.math.cos(rad) * armHalfW).toFloat()
+            moveTo(r - dx + px, r - dy + py)
+            lineTo(r + dx + px, r + dy + py)
+            lineTo(r + dx - px, r + dy - py)
+            lineTo(r - dx - px, r - dy - py)
+            close()
+        }
+    }
+    TrafficHazardCategories.MAJOR_EVENT -> android.graphics.Path().apply {
+        // A five-point star — the one category that is a scheduled closure (a stadium event, a
+        // parade), not an ad hoc hazard, and deliberately reads as "different in kind" from every
+        // other glyph here.
+        val outerR = r * 0.62f
+        val innerR = outerR * 0.42f
+        for (i in 0 until 10) {
+            val rad = Math.toRadians((-90 + i * 36).toDouble())
+            val radius = if (i % 2 == 0) outerR else innerR
+            val x = r + (kotlin.math.cos(rad) * radius).toFloat()
+            val y = r + (kotlin.math.sin(rad) * radius).toFloat()
+            if (i == 0) moveTo(x, y) else lineTo(x, y)
+        }
+        close()
+    }
+    // INCIDENT, and any category this app does not yet recognise -- see this function's own doc.
+    else -> android.graphics.Path().apply {
+        val triHalfW = r * 0.42f
+        val triTop = r * 0.48f
+        val triBottom = d - r * 0.55f
+        moveTo(r, triTop)
+        lineTo(r - triHalfW, triBottom)
+        lineTo(r + triHalfW, triBottom)
+        close()
+    }
 }

@@ -902,6 +902,17 @@ class FareEngineImpl(
      * at close, and rounding every tick compounds a real drift over a long trip. Only
      * [FareState.runningTotal] -- which *is* a close() result -- carries cent rounding.
      */
+    // The two `fix != null` checks below (blackout catch-up, and F2's distance branch) are
+    // provably redundant to the K2 compiler: both sites are only reached when `!gpsLost`, and
+    // `gpsLost`'s own definition (`fixAgeNanos == null || ...`, where `fixAgeNanos = fix?.let{}`)
+    // means `!gpsLost` already implies `fix != null` -- hence the "Condition is always 'true'"
+    // warnings here, verified by hand rather than dismissed on sight (see the 2026-09-10 QA pass
+    // that traced both through: this file's own commit history has the reasoning). Kept anyway,
+    // deliberately: this is billing code, and the redundancy is a second, independent guard against
+    // an NPE if `gpsLost`'s definition ever changes under a future edit -- a silent skip of one
+    // tick's corridor billing / distance charge is a far cheaper failure than a crashed meter
+    // mid-fare. Suppressed rather than removed.
+    @Suppress("SENSELESS_COMPARISON")
     private fun tick() {
         val cs = calcState ?: return
 
