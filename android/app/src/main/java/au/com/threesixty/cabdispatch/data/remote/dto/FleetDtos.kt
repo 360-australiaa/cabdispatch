@@ -115,6 +115,16 @@ data class DeviceDto(
      * known to be pending without a second network round trip.
      */
     @SerialName("latest_version_code") val latestVersionCode: Int? = null,
+    /**
+     * This device row's own [vehicleId]'s rego, joined in server-side (backend `DeviceRead.
+     * vehicle_rego`, `device_heartbeat`) — `null` whenever [vehicleId] is unset, the vehicle has
+     * since been deleted, or the backend predates this field. See
+     * [au.com.threesixty.cabdispatch.domain.decideVehicleRebind]'s doc ("The fourth case") for why
+     * this exists: it is what lets that self-heal tell a genuine fleet-wipe/reseed (same rego, new
+     * uuid — heal it) apart from a driver deliberately bound to a different vehicle than this
+     * tablet's admin-configured pairing (leave it alone).
+     */
+    @SerialName("vehicle_rego") val vehicleRego: String? = null,
 )
 
 /**

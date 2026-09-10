@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.GpsFixed
@@ -736,7 +737,15 @@ private fun rememberTollRegistrySnapshot(): TollRegistrySnapshot {
 private fun TollAheadChip(upcoming: UpcomingToll) {
     GlassCard(cornerRadiusDp = 14, glow = CaptainPalette.warning) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            // Real bug, found live (2026-09-09, GPS-simulated "Airport T1 pickup -> CBD" run): an
+            // unbounded-width single-line Text here grows exactly as wide as its content needs —
+            // fine for a short road name, but "Toll ahead: Sydney Harbour Bridge & Sydney Harbour
+            // Tunnel — $7.41" is long enough to reach clear across this Column's TopEnd anchor and
+            // overlap HiredScreen.kt's Trip/Zone pills docked TopStart, exactly the "one
+            // consistently-empty corner" this file's class doc assumed never collides with
+            // anything. Capped so a long road name wraps onto a second line instead of intruding
+            // on the opposite corner — the chip stays anchored top-end either way.
+            modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(

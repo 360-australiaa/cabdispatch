@@ -855,6 +855,36 @@ async def test_heartbeat_updates_status_fields_and_reports_flags(client, session
     assert body["kiosk_locked"] is False
     assert body["force_update_pending"] is False
     assert body["last_seen_at"] is not None
+    # No vehicle bound to this device row -- honest null, never a guess.
+    assert body["vehicle_rego"] is None
+
+
+async def test_heartbeat_carries_the_bound_vehicle_s_rego(client, session):
+    """See `DeviceRead.vehicle_rego`'s own doc: the Android client's self-heal
+    (`decideVehicleRebind`) needs this to tell a genuine fleet-wipe/reseed (same rego, new uuid --
+    heal it) apart from a driver deliberately bound to a different vehicle than this tablet's
+    admin-configured pairing (leave it alone) -- real bug found live, 2026-09-09."""
+    headers = await auth_headers(client, session, role="admin", tenant_name="Rego Heartbeat Tenant")
+    vehicle_resp = await _create_vehicle(client, headers, rego="T22123")
+    vehicle_id = vehicle_resp.json()["id"]
+
+    resp = await client.post(
+        "/v1/fleet/devices",
+        json={"android_id": "android-rego-hb-1", "vehicle_id": vehicle_id},
+        headers=headers,
+    )
+    device_id = resp.json()["id"]
+
+    resp = await client.post(f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["vehicle_rego"] == "T22123"
+
+    # The vehicle is deleted/reassigned later (a fleet wipe) -- the device row's own vehicle_id
+    # goes stale, and the join must answer None rather than a stale/wrong rego or a 500.
+    await client.delete(f"/v1/fleet/vehicles/{vehicle_id}", headers=headers)
+    resp = await client.post(f"/v1/fleet/devices/{device_id}/heartbeat", json={}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["vehicle_rego"] is None
 
 
 async def test_kiosk_lock_is_admin_only_and_visible_on_heartbeat(client, session):

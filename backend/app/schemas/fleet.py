@@ -210,6 +210,19 @@ class DeviceRead(BaseModel):
     # only as "no hint was computed this response".
     latest_version_code: int | None = None
 
+    # NOT a Device column either -- populated only by POST /devices/{id}/heartbeat, joined from
+    # `vehicle_id`'s own Vehicle row. Real bug found live (2026-09-09): the Android client's
+    # `decideVehicleRebind` self-heal (see that file's doc) used to adopt this row's `vehicle_id`
+    # into the driver's session the moment it disagreed with the session's current binding, with
+    # no way to tell "the depot re-seeded the same car under a new uuid" (heal it) apart from "the
+    # driver deliberately bound to a different vehicle than this tablet's admin-configured pairing"
+    # (leave it alone -- that is the exact "Check tablet placement" scenario, and overwriting it
+    # silently reattributed a whole shift's trips to the wrong car). The rego lets the client make
+    # that distinction itself without a second roster round-trip. `None` whenever `vehicle_id` is
+    # unset, on every non-heartbeat DeviceRead response, or if the vehicle row has since been
+    # deleted (same honest-null posture as every other joined-in field on this schema).
+    vehicle_rego: str | None = None
+
     # NOT a Device column either. The tenant's slug, resolved from `tenant_id`
     # and set on the response by the pairing routes -- same technique as
     # `device_secret` below.

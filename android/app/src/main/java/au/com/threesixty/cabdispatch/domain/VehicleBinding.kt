@@ -129,16 +129,46 @@ class ApiVehicleUuidResolver(private val apiService: ApiService) : VehicleUuidRe
  * - **Already equal.** No write, so [SessionHolder]'s durable store is not churned on every tick
  *   and nothing downstream re-collects a session that did not actually change.
  *
- * Note what is deliberately NOT compared: [DriverSession.vehicleId], the driver-typed/QR'd rego.
- * The device row carries a UUID, not a rego, and nothing here can turn one into the other without
- * the roster call [ApiVehicleUuidResolver] makes. The rego stays exactly as the driver entered it —
- * it is what every display and every rego-keyed API call still uses — and only
- * [DriverSession.vehicleUuid], the field `POST /v1/fleet/positions` actually 404s on, is healed.
+ * [DriverSession.vehicleId], the driver-typed/QR'd rego, is never overwritten by this — it is what
+ * every display and every rego-keyed API call still uses. Only [DriverSession.vehicleUuid], the
+ * field `POST /v1/fleet/positions` actually 404s on, is ever healed.
  *
+ * ### The fourth case that must NOT rebind either (real bug, found live 2026-09-09)
+ * This used to adopt [reportedVehicleUuid] unconditionally whenever it disagreed with
+ * [DriverSession.vehicleUuid], on the reasoning that the device row's uuid is always the fresher
+ * answer. That is only true for the fleet-wipe/reseed case this channel was built for — the SAME
+ * car, under a NEW uuid, still wearing the SAME rego the driver bound to. It is not true when the
+ * driver has deliberately bound to a DIFFERENT vehicle than this tablet's admin-configured device
+ * pairing — a relief/spare tablet, a shared tablet moved between cars, or exactly the scenario
+ * `LoginVehicleBindViewModel`'s own "Check tablet placement" warning exists to flag (a shift
+ * started on vehicle A while the device row still says vehicle B). That warning's own copy reads
+ * "nothing to fix here right now" — but this method was quietly proving it wrong within one 60s
+ * heartbeat tick, rebinding the session to vehicle B and reattributing every trip on that shift's
+ * billing to a car the driver was never actually in. [reportedVehicleRego] is what tells the two
+ * cases apart: adopt the reported uuid when there is no working uuid to protect yet, OR when the
+ * reported vehicle's own rego matches [DriverSession.vehicleId] (same car, healed uuid) — never
+ * when the regos disagree (a genuinely different car, which is not this channel's business).
+ *
+ * @param reportedVehicleUuid the fleet device row's own `vehicle_id` (`DeviceDto.vehicleId`).
+ * @param reportedVehicleRego that same vehicle's rego (`DeviceDto.vehicleRego`), joined in
+ *   server-side — `null` if the backend predates that field or the vehicle has since been deleted;
+ *   treated the same as "can't tell", which means "leave the session alone" unless there is no
+ *   working uuid yet at all.
  * @return the UUID to adopt, or `null` for "leave the session alone".
  */
-fun decideVehicleRebind(current: DriverSession?, reportedVehicleUuid: String?): String? {
+fun decideVehicleRebind(
+    current: DriverSession?,
+    reportedVehicleUuid: String?,
+    reportedVehicleRego: String?,
+): String? {
     if (current == null) return null
     val reported = reportedVehicleUuid?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    return if (reported == current.vehicleUuid) null else reported
+    if (reported == current.vehicleUuid) return null
+    // Recovery case: nothing to protect yet (an offline bind, or a resolver failure at login) —
+    // adopt the depot's answer outright, same as before this pass.
+    if (current.vehicleUuid == null) return reported
+    // Otherwise only heal when the depot's own vehicle carries the SAME rego the driver bound to
+    // — see this function's own doc, "The fourth case" above.
+    val rego = reportedVehicleRego?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return if (rego.equals(current.vehicleId.trim(), ignoreCase = true)) reported else null
 }

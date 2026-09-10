@@ -400,7 +400,23 @@ private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
     // Real QR scan needs an Activity to host its scan UI — this app is single-activity (see
     // MainActivity's own doc), so LocalContext.current always is one here.
     val activity = LocalContext.current as android.app.Activity
-    Column(modifier = Modifier.fillMaxSize().padding(start = 72.dp, end = 72.dp, top = 64.dp, bottom = 48.dp)) {
+    // Top inset from CaptainChromeMetrics (real bug, found live 2026-09-09): same fix as
+    // InspectionStep below in this same file — this Column used a bare 64.dp instead of
+    // MfaStep's topOverlayInset-based padding a few steps earlier in this same flow, so LOCK
+    // PENDING/FLEET LOCKED/TABLET NOT REGISTERED sat across this screen's own title/subtitle
+    // ("Scan the QR on the dash...") whenever either banner was up and no real header had measured
+    // yet. Same +104.dp figure as MfaStep/the driver sign-in step above, not a smaller guess: a
+    // first pass at +8.dp cleared the subtitle but the chip still clipped the "Bind to vehicle"
+    // H1 itself (confirmed on the tablet) — 104dp is the one already proven, on this exact tablet,
+    // to clear a full-size title comfortably. verticalScroll added for the same reason those two
+    // steps already carry it: this Column was never audited against the extra padding actually
+    // fitting the fixed 800dp canvas (see FixedDesignCanvas's own doc) on every device/font-scale
+    // combination, and a scrollable column degrades to "scroll a little" instead of "Bind Vehicle
+    // renders off-screen" if it doesn't.
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 72.dp, end = 72.dp, top = CaptainChromeMetrics.topOverlayInset + 104.dp, bottom = 48.dp),
+    ) {
         Text("Bind to vehicle", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 36.sp, color = CaptainPalette.textPrimary)
         Spacer(Modifier.height(8.dp))
         Text(
@@ -575,7 +591,21 @@ private fun InspectionStep(
 ) {
     var showDefectDialog by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(start = 72.dp, end = 72.dp, top = 48.dp, bottom = 44.dp)) {
+    // Top inset from CaptainChromeMetrics (real bug, found live 2026-09-09): this screen has no
+    // header either, same as DriverSignInStep/BindVehicleStep above in this same file, but this
+    // Column used a bare 48.dp instead of their topOverlayInset-based padding — the one step of
+    // the three that never adopted the fix those two already carry. LOCK PENDING/FLEET LOCKED (or
+    // TABLET NOT REGISTERED) sat squarely across this screen's own title/subtitle whenever either
+    // banner was up and no real header had ever measured itself yet (a cold start, or straight
+    // through login without visiting a headered screen first) -- confirmed on the tablet. Bumped
+    // to the same +104.dp/verticalScroll shape as VehicleBindStep above once a first +8.dp pass
+    // turned out to still clip the H1 on that sibling screen — see that Column's own doc; applied
+    // here too rather than left on a smaller untested guess for a screen with nine checklist cards
+    // to fit under the extra padding.
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 72.dp, end = 72.dp, top = CaptainChromeMetrics.topOverlayInset + 104.dp, bottom = 44.dp),
+    ) {
         Text("Pre-shift safety inspection", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)
         Spacer(Modifier.height(6.dp))
         Text(

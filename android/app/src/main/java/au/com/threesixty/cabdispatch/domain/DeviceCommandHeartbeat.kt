@@ -344,7 +344,7 @@ class DeviceCommandHeartbeat(
         if (SessionHolder.deviceId != null) return
         pairingStore.saveDeviceId(device.id)
         SessionHolder.deviceId = device.id
-        reconcileVehicleBinding(device.vehicleId)
+        reconcileVehicleBinding(device.vehicleId, device.vehicleRego)
     }
 
     /** Polls immediately and then every [POLL_INTERVAL_MS] — same "act then delay" shape as
@@ -434,7 +434,7 @@ class DeviceCommandHeartbeat(
         )
         // The self-heal channel that was on the wire all along and never read — see
         // [reconcileVehicleBinding] and [decideVehicleRebind].
-        reconcileVehicleBinding(device.vehicleId)
+        reconcileVehicleBinding(device.vehicleId, device.vehicleRego)
         if (shouldAnswerLocate(device.locateRequested)) {
             respondToLocateRequest(deviceId)
         }
@@ -468,8 +468,9 @@ class DeviceCommandHeartbeat(
      * The decision itself is [decideVehicleRebind] — pure, unit-tested, and documenting the three
      * cases that must NOT rebind. This method is only the part that touches live state.
      */
-    private fun reconcileVehicleBinding(reportedVehicleUuid: String?) {
-        val adopt = decideVehicleRebind(SessionHolder.session.value, reportedVehicleUuid) ?: return
+    private fun reconcileVehicleBinding(reportedVehicleUuid: String?, reportedVehicleRego: String?) {
+        val adopt = decideVehicleRebind(SessionHolder.session.value, reportedVehicleUuid, reportedVehicleRego)
+            ?: return
         SessionHolder.updateVehicleUuid(adopt)
     }
 

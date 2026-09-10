@@ -525,6 +525,21 @@ async def create_device(
     return device
 
 
+async def _join_vehicle_rego(session: AsyncSession, response: DeviceRead, device: Device) -> None:
+    """Sets `response.vehicle_rego` from `device.vehicle_id`'s own Vehicle row — see
+    `DeviceRead.vehicle_rego`'s own doc. Shared by every route that returns a `DeviceRead` and
+    feeds the Android client's `decideVehicleRebind` self-heal (`devices/me`, `/heartbeat`), so
+    that self-heal cannot silently regress on one of the two paths into it while the other keeps
+    working."""
+    if device.vehicle_id is not None:
+        vehicle_result = await session.execute(
+            select(Vehicle.rego).where(
+                Vehicle.id == device.vehicle_id, Vehicle.tenant_id == device.tenant_id
+            )
+        )
+        response.vehicle_rego = vehicle_result.scalar_one_or_none()
+
+
 async def _with_tenant_slug(session: AsyncSession, device: Device) -> DeviceRead:
     """`DeviceRead` for a tablet, carrying its tenant's slug.
 
@@ -536,6 +551,7 @@ async def _with_tenant_slug(session: AsyncSession, device: Device) -> DeviceRead
     response = DeviceRead.model_validate(device)
     tenant = await tenant_service.get_tenant_or_404(session, tenant_id=device.tenant_id)
     response.tenant_slug = tenant.slug
+    await _join_vehicle_rego(session, response, device)
     return response
 
 
@@ -826,6 +842,7 @@ async def device_heartbeat(
     latest_release = await app_releases_service.get_latest_active_release(session)
     response = DeviceRead.model_validate(device)
     response.latest_version_code = latest_release.version_code if latest_release is not None else None
+    await _join_vehicle_rego(session, response, device)
     return response
 
 

@@ -111,19 +111,44 @@ class VehicleBindingTest {
 
     /**
      * The field failure, in one test: a session still bound to a vehicle deleted in a fleet wipe,
-     * and a depot that has since re-bound the tablet to the re-seeded car. Before this the tablet
-     * published to the dead uuid forever ("Location request failed to send — HTTP 404") with no
-     * path back short of a driver re-binding at login.
+     * and a depot that has since re-bound the tablet to the re-seeded car UNDER THE SAME REGO.
+     * Before this the tablet published to the dead uuid forever ("Location request failed to send
+     * — HTTP 404") with no path back short of a driver re-binding at login.
      */
     @Test
-    fun `a different vehicle id on the heartbeat rebinds the session`() {
-        assertEquals("uuid-khi-v2", decideVehicleRebind(session, "uuid-khi-v2"))
+    fun `a different vehicle id on the heartbeat rebinds the session when the rego still matches`() {
+        assertEquals("uuid-khi-v2", decideVehicleRebind(session, "uuid-khi-v2", "KHI-01"))
+        // Case/whitespace-insensitive, same as matchVehicleUuid/bindVehicle.
+        assertEquals("uuid-khi-v2", decideVehicleRebind(session, "uuid-khi-v2", " khi-01 "))
     }
 
-    /** The ordinary tick, 1439 times a day: same answer, no write, no store churn. */
+    /**
+     * The real bug, found live (2026-09-09): a driver's shift+trip explicitly bound to a different
+     * vehicle than this tablet's admin-configured device pairing — the exact "Check tablet
+     * placement" scenario `LoginVehicleBindViewModel` itself warns about — used to get silently
+     * rebound to the device's own paired car within one heartbeat tick, reattributing every trip's
+     * billing to a car the driver was never actually in. A working binding to a genuinely different
+     * car must never be overwritten just because the device row disagrees.
+     */
+    @Test
+    fun `a different vehicle id is NOT adopted when the reported rego is a different car`() {
+        assertNull(decideVehicleRebind(session, "uuid-t22123", "T22123"))
+    }
+
+    /** No rego to compare against (an older backend, or the reported vehicle has since been
+     * deleted) is "can't tell", not "assume it's fine" — same as a genuinely different rego. */
+    @Test
+    fun `a different vehicle id is NOT adopted when no rego was reported to compare`() {
+        assertNull(decideVehicleRebind(session, "uuid-khi-v2", null))
+        assertNull(decideVehicleRebind(session, "uuid-khi-v2", "   "))
+    }
+
+    /** The ordinary tick, 1439 times a day: same answer, no write, no store churn — regardless of
+     * what rego comes with it, since there is nothing to decide once the uuid already matches. */
     @Test
     fun `the same vehicle id is not a rebind`() {
-        assertNull(decideVehicleRebind(session, "uuid-khi"))
+        assertNull(decideVehicleRebind(session, "uuid-khi", "KHI-01"))
+        assertNull(decideVehicleRebind(session, "uuid-khi", null))
     }
 
     /**
@@ -133,30 +158,35 @@ class VehicleBindingTest {
      */
     @Test
     fun `a device row with no vehicle bound never clears a working binding`() {
-        assertNull(decideVehicleRebind(session, null))
-        assertNull(decideVehicleRebind(session, "   "))
+        assertNull(decideVehicleRebind(session, null, null))
+        assertNull(decideVehicleRebind(session, "   ", null))
     }
 
     /** A parked, logged-off tablet still heartbeats on its device secret — there is simply no
      * session to correct, and inventing one is not on the table. */
     @Test
     fun `no session means nothing to rebind`() {
-        assertNull(decideVehicleRebind(null, "uuid-khi-v2"))
+        assertNull(decideVehicleRebind(null, "uuid-khi-v2", "KHI-01"))
     }
 
     /** A bind performed offline resolves to a null uuid and used to stay null for the whole shift.
-     * The heartbeat can now fill it in without the driver doing anything. */
+     * The heartbeat can now fill it in without the driver doing anything — this recovery case has
+     * no working binding to protect, so it adopts the depot's answer regardless of rego. */
     @Test
-    fun `a session that never resolved a uuid adopts the depot's answer`() {
-        assertEquals("uuid-khi", decideVehicleRebind(session.copy(vehicleUuid = null), "uuid-khi"))
+    fun `a session that never resolved a uuid adopts the depot's answer regardless of rego`() {
+        assertEquals("uuid-khi", decideVehicleRebind(session.copy(vehicleUuid = null), "uuid-khi", "KHI-01"))
+        assertEquals("uuid-khi", decideVehicleRebind(session.copy(vehicleUuid = null), "uuid-khi", null))
+        assertEquals(
+            "uuid-t22123",
+            decideVehicleRebind(session.copy(vehicleUuid = null), "uuid-t22123", "T22123"),
+        )
     }
 
-    /** Only the uuid is healed: the rego is what the driver typed, and every display and
-     * rego-keyed API call still uses it. Nothing here should tempt a future caller to touch it. */
+    /** Only the uuid is ever written back: the rego stays exactly as the driver typed it, and every
+     * display and rego-keyed API call still uses that, never the reported one. */
     @Test
-    fun `the rego is never what is compared`() {
-        // Same uuid, completely different rego on the session — still not a rebind, because the
-        // device row carries no rego to disagree with.
-        assertNull(decideVehicleRebind(session.copy(vehicleId = "GHP-1"), "uuid-khi"))
+    fun `the session's own rego is never overwritten, only the uuid`() {
+        val healed = session.copy(vehicleId = "khi-01") // driver typed lowercase
+        assertEquals("uuid-khi-v2", decideVehicleRebind(healed, "uuid-khi-v2", "KHI-01"))
     }
 }
