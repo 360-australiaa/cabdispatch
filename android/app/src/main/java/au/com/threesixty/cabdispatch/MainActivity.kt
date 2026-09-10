@@ -239,16 +239,24 @@ private fun CabDispatchScreenRoot() {
         // getLockTaskModeState() and latched kioskPinConfirmed = false, permanently, because this
         // effect only re-runs on the NEXT kioskLocked change (a poll landing or a cold start), not
         // on a timer. A tablet the OS had genuinely just pinned sat showing "LOCK PENDING" through
-        // an entire session and multiple app restarts. One short delayed re-read -- of state only,
-        // never re-calling start/stop, which would re-trigger that OS toast a second time for no
-        // reason -- catches the OS actually settling; if it still has not by then, LOCK PENDING is
-        // the honest, unretried answer, same as before this fix.
+        // an entire session and multiple app restarts.
+        //
+        // A single 400ms retry (this fix's first attempt) was not enough -- confirmed live: even
+        // ~2 real seconds after the OS's own "App is pinned" toast, `dumpsys activity activities`
+        // already reported `mLockTaskModeState=PINNED` while this effect's one retry had already
+        // given up and latched false. So this polls -- of state only, never re-calling
+        // start/stop, which would re-trigger that OS toast a second time for no reason -- a
+        // handful of times over a longer window. If the OS still has not settled after that,
+        // LOCK PENDING is the honest, exhausted-retries answer, same as before this fix existed.
         if (!kioskPinConfirmed && activity != null) {
-            delay(400)
-            kioskPinConfirmed = KioskLockController.isPinConfirmed(
-                KioskLockController.currentLockTaskMode(activity),
-                commandState.kioskLocked,
-            )
+            repeat(6) {
+                delay(500)
+                kioskPinConfirmed = KioskLockController.isPinConfirmed(
+                    KioskLockController.currentLockTaskMode(activity),
+                    commandState.kioskLocked,
+                )
+                if (kioskPinConfirmed) return@LaunchedEffect
+            }
         }
     }
 
