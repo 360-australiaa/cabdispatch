@@ -344,6 +344,25 @@ def test_h2_cleaning_fee_is_clamped_to_the_tariffs_cap_never_trusted_raw():
     assert breakdown.fare_total == Decimal("129.31")
 
 
+def test_h2a_negative_add_ons_are_defensively_clamped_to_zero():
+    """The pure kernel must preserve its money invariant even if a caller
+    bypasses API-schema validation during replay or import."""
+    engine = FareEngine()
+    state = FareState(tariff=URBAN_TARIFF, time_class=TimeClass.DAY)
+
+    breakdown = engine.close(
+        state,
+        payment_method="card",
+        cleaning_fee=Decimal("-10.00"),
+        surcharge_pct=Decimal("-5.00"),
+    )
+
+    assert breakdown.cleaning_fee == Decimal(0)
+    assert breakdown.surcharge == Decimal(0)
+    assert breakdown.fare_total == URBAN_TARIFF.flag_fall
+    assert breakdown.grand_total == URBAN_TARIFF.flag_fall
+
+
 def test_h3_negotiated_set_price_bills_exactly_the_agreed_amount_all_inclusive():
     """2026-09 product correction: a $25 negotiated ("Set Price") fare is now
     ALL-INCLUSIVE — the $6.43 toll and PSL are still real, still recorded on

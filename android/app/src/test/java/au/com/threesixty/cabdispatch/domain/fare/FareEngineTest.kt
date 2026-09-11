@@ -812,4 +812,24 @@ class FareEngineTest {
         assertEquals(BigDecimal("0.65"), breakdown.surcharge)
         assertEquals(BigDecimal("13.65"), breakdown.grandTotal) // surcharge IS billed, unlike the negotiated case
     }
+
+    @Test
+    fun testAF_negativeAddOnsAreDefensivelyClampedToZero() {
+        // Transport validation rejects these inputs; this is a second line of
+        // defence for offline replay/import paths that call the pure kernel.
+        val engine = FareEngine()
+        val state = FareState(tariff = URBAN_TARIFF, timeClass = TimeClass.DAY)
+
+        val breakdown = engine.close(
+            state,
+            paymentMethod = "card",
+            surchargePct = BigDecimal("-5.0"),
+            cleaningFee = BigDecimal("-10.00"),
+        )
+
+        assertEquals(BigDecimal.ZERO, breakdown.cleaningFee)
+        assertEquals(BigDecimal.ZERO, breakdown.surcharge)
+        assertEquals(URBAN_TARIFF.flagFall, breakdown.fareTotal)
+        assertEquals(URBAN_TARIFF.flagFall, breakdown.grandTotal)
+    }
 }

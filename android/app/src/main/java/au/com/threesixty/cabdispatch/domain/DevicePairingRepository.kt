@@ -5,6 +5,10 @@ import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.DeviceRegisterRequestDto
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 
@@ -83,6 +87,17 @@ object DevicePairingRepository {
      * per status code, and never throws.
      */
     fun errorMessage(error: Throwable): String {
+        // Never surface OkHttp/OS transport text here. It can reveal an API
+        // host, port, or the tablet's LAN address to a driver at the
+        // commissioning screen. Diagnostics remain in protected logs.
+        if (
+            error is SocketTimeoutException ||
+            error is ConnectException ||
+            error is UnknownHostException ||
+            error is IOException
+        ) {
+            return "Cannot reach Cab Dispatch. Check the tablet connection and try again."
+        }
         val http = error as? retrofit2.HttpException
             ?: return error.message ?: "Could not pair — check your connection and try again"
         val body = runCatching { http.response()?.errorBody()?.string() }.getOrNull()

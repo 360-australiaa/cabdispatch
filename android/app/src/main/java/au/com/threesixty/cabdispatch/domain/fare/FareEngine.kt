@@ -395,6 +395,10 @@ class FareEngine {
     private fun clampCleaningFee(tariff: Tariff, cleaningFee: BigDecimal): BigDecimal =
         cleaningFee.coerceIn(BigDecimal.ZERO, tariff.cleaningFeeCap)
 
+    /** Keeps the pure engine safe when a caller bypasses transport validation. */
+    private fun clampSurchargePct(tariff: Tariff, surchargePct: BigDecimal): BigDecimal =
+        surchargePct.coerceIn(BigDecimal.ZERO, tariff.surchargePctCap)
+
     /** Assembles the final (or checkpoint — this method does not mutate
      * [state], so it may safely be called mid-trip e.g. at each hirer's
      * drop-off in a multiple-hiring scenario) fare breakdown. */
@@ -423,7 +427,7 @@ class FareEngine {
             val fareTotal = fixedFare
             var surcharge = BigDecimal.ZERO
             if (paymentMethod == "card") {
-                val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
+                val pct = clampSurchargePct(state.tariff, surchargePct ?: state.tariff.surchargePctCap)
                 surcharge = roundHalfUp(fareTotal * pct / BigDecimal(100))
             }
             val grandTotal = fareTotal + cappedCleaningFee // surcharge absorbed, never added
@@ -491,7 +495,7 @@ class FareEngine {
         if (negotiatedTotal != null) {
             fareTotal = roundDownToCent(negotiatedTotal)
             surcharge = if (paymentMethod == "card") {
-                val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
+                val pct = clampSurchargePct(state.tariff, surchargePct ?: state.tariff.surchargePctCap)
                 roundHalfUp(fareTotal * pct / BigDecimal(100))
             } else {
                 BigDecimal.ZERO
@@ -501,7 +505,7 @@ class FareEngine {
             val subtotal = meteredFare + state.tolls + psl + state.extras + cappedCleaningFee
             fareTotal = roundDownToCent(subtotal)
             surcharge = if (paymentMethod == "card") {
-                val pct = minOf(surchargePct ?: state.tariff.surchargePctCap, state.tariff.surchargePctCap)
+                val pct = clampSurchargePct(state.tariff, surchargePct ?: state.tariff.surchargePctCap)
                 roundHalfUp(fareTotal * pct / BigDecimal(100))
             } else {
                 BigDecimal.ZERO

@@ -589,7 +589,10 @@ class FareEngine:
         # Order cl 2(f): clamp any requested cleaning fee to the tariff's cap
         # regardless of what the caller asked for — the enforced maximum,
         # not merely a display-layer suggestion.
-        cleaning_fee = min(cleaning_fee, state.tariff.cleaning_fee_cap)
+        # The request schemas reject negative values, but this pure kernel is
+        # also used by replay/import paths. Keep the billing invariant here so
+        # a bypass can never reduce a regulated fare with a negative add-on.
+        cleaning_fee = max(Decimal(0), min(cleaning_fee, state.tariff.cleaning_fee_cap))
 
         if state.fixed_fare is not None:
             # Sydney Airport Fixed Fare Trial: no PSL, tolls, or peak allowed on
@@ -602,10 +605,10 @@ class FareEngine:
             fare_total = state.fixed_fare
             surcharge = Decimal(0)
             if payment_method == "card":
-                pct = min(
+                pct = max(Decimal(0), min(
                     surcharge_pct if surcharge_pct is not None else state.tariff.surcharge_pct_cap,
                     state.tariff.surcharge_pct_cap,
-                )
+                ))
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
             grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
             gst_component = round_half_up(grand_total / Decimal(11))
@@ -663,10 +666,10 @@ class FareEngine:
 
             surcharge = Decimal(0)
             if payment_method == "card":
-                pct = min(
+                pct = max(Decimal(0), min(
                     surcharge_pct if surcharge_pct is not None else state.tariff.surcharge_pct_cap,
                     state.tariff.surcharge_pct_cap,
-                )
+                ))
                 surcharge = round_half_up(fare_total * pct / Decimal(100))
 
             grand_total = fare_total + cleaning_fee  # surcharge absorbed, never added
@@ -753,10 +756,10 @@ class FareEngine:
 
         surcharge = Decimal(0)
         if payment_method == "card":
-            pct = min(
+            pct = max(Decimal(0), min(
                 surcharge_pct if surcharge_pct is not None else state.tariff.surcharge_pct_cap,
                 state.tariff.surcharge_pct_cap,
-            )
+            ))
             surcharge = round_half_up(fare_total * pct / Decimal(100))
 
         grand_total = fare_total + surcharge

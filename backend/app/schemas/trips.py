@@ -132,8 +132,8 @@ class TripCreate(BaseModel):
         default=False,
         description="A maxi-cab specifically requested at a Sydney Airport rank — triggers the maxi rate independent of passenger_count, except for a wheelchair hiring.",
     )
-    tolls: Decimal = Decimal(0)
-    extras: Decimal = Decimal(0)
+    tolls: Decimal = Field(default=Decimal(0), ge=0)
+    extras: Decimal = Field(default=Decimal(0), ge=0)
     gps_trace_ref: str | None = None
     negotiated_total: Decimal | None = Field(
         default=None,
@@ -171,8 +171,8 @@ class TripUpdate(BaseModel):
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[SplitPaymentItem] | None = None
-    tolls: Decimal | None = None
-    extras: Decimal | None = None
+    tolls: Decimal | None = Field(default=None, ge=0)
+    extras: Decimal | None = Field(default=None, ge=0)
     gps_trace_ref: str | None = None
     receipt_ref: str | None = None
     end_lat: float | None = None
@@ -214,8 +214,8 @@ class TripCloseRequest(BaseModel):
     voucher_code: str | None = None
     account_reference: str | None = None
     split_payments: list[SplitPaymentItem] | None = None
-    surcharge_pct: Decimal | None = None
-    cleaning_fee: Decimal = Decimal(0)
+    surcharge_pct: Decimal | None = Field(default=None, ge=0)
+    cleaning_fee: Decimal = Field(default=Decimal(0), ge=0)
     include_psl: bool = False
     receipt_ref: str | None = None
     tip_amount: Decimal | None = Field(
@@ -293,10 +293,10 @@ class TripSyncItem(BaseModel):
     passenger_count: int = Field(default=1, ge=1, le=11)
     wheelchair_hiring: bool = False
     airport_rank_requested_maxi: bool = False
-    tolls: Decimal = Decimal(0)
-    extras: Decimal = Decimal(0)
-    cleaning_fee: Decimal = Decimal(0)
-    surcharge_pct: Decimal | None = None
+    tolls: Decimal = Field(default=Decimal(0), ge=0)
+    extras: Decimal = Field(default=Decimal(0), ge=0)
+    cleaning_fee: Decimal = Field(default=Decimal(0), ge=0)
+    surcharge_pct: Decimal | None = Field(default=None, ge=0)
     include_psl: bool = False
     gps_trace: list[TelemetryPoint] = Field(default_factory=list)
     gps_trace_ref: str | None = None
@@ -309,7 +309,9 @@ class TripSyncItem(BaseModel):
             "with a driver-entered set price doesn't lose it on replay."
         ),
     )
-    device_total: Decimal = Field(..., description="The total the offline device computed on-vehicle")
+    device_total: Decimal = Field(
+        ..., ge=0, description="The total the offline device computed on-vehicle"
+    )
     tip_amount: Decimal | None = Field(
         default=None,
         description=(
