@@ -70,6 +70,7 @@ from app.services.trips import (
     flag_trip_for_review,
     is_replayed_tick,
     recompute_from_trace,
+    reconcile_gps_blackout_segments,
     resolve_is_maxi_vehicle,
     resolve_tariff,
 )
@@ -269,7 +270,7 @@ async def sync_trips(
                 # own doc comment; it resolves both authoritatively itself, from
                 # the tariff it looks up and item.start_at, and hands the
                 # resolved values back below for the Trip row.
-                breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events = await recompute_from_trace(
+                breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events, stopped_s = await recompute_from_trace(
                     session,
                     tenant_id=tenant_id,
                     tariff_id=item.tariff_id,
@@ -289,6 +290,20 @@ async def sync_trips(
                     surcharge_pct=item.surcharge_pct,
                     include_psl=item.include_psl,
                     negotiated_total=item.negotiated_total,
+                )
+
+                # GPS-blackout / STOPPED reconciliation (B-W1) -- purely an audit-trail
+                # cross-check between the device's OWN account of its blackouts
+                # (item.gps_blackout_segments) and this server's own independent
+                # recompute above (gps_blackout_events); see
+                # reconcile_gps_blackout_segments's own doc for exactly what is
+                # compared and why neither side is ever auto-corrected by the other.
+                blackout_reconciliation = await reconcile_gps_blackout_segments(
+                    session,
+                    device_segments=item.gps_blackout_segments,
+                    server_events=gps_blackout_events,
+                    device_stopped_s=item.stopped_s,
+                    server_stopped_s=stopped_s,
                 )
 
                 variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
@@ -372,7 +387,13 @@ async def sync_trips(
                     distance_m=distance_m,
                     moving_s=moving_s,
                     waiting_s=waiting_s,
+                    stopped_s=stopped_s,
                     gps_blackout_events=gps_blackout_events or None,
+                    device_gps_blackout_segments=(
+                        [segment.model_dump(mode="json") for segment in item.gps_blackout_segments]
+                        or None
+                    ),
+                    blackout_reconciliation=blackout_reconciliation or None,
                     flag_fall=breakdown.flag_fall,
                     dist_amount=breakdown.distance_charge,
                     wait_amount=breakdown.waiting_charge,
