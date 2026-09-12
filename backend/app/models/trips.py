@@ -366,6 +366,67 @@ class Trip(Base, TenantScopedMixin, TimestampMixin):
     # is what makes this threshold meaningful there.
     gps_blackout_events: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True, default=list)
 
+    # --- device-reported GPS blackout segments + reconciliation (B-W1, GPS
+    # blackout program, docs/plans/2026-09-12-android-meter-optimisation-and-
+    # gps-blackout-plan.md) --------------------------------------------------
+    #
+    # `device_gps_blackout_segments`: the DEVICE's OWN account of the GPS
+    # blackouts it experienced this trip -- the wire mirror of Android's
+    # `GpsBlackoutSegmentDto` list (`app.schemas.trips.DeviceGpsBlackoutSegment`,
+    # `TripSyncItem.gps_blackout_segments`), stored verbatim (one dict per
+    # segment, same shape as that schema's own `.model_dump(mode="json")`).
+    # Deliberately a SEPARATE column from `gps_blackout_events` above, never
+    # merged into it: that column is this SERVER's own independent recompute
+    # from the raw `gps_trace` (app.services.trips.recompute_from_trace); this
+    # one is what the meter itself believed happened, computed by completely
+    # different code on a completely different device. Treating the two as
+    # interchangeable -- or letting one silently correct the other -- would
+    # throw away the entire point of having both: a genuine disagreement
+    # between them is itself evidence (of a bug in either implementation, or
+    # of a driver/device attempting to manufacture a dispute), not noise to be
+    # smoothed over. Nullable, no backfill needed -- every existing trip simply
+    # has no device-reported segments yet (empty list, matching the
+    # `TripSyncItem` field's own `default_factory=list`).
+    device_gps_blackout_segments: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, default=list
+    )
+
+    # `blackout_reconciliation`: the OUTPUT of comparing the two accounts above,
+    # via `app.services.trips.reconcile_gps_blackout_segments` (called once, at
+    # sync time, from `app.api.v1.trips.sync_trips` -- see that function's own
+    # doc for exactly what is checked and the tolerances used). Each entry is
+    # `{"type": "<flag kind>", ...details}`. Empty/`[]` means either the device
+    # reported no blackout segments, or everything it reported reconciled
+    # cleanly. AUDIT-TRAIL / FRAUD-AND-BUG-DETECTION ONLY, same posture as
+    # `flagged_for_review` below -- a non-empty list is a prompt for the OWNER
+    # to look at the trip on the dashboard, and changes NOTHING about
+    # distance_m/moving_s/waiting_s/tolls/total, which already reflect either
+    # the device's own on-trip billing (verified via the pre-existing 1%
+    # variance check) or this server's own independent recompute, exactly as
+    # they did before this column existed. Never auto-corrects either side.
+    blackout_reconciliation: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, default=list
+    )
+
+    # --- STOPPED-state wiring (G4, same plan doc, "a driver-initiated pause
+    # bills nothing, and is DISTINCT from an involuntary GPS blackout"). The
+    # SERVER's own independently-computed total, in exactly the same spirit as
+    # `moving_s`/`waiting_s` above: `app.services.trips.recompute_from_trace`
+    # (offline sync) and `apply_tick` (online tick) both derive this from the
+    # trip's own telemetry (`app.schemas.trips.TelemetryPoint.state ==
+    # "stopped"`), never from the device's own `TripSyncItem.stopped_s`/
+    # `TripTickRequest.stopped_s` claim -- that claim is cross-checked against
+    # this column by `reconcile_gps_blackout_segments` and flagged (not
+    # trusted) on a mismatch, same posture as the blackout columns above.
+    # STOPPED seconds are excluded from both `moving_s` and `waiting_s` -- a
+    # stopped interval is neither driving nor waiting-for-a-fare, it is the
+    # meter deliberately not billing at all -- so `distance_m + moving_s +
+    # waiting_s` no longer sums to the whole trip duration once a trip has any
+    # stopped time; `stopped_s` is the remainder that explains the gap.
+    # Default 0, matching every existing trip (which has never had a STOPPED
+    # interval, this column being exactly what starts recording one).
+    stopped_s: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     # --- dispute flagging (blueprint 5.2.5 "Dispute" button / 6.1.3 schema,
     # module docstring deviation #4). Settable via PATCH /v1/trips/{id}/flag by
     # the trip's own driver or a staff role (owner/admin/dispatcher) — see

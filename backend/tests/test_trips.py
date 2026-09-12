@@ -2882,3 +2882,535 @@ async def test_online_close_without_device_total_records_no_variance(
     assert resp.status_code == 200, resp.text
     assert resp.json()["max_fare_check_passed"] is True
     assert resp.json()["flagged_for_review"] is False
+
+
+# --- B-W1: device-reported GPS blackout segments, reconciliation, STOPPED ---
+# (docs/plans/2026-09-12-android-meter-optimisation-and-gps-blackout-plan.md)
+
+
+async def _seed_test_corridor(
+    session: AsyncSession,
+    *,
+    road_id: str,
+    entry: tuple[float, float],
+    bend: tuple[float, float],
+    exit_: tuple[float, float],
+) -> None:
+    """Same 3-gantry bent `distance` toll-road fixture as
+    test_sync_bills_the_known_corridor_distance_across_a_real_gps_blackout
+    above, factored out so the reconciliation tests below can each seed their
+    own differently-named road without colliding."""
+    road = TollRoad(
+        id=road_id,
+        api_code=None,
+        name=f"Test corridor {road_id}",
+        operator="Test Operator",
+        pricing_model="distance",
+        charging_policy="once_per_road",
+        directional="both",
+    )
+    session.add(road)
+    await session.commit()
+    session.add(
+        TollRoadPriceRevision(
+            toll_road_id=road_id,
+            price_class_a_min=None,
+            price_class_a_max=None,
+            price_class_b_min=None,
+            price_class_b_max=None,
+            cap_class_a=Decimal("100.00"),
+            cap_class_b=None,
+            rate_per_km_class_a=Decimal("1.00"),
+            flagfall_class_a=None,
+            network_cap_class_a=None,
+            time_of_day_rates_class_a=None,
+            currency="AUD",
+            gst_included=True,
+            effective_date=date(2026, 7, 1),
+            indexation="quarterly",
+            confidence="verified",
+        )
+    )
+    for gid, (lat, lng) in [
+        (f"{road_id}:g0", entry),
+        (f"{road_id}:g1", bend),
+        (f"{road_id}:g2", exit_),
+    ]:
+        session.add(
+            TollGantry(
+                id=gid,
+                toll_road_id=road_id,
+                location=gid,
+                ramp=None,
+                direction=None,
+                latitude=lat,
+                longitude=lng,
+            )
+        )
+    await session.commit()
+
+
+def _device_blackout_segment(
+    *,
+    client_uuid: str,
+    started_at: datetime,
+    ended_at: datetime,
+    entry: tuple[float, float],
+    exit_: tuple[float, float],
+    resolution: str,
+    billed_distance_km: str,
+    entry_was_moving: bool = True,
+    corridor_road_id: str | None = None,
+) -> dict:
+    return {
+        "client_uuid": client_uuid,
+        "started_at": started_at.isoformat(),
+        "ended_at": ended_at.isoformat(),
+        "entry_lat": entry[0],
+        "entry_lng": entry[1],
+        "exit_lat": exit_[0],
+        "exit_lng": exit_[1],
+        "entry_was_moving": entry_was_moving,
+        "resolution": resolution,
+        "billed_distance_km": billed_distance_km,
+        "corridor_road_id": corridor_road_id,
+    }
+
+
+async def test_sync_accepts_and_persists_device_gps_blackout_segments(
+    client: AsyncClient, session: AsyncSession
+):
+    """The device's own account of a GPS blackout (no known corridor nearby,
+    resolution NONE) round-trips onto the new Trip.device_gps_blackout_segments
+    column exactly, alongside (never merged with) the server's own
+    independently-computed gps_blackout_events for the same gap."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    entry_lat, entry_lng = -36.10, 150.10
+    exit_lat, exit_lng = -36.10, 150.12
+    now = _FIXED_DAY_START_AT
+    trace = [
+        {"lat": exit_lat, "lng": exit_lng, "speed_kmh": 60, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+    segment = _device_blackout_segment(
+        client_uuid="seg-1",
+        started_at=now,
+        ended_at=now + timedelta(seconds=60),
+        entry=(entry_lat, entry_lng),
+        exit_=(exit_lat, exit_lng),
+        resolution="NONE",
+        billed_distance_km="0",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="0.00",
+        start_lat=entry_lat,
+        start_lng=entry_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["device_gps_blackout_segments"] is not None and len(trip["device_gps_blackout_segments"]) == 1
+    persisted = trip["device_gps_blackout_segments"][0]
+    assert persisted["client_uuid"] == "seg-1"
+    assert persisted["resolution"] == "NONE"
+    assert Decimal(persisted["billed_distance_km"]) == Decimal(0)
+
+    # No known corridor anywhere near this gap on either side -> both accounts
+    # agree there is nothing to explain it with, so reconciliation is clean.
+    assert not trip["blackout_reconciliation"]
+
+    # The server's own independent account is unaffected by, and distinct
+    # from, the device's -- still exactly one NONE-resolution event.
+    assert trip["gps_blackout_events"] is not None and len(trip["gps_blackout_events"]) == 1
+    assert trip["gps_blackout_events"][0]["resolution"] == "NONE"
+
+
+async def test_sync_accepts_empty_gps_blackout_segments_list(client: AsyncClient, session: AsyncSession):
+    """Backward compat: a device build that predates this wire field (or one
+    that has it but genuinely saw no blackout) must sync exactly as before --
+    omitting `gps_blackout_segments`/`stopped_s` entirely from the payload is
+    just as valid as sending empty defaults."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    end_lat, end_lng = -33.8600, 151.2093
+    now = _FIXED_DAY_START_AT
+    trace = _continuous_trace(
+        start_lat=start_lat, start_lng=start_lng, end_lat=end_lat, end_lng=end_lng, start_at=now
+    )
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="999.00",  # irrelevant to this test; variance is not asserted
+        start_lat=start_lat,
+        start_lng=start_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(minutes=5)).isoformat(),
+    )
+    # Simulate an old client: this field was never named at all.
+    assert "gps_blackout_segments" not in item
+    assert "stopped_s" not in item
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["status"] == "closed"
+    assert not trip["device_gps_blackout_segments"]
+    assert not trip["blackout_reconciliation"]
+    assert trip["stopped_s"] == 0
+
+
+async def test_sync_reconciliation_stays_clear_when_corridor_segment_matches(
+    client: AsyncClient, session: AsyncSession
+):
+    """A device-reported CORRIDOR segment whose billed_distance_km agrees
+    (within BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS/_PCT) with what the server's
+    own known_corridor_distance_km independently computes for the same
+    entry/exit points reconciles cleanly -- no flag."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    entry = (-35.50, 150.90)
+    bend = (-35.48, 150.90)
+    exit_ = (-35.48, 150.92)
+    await _seed_test_corridor(session, road_id="TESTRECONCILEOK", entry=entry, bend=bend, exit_=exit_)
+
+    leg1_km = haversine_km(*entry, *bend)
+    leg2_km = haversine_km(*bend, *exit_)
+    corridor_km = leg1_km + leg2_km
+
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": exit_[0], "lng": exit_[1], "speed_kmh": 80, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    segment = _device_blackout_segment(
+        client_uuid="seg-corridor-ok",
+        started_at=now,
+        ended_at=now + timedelta(seconds=60),
+        entry=entry,
+        exit_=exit_,
+        resolution="CORRIDOR",
+        billed_distance_km=str(corridor_km),
+        corridor_road_id="TESTRECONCILEOK",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=entry[0], start_lng=entry[1],
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert not trip["blackout_reconciliation"], trip["blackout_reconciliation"]
+
+
+async def test_sync_flags_corridor_distance_mismatch(client: AsyncClient, session: AsyncSession):
+    """The same fixture as the clean-match test above, except the device's
+    claimed billed_distance_km is wildly different from the server's own
+    known_corridor_distance_km recompute for the identical entry/exit points
+    -- must raise a corridor_distance_mismatch flag (audit-trail only: the
+    trip's own money fields are untouched by this flag)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    entry = (-35.50, 150.90)
+    bend = (-35.48, 150.90)
+    exit_ = (-35.48, 150.92)
+    await _seed_test_corridor(session, road_id="TESTRECONCILEBAD", entry=entry, bend=bend, exit_=exit_)
+
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": exit_[0], "lng": exit_[1], "speed_kmh": 80, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    segment = _device_blackout_segment(
+        client_uuid="seg-corridor-bad",
+        started_at=now,
+        ended_at=now + timedelta(seconds=60),
+        entry=entry,
+        exit_=exit_,
+        resolution="CORRIDOR",
+        # The real corridor here is a few km; claiming 0.001km is well
+        # outside both the absolute (250m) and relative (10%) tolerance.
+        billed_distance_km="0.001",
+        corridor_road_id="TESTRECONCILEBAD",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=entry[0], start_lng=entry[1],
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    flags = trip["blackout_reconciliation"]
+    assert flags, "expected a corridor_distance_mismatch flag"
+    mismatch = [f for f in flags if f["type"] == "corridor_distance_mismatch"]
+    assert len(mismatch) == 1, flags
+    assert mismatch[0]["segment_client_uuid"] == "seg-corridor-bad"
+
+    # Never an auto-correction -- the trip's own billed distance is still
+    # whatever the server's own (correct) recompute produced, not the
+    # device's mismatched claim and not some blended value.
+    assert trip["distance_m"] > 0
+
+
+async def test_sync_flags_device_segment_missing_on_server(client: AsyncClient, session: AsyncSession):
+    """A device-reported blackout segment for a time range where the
+    server's own trace-derived events show no corresponding gap at all (a
+    perfectly continuous trace) is flagged -- the device believed it lost
+    GPS for an interval this server's own gap detection never saw."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.8688, 151.2093
+    end_lat, end_lng = -33.8600, 151.2093
+    now = _FIXED_DAY_START_AT
+    trace = _continuous_trace(
+        start_lat=start_lat, start_lng=start_lng, end_lat=end_lat, end_lng=end_lng, start_at=now
+    )
+    # A blackout the device claims to have seen, entirely fabricated relative
+    # to the (gap-free) trace above.
+    segment = _device_blackout_segment(
+        client_uuid="seg-phantom",
+        started_at=now + timedelta(seconds=10),
+        ended_at=now + timedelta(seconds=40),
+        entry=(start_lat, start_lng),
+        exit_=(end_lat, end_lng),
+        resolution="STATIONARY",
+        billed_distance_km="0",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="999.00",
+        start_lat=start_lat, start_lng=start_lng,
+        start_at=now.isoformat(), end_at=(now + timedelta(minutes=5)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert not trip["gps_blackout_events"]  # continuous trace -- no real server-side gap
+    flags = trip["blackout_reconciliation"]
+    missing_on_server = [f for f in flags if f["type"] == "device_segment_missing_on_server"]
+    assert len(missing_on_server) == 1, flags
+    assert missing_on_server[0]["segment_client_uuid"] == "seg-phantom"
+
+
+async def test_sync_flags_server_gap_missing_on_device(client: AsyncClient, session: AsyncSession):
+    """The reverse case: a real gap in the server's own trace-derived
+    gps_blackout_events with no matching device-reported segment at all
+    (gps_blackout_segments: []) -- the device's own blackout log missed a
+    gap that genuinely exists in the trace it uploaded."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -36.20, 150.20
+    end_lat, end_lng = -36.20, 150.22
+    now = _FIXED_DAY_START_AT
+    # No toll road seeded near here -- a genuine, unexplained (resolution
+    # NONE) gap, exactly the common "real GPS loss, nothing mapped nearby"
+    # case gps_blackout_events already covers.
+    trace = [{"lat": end_lat, "lng": end_lng, "speed_kmh": 60, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=start_lat, start_lng=start_lng,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["gps_blackout_events"] and len(trip["gps_blackout_events"]) == 1
+    flags = trip["blackout_reconciliation"]
+    missing_on_device = [f for f in flags if f["type"] == "server_gap_missing_on_device"]
+    assert len(missing_on_device) == 1, flags
+
+
+async def test_sync_flags_stopped_seconds_mismatch(client: AsyncClient, session: AsyncSession):
+    """The device's own claimed TripSyncItem.stopped_s, when it disagrees
+    with what the server's own recompute_from_trace independently derives
+    from the trace's own `state` fields by more than
+    STOPPED_SECONDS_TOLERANCE_S, is flagged."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.90, 151.00
+    now = _FIXED_DAY_START_AT
+    # A single "stopped" point 90s in -- the server independently derives
+    # stopped_s == 90 from this alone.
+    trace = [
+        {
+            "lat": start_lat, "lng": start_lng, "speed_kmh": 0,
+            "ts": (now + timedelta(seconds=90)).isoformat(), "state": "stopped",
+        }
+    ]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=start_lat, start_lng=start_lng,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=90)).isoformat(),
+        stopped_s=0,  # device claims no stopped time at all -- a real disagreement
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["stopped_s"] == 90
+    flags = trip["blackout_reconciliation"]
+    mismatch = [f for f in flags if f["type"] == "stopped_seconds_mismatch"]
+    assert len(mismatch) == 1, flags
+    assert mismatch[0]["server_stopped_s"] == 90
+    assert mismatch[0]["device_stopped_s"] == 0
+
+
+async def test_sync_stopped_interval_bills_nothing(client: AsyncClient, session: AsyncSession):
+    """STOPPED-state wiring (G4), the conservative interpretation this pass
+    implements: a `state: "stopped"` interval never accrues distance or
+    waiting time, whether or not it is also long enough to independently
+    qualify as a GPS blackout gap -- and it is recorded in
+    gps_blackout_events with resolution "STOPPED" (billing nothing) rather
+    than silently vanishing or falling through to the corridor/plausible-
+    distance logic."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    start_lat, start_lng = -33.90, 151.00
+    # Well over 100km away -- if this interval were billed as an ordinary
+    # blackout (not STOPPED), an unmatched corridor lookup would bill 0 km
+    # anyway, so a huge haversine distance is used instead to prove nothing
+    # merely "coincidentally" came out to zero: a non-STOPPED gap this long,
+    # landing on real coordinates with no known corridor, would still only
+    # ever bill 0 extra km (see recompute_from_trace's own NONE-resolution
+    # behaviour) -- so the meaningful assertion below is on moving_s/
+    # waiting_s/resolution, not on distance_m alone.
+    far_lat, far_lng = -34.50, 151.50
+    now = _FIXED_DAY_START_AT
+    trace = [
+        {
+            "lat": far_lat, "lng": far_lng, "speed_kmh": 0,
+            "ts": (now + timedelta(seconds=120)).isoformat(), "state": "stopped",
+        }
+    ]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="0.00",
+        start_lat=start_lat, start_lng=start_lng,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=120)).isoformat(),
+        stopped_s=120,
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["moving_s"] == 0
+    assert trip["waiting_s"] == 0
+    assert trip["stopped_s"] == 120
+    assert trip["distance_m"] == 0
+    events = trip["gps_blackout_events"]
+    assert events and len(events) == 1
+    assert events[0]["resolution"] == "STOPPED"
+    assert events[0]["matched_km"] is None
+    # Device and server agree on stopped_s -- no reconciliation flag.
+    assert not trip["blackout_reconciliation"]
+
+
+async def test_tick_state_stopped_excludes_interval_from_moving_and_waiting(
+    client: AsyncClient, session: AsyncSession
+):
+    """Online-tick counterpart of the sync test above: a telemetry point
+    marked `state: "stopped"` contributes to neither moving_s nor waiting_s
+    -- only to the new Trip.stopped_s -- through PATCH /v1/trips/{id}/tick."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": trip["start_lat"], "lng": trip["start_lng"], "speed_kmh": 0,
+                    "ts": (t0 + timedelta(seconds=45)).isoformat(), "state": "stopped",
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["moving_s"] == 0
+    assert body["waiting_s"] == 0
+    assert body["stopped_s"] == 45
+    assert body["dist_amount"] == "0.00"
+    assert body["wait_amount"] == "0.00"
+
+
+async def test_tick_rejects_unknown_state_value(client: AsyncClient, session: AsyncSession):
+    """Schema-level validation for STOPPED-state wiring: TelemetryPoint.state
+    is a strict Literal["hired", "stopped"] -- an unrecognised value is a 422,
+    not silently accepted (and, worse, silently treated as "hired")."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    trip = await _create_trip(client, headers, tariff.id)
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": trip["start_lat"], "lng": trip["start_lng"], "speed_kmh": 0,
+                    "ts": (t0 + timedelta(seconds=45)).isoformat(), "state": "paused",
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_sync_rejects_unknown_blackout_resolution_value(client: AsyncClient, session: AsyncSession):
+    """Same strict-Literal posture for DeviceGpsBlackoutSegment.resolution --
+    an unrecognised value (e.g. a future device build sending "INERTIAL"
+    before this backend's Literal is extended to accept it, see
+    BlackoutResolution's own doc comment) is a 422, not silently stored."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    segment = _device_blackout_segment(
+        client_uuid="seg-future",
+        started_at=now,
+        ended_at=now + timedelta(seconds=60),
+        entry=(-33.8688, 151.2093),
+        exit_=(-33.86, 151.2093),
+        resolution="INERTIAL",
+        billed_distance_km="1.0",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="10.00",
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 422

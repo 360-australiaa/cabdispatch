@@ -9,6 +9,7 @@ endpoints and the offline sync recompute path.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -21,7 +22,7 @@ from app.models.fleet import Vehicle
 from app.models.geofence import GEOFENCE_KIND_AIRPORT, GEOFENCE_KIND_TOLL, Geofence
 from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, TripGpsTrace
-from app.schemas.trips import TelemetryPoint
+from app.schemas.trips import DeviceGpsBlackoutSegment, TelemetryPoint
 from app.services import payments as payments_service
 from app.services.fare_engine import (
     NSW_FARE_ZONE,
@@ -37,6 +38,8 @@ from app.services.fare_engine import (
 from app.services.geofence import detect_geofences
 from app.services.tariffs import to_fare_engine_tariff
 from app.services.tolls import apply_toll_detection, known_corridor_distance_km
+
+logger = logging.getLogger("cab_dispatch.trips")
 
 engine = FareEngine()
 
@@ -342,6 +345,7 @@ async def apply_tick(
 
     moving_delta = Decimal(0)
     waiting_delta = Decimal(0)
+    stopped_delta = Decimal(0)
     # Geofence ids whose toll has already been folded into trip.tolls, seeded
     # from what earlier tick() calls already persisted so a vehicle lingering
     # in (or re-entering) the same toll zone across multiple PATCH .../tick
@@ -360,21 +364,34 @@ async def apply_tick(
             elapsed_seconds = Decimal(
                 str(max((_as_utc(point.ts) - _as_utc(prev_ts)).total_seconds(), 0))
             )
-        distance_km = plausible_distance_km(
-            prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
-        )
-
-        state = engine.tick(
-            state,
-            speed_kmh=Decimal(str(point.speed_kmh)),
-            distance_delta_km=distance_km,
-            elapsed_seconds=elapsed_seconds,
-        )
-
-        if state.last_mode == "waiting":
-            waiting_delta += elapsed_seconds
+        # STOPPED-state wiring (G4) -- see TelemetryPoint.state's own doc. A
+        # point marked "stopped" means the driver explicitly paused the meter
+        # for this interval: nothing accrues -- no distance, no waiting, no
+        # moving time -- for the seconds between the previous point and this
+        # one; only `trip.stopped_s` (below) grows. Toll detection further
+        # down still runs unconditionally: a real toll gantry crossed while
+        # parked (queued at a toll plaza) is still a real toll -- STOPPED's
+        # "never bill" guarantee is about the FARE (flag-fall/distance/
+        # waiting), not about tolls, which are a pass-through cost rather
+        # than the meter's own charge.
+        if point.state == "stopped":
+            stopped_delta += elapsed_seconds
         else:
-            moving_delta += elapsed_seconds
+            distance_km = plausible_distance_km(
+                prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
+            )
+
+            state = engine.tick(
+                state,
+                speed_kmh=Decimal(str(point.speed_kmh)),
+                distance_delta_km=distance_km,
+                elapsed_seconds=elapsed_seconds,
+            )
+
+            if state.last_mode == "waiting":
+                waiting_delta += elapsed_seconds
+            else:
+                moving_delta += elapsed_seconds
 
         prev_lat, prev_lng, prev_ts = point.lat, point.lng, point.ts
 
@@ -414,6 +431,7 @@ async def apply_tick(
     trip.wait_amount = round_half_up(state.accrued_waiting_charge)
     trip.moving_s += int(moving_delta)
     trip.waiting_s += int(waiting_delta)
+    trip.stopped_s += int(stopped_delta)
     # Normalised to UTC before persisting — see _as_utc. SQLite drops the
     # offset on write, so storing the device's own local-offset wall clock
     # here is what made the anchor unusable for the replay comparison.
@@ -688,12 +706,14 @@ async def recompute_from_trace(
     surcharge_pct: Decimal | None,
     include_psl: bool,
     negotiated_total: Decimal | None = None,
-) -> tuple[FareBreakdown, int, int, int, TimeClass, bool, list[dict]]:
+) -> tuple[FareBreakdown, int, int, int, TimeClass, bool, list[dict], int]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
     Returns (breakdown, distance_m, moving_s, waiting_s, time_class, is_peak,
-    gps_blackout_events) -- the last exactly Trip.gps_blackout_events' own
-    shape, for the caller to persist whole onto the new Trip row (a sync item
+    gps_blackout_events, stopped_s) -- gps_blackout_events exactly
+    Trip.gps_blackout_events' own shape and stopped_s exactly Trip.stopped_s'
+    own meaning (STOPPED-state wiring, G4 -- see TelemetryPoint.state's own
+    doc), for the caller to persist whole onto the new Trip row (a sync item
     replays the WHOLE trace in one call, unlike apply_tick's incremental
     append, so there is nothing to merge with here).
 
@@ -734,14 +754,41 @@ async def recompute_from_trace(
         state.fixed_fare = airport_fixed_fare(state.maxi_applied)
 
     prev_lat, prev_lng, prev_ts = start_lat, start_lng, start_at
+    prev_state: str | None = None
     moving_s = 0
     waiting_s = 0
+    stopped_s = 0
     gps_blackout_events: list[dict] = []
 
     for point in gps_trace:
         ts_prev = prev_ts if prev_ts.tzinfo else prev_ts.replace(tzinfo=UTC)
         ts_point = point.ts if point.ts.tzinfo else point.ts.replace(tzinfo=UTC)
         elapsed_seconds = Decimal(str(max((ts_point - ts_prev).total_seconds(), 0)))
+
+        # STOPPED-state wiring (G4) -- see TelemetryPoint.state's own doc. This
+        # interval is treated as STOPPED (bills nothing at all -- no distance,
+        # no waiting/moving time, and if it also happens to be a GPS-blackout-
+        # length gap, no corridor catch-up either, just an audit-trail entry)
+        # whenever EITHER endpoint reports "stopped": the more conservative of
+        # the two readings, since a transition either INTO or OUT OF a
+        # driver-initiated pause anywhere inside this interval means at least
+        # part of it was genuinely paused, and "never bill during STOPPED"
+        # means resolving that ambiguity in the driver/passenger's favour, not
+        # the fare's.
+        if point.state == "stopped" or prev_state == "stopped":
+            stopped_s += int(elapsed_seconds)
+            if elapsed_seconds > BLACKOUT_GAP_THRESHOLD_S:
+                gps_blackout_events.append(
+                    {
+                        "start": ts_prev.isoformat(),
+                        "end": ts_point.isoformat(),
+                        "elapsed_s": int(elapsed_seconds),
+                        "matched_km": None,
+                        "resolution": "STOPPED",
+                    }
+                )
+            prev_lat, prev_lng, prev_ts, prev_state = point.lat, point.lng, point.ts, point.state
+            continue
 
         # A gap this long is a real GPS blackout (matches the on-device meter's own
         # MAX_FIX_AGE_MS threshold for "GPS lost"), not the short-timeframe glitch
@@ -772,6 +819,7 @@ async def recompute_from_trace(
                     "end": ts_point.isoformat(),
                     "elapsed_s": int(elapsed_seconds),
                     "matched_km": str(corridor_km) if corridor_km is not None else None,
+                    "resolution": "CORRIDOR" if corridor_km is not None else "NONE",
                 }
             )
         else:
@@ -790,7 +838,7 @@ async def recompute_from_trace(
         else:
             moving_s += int(elapsed_seconds)
 
-        prev_lat, prev_lng, prev_ts = point.lat, point.lng, point.ts
+        prev_lat, prev_lng, prev_ts, prev_state = point.lat, point.lng, point.ts, point.state
 
     breakdown = engine.close(
         state,
@@ -800,7 +848,223 @@ async def recompute_from_trace(
         include_psl=include_psl,
     )
     distance_m = round(state.cumulative_distance_km * Decimal(1000))
-    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events
+    return breakdown, distance_m, moving_s, waiting_s, time_class, is_peak, gps_blackout_events, stopped_s
+
+
+# --- Tolerances for reconcile_gps_blackout_segments below -------------------
+#
+# CORRIDOR distance: an absolute floor for short corridors (GPS/gantry-position
+# rounding dominates at short range) OR'd with a relative allowance for longer
+# ones (cumulative path-matching error scales with distance) -- the larger of
+# the two wins. 250m matches this same GPS-blackout program's own device-vs-
+# inferred corridor-endpoint agreement tolerance (docs/plans/2026-09-12-
+# android-meter-optimisation-and-gps-blackout-plan.md, B-W1 task list); 10% is
+# a business judgement call, not a physical constant, chosen the same way this
+# codebase's other geometry/money tolerances are (see e.g.
+# app.services.tolls.TOLL_CONFIRM_RADIUS_M's own "150m, not exact-match"
+# reasoning).
+BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS = Decimal("0.25")
+BLACKOUT_CORRIDOR_KM_TOLERANCE_PCT = Decimal("0.10")
+
+# How close two independently-derived blackout intervals' start/end timestamps
+# must be to be considered "the same gap". The device's own blackout-detection
+# loop and this server's own trace-gap detection both operate on the SAME
+# underlying GPS signal loss recorded in the SAME uploaded gps_trace, so their
+# start/end times should agree closely; a few seconds of slack absorbs
+# ordinary clock/sequencing differences between the two independent
+# implementations without masking a genuine "one side saw a gap the other
+# didn't" disagreement.
+BLACKOUT_SEGMENT_MATCH_TOLERANCE_S = 10
+
+# STOPPED-state reconciliation (G4): how far the device's own claimed
+# TripSyncItem.stopped_s may differ from this server's own recompute_from_trace-
+# derived Trip.stopped_s before it is worth a flag -- generous enough to
+# absorb the device's own local processing/rounding of its pause/resume
+# timestamps, tight enough that a real, sustained disagreement (a client bug,
+# or an attempt to bill through what should have been a free stop) still
+# surfaces.
+STOPPED_SECONDS_TOLERANCE_S = 10
+
+
+def _parse_iso_utc(value: str) -> datetime:
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _blackout_intervals_match(
+    start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime
+) -> bool:
+    return (
+        abs((start_a - start_b).total_seconds()) <= BLACKOUT_SEGMENT_MATCH_TOLERANCE_S
+        and abs((end_a - end_b).total_seconds()) <= BLACKOUT_SEGMENT_MATCH_TOLERANCE_S
+    )
+
+
+async def reconcile_gps_blackout_segments(
+    session: AsyncSession,
+    *,
+    device_segments: list[DeviceGpsBlackoutSegment],
+    server_events: list[dict],
+    device_stopped_s: int,
+    server_stopped_s: int,
+) -> list[dict]:
+    """Fraud/bug-detection cross-check between the DEVICE's own account of a
+    trip's GPS blackouts (`device_segments`, from
+    `TripSyncItem.gps_blackout_segments`) and the SERVER's own, completely
+    independent recompute of the same trip's blackouts from its raw
+    `gps_trace` (`server_events`, `recompute_from_trace`'s own return value,
+    exactly `Trip.gps_blackout_events`'s shape) -- plus the equivalent
+    STOPPED-state cross-check (`device_stopped_s` vs `server_stopped_s`).
+
+    **THIS IS AN AUDIT-TRAIL SIGNAL FOR A HUMAN (the OWNER) TO REVIEW, NOT AN
+    AUTO-BILLING-CORRECTION MECHANISM.** Neither account is "corrected" by the
+    other here, and nothing this function returns is ever folded into
+    distance_m/moving_s/waiting_s/tolls/total -- the device's own on-trip
+    billing (already independently verified via the pre-existing 1%-variance
+    check against `device_total`) stands regardless of what a flag below
+    says. Called once per synced item, from `app.api.v1.trips.sync_trips`,
+    and the result is stored verbatim on `Trip.blackout_reconciliation`.
+
+    Checks, each producing zero or more flag dicts (`{"type": ..., ...}`):
+
+    1. `corridor_distance_mismatch` -- a device segment with
+       `resolution == "CORRIDOR"` whose `billed_distance_km` disagrees with
+       what THIS server's own `known_corridor_distance_km` computes for the
+       exact same entry/exit coordinates by more than the larger of
+       `BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS`/`_PCT` (see their own doc
+       comments above), or for which the server finds no known corridor at
+       all between those points.
+    2. `device_segment_missing_on_server` -- a device-reported segment whose
+       start/end timestamps match no entry in `server_events` within
+       `BLACKOUT_SEGMENT_MATCH_TOLERANCE_S` (the device believed it lost GPS
+       for an interval this server's own trace-gap detection never saw).
+    3. `server_gap_missing_on_device` -- the reverse: a real gap in
+       `server_events` (elapsed time over `BLACKOUT_GAP_THRESHOLD_S`) with no
+       matching device-reported segment. Deliberately skips any server event
+       with `resolution == "STOPPED"`: that resolution means the gap
+       coincided with a driver-initiated pause (see TelemetryPoint.state's
+       own doc), which is NOT a GPS blackout at all and so is never expected
+       to appear in the device's own `gps_blackout_segments` list in the
+       first place -- flagging it here would be noise on every ordinary
+       STOPPED interval, not a real signal.
+    4. `stopped_seconds_mismatch` -- `device_stopped_s` and
+       `server_stopped_s` disagree by more than
+       `STOPPED_SECONDS_TOLERANCE_S`.
+
+    Returns `[]` when every check passes (including the trivial case of no
+    device segments and no server events)."""
+    flags: list[dict] = []
+
+    server_intervals = [
+        (_parse_iso_utc(event["start"]), _parse_iso_utc(event["end"]), event) for event in server_events
+    ]
+
+    for segment in device_segments:
+        seg_start = _as_utc(segment.started_at)
+        seg_end = _as_utc(segment.ended_at)
+
+        has_server_match = any(
+            _blackout_intervals_match(seg_start, seg_end, start, end)
+            for (start, end, _event) in server_intervals
+        )
+        if not has_server_match:
+            flags.append(
+                {
+                    "type": "device_segment_missing_on_server",
+                    "segment_client_uuid": segment.client_uuid,
+                    "started_at": segment.started_at.isoformat(),
+                    "ended_at": segment.ended_at.isoformat(),
+                    "detail": (
+                        "Device reported a GPS blackout segment with no matching gap in "
+                        "the server's own trace-derived blackout events."
+                    ),
+                }
+            )
+
+        if segment.resolution == "CORRIDOR":
+            corridor_km = await known_corridor_distance_km(
+                session,
+                entry_lat=segment.entry_lat,
+                entry_lng=segment.entry_lng,
+                exit_lat=segment.exit_lat,
+                exit_lng=segment.exit_lng,
+            )
+            if corridor_km is None:
+                flags.append(
+                    {
+                        "type": "corridor_distance_mismatch",
+                        "segment_client_uuid": segment.client_uuid,
+                        "device_billed_km": str(segment.billed_distance_km),
+                        "server_computed_km": None,
+                        "detail": (
+                            "Device billed a CORRIDOR resolution but the server's own "
+                            "toll-road registry finds no known corridor between the same "
+                            "entry/exit points."
+                        ),
+                    }
+                )
+            else:
+                tolerance = max(
+                    BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS,
+                    corridor_km * BLACKOUT_CORRIDOR_KM_TOLERANCE_PCT,
+                )
+                if abs(segment.billed_distance_km - corridor_km) > tolerance:
+                    flags.append(
+                        {
+                            "type": "corridor_distance_mismatch",
+                            "segment_client_uuid": segment.client_uuid,
+                            "device_billed_km": str(segment.billed_distance_km),
+                            "server_computed_km": str(corridor_km),
+                            "detail": (
+                                f"Device billed {segment.billed_distance_km} km for a "
+                                f"CORRIDOR blackout the server independently computes as "
+                                f"{corridor_km} km (tolerance {tolerance} km)."
+                            ),
+                        }
+                    )
+
+    for (start, end, event) in server_intervals:
+        if event.get("resolution") == "STOPPED":
+            continue
+        has_device_match = any(
+            _blackout_intervals_match(_as_utc(segment.started_at), _as_utc(segment.ended_at), start, end)
+            for segment in device_segments
+        )
+        if not has_device_match:
+            flags.append(
+                {
+                    "type": "server_gap_missing_on_device",
+                    "started_at": event["start"],
+                    "ended_at": event["end"],
+                    "detail": (
+                        "The server's own trace-derived blackout events include a gap the "
+                        "device never reported as a GPS blackout segment."
+                    ),
+                }
+            )
+
+    if abs(device_stopped_s - server_stopped_s) > STOPPED_SECONDS_TOLERANCE_S:
+        flags.append(
+            {
+                "type": "stopped_seconds_mismatch",
+                "device_stopped_s": device_stopped_s,
+                "server_stopped_s": server_stopped_s,
+                "detail": (
+                    f"Device reported {device_stopped_s}s stopped this trip; the server's "
+                    f"own recompute finds {server_stopped_s}s "
+                    f"(tolerance {STOPPED_SECONDS_TOLERANCE_S}s)."
+                ),
+            }
+        )
+
+    if flags:
+        logger.warning(
+            "Trip GPS-blackout/STOPPED reconciliation raised %d flag(s): %s",
+            len(flags),
+            [flag["type"] for flag in flags],
+        )
+
+    return flags
 
 
 def build_gps_trace_row(

@@ -85,6 +85,19 @@ class TelemetryPoint(BaseModel):
     lng: float
     speed_kmh: float = Field(ge=0)
     ts: datetime
+    # STOPPED-state wiring (G4 — docs/plans/2026-09-12-android-meter-optimisation-
+    # and-gps-blackout-plan.md, "B-W1"/"G4" — see app.models.trips.Trip.stopped_s's
+    # own doc for the full design). `None`/omitted means "hired": every point from
+    # a meter build that predates this field, and every ordinary telemetry point
+    # once it exists. `"stopped"` marks an interval the driver explicitly paused
+    # the meter for (a break, a multi-hire gap) -- DISTINCT from a GPS blackout
+    # (involuntary signal loss, tracked separately via
+    # TripSyncItem.gps_blackout_segments / Trip.gps_blackout_events): a blackout
+    # can happen while STOPPED or while hired, and this field is what lets the
+    # server tell the two apart. Never itself trusted to move money beyond "no
+    # accrual while stopped" -- see app.services.trips.apply_tick /
+    # recompute_from_trace's own comments for exactly what "stopped" suppresses.
+    state: Literal["hired", "stopped"] | None = None
 
 
 # --- Create -------------------------------------------------------------
@@ -228,6 +241,20 @@ class TripTickRequest(BaseModel):
     # keep re-sending it on every subsequent tick.
     dest_lat: float | None = Field(default=None, ge=-90, le=90)
     dest_lng: float | None = Field(default=None, ge=-180, le=180)
+    # See TelemetryPoint.state's own doc -- the device's own running total of
+    # seconds THIS TRIP has spent "stopped" so far (cumulative, not just this
+    # batch). Accepted for wire forward-compat with the meter's own tick DTO
+    # (docs/plans/2026-09-12-android-meter-optimisation-and-gps-blackout-plan.md,
+    # G4) and defaulted to 0 so a meter build that predates STOPPED-on-the-wire
+    # still ticks exactly as before. NOT cross-checked per-tick against
+    # `Trip.stopped_s` here -- unlike the offline-sync path
+    # (`app.services.trips.reconcile_gps_blackout_segments`, run once per
+    # synced item against that item's own `TripSyncItem.stopped_s`), a trip
+    # ticked/closed entirely online never replays through
+    # `recompute_from_trace`, so there is no independent per-tick recompute to
+    # reconcile this claim against; `Trip.stopped_s` itself is still updated
+    # from each point's own `state` regardless (see `apply_tick`).
+    stopped_s: int = Field(default=0, ge=0)
 
 
 # --- Close ------------------------------------------------------------------
@@ -293,6 +320,60 @@ class TripCloseRequest(BaseModel):
 # --- Sync (offline bulk replay) ----------------------------------------------
 
 
+# Mirrors Android's `au.com.threesixty.cabdispatch.data.local.entity.
+# BlackoutResolution` / `GpsBlackoutSegmentDto.resolution` (TripsDtos.kt) exactly,
+# as it stands today: NONE (no known road matched the gap -- nothing extra
+# billed), CORRIDOR (a known toll-road corridor matched -- that corridor's real
+# distance was billed) or STATIONARY (the vehicle was not moving when the
+# blackout started -- only waiting time accrued, no distance). NOTE: the wider
+# GPS-blackout program plan (docs/plans/2026-09-12-android-meter-optimisation-
+# and-gps-blackout-plan.md, W1/W2 tasks 3 & 6) documents THREE further values
+# a later device build may send once those workstreams land -- INERTIAL,
+# UNCALIBRATED and STOPPED -- none of which exist on the wire in this
+# codebase's current Android history (`git log -- .../TripsDtos.kt` shows no
+# commit adding them yet). Kept as a strict Literal of only the three values
+# that actually exist today, deliberately, rather than a bare `str`: a
+# genuinely unknown resolution value is a signal worth a 422, not something to
+# silently accept and store — extend this Literal (and the reconciliation
+# logic in app.services.trips) in the same pass that wires up whichever of
+# those three values a future device build actually starts sending.
+BlackoutResolution = Literal["NONE", "CORRIDOR", "STATIONARY"]
+
+
+class DeviceGpsBlackoutSegment(BaseModel):
+    """Wire mirror of Android's `GpsBlackoutSegmentDto`
+    (`data/remote/dto/TripsDtos.kt`) -- the DEVICE's own account of one GPS
+    blackout it experienced, independently of whatever
+    `app.services.trips.recompute_from_trace` derives from the very same raw
+    `gps_trace` (see `Trip.gps_blackout_events`'s own doc for that server-side
+    computation). See `TripSyncItem.gps_blackout_segments` and
+    `Trip.device_gps_blackout_segments`'s own doc comments for why these two
+    accounts are recorded side by side and never silently merged or trusted
+    as equivalent -- this is dispute evidence and a fraud/bug-detection
+    signal for a human to review
+    (`app.services.trips.reconcile_gps_blackout_segments`), NOT a billing
+    input: the device's own on-trip billing (already folded into this same
+    item's `device_total`) stands regardless of what this list says.
+
+    Field names match the Kotlin DTO's own `@SerialName` annotations exactly
+    (see that class's own doc comment for the precedent: `client_uuid`,
+    `started_at`/`ended_at`, `entry_lat`/`entry_lng`/`exit_lat`/`exit_lng`,
+    `entry_was_moving`, `resolution`, `billed_distance_km`,
+    `corridor_road_id`)."""
+
+    client_uuid: str
+    started_at: datetime
+    ended_at: datetime
+    entry_lat: float
+    entry_lng: float
+    exit_lat: float
+    exit_lng: float
+    entry_was_moving: bool
+    resolution: BlackoutResolution
+    billed_distance_km: Decimal = Field(ge=0)
+    corridor_road_id: str | None = None
+
+
 class TripSyncItem(BaseModel):
     """A complete, self-contained trip payload uploaded after a period offline.
 
@@ -347,6 +428,22 @@ class TripSyncItem(BaseModel):
     include_psl: bool = False
     gps_trace: list[TelemetryPoint] = Field(default_factory=list)
     gps_trace_ref: str | None = None
+    # See DeviceGpsBlackoutSegment's own doc -- the device's OWN account of the
+    # GPS blackouts it experienced this trip, empty for every trip with no
+    # blackout (the overwhelming majority) and for every pre-existing call site
+    # that never named this field (full backward compat -- a device predating
+    # this wire field syncs exactly as before). Never itself a billing input;
+    # see app.services.trips.reconcile_gps_blackout_segments for what the
+    # server does with it.
+    gps_blackout_segments: list[DeviceGpsBlackoutSegment] = Field(default_factory=list)
+    # DEVICE ADVISORY ONLY, same convention as time_class/is_peak/maxi above --
+    # see TelemetryPoint.state's own doc. The device's own cumulative "seconds
+    # this trip spent STOPPED" count, cross-checked (never trusted outright)
+    # against the server's own recompute_from_trace-derived total; see that
+    # function's own doc and reconcile_gps_blackout_segments for the mismatch
+    # flag. Defaulted to 0 so a meter build that predates STOPPED-on-the-wire
+    # still syncs exactly as before.
+    stopped_s: int = Field(default=0, ge=0)
     receipt_ref: str | None = None
     negotiated_total: Decimal | None = Field(
         default=None,
@@ -410,6 +507,11 @@ class TripRead(BaseModel):
     distance_m: int
     moving_s: int
     waiting_s: int
+    # STOPPED-state wiring (G4) -- server-independent total, computed exactly like
+    # moving_s/waiting_s above by app.services.trips.recompute_from_trace /
+    # apply_tick from the trip's own telemetry (TelemetryPoint.state), NOT the
+    # device's own TripSyncItem.stopped_s claim -- see Trip.stopped_s's own doc.
+    stopped_s: int
     flag_fall: Decimal
     dist_amount: Decimal
     wait_amount: Decimal
@@ -433,7 +535,28 @@ class TripRead(BaseModel):
     unpriced_toll_road_ids: list[str] | None = Field(default_factory=list)
     # GPS-blackout audit trail (app.services.trips.BLACKOUT_GAP_THRESHOLD_S) -- see
     # app.models.trips.Trip.gps_blackout_events's own doc comment for the exact shape.
+    # This is the SERVER's own independent account, derived from the raw gps_trace --
+    # never merged with, or corrected by, the device's own account below.
     gps_blackout_events: list[dict] | None = Field(default_factory=list)
+    # The DEVICE's own account of the same trip's GPS blackouts (see
+    # DeviceGpsBlackoutSegment's own doc) -- stored and exposed side by side with
+    # gps_blackout_events above so a human reviewing a trip (dashboard trip-detail)
+    # can see both. Deliberately never reconciled into one list: the two are
+    # computed by two completely independent processes (the on-device meter vs.
+    # this server's own recompute_from_trace) and a real disagreement between them
+    # is itself the signal worth seeing, not something to paper over.
+    device_gps_blackout_segments: list[dict] | None = Field(default_factory=list)
+    # Fraud/bug-detection flags raised by comparing the two accounts above -- see
+    # app.services.trips.reconcile_gps_blackout_segments's own doc for exactly what
+    # is checked and the tolerances used. `[]`/empty means either no device
+    # blackout segments were reported, or every one that was reported reconciled
+    # cleanly against the server's own computation. AUDIT-TRAIL ONLY: raising a
+    # flag here never changes distance_m/moving_s/waiting_s/tolls/total above --
+    # those already reflect the device's own on-trip billing (server-verified via
+    # the usual 1% variance check) or the server's own independent recompute,
+    # exactly as before this field existed. A flag here is a prompt for the OWNER
+    # to look at the trip, not an automatic correction.
+    blackout_reconciliation: list[dict] | None = Field(default_factory=list)
     flagged_for_review: bool
     review_notes: str | None
     voucher_code: str | None
