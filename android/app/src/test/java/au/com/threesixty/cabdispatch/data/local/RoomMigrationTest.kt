@@ -467,10 +467,15 @@ class RoomMigrationTest {
         // GPS-blackout audit-trail table this same W1 pass introduced) is validated by this test,
         // not just opened.
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        // MIGRATION_15_16/MIGRATION_16_17 added post-integration (W4/W2 both landed after this
+        // test was written against a then-CURRENT v15) so this real Room open -- which always
+        // targets AppDatabase's compiled CURRENT version, not the v15 this test's own scenario is
+        // about -- can complete every step up to it, same reasoning as the sibling test above.
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
             .addMigrations(
                 MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                 MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                MIGRATION_15_16, MIGRATION_16_17,
             )
             .build()
         try {
@@ -519,8 +524,11 @@ class RoomMigrationTest {
 
         helper.runMigrationsAndValidate(resolvedPath, 15, true, MIGRATION_14_15)
 
+        // MIGRATION_15_16/MIGRATION_16_17 added post-integration so this real Room open -- which
+        // always targets AppDatabase's compiled CURRENT version, not the v15 this test's own
+        // scenario is about -- can complete every step up to it.
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbNameV14)
-            .addMigrations(MIGRATION_14_15)
+            .addMigrations(MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
             .build()
         try {
             assertEveryPreV14RowSurvivedMigration(db.openHelper.readableDatabase)
