@@ -73,6 +73,15 @@ import java.math.BigDecimal
  * (no real path exists between one point and itself); or a road has fewer than two gantries at all
  * (nothing to interpolate along). Where more than one road's gantries plausibly bracket both fixes,
  * the SHORTEST candidate distance wins — the more parsimonious, less coincidental match.
+ *
+ * **W3 (road-geometry constraint sources, 2026-09-12 plan) note:** this function's own search —
+ * "for each road, does it bracket both fixes within the portal radius, and if so what's the
+ * greedy-walked distance" — is now [gantryChainPath]'s job too; this function just sums that
+ * function's own returned point sequence rather than duplicating the search. See
+ * `domain/location/roadpath/CorridorRoadPath.kt` for the actual polyline consumer this split was
+ * made for (it needs the ordered points themselves, not just their summed length, so it can answer
+ * [au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPath.advance]/[au.com.threesixty
+ * .cabdispatch.domain.location.roadpath.RoadPath.distanceTo] against real geometry).
  */
 fun knownCorridorDistanceKm(
     registry: TollRegistrySnapshot,
@@ -81,7 +90,43 @@ fun knownCorridorDistanceKm(
     exitLat: Double,
     exitLng: Double,
 ): BigDecimal? {
-    var bestKm: BigDecimal? = null
+    val path = gantryChainPath(registry, entryLat, entryLng, exitLat, exitLng) ?: return null
+    val totalM = sumConsecutiveHaversineM(path)
+    return BigDecimal.valueOf(totalM / 1000.0).takeIf { it.signum() > 0 }
+}
+
+/**
+ * The real, ordered point sequence a blackout between ([entryLat], [entryLng]) and ([exitLat],
+ * [exitLng]) would have followed, if a known road corridor brackets both fixes — the geometry
+ * [knownCorridorDistanceKm] sums the length of, and the polyline
+ * `domain/location/roadpath/CorridorRoadPath.kt`'s [au.com.threesixty.cabdispatch.domain.location
+ * .roadpath.RoadPath] actually walks. Exactly [knownCorridorDistanceKm]'s own matching rule
+ * (same [CORRIDOR_PORTAL_MATCH_RADIUS_M], same "shortest candidate road wins", same rejections) —
+ * see that function's own doc for the full reasoning; this function exists purely so the winning
+ * candidate's POINTS survive past the search, instead of being collapsed into a single km figure
+ * immediately.
+ *
+ * The returned list, when non-null, is `[entryFix] + (the road's own walked gantry chain,
+ * entry-nearest to exit-nearest inclusive) + [exitFix]` — i.e. it starts and ends at the exact
+ * fixes passed in, not at the road's own nearest gantries, so a consumer walking this polyline
+ * (advancing along it, or projecting a THIRD fix onto it) never has to separately account for the
+ * "gap" leg from a fix to its nearest gantry the way [knownCorridorDistanceKm]'s old inline
+ * arithmetic did.
+ */
+// CyclomaticComplexMethod: this is the exact same per-road matching search
+// [knownCorridorDistanceKm] itself carried (and had baselined) before this split -- moving the
+// search here instead of duplicating it is the fix task 2 actually asks for; the search's own
+// inherent complexity (several independent guard conditions per candidate road) is unchanged.
+@Suppress("CyclomaticComplexMethod")
+fun gantryChainPath(
+    registry: TollRegistrySnapshot,
+    entryLat: Double,
+    entryLng: Double,
+    exitLat: Double,
+    exitLng: Double,
+): List<Pair<Double, Double>>? {
+    var bestPath: List<Pair<Double, Double>>? = null
+    var bestLengthM = Double.MAX_VALUE
     for ((_, gantries) in registry.gantries.groupBy { it.tollRoadId }) {
         if (gantries.size < 2) continue // nothing to interpolate a path along
 
@@ -97,12 +142,25 @@ fun knownCorridorDistanceKm(
 
         if (entryNearest.id == exitNearest.id) continue // same single point both ends -- no real path
 
-        val pathM = greedyChainDistanceM(gantries, entryNearest, exitNearest) ?: continue
-        val totalKm = BigDecimal.valueOf((entryGapM + pathM + exitGapM) / 1000.0)
-        val currentBest = bestKm
-        if (currentBest == null || totalKm < currentBest) bestKm = totalKm
+        val chainPoints = greedyChainPoints(gantries, entryNearest, exitNearest) ?: continue
+        val candidateLengthM = entryGapM + sumConsecutiveHaversineM(chainPoints) + exitGapM
+        if (candidateLengthM < bestLengthM) {
+            bestLengthM = candidateLengthM
+            bestPath = listOf(entryLat to entryLng) + chainPoints + listOf(exitLat to exitLng)
+        }
     }
-    return bestKm?.takeIf { it.signum() > 0 }
+    return bestPath
+}
+
+/** Sums the consecutive haversine legs of an already-ordered point sequence — the one place both
+ * [knownCorridorDistanceKm] and [gantryChainPath] turn a polyline into a length, so the two can
+ * never independently drift apart on how a "path length" is computed. */
+private fun sumConsecutiveHaversineM(points: List<Pair<Double, Double>>): Double {
+    var total = 0.0
+    for (i in 0 until points.size - 1) {
+        total += tollHaversineM(points[i].first, points[i].second, points[i + 1].first, points[i + 1].second)
+    }
+    return total
 }
 
 /**
@@ -124,9 +182,11 @@ fun knownCorridorDistanceKm(
 const val CORRIDOR_PORTAL_MATCH_RADIUS_M = 250.0
 
 /**
- * Sums the real, consecutive haversine legs of a greedy nearest-neighbour walk from [start] to [end]
- * over [gantries] (one road's own points) — the best available reconstruction of "this road's point
- * sequence" for a dataset that stores no path order at all (see [knownCorridorDistanceKm]'s own doc).
+ * The real, ordered point sequence of a greedy nearest-neighbour walk from [start] to [end] over
+ * [gantries] (one road's own points) — the best available reconstruction of "this road's point
+ * sequence" for a dataset that stores no path order at all (see [knownCorridorDistanceKm]'s own
+ * doc). [greedyChainDistanceM] is just this function's own points, summed; [gantryChainPath] is
+ * this same walk with the entry/exit FIXES (not just the bracketing gantries) prepended/appended.
  *
  * **Honest limitation:** nearest-neighbour is not guaranteed to recover the true physical order of
  * an irregularly-spaced chain — a point could be geometrically closer to the current one than the
@@ -137,23 +197,39 @@ const val CORRIDOR_PORTAL_MATCH_RADIUS_M = 250.0
  * to. `null` if the walk cannot reach [end] within [gantries]'s own size (should not happen for a
  * finite, correctly-tagged road; a defensive bound, not an expected outcome).
  */
-internal fun greedyChainDistanceM(
+// ReturnCount: the exact same walk [greedyChainDistanceM] carried (and had baselined) under its
+// own name before this split -- see this function's own doc for why the walk itself, not just its
+// summed length, now needs to survive past this search.
+@Suppress("ReturnCount")
+internal fun greedyChainPoints(
     gantries: List<TollGantryRef>,
     start: TollGantryRef,
     end: TollGantryRef,
-): Double? {
-    if (start.id == end.id) return 0.0
+): List<Pair<Double, Double>>? {
+    if (start.id == end.id) return listOf(start.latitude to start.longitude)
     val remaining = gantries.filterNot { it.id == start.id }.toMutableList()
     var current = start
-    var total = 0.0
+    val path = mutableListOf(start.latitude to start.longitude)
     var stepsLeft = gantries.size
     while (current.id != end.id) {
         if (stepsLeft-- <= 0) return null
         val next = remaining.minByOrNull { tollHaversineM(current.latitude, current.longitude, it.latitude, it.longitude) }
             ?: return null
-        total += tollHaversineM(current.latitude, current.longitude, next.latitude, next.longitude)
+        path.add(next.latitude to next.longitude)
         remaining.removeAll { it.id == next.id }
         current = next
     }
-    return total
+    return path
+}
+
+/** [greedyChainPoints]'s own walk, summed — kept as its own function (rather than inlined at each
+ * call site) since [au.com.threesixty.cabdispatch.domain.fare.KnownCorridorTest] exercises this
+ * exact name/signature directly, independent of [knownCorridorDistanceKm]'s own tests. */
+internal fun greedyChainDistanceM(
+    gantries: List<TollGantryRef>,
+    start: TollGantryRef,
+    end: TollGantryRef,
+): Double? {
+    val points = greedyChainPoints(gantries, start, end) ?: return null
+    return sumConsecutiveHaversineM(points)
 }

@@ -14,6 +14,7 @@ import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import au.com.threesixty.cabdispatch.domain.location.inertial.BlackoutReconciler
 import au.com.threesixty.cabdispatch.domain.location.inertial.InertialConfidence
 import au.com.threesixty.cabdispatch.domain.location.inertial.InertialBillingSource
+import au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPathSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -470,6 +471,19 @@ class FareEngineImpl(
      * "Inertial billing" section.
      */
     private val inertialSpeedSource: InertialBillingSource? = null,
+    /**
+     * W3 (road-geometry constraint sources, 2026-09-12 plan): a richer road-path reference for
+     * [resolveInertialBlackout] than the bare [lookupKnownCorridorKm] toll-registry lookup alone —
+     * see [RoadPathSource]'s own doc for why an active nav route or the offline map style's own
+     * road layer can each be a strictly better answer than the toll registry when one of them
+     * matches. `null` by default so every pre-existing call site (every test in this file, every
+     * preview, and production until [au.com.threesixty.cabdispatch.data.AppContainer] passes one)
+     * keeps compiling and behaving EXACTLY as before this workstream existed — an INERTIAL
+     * blackout's reconciliation reference is then [lookupKnownCorridorKm] alone, unconditionally,
+     * matching W2's own behaviour byte-for-byte. See [lookupRoadPathKm]'s own doc for the
+     * try-this-first-then-fall-back order.
+     */
+    private val roadPathSource: RoadPathSource? = null,
     /**
      * A seam over `BuildConfig.INERTIAL_BILLING_ENABLED` — same reasoning [nanoTimeSource]/
      * [wallClockNow] are seams over their own real platform reads: `BuildConfig` fields are
@@ -1423,6 +1437,27 @@ class FareEngineImpl(
             }
 
     /**
+     * W3's task 6: [resolveInertialBlackout]'s own road-path reference -- tries [roadPathSource]
+     * FIRST (a match there is a strictly richer answer than the plain corridor lookup alone: a
+     * real nav-route or offline-style polyline, not just the toll registry's own gantry chain),
+     * falling back to [lookupKnownCorridorKm] exactly as W2 left it whenever [roadPathSource] is
+     * `null` or returns no match at either end (an unmatched entry fix, or an exit fix more than
+     * 60m off the matched path -- see `domain/location/roadpath/RoadPath.kt`'s own `distanceTo`
+     * contract for why that counts as "no match" rather than a degenerate zero). A caller that
+     * never wires [roadPathSource] (every existing test, and production until
+     * [au.com.threesixty.cabdispatch.data.AppContainer] passes one) is therefore byte-identical to
+     * W2's own behaviour, unconditionally -- this function is additive, never a replacement of
+     * [lookupKnownCorridorKm] itself, which [resolveBlackout]'s own CORRIDOR path still calls
+     * directly and unchanged.
+     */
+    private fun lookupRoadPathKm(entryFix: LocationFix, exitFix: LocationFix): BigDecimal? {
+        val fromRoadPath = roadPathSource?.pathAt(entryFix)?.distanceTo(exitFix)
+            ?.let { metres -> BigDecimal.valueOf(metres / METRES_PER_KM) }
+            ?.takeIf { it.signum() > 0 }
+        return fromRoadPath ?: lookupKnownCorridorKm(entryFix, exitFix)
+    }
+
+    /**
      * Task 6's "Reconcile at reacquisition" -- the closing half of an INERTIAL (or, on a mid-
      * blackout invalidation, UNCALIBRATED) segment. Never called unless [InertialTally.engaged],
      * i.e. never unless `BuildConfig.INERTIAL_BILLING_ENABLED` billed at least one tick of this
@@ -1466,7 +1501,7 @@ class FareEngineImpl(
         if (inertial.invalidatedMidway) return common
 
         val chordKm = BigDecimal.valueOf(GeoMath.distanceKm(entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng))
-        val roadPathKm = lookupKnownCorridorKm(entryFix, exitFix)
+        val roadPathKm = lookupRoadPathKm(entryFix, exitFix)
         val reconciliation = BlackoutReconciler.reconcile(
             estimatedKm = inertial.billedKm,
             chordKm = chordKm,
@@ -1696,6 +1731,10 @@ class FareEngineImpl(
         /** Nominal loop cadence. The meter no longer *bills* this figure -- see [tick]'s F1 note --
          * it only decides how often the loop wakes up to measure what really elapsed. */
         private const val TICK_PERIOD_MS = 1000L
+
+        /** W3: [lookupRoadPathKm]'s metres-to-km conversion for a matched [RoadPathSource]'s own
+         * [au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPath.distanceTo] figure. */
+        private const val METRES_PER_KM = 1000.0
 
         /**
          * How old the newest GPS fix may be before [tick] stops believing it knows whether this
