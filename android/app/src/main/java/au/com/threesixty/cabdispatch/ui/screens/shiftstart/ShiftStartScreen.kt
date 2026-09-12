@@ -15,7 +15,6 @@ import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -49,7 +48,7 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  */
 @Composable
 fun ShiftStartScreen(navController: NavHostController) {
-    val session by SessionHolder.session.collectAsState()
+    val session by SessionHolder.session.collectAsStateWithLifecycle()
     val s = session
     // REAL region and tariff (2026-09-08). These two rows were literals -- "Urban (auto-detected
     // via GPS)" and "Lilly Cabs urban rank/hail · Ed25519 signed ✓" -- printed on every tablet
@@ -66,7 +65,8 @@ fun ShiftStartScreen(navController: NavHostController) {
     val locationFix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
     val hasFix = locationFix != null
     val region = remember(locationFix) { RegionResolver.resolve(locationFix) }
-    val tariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }.collectAsState(initial = null)
+    val tariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }
+        .collectAsStateWithLifecycle(initialValue = null)
 
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {
         Column(modifier = Modifier.align(Alignment.Center)) {

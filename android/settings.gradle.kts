@@ -48,3 +48,10 @@ dependencyResolutionManagement {
 
 rootProject.name = "CabDispatch"
 include(":app")
+// Baseline Profile generator module (W5 optimisation plan, 2026-09-12) -- a `com.android.test`
+// module, not part of the shipped app, whose one Test class drives a real cold start -> login ->
+// hired screen through Macrobenchmark's `BaselineProfileRule` on a connected device/emulator and
+// writes the resulting profile back into `:app`'s `src/main/baseline-prof.txt`. See
+// baselineprofile/build.gradle.kts's own doc for what this module can and can't do from THIS
+// worktree (no device access here -- see that file and HANDOFF.md for the OWNER step).
+include(":baselineprofile")

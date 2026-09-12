@@ -15,6 +15,10 @@ plugins {
     // release built against Kotlin 1.9.x; bumped to the first release with real Kotlin 2.0/K2
     // frontend support alongside the toolchain upgrade above.
     id("io.gitlab.arturbosch.detekt") version "1.23.8"
+    // Baseline Profile (W5 optimisation plan, 2026-09-12) -- consumes the profile the
+    // `:baselineprofile` module's instrumented test generates. See that module's own doc for what
+    // it does and what this pass could/couldn't run from this worktree.
+    id("androidx.baselineprofile")
 }
 
 // Detekt runs on the existing tree with a BASELINE (detekt-baseline.xml), not with the rules
@@ -273,7 +277,53 @@ kotlin {
     }
 }
 
+// Compose compiler configuration (W5, 2026-09-12 optimisation plan) -- the
+// `org.jetbrains.kotlin.plugin.compose` plugin applied above exposes this `composeCompiler { }`
+// extension for the same compiler that used to be configured through raw
+// `-P plugin:androidx.compose.compiler.plugins.kotlin:*` freeCompilerArgs; the extension is the
+// same flags, typed, and is what a Kotlin-2.x Compose module is expected to use now.
+composeCompiler {
+    // See app/compose_compiler_config.conf's own header doc for exactly which classes are listed
+    // and why (BigDecimal/java.time have no Kotlin stability metadata at all; a handful of this
+    // app's own domain models are read-only-List/BigDecimal-only and verified never mutated in
+    // place). Without this, every composable taking a FareState parameter -- including MeterDial
+    // and HiredScreen, the two composables that recompose once per fare tick for an entire hiring
+    // -- is reported unstable, which silently disables the compiler's skip-if-unchanged check for
+    // every OTHER parameter on those composables too, not only the one that legitimately changes
+    // every second.
+    stabilityConfigurationFiles.add(project.layout.projectDirectory.file("compose_compiler_config.conf"))
+
+    // Metrics/reports (recomposition-stability .txt/.json/.csv per module) are real I/O on every
+    // single compile, so they are OFF unless explicitly asked for -- gated on a Gradle property
+    // rather than always-on, per this task's own instruction not to slow down every build.
+    // Usage: `./gradlew :app:compileDebugKotlin -PcomposeMetrics=true --offline`, then read
+    // `app/build/compose_metrics/*-module.json` (per-composable stability) and
+    // `app/build/compose_reports/*-composables.csv` (skippable/restartable per composable) --
+    // MeterDial/HiredScreen/DeckHomeScreen are the ones this plan's acceptance criteria care about.
+    if (project.hasProperty("composeMetrics")) {
+        metricsDestination.set(layout.buildDirectory.dir("compose_metrics"))
+        reportsDestination.set(layout.buildDirectory.dir("compose_reports"))
+    }
+}
+
+// Baseline Profile plugin configuration (W5 optimisation plan, 2026-09-12) -- see
+// `:baselineprofile`'s own doc for what generates the profile this consumes and why that
+// generation step is an OWNER task, not something this pass ran. `automaticGenerationDuringBuild`
+// stays `false` (the default): true would try to run the connected `:baselineprofile` test on
+// every release build, which needs a real attached device/emulator this CI/build box does not
+// have -- the profile is generated deliberately, on demand, by the owner, not on every build.
+baselineProfile {
+    // `false` (default) — see the comment above; this project's release build never blocks on a
+    // connected device that may not exist.
+    automaticGenerationDuringBuild = false
+}
+
 dependencies {
+    // The `:baselineprofile` module's generated output -- this is what actually wires a real
+    // `baseline-prof.txt`, once one exists, into `:app`'s release build; see that module's build
+    // file for why none exists yet from this worktree.
+    baselineProfile(project(":baselineprofile"))
+
     // -- Compose (BOM pins all Compose artifact versions together) --
     implementation(platform("androidx.compose:compose-bom:2026.06.00"))
     implementation("androidx.compose.ui:ui")
@@ -408,6 +458,23 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+
+    // -- Startup/jank (W5 optimisation plan, 2026-09-12) --
+    // Installs whatever Baseline Profile is bundled in the APK (the `:baselineprofile` module's
+    // generated `baseline-prof.txt`, merged into `assets/dexopt/` by AGP) on first launch on API
+    // < 33 devices — API 33+ handles this automatically via Cloud Profiles/Play install-time
+    // profiles, but this fleet's tablets (SM-T575, API 29 minSdk) do not, so the library call is
+    // still required for them to get the AOT-compiled fast path at all. A no-op if no profile was
+    // bundled, so this is safe to add ahead of the profile actually being generated (see the
+    // `:baselineprofile` module's own doc for why that generation step is an OWNER task).
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+
+    // LeakCanary, debug builds only (never shipped — `debugImplementation`, not `implementation`,
+    // so a release APK never links it and never pays its overhead or shows its notification).
+    // Auto-installs itself via a manifest-merged ContentProvider — no `Application.onCreate()` call
+    // needed, unlike StrictMode above in CabDispatchApp.kt. 2.14 is the current stable release as
+    // of this pass.
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }
 
 // -- Release hardening tripwire (Phase 0, security addendum) --------------------------------

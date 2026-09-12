@@ -59,11 +59,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.ActiveBlackout
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SpeedBand
 import au.com.threesixty.cabdispatch.domain.TimeClass
 import au.com.threesixty.cabdispatch.domain.toMeterDisplayString
 import au.com.threesixty.cabdispatch.domain.toMoneyString
+import java.time.Duration
+import java.time.Instant
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
@@ -117,6 +120,45 @@ internal fun nightMultiplierLabel(tariff: TariffDto?): String? {
 }
 
 private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(this) }.getOrNull()
+
+// ============================================================================================
+// GPS LOST pill — blackout in progress (W1/W5 GPS blackout program, 2026-09-12)
+// ============================================================================================
+
+/**
+ * "m:ss" since [ActiveBlackout.startedAtIso] — the wall-clock instant a real blackout began.
+ * Recomputed off `Instant.now()` on every recomposition rather than a monotonic clock
+ * deliberately: this is a DISPLAY-only "how long has this been going on" figure for the driver,
+ * never a billing decision (see [ActiveBlackout.startedAtIso]'s own doc — billing always runs on
+ * the engine's monotonic clock). [MeterDial] recomposes once a second for the whole hiring (the
+ * fare tick), which is exactly the cadence this needs to stay live without a clock of its own.
+ * A malformed/unparseable instant (should never happen — see the caller) renders "0:00" rather
+ * than crashing the dial.
+ */
+private fun blackoutElapsedLabel(startedAtIso: String): String {
+    val started = runCatching { Instant.parse(startedAtIso) }.getOrNull() ?: return "0:00"
+    val elapsed = Duration.between(started, Instant.now()).let { if (it.isNegative) Duration.ZERO else it }
+    val totalSeconds = elapsed.seconds
+    return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+}
+
+/**
+ * The GPS-lost pill's full text while a blackout is in progress — "GPS LOST 1:23 · waiting only"
+ * or "GPS LOST 1:23 · no charge yet". The suffix is decided by [ActiveBlackout.entryWasMoving],
+ * NOT by [FareState.gpsLost] alone (that flag only says a fix is missing, not what the meter is
+ * doing about it): a blackout that started while STATIONARY can only ever resolve to STATIONARY
+ * (waiting time billed throughout, per [au.com.threesixty.cabdispatch.data.local.entity
+ * .BlackoutResolution]'s doc) — "waiting only" is the whole, final story for that case, so it is
+ * said plainly. A blackout that started while MOVING might still resolve to a real corridor
+ * distance once the vehicle reacquires GPS in a mapped tunnel, or to nothing at all if it never
+ * does — neither is known yet while the blackout is still open, so "no charge yet" says exactly
+ * that (a promise about what is NOT being billed right now, not a claim about what the receipt
+ * will eventually show).
+ */
+private fun gpsLostPillText(blackout: ActiveBlackout): String {
+    val suffix = if (blackout.entryWasMoving) "no charge yet" else "waiting only"
+    return "GPS LOST ${blackoutElapsedLabel(blackout.startedAtIso)} · $suffix"
+}
 
 // ============================================================================================
 // NIGHT / DAY FARE tile
@@ -191,7 +233,13 @@ internal fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
             .clip(CircleShape)
             .background(if (enabled) CaptainPalette.raised else CaptainPalette.panel)
             .border(1.dp, CaptainPalette.panelBorder, CircleShape)
-            .clickable(onClick = onToggle),
+            .clickable(onClick = onToggle)
+            // W5 a11y pass, 2026-09-12: `Modifier.clickable()`'s own `role` parameter defaults to
+            // `null` -- it makes this Box focusable/actionable but never announces it as a
+            // BUTTON the way a real `Button`/`IconButton` would. Same custom-composed-tappable
+            // fix as PAUSE/RESUME and END FARE below, and the ActionTile helper further down this
+            // file.
+            .semantics { role = Role.Button },
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -394,7 +442,8 @@ internal fun MeterDial(
                         color = CaptainPalette.textMuted,
                         modifier = Modifier.padding(top = 2.dp),
                     )
-                    // GPS LOST — the honest half of A1's F3 fix (A4, 2026-09-08).
+                    // GPS LOST — the honest half of A1's F3 fix (A4, 2026-09-08; extended for the
+                    // W1/W5 blackout program, 2026-09-12).
                     //
                     // The engine now *stops accruing distance* when the newest fix is older than
                     // `MAX_FIX_AGE_MS` (FareEngine.kt#tick) — the tunnel that used to bill phantom
@@ -404,11 +453,23 @@ internal fun MeterDial(
                     // a correct hold from a frozen meter. So this states exactly what is and is
                     // not being charged, in the words of the rule being applied.
                     //
+                    // Gated on `fareState.blackout` (not `gpsLost` alone) so the pill can show the
+                    // live "how long" figure and the entry-motion-specific wording — see
+                    // [gpsLostPillText]'s own doc. `gpsLost` without a `blackout` should never
+                    // happen (`FareState.blackout`'s doc: "the two are always set and cleared
+                    // together") but the plain fallback text below is kept as a defensive floor —
+                    // an honest generic warning is still better than the pill silently vanishing
+                    // if that invariant is ever violated by a future change.
+                    //
                     // PERSISTENT, not a self-dismissing banner like METER STARTED or TOLL ADDED:
                     // it is a live condition, not an event, and it must stay on screen for as long
-                    // as it is true. It carries no animation of its own — it appears and it sits
-                    // there, which is also what the calm-motion rule requires of it.
+                    // as it is true. It carries no animation of its own — the TEXT it shows updates
+                    // once a second along with the rest of the dial's per-tick figures, but nothing
+                    // here fades, slides, pulses or otherwise animates, which is exactly what the
+                    // calm-motion rule (ui/theme/Hud.kt) requires of a condition that can sit on
+                    // screen, unattended, for the length of an entire tunnel queue.
                     if (fareState.gpsLost) {
+                        val blackout = fareState.blackout
                         Row(
                             modifier = Modifier
                                 .padding(top = 6.dp)
@@ -430,7 +491,7 @@ internal fun MeterDial(
                                 modifier = Modifier.size(14.dp),
                             )
                             Text(
-                                "GPS LOST — WAITING TIME ONLY",
+                                (blackout?.let { gpsLostPillText(it) } ?: "GPS LOST — WAITING TIME ONLY").uppercase(),
                                 style = Type.tiny,
                                 letterSpacing = 1.sp,
                                 color = CaptainPalette.warning,

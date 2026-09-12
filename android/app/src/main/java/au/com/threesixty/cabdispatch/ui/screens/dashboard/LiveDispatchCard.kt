@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,6 +33,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.ui.theme.CaptainButton
@@ -186,7 +186,7 @@ internal fun DispatchOfferRow(card: AvailableTripCard, busy: Boolean, onAccept: 
     // live-traffic) when present. `null` on a job created before that migration landed — falls
     // back to this app's own live-GPS straight-line distance (no ETA fabricated locally), then to
     // the offer's relative-request-time text if even a GPS fix isn't available yet.
-    val fix by AppContainer.speedSource.locationFix.collectAsState()
+    val fix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
     val distanceLabel = when {
         job.distanceKm != null && job.etaMin != null ->
             "${job.distanceKm} km · ${job.etaMin} min (approx.)"

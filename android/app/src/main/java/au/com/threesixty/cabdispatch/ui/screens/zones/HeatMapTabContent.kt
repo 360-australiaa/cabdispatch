@@ -17,7 +17,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.data.remote.ZoneDto
 import au.com.threesixty.cabdispatch.data.remote.ZoneStatsDto
@@ -101,8 +101,8 @@ fun HeatMapTabContent(
     plotViewModel: PlotZoneViewModel = viewModel(),
     statsViewModel: ZoneStatisticsViewModel = viewModel(),
 ) {
-    val zoneState by plotViewModel.uiState.collectAsState()
-    val statsState by statsViewModel.uiState.collectAsState()
+    val zoneState by plotViewModel.uiState.collectAsStateWithLifecycle()
+    val statsState by statsViewModel.uiState.collectAsStateWithLifecycle()
 
     val zones = (zoneState as? PlotZoneUiState.Loaded)?.zones.orEmpty()
     val statsByZoneId = remember(statsState.stats) { statsState.stats.associateBy { it.zoneId } }

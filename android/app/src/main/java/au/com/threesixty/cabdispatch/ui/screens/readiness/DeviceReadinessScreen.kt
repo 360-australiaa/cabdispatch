@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.Icons
 import android.Manifest
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_ALPHABET
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -45,7 +46,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,7 +92,7 @@ fun DeviceReadinessScreen(
     viewModel: DeviceReadinessViewModel = viewModel(),
 ) {
     val context = LocalContext.current
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.ready) {
         if (state.ready) onReady()

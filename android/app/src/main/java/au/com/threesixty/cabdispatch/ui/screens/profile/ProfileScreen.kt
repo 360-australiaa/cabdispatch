@@ -34,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
@@ -141,11 +141,12 @@ fun ProfileScreen(
     onFactoryReset: () -> Unit,
     viewModel: ProfileViewModel = viewModel(),
 ) {
-    val session by SessionHolder.session.collectAsState()
+    val session by SessionHolder.session.collectAsStateWithLifecycle()
     var activeTab by remember { mutableStateOf(ProfileTab.PROFILE) }
 
     // Screen-local compliance-expiry loader (see class doc): null = failed/hidden, empty = loaded
-    // none. Real network read, degrades to hiding the cards.
+    // none. Real network read, degrades to hiding the cards. Unit is correct — a one-shot load on
+    // screen entry, nothing in composition drives a re-fetch.
     var expiryItems by remember { mutableStateOf<List<ComplianceExpiryItemDto>>(emptyList()) }
     LaunchedEffect(Unit) {
         expiryItems = runCatching { AppContainer.apiService.complianceExpiry() }
@@ -198,11 +199,11 @@ fun ProfileScreen(
 @Composable
 private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel) {
     val context = LocalContext.current
-    val photoState by viewModel.photoState.collectAsState()
-    val isUploadingPhoto by viewModel.isUploadingPhoto.collectAsState()
-    val photoUploadError by viewModel.photoUploadError.collectAsState()
-    val vehicleDetail by viewModel.vehicleDetail.collectAsState()
-    val userDetail by viewModel.userDetail.collectAsState()
+    val photoState by viewModel.photoState.collectAsStateWithLifecycle()
+    val isUploadingPhoto by viewModel.isUploadingPhoto.collectAsStateWithLifecycle()
+    val photoUploadError by viewModel.photoUploadError.collectAsStateWithLifecycle()
+    val vehicleDetail by viewModel.vehicleDetail.collectAsStateWithLifecycle()
+    val userDetail by viewModel.userDetail.collectAsStateWithLifecycle()
     var cameraPermissionDenied by remember { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
@@ -378,7 +379,7 @@ private fun ComplianceColumn(
     expiryItems: List<ComplianceExpiryItemDto>,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.complianceState.collectAsState()
+    val state by viewModel.complianceState.collectAsStateWithLifecycle()
 
     Column(modifier = modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -569,8 +570,8 @@ private fun ProfileTabPill(label: String, selected: Boolean, onClick: () -> Unit
  */
 @Composable
 private fun DocumentsPane(viewModel: ProfileViewModel, modifier: Modifier = Modifier) {
-    val userDetail by viewModel.userDetail.collectAsState()
-    val vehicleDetail by viewModel.vehicleDetail.collectAsState()
+    val userDetail by viewModel.userDetail.collectAsStateWithLifecycle()
+    val vehicleDetail by viewModel.vehicleDetail.collectAsStateWithLifecycle()
 
     Column(modifier = modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(

@@ -24,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
@@ -679,7 +679,7 @@ private data class BackdropHolder(
  */
 @Composable
 internal fun rememberLiveTrace(): List<MapPoint> {
-    val fix by AppContainer.speedSource.locationFix.collectAsState()
+    val fix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
     var trace by remember { mutableStateOf<List<MapPoint>>(emptyList()) }
     LaunchedEffect(fix) {
         val f = fix ?: return@LaunchedEffect

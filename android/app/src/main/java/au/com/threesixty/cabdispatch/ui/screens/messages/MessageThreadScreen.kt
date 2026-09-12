@@ -31,7 +31,6 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +44,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
@@ -73,9 +73,12 @@ fun MessageThreadScreen(
     navController: NavHostController,
     viewModel: MessagesViewModel = viewModel(),
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
+    // Unit is correct: "mark read" is an on-open action for this thread, not a reaction to any
+    // value this composable reads — it must fire exactly once when the thread is opened, and
+    // keying it on e.g. state.messages.size would re-fire (and re-mark) on every new message.
     LaunchedEffect(Unit) { viewModel.markUnreadAsRead() }
     LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)

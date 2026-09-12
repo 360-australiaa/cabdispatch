@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +30,7 @@ import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.AppUpdateState
 import au.com.threesixty.cabdispatch.ui.theme.Deck
@@ -141,7 +141,7 @@ import kotlinx.coroutines.launch
 fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
     val activity = LocalActivity.current
     val checker = AppContainer.appUpdateChecker
-    val updateState by checker.state.collectAsState()
+    val updateState by checker.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     // Kick off exactly one check per time this banner appears (force_update_pending flips true) —
@@ -458,8 +458,8 @@ private const val SYNCING_FOLLOWUP_MAX_MS = 12_000L
  */
 @Composable
 fun OfflineBanner(modifier: Modifier = Modifier) {
-    val isOnline by AppContainer.connectivitySyncTrigger.isOnline.collectAsState()
-    val pendingCount by AppContainer.tripRepository.observeOutboxSize().collectAsState(initial = 0)
+    val isOnline by AppContainer.connectivitySyncTrigger.isOnline.collectAsStateWithLifecycle()
+    val pendingCount by AppContainer.tripRepository.observeOutboxSize().collectAsStateWithLifecycle(initialValue = 0)
 
     var wasOffline by remember { mutableStateOf(!isOnline) }
     var syncingFollowUp by remember { mutableStateOf(false) }

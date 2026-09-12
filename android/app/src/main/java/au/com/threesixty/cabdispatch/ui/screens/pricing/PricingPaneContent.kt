@@ -83,6 +83,9 @@ fun PricingPaneContent(modifier: Modifier = Modifier) {
     // displays a figure the meter would not charge.
     var airportAccessFee by remember { mutableStateOf<String?>(null) }
 
+    // Unit is correct: this pane has no parameters and nothing it reads can change out from under
+    // it (region is resolved fresh, once, from the live fix at the moment the pane opens) — a
+    // "load on open" effect with no real dependency to key on.
     LaunchedEffect(Unit) {
         val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
         tariff = runCatching { AppContainer.tariffCache.getActiveTariff(region = region) }.getOrNull()

@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -23,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TermsAcceptance
@@ -61,7 +61,7 @@ private const val DISCLAIMER_PARA_2 =
 @Composable
 fun TermsDisclaimerScreen(onAccept: () -> Unit) {
     val context = LocalContext.current
-    val session by SessionHolder.session.collectAsState()
+    val session by SessionHolder.session.collectAsStateWithLifecycle()
 
     // No header on this screen, so the app-level banners fall back to their last measured
     // clearance -- on a fresh install, nothing has ever measured one -- and land across this

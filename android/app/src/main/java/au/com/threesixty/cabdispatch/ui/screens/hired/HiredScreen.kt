@@ -30,7 +30,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -49,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.data.AppContainer
@@ -60,6 +60,7 @@ import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.data.remote.ZoneDto
 import au.com.threesixty.cabdispatch.domain.LocationFix
+import au.com.threesixty.cabdispatch.domain.ResolvedBlackout
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TripContext
@@ -187,15 +188,15 @@ fun HiredScreen(
     viewModel: HiredViewModel = viewModel(),
     meterNavViewModel: MeterNavViewModel = viewModel(),
 ) {
-    val fareState by viewModel.fareState.collectAsState()
-    val speechEnabled by viewModel.speechEnabled.collectAsState()
-    val duressState by viewModel.duressState.collectAsState()
-    val breakdownExpanded by viewModel.breakdownExpanded.collectAsState()
+    val fareState by viewModel.fareState.collectAsStateWithLifecycle()
+    val speechEnabled by viewModel.speechEnabled.collectAsStateWithLifecycle()
+    val duressState by viewModel.duressState.collectAsStateWithLifecycle()
+    val breakdownExpanded by viewModel.breakdownExpanded.collectAsStateWithLifecycle()
     val isPaused = fareState.status == TripStatus.STOPPED
     // Read straight from the simulator rather than from the trip row, so the banner is live the
     // instant simulation starts or stops -- including on a trip that was opened before it was
     // switched on. See the banner itself, below.
-    val simulatingGps by AppContainer.gpsSimulator.active.collectAsState()
+    val simulatingGps by AppContainer.gpsSimulator.active.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // BACK IS NOW ALLOWED (A4, 2026-09-08) — the `BackHandler(enabled = true) {}` that used to sit
@@ -231,12 +232,13 @@ fun HiredScreen(
     // "screen-local loader" convention DeckHomeScreen's HomeExtras/DriverAvatar already use), not a
     // new field added to HiredViewModel itself. Degrades to nulls (every dependent row below
     // already shows "—") if this VM instance somehow outlives the pendingTrip hand-off.
-    val tripContext by SessionHolder.pendingTrip.collectAsState()
+    val tripContext by SessionHolder.pendingTrip.collectAsStateWithLifecycle()
     // Real persisted trip row (Room, via the same observeActiveTrip Flow DeckHomeScreen's
     // hasActiveTrip read uses) — only for the Trip Details timeline's real pickup time
     // (TripEntity.startAt) — and its persisted GPS trace for the backdrop's route polyline.
-    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
-    val persistedTrace by AppContainer.tripRepository.observeActiveTripGpsTrace().collectAsState(initial = emptyList())
+    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsStateWithLifecycle(initialValue = null)
+    val persistedTrace by AppContainer.tripRepository.observeActiveTripGpsTrace()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     // The tariff the running fare is actually charging, for a RESUMED fare (tablet, 2026-09-08).
     // `tripContext` above is the in-memory hand-off set when the driver tapped START; after a
     // process death it is null, so on a resumed fare the Night Fare tile and the breakdown's
@@ -245,10 +247,11 @@ fun HiredScreen(
     // its id matches the open trip's own tariffId, so the label can never name a tariff other than
     // the one on the bill. No match: still an honest dash, never a plausible number.
     val region = remember { RegionResolver.resolve(AppContainer.speedSource.locationFix.value) }
-    val cachedTariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }.collectAsState(initial = null)
+    val cachedTariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }
+        .collectAsStateWithLifecycle(initialValue = null)
     val resumedTariff: TariffDto? = cachedTariff?.takeIf { activeTrip != null && it.id == activeTrip?.tariffId }
     val liveTrace = rememberLiveTrace()
-    val liveFix by AppContainer.speedSource.locationFix.collectAsState()
+    val liveFix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
 
     // ---- Navigator (real, wired) ----------------------------------------------------------------
     // MeterNavViewModel is the merged, in-flight navigator ViewModel (destination search, real
@@ -257,7 +260,7 @@ fun HiredScreen(
     // one thing, the process-wide TTS engine. `destination != null` is the one real trigger for
     // the mockup-#4 layout switch — never TripContext.destAddress, which (per that field's own
     // doc) never carries coordinates for a rank/hail trip.
-    val navState by meterNavViewModel.uiState.collectAsState()
+    val navState by meterNavViewModel.uiState.collectAsStateWithLifecycle()
     val hasDestination = navState.destination != null
     // HiredViewModel.speechEnabled stays the single source of truth for "is anything spoken right
     // now" — this mirrors it into the navigator's own flag on every change so the one voice toggle
@@ -325,6 +328,26 @@ fun HiredScreen(
             // running fare permanently.
             kotlinx.coroutines.delay(7000)
             autoTollBanner = null
+        }
+    }
+
+    // "FARE RESUMED" — the GPS-blackout half (W1/W5 GPS blackout program, 2026-09-12). The dial's
+    // GPS LOST pill (see MeterDial) is the PERSISTENT half of this contract, on for as long as
+    // fareState.blackout is non-null; this is the ONE-SHOT half, fired the instant the blackout
+    // actually resolves, so a driver who was not staring at the pill still gets told the meter is
+    // billing normally again. Exactly the same "key off the event's own id, never resets to null"
+    // shape as autoTollBanner immediately above — see FareState.lastResolvedBlackout's own doc for
+    // why nullness alone is never the trigger.
+    var blackoutResumedBanner by remember { mutableStateOf<ResolvedBlackout?>(null) }
+    LaunchedEffect(fareState.lastResolvedBlackout?.segmentId) {
+        val resolved = fareState.lastResolvedBlackout
+        if (resolved != null) {
+            blackoutResumedBanner = resolved
+            // 5s, matching showResumedBanner above (the restart-recovery banner this mirrors) —
+            // read after an event the driver was not necessarily watching for, not a routine
+            // confirmation like METER STARTED's 2s.
+            kotlinx.coroutines.delay(5000)
+            blackoutResumedBanner = null
         }
     }
 
@@ -578,6 +601,11 @@ fun HiredScreen(
             }
         }
 
+        BlackoutResumedBanner(
+            resolved = blackoutResumedBanner,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+        )
+
         CaptainDialogScrim(visible = showPassengerEdit, onDismissRequest = { showPassengerEdit = false }) {
             PassengerEditDialog(
                 initialCount = fareState.passengerCount,
@@ -670,7 +698,15 @@ fun HiredScreen(
         }
         CaptainDialogScrim(visible = showControls, onDismissRequest = { showControls = false }) {
             ControlsDrawer(
-                fareState = fareState,
+                // W5 recomposition-hygiene pass: exactly the fields ControlsDrawer's subtree reads,
+                // not the whole `fareState` — see that composable's own doc for why.
+                fareInfo = ControlsDrawerFareInfo(
+                    breakdown = fareState.breakdown,
+                    timeClass = fareState.timeClass,
+                    negotiatedTotal = fareState.negotiatedTotal,
+                    movingSeconds = fareState.movingSeconds,
+                    distanceKm = fareState.distanceKm,
+                ),
                 tripContext = tripContext,
                 tariffFallback = resumedTariff,
                 startAtIso = activeTrip?.startAt,
@@ -708,6 +744,65 @@ fun HiredScreen(
                 onCancel = viewModel::cancelDuress,
             )
             DuressUiState.Idle -> Unit
+        }
+    }
+}
+
+/**
+ * The GPS-blackout "FARE RESUMED" transient banner — see [HiredScreen]'s own `blackoutResumedBanner`
+ * doc for the full "why" (the one-shot half of the blackout UI contract, paired with [MeterDial]'s
+ * persistent GPS LOST pill). Extracted to its own composable (W5 recomposition-hygiene pass,
+ * 2026-09-12) rather than left inline in [HiredScreen]'s body: this is a self-contained
+ * "nothing to show, or one banner" decision with no other dependency on that function's own state,
+ * and keeping it inline pushed [HiredScreen] itself over detekt's cyclomatic-complexity threshold
+ * for no benefit — moving it here costs nothing (same `AnimatedVisibility`, same `Modifier` passed
+ * straight through from the call site) and reads exactly the same at the call site.
+ */
+@Composable
+private fun BlackoutResumedBanner(resolved: ResolvedBlackout?, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = resolved != null,
+        modifier = modifier,
+        enter = fadeIn(),
+        exit = fadeOut(animationSpec = tween(400)),
+    ) {
+        if (resolved != null) {
+            Row(
+                modifier = Modifier
+                    .neonGlow(CaptainPalette.hudAccent, 99.dp, strength = 0.8f)
+                    .clip(RoundedCornerShape(Radius.pill))
+                    .background(CaptainPalette.hudAccent)
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Decorative (see the identical Restore icon on showResumedBanner above for the
+                // reviewed a11y reasoning): the text beside it already carries the full
+                // announcement.
+                Icon(
+                    Icons.Rounded.Restore,
+                    contentDescription = null,
+                    tint = CaptainPalette.bg,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    // What actually happened to the gap, in the driver's own words, not just
+                    // "signal's back" — a driver who is about to explain a fare to a passenger
+                    // needs to know whether the tunnel just got billed as real road distance, as
+                    // waiting time, or as nothing at all. See ResolvedBlackout.resolution's own
+                    // doc for these three values ("NONE"/"CORRIDOR"/"STATIONARY") — this is the
+                    // ONLY place on screen that turns that wire value into English.
+                    "FARE RESUMED — " + when (resolved.resolution) {
+                        "CORRIDOR" -> "corridor distance billed"
+                        "STATIONARY" -> "waiting time billed"
+                        else -> "no charge for the gap"
+                    },
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.bg,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
         }
     }
 }

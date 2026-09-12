@@ -165,9 +165,26 @@ private const val DESIGN_H_DP = 800f
  * 400dp drive panel, 140×78 keys…) is authored against 1280×800, so instead of re-deriving every
  * measurement adaptively, the root [Density] is scaled so 1280dp of layout exactly spans the
  * panel's width (uniform scale, aspect preserved: both axes are 1.6× here, and any 16:10 panel
- * maps cleanly). Fonts scale identically since sp resolves through the same density. This is the
- * standard fixed-canvas approach for single-purpose kiosk hardware; dialogs/popups hosted in
- * separate windows keep system density, which is acceptable for their content.
+ * maps cleanly). Fonts scale identically since sp resolves through the same density -- and
+ * separately respect the SYSTEM accessibility text-size setting on top, via `fontScale =
+ * systemDensity.fontScale` below: a driver who has turned on large text in Android Settings gets
+ * both scale factors, not just this one. This is the standard fixed-canvas approach for
+ * single-purpose kiosk hardware.
+ *
+ * **Real `Dialog`/`Popup` hosts a SEPARATE window that does NOT inherit this override** (W5
+ * density audit, 2026-09-12 -- this was previously documented here as "acceptable for their
+ * content", which was wrong for at least two real call sites: `EngagementTiles.kt`'s
+ * `TopUpInfoDialog`/`AnnouncementDialog` rendered visibly smaller than the rest of the app, out of
+ * proportion with everything around them, because their 440/520dp panels were measured against the
+ * tablet's real ~1.6×-smaller system density instead of this one). The fix applied there --
+ * capturing the caller's already-scaled `LocalDensity.current` just outside the `Dialog` and
+ * re-providing it inside the `Dialog`'s own content -- is the correct pattern for any FUTURE real
+ * `Dialog`/`Popup` too. Every other dialog/sheet in this app already avoids the problem by being a
+ * same-window overlay instead (`CaptainDialogScrim` and friends -- see
+ * [au.com.threesixty.cabdispatch.ui.overlays.FleetCommandOverlays]'s class doc), which is still the
+ * preferred approach whenever the caller has the full window to draw a scrim over; a real `Dialog`
+ * is only needed when the caller is confined to a smaller content slot (as `EngagementTiles.kt`'s
+ * two dialogs are, hosted inside the Dashboard pane's own slot, not the full screen).
  */
 @Composable
 private fun FixedDesignCanvas(content: @Composable () -> Unit) {

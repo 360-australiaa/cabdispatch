@@ -37,8 +37,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import au.com.threesixty.cabdispatch.domain.FareState
+import au.com.threesixty.cabdispatch.domain.FareBreakdown
+import au.com.threesixty.cabdispatch.domain.TimeClass
 import au.com.threesixty.cabdispatch.domain.TripContext
+import java.math.BigDecimal
 import au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.Type
@@ -53,6 +55,19 @@ import au.com.threesixty.cabdispatch.ui.theme.InterFamily
  */
 
 private val NAV_TILE_H = 92.dp
+
+/**
+ * Exactly the [au.com.threesixty.cabdispatch.domain.FareState] fields [ControlsDrawer]'s subtree
+ * reads, bundled into one class for the same reason [MeterActions] bundles its own four callbacks
+ * — see [ControlsDrawer]'s own doc for the recomposition-hygiene reasoning this exists for.
+ */
+internal data class ControlsDrawerFareInfo(
+    val breakdown: FareBreakdown,
+    val timeClass: TimeClass,
+    val negotiatedTotal: BigDecimal?,
+    val movingSeconds: Int,
+    val distanceKm: BigDecimal,
+)
 
 /**
  * The small, low-profile affordance that opens [ControlsDrawer] — docked in the dial panel's
@@ -97,10 +112,21 @@ internal fun ControlsHandle(onClick: () -> Unit, modifier: Modifier = Modifier) 
  * builds — SET PRICE/ADD TOLL/MORE close this drawer first (see those callbacks' own doc at the
  * `actions` call site) so the driver lands back on the plain dial+map view under whichever dialog it
  * opened; PAUSE FARE has no dialog of its own and leaves the drawer open.
+ *
+ * Takes [fareInfo] (a small bundle of exactly [ControlsDrawerFareInfo.breakdown]/`.timeClass`/
+ * `.negotiatedTotal`/`.movingSeconds`/`.distanceKm`) rather than the whole `FareState` (W5
+ * recomposition-hygiene pass, 2026-09-12) — this drawer is open on demand (see [ControlsHandle]'s
+ * doc) but, while it IS open, a whole-`FareState` parameter recomposed it on every one-second tick
+ * regardless of whether anything it actually renders changed (parked with the drawer open,
+ * currentSpeedKmh/waitingSeconds still tick every second with nothing here depending on either).
+ * Narrowing to exactly the fields [NightFareTile]/[FareBreakdownCard]/[TripDetailsCard] read below
+ * lets Compose skip this whole subtree on a tick that doesn't move any of them — bundled into one
+ * class, matching [MeterActions]' own precedent just below, rather than five separate parameters
+ * (detekt's `LongParameterList` rule, same reasoning that class's doc gives).
  */
 @Composable
 internal fun ControlsDrawer(
-    fareState: FareState,
+    fareInfo: ControlsDrawerFareInfo,
     tripContext: TripContext?,
     /** The charging tariff for a resumed fare, when [tripContext] is gone -- see HiredScreen. */
     tariffFallback: TariffDto? = null,
@@ -111,6 +137,14 @@ internal fun ControlsDrawer(
     actions: MeterActions,
     onDismiss: () -> Unit,
 ) {
+    // Not a destructuring `val (a, b, c, d, e) = fareInfo` (detekt's
+    // DestructuringDeclarationWithTooManyEntries caps that at 3) — plain property reads, same
+    // values, one line each.
+    val breakdown = fareInfo.breakdown
+    val timeClass = fareInfo.timeClass
+    val negotiatedTotal = fareInfo.negotiatedTotal
+    val movingSeconds = fareInfo.movingSeconds
+    val distanceKm = fareInfo.distanceKm
     Column(
         modifier = Modifier
             .width(440.dp)
@@ -145,7 +179,7 @@ internal fun ControlsDrawer(
         }
         Spacer(Modifier.height(16.dp))
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-            NightFareTile(timeClass = fareState.timeClass, tariff = (tripContext?.tariff ?: tariffFallback))
+            NightFareTile(timeClass = timeClass, tariff = (tripContext?.tariff ?: tariffFallback))
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SetPriceTile(actions, Modifier.weight(1f).height(NAV_TILE_H))
@@ -159,18 +193,23 @@ internal fun ControlsDrawer(
             Spacer(Modifier.height(8.dp))
             FareBreakdownCard(
                 title = if (hasDestination) "FARE DETAILS" else "FARE BREAKDOWN",
-                breakdown = fareState.breakdown,
-                timeClass = fareState.timeClass,
+                breakdown = breakdown,
+                timeClass = timeClass,
                 nightMultiplierLabel = nightMultiplierLabel((tripContext?.tariff ?: tariffFallback)),
                 expanded = breakdownExpanded,
                 onToggle = onToggleBreakdown,
-                negotiatedTotal = fareState.negotiatedTotal,
+                negotiatedTotal = negotiatedTotal,
             )
             // Dropped once the map panel already carries the same PICK UP/DESTINATION pair — the
             // two must never show the same address/time twice.
             if (!hasDestination) {
                 Spacer(Modifier.height(8.dp))
-                TripDetailsCard(tripContext = tripContext, fareState = fareState, startAtIso = startAtIso)
+                TripDetailsCard(
+                    tripContext = tripContext,
+                    movingSeconds = movingSeconds,
+                    distanceKm = distanceKm,
+                    startAtIso = startAtIso,
+                )
             }
             Spacer(Modifier.height(8.dp))
             AccrualNote()

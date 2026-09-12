@@ -34,8 +34,8 @@ import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,12 +46,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.data.remote.AnnouncementDto
 import au.com.threesixty.cabdispatch.data.remote.IncentiveProgressDto
@@ -99,7 +101,7 @@ fun DriverEngagementTiles(
     twoColumn: Boolean = false,
     viewModel: DriverEngagementViewModel = viewModel(),
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     // "Refreshed on pane entry": this composable only exists while the Dashboard pane is showing,
     // so its first composition IS pane entry (the ViewModel itself outlives the pane, so a
     // re-entry re-fetches rather than showing whatever it last had without checking).
@@ -313,28 +315,45 @@ private fun LedgerLine(line: WalletTransactionDto) {
  * (`backend/app/api/v1/wallet.py` — every write is `require_role("owner", "admin")`); there is no
  * driver-facing top-up endpoint, card capture or payment gateway for a wallet credit anywhere in
  * this system. Pretending otherwise would be a fake button, so this says what actually happens.
+ *
+ * A real `Dialog`, not [au.com.threesixty.cabdispatch.ui.theme.CaptainDialogScrim] like every other
+ * dialog on this screen (W5 density-override fix, 2026-09-12) — deliberately: this composable is
+ * reached from [EngagementTilesContent], which only ever gets the Dashboard pane's own content
+ * slot, not the full window, so a `CaptainDialogScrim`'s `fillMaxSize()` scrim here would cover
+ * only that slot rather than the screen. A real `Dialog` is the correct tool for that, but (see
+ * [au.com.threesixty.cabdispatch.ui.overlays.FleetCommandOverlays]'s class doc, and
+ * [au.com.threesixty.cabdispatch.MainActivity]'s `FixedDesignCanvas` doc) it hosts its content in a
+ * SEPARATE window that keeps the real system density, not the 1280×800 design-canvas density
+ * `FixedDesignCanvas` provides everywhere else — a plain `Dialog` here rendered its 440dp panel at
+ * the tablet's real ~1.6x-smaller physical scale, visibly out of proportion with the rest of the
+ * app around it. Re-providing the CALLER's own [LocalDensity] (captured just outside, already the
+ * correctly-scaled one) inside the dialog's content fixes exactly that, without turning this into
+ * a `CaptainDialogScrim` or touching `FixedDesignCanvas` itself.
  */
 @Composable
 private fun TopUpInfoDialog(onDismiss: () -> Unit) {
+    val scaledDensity = LocalDensity.current
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(440.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(CaptainPalette.panel)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text("Add funds", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
-            Text(
-                "Wallet top-ups are posted by your operator, not from this tablet. Ask your base " +
-                    "to add funds to your wallet — the new balance shows here on the next refresh.",
-                fontFamily = InterFamily,
-                fontSize = 16.sp,
-                color = CaptainPalette.textSecondary,
-            )
-            CaptainButton(text = "Got it", heightDp = 56, fontSize = 18.sp, onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+        CompositionLocalProvider(LocalDensity provides scaledDensity) {
+            Column(
+                modifier = Modifier
+                    .width(440.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp))
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text("Add funds", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)
+                Text(
+                    "Wallet top-ups are posted by your operator, not from this tablet. Ask your base " +
+                        "to add funds to your wallet — the new balance shows here on the next refresh.",
+                    fontFamily = InterFamily,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textSecondary,
+                )
+                CaptainButton(text = "Got it", heightDp = 56, fontSize = 18.sp, onClick = onDismiss, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }
@@ -744,26 +763,33 @@ private fun PreviewEngagementTilesLoadingErrorEmpty() {
  * an announcement has none - there is no acknowledge, dismiss or mark-read endpoint anywhere in
  * this app's API surface, and inventing a button that quietly did nothing would be exactly the
  * kind of fake affordance the rest of this file exists to avoid.
+ *
+ * Real `Dialog`, density-corrected exactly like [TopUpInfoDialog] above — see that composable's
+ * own doc for why this screen needs a real `Dialog` for full-window coverage AND why that means
+ * re-providing the caller's already-scaled [LocalDensity] inside it (W5, 2026-09-12).
  */
 @Composable
 private fun AnnouncementDialog(item: AnnouncementDto, onDismiss: () -> Unit) {
+    val scaledDensity = LocalDensity.current
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(520.dp)
-                .clip(RoundedCornerShape(Radius.lg))
-                .background(CaptainPalette.panel)
-                .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(Radius.lg))
-                .padding(Space.lg),
-            verticalArrangement = Arrangement.spacedBy(Space.smd),
-        ) {
-            Text(item.title, style = Type.h1, color = CaptainPalette.textPrimary)
-            val when_ = Fmt.relativeTime(item.startsAt)
-            if (when_.isNotEmpty()) {
-                Text(when_, style = Type.tiny, color = CaptainPalette.textMuted)
+        CompositionLocalProvider(LocalDensity provides scaledDensity) {
+            Column(
+                modifier = Modifier
+                    .width(520.dp)
+                    .clip(RoundedCornerShape(Radius.lg))
+                    .background(CaptainPalette.panel)
+                    .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(Radius.lg))
+                    .padding(Space.lg),
+                verticalArrangement = Arrangement.spacedBy(Space.smd),
+            ) {
+                Text(item.title, style = Type.h1, color = CaptainPalette.textPrimary)
+                val when_ = Fmt.relativeTime(item.startsAt)
+                if (when_.isNotEmpty()) {
+                    Text(when_, style = Type.tiny, color = CaptainPalette.textMuted)
+                }
+                Text(item.body, style = Type.body, color = CaptainPalette.textSecondary)
+                CaptainButton(text = "Close", heightDp = 56, fontSize = 18.sp, onClick = onDismiss, modifier = Modifier.fillMaxWidth())
             }
-            Text(item.body, style = Type.body, color = CaptainPalette.textSecondary)
-            CaptainButton(text = "Close", heightDp = 56, fontSize = 18.sp, onClick = onDismiss, modifier = Modifier.fillMaxWidth())
         }
     }
 }

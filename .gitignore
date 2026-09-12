@@ -31,6 +31,12 @@ npm-debug.log*
 android/.gradle/
 android/build/
 android/app/build/
+# W5 (2026-09-12): the new `:baselineprofile` module (and any future module) needs the same
+# per-module build/ exclusion `android/app/build/` above already gives `:app` -- this was missing
+# for `:baselineprofile` and let its whole Gradle output tree get staged by an unqualified `git
+# add` once. The trailing wildcard covers this module and whatever comes after it without needing
+# another one-off line each time.
+android/*/build/
 android/local.properties
 android/*.iml
 android/.idea/
