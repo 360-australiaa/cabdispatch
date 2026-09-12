@@ -60,11 +60,15 @@ import au.com.threesixty.cabdispatch.ui.theme.Type
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.createGlowLine
 import au.com.threesixty.cabdispatch.ui.theme.toMapboxHex
+import au.com.threesixty.cabdispatch.domain.location.roadpath.StyleRoadFeature
 import com.mapbox.android.gestures.MoveGestureDetector
 import com.mapbox.android.gestures.StandardScaleGestureDetector
+import com.mapbox.bindgen.Value
+import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
+import com.mapbox.maps.SourceQueryOptions
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.annotation.annotations
@@ -703,6 +707,61 @@ private const val LIVE_TRACE_MAX = 4000
  * this file used before this pass.
  */
 private const val BACKDROP_MAP_STYLE_URI = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za"
+
+/**
+ * W3 (road-geometry constraint sources, 2026-09-12 plan) — the one real Mapbox SDK call
+ * `domain/location/roadpath/StyleRoadPath.kt`'s task-4 spike cannot make on its own (that class is
+ * pure Kotlin with no [MapView] dependency, by [au.com.threesixty.cabdispatch.domain.location
+ * .roadpath.RoadPathSource]'s own contract — see that file's doc). Queries [mapView]'s CURRENTLY
+ * LOADED style for `LineString` features on [sourceLayerId] within [sourceId] — e.g.
+ * `mapbox-streets-v8`'s own `"road"` layer inside the standard `"composite"` source, IF the custom
+ * style at [BACKDROP_MAP_STYLE_URI] is ever extended to include it (an owner-only Mapbox Studio
+ * change — see [StyleRoadPath][au.com.threesixty.cabdispatch.domain.location.roadpath.StyleRoadPath]'s
+ * own doc for why this project cannot confirm that from static inspection alone).
+ *
+ * A query over ALREADY-LOADED/cached tile data only — `querySourceFeatures` never itself issues a
+ * network request (it only ever answers from what the renderer has already fetched, exactly the
+ * "offline region already cached it" case this feature depends on) — but the SDK's own API is
+ * callback-based regardless (a native tile-cache lookup still hops off the calling thread), so
+ * this stays a callback rather than a blocking call, matching every other `mapboxMap.*` call in
+ * this file. [onResult] receives an empty list, never an error/crash, whenever [sourceId]/
+ * [sourceLayerId] do not exist on the currently loaded style (an unconfigured or misnamed layer —
+ * the honest "nothing to offer" case [StyleRoadPath][au.com.threesixty.cabdispatch.domain.location
+ * .roadpath.StyleRoadPath] itself is written to degrade safely from) or the SDK call itself fails
+ * for any other reason.
+ *
+ * Deliberately just a thin, testable-shape wrapper around the real SDK call — it does not itself
+ * decide what counts as "near" or "connected" (that geometry lives in
+ * [StyleRoadPath][au.com.threesixty.cabdispatch.domain.location.roadpath.StyleRoadPath], which is
+ * pure and unit-testable without a [MapView] at all); this function's only job is the one line of
+ * real Mapbox SDK surface that class cannot reach on its own. **Not wired to any call site by this
+ * workstream** — see `data/AppContainer.kt`'s own `roadPathSource` doc for why: publishing this
+ * function's results into something [StyleRoadPath][au.com.threesixty.cabdispatch.domain.location
+ * .roadpath.StyleRoadPath]'s cache-reading `featureProvider` lambda can consume needs a live
+ * `MapView` + a blackout-entry trigger this workstream has no device to verify end-to-end.
+ */
+internal fun queryRoadSourceFeatures(
+    mapView: MapView,
+    sourceId: String,
+    sourceLayerId: String,
+    onResult: (List<StyleRoadFeature>) -> Unit,
+) {
+    mapView.mapboxMap.querySourceFeatures(
+        sourceId,
+        SourceQueryOptions(listOf(sourceLayerId), Value.nullValue()),
+    ) { expected ->
+        val features = expected.value.orEmpty().mapNotNull { queried ->
+            val feature = queried.queriedFeature.feature
+            val geometry = feature.geometry() as? LineString ?: return@mapNotNull null
+            StyleRoadFeature(
+                name = feature.getStringProperty("name"),
+                roadClass = feature.getStringProperty("class"),
+                points = geometry.coordinates().map { point -> point.latitude() to point.longitude() },
+            )
+        }
+        onResult(features)
+    }
+}
 
 /** [TollAheadChip]'s fade-in duration; fade-out is half this — a quick, calm exit once the
  * gantry is behind the vehicle, never a lingering banner. */

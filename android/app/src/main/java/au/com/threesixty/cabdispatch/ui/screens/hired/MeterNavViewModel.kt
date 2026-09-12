@@ -108,6 +108,22 @@ class MeterNavViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(MeterNavUiState())
     val uiState: StateFlow<MeterNavUiState> = _uiState.asStateFlow()
 
+    /**
+     * W3 (road-geometry constraint sources, 2026-09-12 plan): the active route's own polyline,
+     * decoupled from [DirectionsRoute]/[RoutePoint] the same way `domain.location.inertial
+     * .InertialBillingSource` decouples [au.com.threesixty.cabdispatch.domain.FareEngineImpl] from
+     * a concrete sensor class -- so `domain/location/roadpath/NavRouteRoadPath.kt` can read this
+     * without depending on this UI-layer ViewModel or the Mapbox Directions DTOs at all. A plain
+     * property, not a `StateFlow`: [au.com.threesixty.cabdispatch.domain.location.roadpath
+     * .NavRouteRoadPath.pathAt] only ever reads this once, at the instant a blackout begins, never
+     * observes it continuously, so the smaller seam is the right one (see W3's own task list --
+     * "add the minimal accessor needed, not a larger refactor"). `null` whenever
+     * [MeterNavUiState.route] itself is null (no destination picked, or a route request in
+     * flight/failed) -- never fabricated.
+     */
+    val activeRoutePoints: List<Pair<Double, Double>>?
+        get() = _uiState.value.route?.points?.map { it.lat to it.lng }
+
     /** Raw typed text, fed through the debounce — kept separate from [MeterNavUiState.query] so
      * echoing the selected destination's name into the field does not trigger a lookup. */
     private val typedQuery = MutableStateFlow("")

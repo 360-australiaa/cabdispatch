@@ -320,12 +320,9 @@ object AppContainer {
         // every other best-effort call in this class.
         startupScope.launch { runCatching { tariffSigningKeyCache.refresh() } }
 
-        // Best-effort warm-up of the NSW toll-road registry (automatic toll-detection pass) — same
-        // "fire-and-forget, never block startup, the fare engine never calls the network directly"
-        // shape as the tariff-signing-key warm-up immediately above. [tollRegistryCache.snapshot]
-        // returns an honest empty registry (never throws) if this hasn't completed yet by the time
-        // a trip starts — see [TollRegistryCache]'s own "offline-empty-cache" doc.
-        startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+        // Best-effort warm-up of the NSW toll-road registry (automatic toll-detection pass) — see
+        // [warmUpTollRegistry]'s own doc.
+        warmUpTollRegistry()
         // Airport-fee zones: load what Room already holds into memory FIRST (a pure local read,
         // so a trip started seconds after boot with no signal still decides its pickup fee
         // against the real ranks), then the same best-effort network warm-up as the registry.
@@ -568,7 +565,35 @@ object AppContainer {
      * become a crash or a user-visible error on a path the driver did not ask for.
      */
     fun refreshTollRegistry() {
-        startupScope.launch { runCatching { tollRegistryCache.refresh() } }
+        startupScope.launch {
+            runCatching { tollRegistryCache.refresh() }
+            // W3: keep the synchronous mirror in step with whatever this refresh just fetched --
+            // see [cachedTollRegistrySnapshotForRoadPath]'s own doc.
+            runCatching { cachedTollRegistrySnapshotForRoadPath = tollRegistryCache.snapshot() }
+        }
+    }
+
+    /**
+     * [init]'s own toll-registry startup warm-up -- extracted purely to keep that already-dense
+     * function within this codebase's own `LongMethod` budget; behaviour is otherwise unchanged
+     * from where this used to sit inline. Same "fire-and-forget, never block startup, the fare
+     * engine never calls the network directly" shape as the tariff-signing-key warm-up next to its
+     * own call site. [TollRegistryCache.snapshot] returns an honest empty registry (never throws)
+     * if this hasn't completed yet by the time a trip starts -- see [TollRegistryCache]'s own
+     * "offline-empty-cache" doc.
+     *
+     * W3: also mirrors into [cachedTollRegistrySnapshotForRoadPath] -- see that field's own doc for
+     * why [au.com.threesixty.cabdispatch.domain.location.roadpath.CorridorRoadPath] needs a plain
+     * synchronous read here rather than calling the suspend [TollRegistryCache.snapshot] itself.
+     * Same "load what Room already holds FIRST, then the network warm-up" shape as the airport-zone
+     * block in [init].
+     */
+    private fun warmUpTollRegistry() {
+        startupScope.launch {
+            runCatching { cachedTollRegistrySnapshotForRoadPath = tollRegistryCache.snapshot() }
+            runCatching { tollRegistryCache.refresh() }
+            runCatching { cachedTollRegistrySnapshotForRoadPath = tollRegistryCache.snapshot() }
+        }
     }
 
     /** Fire-and-forget airport-zone refresh — same shape and same reasoning as
@@ -691,6 +716,61 @@ object AppContainer {
         au.com.threesixty.cabdispatch.domain.location.inertial.ImuTraceRecorder(appContext)
     }
 
+    /**
+     * Plain, synchronously-readable mirror of [tollRegistryCache]'s own Room-backed registry, for
+     * [au.com.threesixty.cabdispatch.domain.location.roadpath.CorridorRoadPath]'s own
+     * [au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPathSource.pathAt] contract --
+     * every [au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPathSource] must be a
+     * plain, non-suspending function (see that interface's own doc), but
+     * [au.com.threesixty.cabdispatch.sync.TollRegistryCache.snapshot] itself is `suspend` (a Room
+     * read). Refreshed on the same triggers [tollRegistryCache]'s own Room copy already is (this
+     * class's startup warm-up, and every [refreshTollRegistry] call) -- a best-effort, eventually-
+     * consistent mirror, never a source of truth of its own: a blackout resolved before the very
+     * first refresh completes simply sees `null` here (no corridor road-path match at all -- the
+     * same honest "not loaded yet" default [au.com.threesixty.cabdispatch.domain.FareEngineImpl]'s
+     * own separate `tollRegistry` field starts at, and [fareEngine]'s own
+     * [au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm] fallback lookup is
+     * unaffected either way).
+     */
+    @Volatile
+    private var cachedTollRegistrySnapshotForRoadPath:
+        au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot? = null
+
+    /**
+     * W3 (road-geometry constraint sources, 2026-09-12 plan) — feeds
+     * [au.com.threesixty.cabdispatch.domain.location.inertial.BlackoutReconciler] (via
+     * [fareEngine]'s own `roadPathSource` parameter) a richer road-path reference than the bare
+     * corridor lookup alone, when one is available.
+     *
+     * Only [au.com.threesixty.cabdispatch.domain.location.roadpath.CorridorRoadPath] is genuinely
+     * wired here today:
+     * - [au.com.threesixty.cabdispatch.domain.location.roadpath.NavRouteRoadPath] needs the active
+     *   nav route, which lives on `MeterNavViewModel` — a screen-scoped `AndroidViewModel` with no
+     *   equivalent process-scoped singleton anywhere in this container (see that class's own doc:
+     *   it is deliberately constructed alongside `HiredViewModel` per screen, once a hiring's
+     *   navigator pane exists, not hoisted here for the whole process's lifetime the way
+     *   [fareEngine] itself is). Wiring it would need a genuinely new process-scoped seam this
+     *   workstream's own scope does not include — noted here as the gap rather than invented
+     *   around, per that workstream's own instructions.
+     * - [au.com.threesixty.cabdispatch.domain.location.roadpath.StyleRoadPath] is wired with a
+     *   feature provider that always returns an empty list (so it always safely returns `null`
+     *   from `pathAt`), for the same reason that class's own doc gives at length: this agent has
+     *   no device to confirm the custom Mapbox style
+     *   (`ui/screens/hired/MeterBackdropMap.kt`'s `BACKDROP_MAP_STYLE_URI`) actually exposes a
+     *   queryable road source-layer offline, so wiring a real, unverified `MapView` query into the
+     *   money path here would be worse than wiring nothing — the safe default is a source that
+     *   never matches, not a guess.
+     */
+    val roadPathSource: au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPathSource by lazy {
+        au.com.threesixty.cabdispatch.domain.location.roadpath.CompositeRoadPath(
+            navRoute = null,
+            corridor = au.com.threesixty.cabdispatch.domain.location.roadpath.CorridorRoadPath {
+                cachedTollRegistrySnapshotForRoadPath
+            },
+            style = au.com.threesixty.cabdispatch.domain.location.roadpath.StyleRoadPath { emptyList() },
+        )
+    }
+
     val fareEngine: FareEngine by lazy {
         FareEngineImpl(
             speedSource,
@@ -706,6 +786,8 @@ object AppContainer {
             // unconditionally just lets shadow mode (BuildConfig.INERTIAL_SHADOW_ENABLED) collect
             // real residual evidence from day one, which is the evidence that gate needs to clear.
             inertialSpeedSource = inertialSpeedSource,
+            // W3: see roadPathSource's own doc above for what is/isn't genuinely wired yet.
+            roadPathSource = roadPathSource,
         )
     }
 
