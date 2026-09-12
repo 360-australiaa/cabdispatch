@@ -174,6 +174,13 @@ object SecurePrefs {
      * learn a new name), which means the existing plaintext `auth_tokens.xml` has to move out of
      * the way before it can be read and retired.
      */
+    // ApplySharedPref (lint): commit() below is deliberate, not an oversight. This function's
+    // last two statements migrate a credential file (auth tokens, device pairing, or the driver
+    // PIN cache) into the legacy slot and then delete the original -- apply()'s async, "finish in
+    // the background" write would let the delete race the write on process death, losing the
+    // credential entirely if the process dies in that window. commit() blocks until the legacy
+    // copy is durably on disk before the original is ever removed, which is the whole point.
+    @Suppress("ApplySharedPref")
     fun stashLegacyPlaintext(context: Context, name: String) {
         val appContext = context.applicationContext
         val legacy = legacyName(name)

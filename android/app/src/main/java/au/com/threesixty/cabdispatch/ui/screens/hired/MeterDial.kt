@@ -182,6 +182,7 @@ internal fun NightFareTile(timeClass: TimeClass, tariff: TariffDto?) {
  * `toggleSpeech(!speechEnabled)` call site (mockup #3, via [MoreActionsSheet]) or the mirrored
  * `onToggleVoice` (mockup #4's nav pane) — just a legible Material icon and a proper hit area.
  */
+@Suppress("DEPRECATION")
 @Composable
 internal fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
     Box(
@@ -194,6 +195,13 @@ internal fun SpeechToggleButton(enabled: Boolean, onToggle: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(
+            // AutoMirrored.Filled.VolumeUp/VolumeOff, suggested by the deprecation warning on the
+            // plain Filled.* versions, does not actually exist in this project's resolved
+            // material-icons-extended version (verified: a real compile failure, "receiver type
+            // mismatch", not a typo here) -- and a speaker icon has no inherent left/right meaning
+            // to mirror in the first place, unlike the directional icons (back arrows, call split)
+            // this AutoMirrored rename genuinely applies to elsewhere in this codebase. Kept on the
+            // plain Filled icon, deprecation suppressed at this composable's own scope below.
             if (enabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
             contentDescription = if (enabled) "Speech announcements on" else "Speech announcements off",
             tint = if (enabled) CaptainPalette.accent else CaptainPalette.textMuted,

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Backend sync (Retrofit/OkHttp) -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -8,6 +9,10 @@
     <!-- Fare engine GPS fusion (B6): foreground fine location while HIRED,
          background so a trip can keep ticking if the app is backgrounded
          mid-fare (e.g. driver briefly switches app for navigation). -->
+    <!-- ACCESS_COARSE_LOCATION alongside FINE is a platform requirement, not a real capability
+         request on top of it: Android has required a FINE-location app to also declare COARSE
+         since API 31 (lint: CoarseFineLocation), and the OS always grants COARSE with FINE. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
@@ -65,9 +70,21 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Package-visibility declaration (API 30+) for
+         RuntimePermissions.batteryOptimisationIntent()'s resolveActivity() check:
+         without this, that check can silently see nothing even when the settings screen
+         genuinely exists, and the app would fall back to the generic app-details screen
+         needlessly. -->
+    <queries>
+        <intent>
+            <action android:name="android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS" />
+        </intent>
+    </queries>
+
     <application
         android:name=".CabDispatchApp"
         android:allowBackup="false"
+        tools:ignore="DataExtractionRules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.CabDispatch"
@@ -96,6 +113,7 @@
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:screenOrientation="sensorLandscape"
+            tools:ignore="DiscouragedApi"
             android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.CabDispatch">
             <intent-filter>

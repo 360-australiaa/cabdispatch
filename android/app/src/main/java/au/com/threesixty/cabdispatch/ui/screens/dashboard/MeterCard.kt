@@ -370,13 +370,13 @@ internal fun MeterDial(
     enabled: Boolean,
     onStartMeter: () -> Unit,
     onCancelStart: () -> Unit,
+    modifier: Modifier = Modifier,
     /** See [MeterCard]'s parameter of the same name: an open fare must never be offered START. */
     hasActiveTrip: Boolean = false,
     onResumeMeter: () -> Unit = {},
     /** Measured by the caller from its own constraints (A3) rather than hardcoded here - see
      * [MeterCard]'s BoxWithConstraints for the 16:9 clipping bug that fixed. */
     size: androidx.compose.ui.unit.Dp,
-    modifier: Modifier = Modifier,
 ) {
     val starting = meterPhase is MeterStartPhase.Starting
     // Icon scale settles to a slightly larger size the moment Start Meter is in flight, then holds

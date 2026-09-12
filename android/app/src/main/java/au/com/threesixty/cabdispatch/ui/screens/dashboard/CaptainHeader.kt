@@ -360,11 +360,13 @@ private fun networkIcon(networkType: String?): ImageVector =
 
 /** Tone for the real GPS fix-quality tier (`DashboardStatusStrip.gpsQuality`). GOOD/FAIR are
  * exactly what [au.com.threesixty.cabdispatch.domain.GpsQualityClassifier.isOk] calls ok (green),
- * POOR is a real-but-degraded fix (amber), no fix / permission denied is red. */
+ * POOR is a real-but-degraded fix (amber), no fix / permission denied is red. STALE (G2, GPS
+ * blackout program, 2026-09-12) reads the same red as NO_FIX — a fix this old is not a fix a
+ * driver should trust either, whatever its accuracy used to be. */
 internal fun gpsTone(quality: GpsQuality): HudTone = when (quality) {
     GpsQuality.GOOD, GpsQuality.FAIR -> HudTone.Success
     GpsQuality.POOR -> HudTone.Warning
-    GpsQuality.NO_FIX, GpsQuality.PERMISSION_DENIED -> HudTone.Danger
+    GpsQuality.NO_FIX, GpsQuality.PERMISSION_DENIED, GpsQuality.STALE -> HudTone.Danger
 }
 
 /** Spoken form of a [HudTone] for the status strip's contentDescriptions - see [StatusDot]. */

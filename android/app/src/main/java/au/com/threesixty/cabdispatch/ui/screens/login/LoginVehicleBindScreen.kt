@@ -47,6 +47,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -399,7 +400,7 @@ private fun MfaStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindV
 private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
     // Real QR scan needs an Activity to host its scan UI — this app is single-activity (see
     // MainActivity's own doc), so LocalContext.current always is one here.
-    val activity = LocalContext.current as android.app.Activity
+    val activity = LocalActivity.current!!
     // Top inset from CaptainChromeMetrics (real bug, found live 2026-09-09): same fix as
     // InspectionStep below in this same file — this Column used a bare 64.dp instead of
     // MfaStep's topOverlayInset-based padding a few steps earlier in this same flow, so LOCK

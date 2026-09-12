@@ -371,6 +371,10 @@ class LoginVehicleBindViewModel @JvmOverloads constructor(
      * a pairing flag. See [au.com.threesixty.cabdispatch.ui.navigation.postAuthDestination], which
      * returns IDLE for an existing session before it consults the gate at all.
      */
+    // Device-identifier lint (HardwareIds): see this function's own `deviceAndroidId` read
+    // below -- sent only for the backend's non-blocking device/vehicle mismatch check, never to
+    // gate the shift, and never persisted client-side.
+    @Suppress("HardwareIds")
     fun startShift(onShiftStarted: () -> Unit, forceHandover: Boolean = false) {
         val state = _uiState.value
         // Guards against a second tap firing a second request while one is already in flight —

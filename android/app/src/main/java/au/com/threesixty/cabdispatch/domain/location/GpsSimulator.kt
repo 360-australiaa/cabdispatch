@@ -87,6 +87,18 @@ class GpsSimulator(private val scope: CoroutineScope) {
                 val elapsedSeconds = (System.currentTimeMillis() - startedAt) / 1000.0
                 val position = route.positionAt(elapsedSeconds)
 
+                // GPS blackout (2026-09-12, W1): inside one of the route's own blackoutWindows,
+                // publish NOTHING -- not a frozen copy of the last fix, an actual skip -- so
+                // `_fix`/`_speedKmh` are left exactly as they were on the tick before the window
+                // opened, and their age (LocationFix.receivedAtNanos) ticks forward toward
+                // FareEngineImpl's real MAX_FIX_AGE_MS staleness cutoff the same way a real
+                // fused-location provider going quiet in a tunnel does. See SimulatedRoute
+                // .isBlackoutAt's own doc.
+                if (route.isBlackoutAt(elapsedSeconds)) {
+                    delay(TICK_INTERVAL_MS)
+                    continue
+                }
+
                 // A finished route parks the vehicle: still emitting fixes (a real device does
                 // not stop reporting when you arrive) but at 0 km/h, so the meter correctly
                 // switches to waiting mode instead of the trip appearing to vanish.

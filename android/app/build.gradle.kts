@@ -93,7 +93,15 @@ ksp {
 
 android {
     namespace = "au.com.threesixty.cabdispatch"
-    compileSdk = 35
+    // compileSdk 36 (W0 toolchain refresh, 2026-09-12): raised only as far as the bumped
+    // dependencies actually require and AGP 8.13.2 (this project's chosen AGP -- see root
+    // build.gradle.kts) actually supports -- this only widens which platform APIs the compiler
+    // can SEE, it changes nothing about how the app behaves at runtime on any device. targetSdk
+    // deliberately stays at 35 below: that is the separate, higher-risk decision that opts the
+    // app into whatever new platform behaviour changes API 36 brings, and doing that without a
+    // real device regression pass is exactly the kind of change that has bitten this project
+    // before (see F3/F4's own history). Revisit targetSdk as its own tested pass.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "au.com.threesixty.cabdispatch"
@@ -169,10 +177,23 @@ android {
     // Delete the corresponding entries from the baseline as those land; do not regenerate the
     // whole file to paper over something new.
     lint {
-        baseline = file("lint-baseline.xml")
+        // No baseline file (W0, 2026-09-12): every issue lint finds is either fixed or suppressed
+        // in place with a comment explaining why, so there is nothing left to grandfather in. A
+        // baseline is how a real regression hides forever next to 48 pre-existing ones; zero is
+        // the only count that stays honest.
+        //
+        // Aligned16KB is the one issue disabled here rather than in app/lint.xml's path-scoped
+        // ignores: it fires on an absolute path inside the Gradle dependency cache
+        // (com.mapbox.common:common's own bundled libandroid-tests-support-code.so, not a file
+        // this project owns or can edit), and that cache path is machine-specific -- a path-scoped
+        // ignore that works on this box would silently stop matching on CI's own cache location.
+        // The 16 KB native-library-alignment requirement is real (Android 15+ devices with a 16 KB
+        // page size), but fixing it means a Mapbox SDK version bump verified on a real device, not
+        // a lint config change made in this pass.
+        disable += "Aligned16KB"
         abortOnError = true
         checkDependencies = true
-        warningsAsErrors = false
+        warningsAsErrors = true
     }
 
     buildTypes {
@@ -196,9 +217,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // kotlinOptions{} moved out to the top-level `kotlin { compilerOptions { } }` extension below
+    // (W0 toolchain refresh, 2026-09-12): the Kotlin 2.3.x Gradle plugin made the old
+    // `android.kotlinOptions` DSL a hard compile error, not just a warning -- see that block for
+    // the jvmTarget/allWarningsAsErrors settings themselves and their own rationale.
 
     buildFeatures {
         compose = true
@@ -207,8 +229,9 @@ android {
 
     // `composeOptions.kotlinCompilerExtensionVersion` is gone (A9 toolchain upgrade) -- the
     // `org.jetbrains.kotlin.plugin.compose` plugin applied above wires the Compose compiler to
-    // whatever Kotlin version this module builds with (2.0.21) and does not take a version of
-    // its own; setting this field with that plugin applied is a Gradle build error, not a no-op.
+    // whatever Kotlin version this module builds with (2.3.21, W0 toolchain refresh) and does not
+    // take a version of its own; setting this field with that plugin applied is a Gradle build
+    // error, not a no-op.
 
     packaging {
         resources {
@@ -226,9 +249,22 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // W0 (2026-09-12): the measured baseline had zero compiler warnings across every source
+        // set that was checked, and the one known warning class (K2's "Condition is always true"
+        // on FareEngineImpl.tick's deliberately-redundant null guards) is already suppressed at
+        // its origin with @Suppress("SENSELESS_COMPARISON") and a comment, not left to this flag.
+        // A new warning failing the build here is meant to feel that abrupt -- it is either a real
+        // defect or needs the same origin-level, justified suppression, never a blanket opt-out.
+        allWarningsAsErrors.set(true)
+    }
+}
+
 dependencies {
     // -- Compose (BOM pins all Compose artifact versions together) --
-    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation(platform("androidx.compose:compose-bom:2026.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -241,30 +277,34 @@ dependencies {
     // across the app's screens (DeckHomeScreen and this pass's CaptainPalette reskins alike) live
     // here, not in the small "core" set material3 ships by default.
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.activity:activity-compose:1.9.1")
+    implementation("androidx.activity:activity-compose:1.13.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // -- Navigation --
-    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation("androidx.navigation:navigation-compose:2.9.8")
 
     // -- Lifecycle --
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     // ProcessLifecycleOwner — used by domain/duress/DuressCameraCapture.kt to bind CameraX's
     // ImageCapture use case to the app-process lifecycle (this app is always single-activity/
     // foreground-kiosk, so "process lifecycle" and "the driver can see the screen" coincide;
     // there is no separate Activity/Fragment lifecycle worth binding to instead here).
-    implementation("androidx.lifecycle:lifecycle-process:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
+    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    // W0/W5 (2026-09-12): `androidx.compose.ui.platform.LocalLifecycleOwner` is deprecated
+    // in favour of this artifact's `androidx.lifecycle.compose.LocalLifecycleOwner`;
+    // `collectAsStateWithLifecycle` (W5) lives here too.
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     // Explicit for `viewModelScope` (used throughout ui/screens/*/ ViewModels).
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
 
     // -- Coroutines: explicit runtime dep (transitive-only isn't enough — the
     // Android `Dispatchers.Main` implementation used by `viewModelScope` is
     // provided by this artifact's ServiceLoader registration, not by
     // kotlinx-coroutines-core alone). Version matched to the
     // kotlinx-coroutines-test version below.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // -- Room (local offline store; entities/DAOs added by the sync-domain
     // sibling agent — this module just wires the dependency) --
@@ -274,38 +314,38 @@ dependencies {
     // (see the now-obsolete workaround in AppDatabase.kt's MIGRATION_9_10 doc, which had engineers
     // reading Room's generated Java instead). exportSchema is turned on for the same reason -- see
     // androidTest/.../RoomMigrationTest.kt for what that does and does not retroactively give us.
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
     // MigrationTestHelper (RoomMigrationTest.kt). Runs under Robolectric in testDebugUnitTest,
     // not as a connectedAndroidTest -- no device/emulator involved, see that test's own doc.
-    testImplementation("androidx.room:room-testing:2.6.1")
-    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.room:room-testing:2.8.5")
+    testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.6.1")
 
     // -- WorkManager (background sync) --
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     // -- Networking: Retrofit + OkHttp + kotlinx.serialization converter.
     // kotlinx.serialization chosen over Moshi/Gson for consistency with the
     // backend's JSON contract tooling (see shared/openapi.json generation). --
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0")
+    implementation("com.squareup.retrofit2:retrofit:2.12.0")
+    implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // -- Location (fare engine GPS fusion, sibling agent) --
-    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-location:21.4.0")
 
     // -- CameraX (duress cabin-camera still-frame capture, blueprint 4.3/8.3's camera-during-
     // active-duress-only feature — see domain/duress/DuressCameraCapture.kt). camera-core +
     // camera-camera2 (the real Camera2-backed implementation) + camera-lifecycle (binds the
     // ImageCapture use case to a LifecycleOwner) — no camera-view, this never shows a
     // PreviewView/viewfinder to the driver, it's a silent background capture only. --
-    implementation("androidx.camera:camera-core:1.3.4")
-    implementation("androidx.camera:camera-camera2:1.3.4")
-    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-core:1.6.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
 
     // -- QR vehicle pairing (2026-08-28, real implementation replacing the StubQrScanner —
     // domain/QrScanner.kt) — the ML Kit "Google code scanner" module (Play Services on-device
@@ -318,7 +358,7 @@ dependencies {
     // -- Image loading — Coil, used by MapboxStaticImage.kt's fallback path (kept as the
     // loading/error-state and no-secret-token fallback, see WheelDashboardScreen.kt's
     // MapBackground) and by any other async-image needs elsewhere in the app. --
-    implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
 
     // -- Mapbox Maps SDK (real interactive map + genuine offline region download, added
     // 2026-08-02 once a secret MAPBOX_DOWNLOADS_TOKEN became available — see
@@ -339,7 +379,7 @@ dependencies {
     // is 29 (see app/build.gradle.kts's own `minSdk` above) — bcprov gives KeyFactory/Signature
     // "Ed25519" support on every API level this app targets instead of needing a minSdk bump.
     // jdk18on (not the older jdk15on) is the currently-maintained artifact line. --
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     // -- Encrypted credential storage (security finding X3) ---------------------------------------
     // Backs TokenStore / DevicePairingStore / the offline PIN cache with an Android Keystore
@@ -354,9 +394,9 @@ dependencies {
     // Kotlin/coroutines, no Android framework classes, so these run without
     // the SDK/emulator this sandbox doesn't have. Version matched to the
     // kotlinx-coroutines-android version above, not bumped independently.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
 
 // -- Release hardening tripwire (Phase 0, security addendum) --------------------------------

@@ -262,6 +262,24 @@ data class FareState(
      */
     val gpsLost: Boolean = false,
     /**
+     * The blackout in progress right now, or `null` when [gpsLost] is `false` -- the two are
+     * always set and cleared together (G1/G3, GPS blackout program, W1, 2026-09-12). A4's dial
+     * pill reads this for the "since when" figure; [au.com.threesixty.cabdispatch.domain
+     * .MeterController] persists it as an OPEN [au.com.threesixty.cabdispatch.data.local.entity
+     * .TripBlackoutSegmentEntity] row on every tick it is non-null, so a process death mid-tunnel
+     * does not lose the fact that a blackout was ever in progress -- see that class's own
+     * "written twice" doc.
+     */
+    val blackout: ActiveBlackout? = null,
+    /**
+     * Set on the exact tick a blackout RESOLVES (the same "never resets to null, key off id" shape
+     * as [lastAutoTollAlert] -- see that field's own doc for why). [au.com.threesixty.cabdispatch
+     * .domain.MeterController] writes the closing half of the audit-trail row from this, mirroring
+     * [lastAutoTollAlert]'s pattern of "the engine publishes the event once; the persistence layer
+     * reacts to it, keyed by id, never by nullness alone."
+     */
+    val lastResolvedBlackout: ResolvedBlackout? = null,
+    /**
      * The authoritative running total -- literally
      * [au.com.threesixty.cabdispatch.domain.fare.FareEngine.close]`(...).grandTotal`, recomputed
      * off the shadow calc state on every tick. `null` only before the first
@@ -333,3 +351,56 @@ fun BigDecimal.toMoneyString(): String = "$" + this.setScale(2, RoundingMode.HAL
  */
 fun BigDecimal.toMeterDisplayString(): String =
     "$" + this.setScale(1, RoundingMode.FLOOR).setScale(2).toPlainString()
+
+/**
+ * A GPS blackout currently in progress -- [FareState.blackout]'s own doc has the full context
+ * (GPS blackout program, W1, 2026-09-12).
+ *
+ * @property segmentId Stable per-blackout identity, minted once when the blackout begins --
+ *   [au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity.clientUuid].
+ * @property startedAtIso Wall-clock instant the blackout began (`java.time.Instant.toString()`),
+ *   for the audit trail only -- never used for any billing decision, which always runs on the
+ *   monotonic clock (see [au.com.threesixty.cabdispatch.domain.LocationFix.receivedAtNanos]'s doc
+ *   for why).
+ * @property entryLat @property entryLng The last known-good position before signal was lost.
+ * @property entryWasMoving Whether the vehicle was moving (>= the tariff's speed threshold) at
+ *   that instant -- decides whether this blackout could ever resolve to CORRIDOR, or bills
+ *   waiting time throughout as STATIONARY. See [au.com.threesixty.cabdispatch.data.local.entity
+ *   .BlackoutResolution]'s own doc.
+ */
+data class ActiveBlackout(
+    val segmentId: String,
+    val startedAtIso: String,
+    val entryLat: Double,
+    val entryLng: Double,
+    val entryWasMoving: Boolean,
+)
+
+/**
+ * A GPS blackout that has just resolved -- [FareState.lastResolvedBlackout]'s own doc has the
+ * full context. Carries everything [ActiveBlackout] did, plus how it was resolved and what (if
+ * anything) was billed for the gap.
+ *
+ * @property resolution [au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution]'s
+ *   name -- stored as a plain String rather than the entity-layer enum type itself, matching this
+ *   file's existing convention of not depending on Room annotation types from a plain state class.
+ * @property exitLat @property exitLng The first live fix on reacquisition, or the position at
+ *   which the driver pressed STOPPED for a blackout that resolved that way instead.
+ * @property billedDistanceKm The real corridor distance billed for this segment, if any -- zero
+ *   for NONE/STATIONARY.
+ * @property corridorRoadId The toll-registry road this segment's corridor match resolved to, when
+ *   [resolution] is CORRIDOR -- `null` otherwise.
+ */
+data class ResolvedBlackout(
+    val segmentId: String,
+    val startedAtIso: String,
+    val endedAtIso: String,
+    val entryLat: Double,
+    val entryLng: Double,
+    val entryWasMoving: Boolean,
+    val exitLat: Double,
+    val exitLng: Double,
+    val resolution: String,
+    val billedDistanceKm: BigDecimal,
+    val corridorRoadId: String? = null,
+)

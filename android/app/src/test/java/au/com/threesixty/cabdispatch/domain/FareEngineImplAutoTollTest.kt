@@ -85,7 +85,7 @@ class FareEngineImplAutoTollTest {
             speedSource,
             backgroundScope,
             TollRegistryProvider { oneWayRoadRegistry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent() // let the async registry-snapshot load (see FareEngineImpl.startTrip) complete
@@ -117,7 +117,7 @@ class FareEngineImplAutoTollTest {
             speedSource,
             backgroundScope,
             TollRegistryProvider { oneWayRoadRegistry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(
             urbanTariffDto(),
@@ -146,7 +146,7 @@ class FareEngineImplAutoTollTest {
             speedSource,
             backgroundScope,
             TollRegistryProvider { oneWayRoadRegistry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()
@@ -177,7 +177,7 @@ class FareEngineImplAutoTollTest {
         val speedSource = FakeMeterGps(0.0)
         // No TollRegistryProvider passed — defaults to TollRegistryProvider.EMPTY, the honest
         // "offline, or nothing has ever been cached" fallback (see that companion's own doc).
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()
 
@@ -206,7 +206,7 @@ class FareEngineImplAutoTollTest {
     @Test
     fun `a hiring that STARTS inside the airport precinct is charged the access fee once`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         // T2/T3 rank side of Sydney Airport -- inside the configured precinct.
         engine.startTrip(urbanTariffDto(), startLat = -33.9455, startLng = 151.1795)
         runCurrent()
@@ -216,7 +216,7 @@ class FareEngineImplAutoTollTest {
     @Test
     fun `a manual Airport preset after the automatic fee does not charge it twice`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.9399, startLng = 151.1753)
         runCurrent()
         engine.addToll(TollPresets.AIRPORT)
@@ -226,7 +226,7 @@ class FareEngineImplAutoTollTest {
     @Test
     fun `a hiring that starts elsewhere pays no airport fee, and the manual preset still works`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, TollRegistryProvider { oneWayRoadRegistry() }, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         // Sydney CBD: ~9 km from the precinct centre. The fee is for PICKUPS at the airport;
         // a drop-off that later drives in is never charged by position, so start position is
         // the only thing tested here.
@@ -252,7 +252,7 @@ class FareEngineImplAutoTollTest {
         speedSource,
         backgroundScope,
         TollRegistryProvider.EMPTY,
-        nanoTimeSource = virtualNanoTimeSource(),
+        nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         airportZoneLookup = lookup,
     )
 

@@ -108,9 +108,13 @@ internal class SharedTtsEngine private constructor(context: Context) {
         override fun onError(utteranceId: String?, errorCode: Int) = finished(utteranceId)
     }
 
-    // lateinit (as the pre-queue implementation was) because the init callback below references
-    // it and Kotlin cannot prove the assignment has happened by then.
-    private lateinit var tts: TextToSpeech
+    // A newer Kotlin compiler (2.3.x, W0 toolchain refresh) can now prove this assignment
+    // definitely happens in the constructor -- the init block below runs unconditionally and
+    // assigns exactly once -- so `lateinit` is flagged unnecessary. The assignment stays split
+    // from the declaration for the same reason lateinit was chosen originally: TextToSpeech's own
+    // constructor takes the completion callback that references `tts` by name, so the property
+    // must exist before that call.
+    private val tts: TextToSpeech
 
     init {
         tts = TextToSpeech(context) { status ->

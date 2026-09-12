@@ -44,6 +44,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -721,6 +722,7 @@ private fun CustomTipDialog(onDismiss: () -> Unit, onConfirm: (BigDecimal) -> Un
     }
 }
 
+@Suppress("DEPRECATION")
 @Composable
 private fun MethodPickerScreen(
     state: CloseAndPayUiState.ReadyToClose,
@@ -1176,6 +1178,7 @@ private fun LabeledEntryScreen(
 
 /** Compact A–Z+digit grid, reused from the Vehicle Bind rego pad's visual language, restyled onto
  * [CaptainPalette] tokens. */
+@Suppress("DEPRECATION")
 @Composable
 private fun RegoStyleKeyGrid(onKey: (String) -> Unit, onBackspace: () -> Unit) {
     val rows = listOf("ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ⌫", "0123456789")
@@ -1359,6 +1362,12 @@ private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, se
 @Composable
 private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel) {
     val scope = rememberCoroutineScope2()
+    // Collected once at the top, lifecycle-aware (StateFlowValueCalledInComposition lint) --
+    // reading SessionHolder.session.value directly deep in this composable's content read a raw
+    // StateFlow snapshot outside Compose's recomposition tracking, so a session change while the
+    // receipt is on screen (unlikely but not impossible: a shift's own submit flow) would never
+    // redraw the driver/vehicle line below.
+    val session by SessionHolder.session.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Same shape as ClosingStatusStrip, for the same reasons (tablet, 2026-09-08): the pill
@@ -1419,12 +1428,16 @@ private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayView
                 ReceiptMono("${r.startedAt} → ${r.closedAt}")
                 // Human identity, not row uuids (tablet, 2026-09-08: the passenger copy printed
                 // "Driver f96598dc-b351-... · Vehicle ad0d0d57-..."). Driver name and rego come
-                // from the live session; the uuids remain the honest fallback only when there is
-                // no session to read -- which on a just-closed fare there always is.
-                val session = SessionHolder.session.value
+                // from the live session (collected at the top of this composable); the uuids
+                // remain the honest fallback only when there is no session to read -- which on a
+                // just-closed fare there always is.
+                val currentSession = session
                 ReceiptMono(
-                    if (session != null) "Driver ${session.driverName} · Vehicle ${session.vehicleId}"
-                    else "Driver ${r.driverId} · Vehicle ${r.vehicleId}",
+                    if (currentSession != null) {
+                        "Driver ${currentSession.driverName} · Vehicle ${currentSession.vehicleId}"
+                    } else {
+                        "Driver ${r.driverId} · Vehicle ${r.vehicleId}"
+                    },
                 )
                 ReceiptMono("------------------------------------", color = Color(0xFF9A968A))
                 r.fareLines.forEach { line ->

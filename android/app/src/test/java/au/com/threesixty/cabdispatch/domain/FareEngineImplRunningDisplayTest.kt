@@ -68,7 +68,7 @@ class FareEngineImplRunningDisplayTest {
     @Test
     fun `running total at t=0 is flagfall plus PSL, not flagfall alone`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         val tariff = urbanTariffDto()
 
         engine.startTrip(tariff, startLat = -33.87, startLng = 151.21)
@@ -89,7 +89,7 @@ class FareEngineImplRunningDisplayTest {
         // own body), so the closed total is definitionally identical, but this test exists to
         // document that fact explicitly rather than leave it implicit.
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         val atStart = engine.state.value.total
@@ -104,7 +104,7 @@ class FareEngineImplRunningDisplayTest {
     @Test
     fun `a toll added mid-trip appears in the running total immediately, on top of flagfall plus PSL`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         engine.addToll(TollPresets.M5) // $4.30
@@ -119,7 +119,7 @@ class FareEngineImplRunningDisplayTest {
         // Speed pinned below the 26 km/h threshold the whole time -> every tick accrues via the
         // WAITING branch (real behaviour for a driver stopped at lights/a rank).
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         val atStart = engine.state.value.total
@@ -150,7 +150,7 @@ class FareEngineImplRunningDisplayTest {
     @Test
     fun `a negotiated fixed price displays exactly the agreed amount immediately, not flagfall`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
 
         engine.startTrip(
             urbanTariffDto(),
@@ -177,7 +177,7 @@ class FareEngineImplRunningDisplayTest {
         // "the meter will keep running" (product's own words) — distance/time keep accruing for
         // the trip record/compliance evidence, but the DISPLAYED total must not follow them.
         val speedSource = FakeMeterGps(80.0) // >= 26 km/h -> DISTANCE mode every tick
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -207,7 +207,7 @@ class FareEngineImplRunningDisplayTest {
         // cost the operator incurred, so it must still be RECORDED (breakdown.tolls) for
         // audit/reconciliation, even though the passenger is never charged more than $50 for it.
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -240,7 +240,7 @@ class FareEngineImplRunningDisplayTest {
         // PATH — the one Close & Pay actually bills from — which is the only comparison that can
         // prove the two agree.
         val gps = FakeMeterGps(70.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -290,7 +290,7 @@ class FareEngineImplRunningDisplayTest {
         // The non-maxi control for the test above: F8's fix must not have moved the ordinary case,
         // which was already very nearly right (it differed only by the Act s76(5)/(6) round-down).
         val gps = FakeMeterGps(50.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         repeat(120) { advanceOneTick(gps) }
 
@@ -314,7 +314,7 @@ class FareEngineImplRunningDisplayTest {
     @Test
     fun `an ordinary metered trip never carries a negotiatedTotal`() = runTest {
         val speedSource = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         assertNull(engine.state.value.negotiatedTotal)

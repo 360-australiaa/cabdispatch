@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -359,7 +360,7 @@ internal fun MoreActionsSheet(
  */
 @Composable
 internal fun PassengerEditDialog(initialCount: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
-    var count by remember { mutableStateOf(initialCount) }
+    var count by remember { mutableIntStateOf(initialCount) }
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(24.dp))

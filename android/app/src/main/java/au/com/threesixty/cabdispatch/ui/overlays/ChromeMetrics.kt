@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.ui.overlays
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -88,7 +89,7 @@ object CaptainChromeMetrics {
      * gate is up while any gate screen is composed, and the overlap during a transition is
      * precisely what a count handles and a boolean cannot.
      */
-    private var gateDepth: Int by mutableStateOf(0)
+    private var gateDepth: Int by mutableIntStateOf(0)
 
     /** Called by each of those screens as it enters and leaves composition. */
     internal fun setFullScreenGateVisible(visible: Boolean) {

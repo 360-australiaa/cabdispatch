@@ -143,6 +143,14 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
         singlePermLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
     }
 
+    // Play Store policy restricts REQUEST_IGNORE_BATTERY_OPTIMIZATIONS to apps whose core function
+    // needs unrestricted background execution -- this app qualifies (a taxi meter running a
+    // location foreground service for the duration of a hiring, per the "foreground services"
+    // policy category) and the request is declared accordingly in the Play Console listing. Now
+    // that `MeterForegroundService` (F4) exists, this exemption is genuinely advisory rather than
+    // load-bearing -- Doze can no longer stop a running fare either way -- but it still improves
+    // heartbeat/duress reliability while the tablet is idle, so the row stays.
+    @Suppress("BatteryLife")
     fun openBatteryOptimisation() {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
             data = Uri.parse("package:${context.packageName}")

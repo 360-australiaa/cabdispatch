@@ -11,15 +11,15 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, phase0/merge-to-main]
   push:
-    branches: [main]
+    branches: [main, phase0/merge-to-main]
 
 # A force-push or a rapid second push should not leave two runs racing for the same ref. Runs on
 # main are never cancelled — main is the deployed branch and its history of green/red matters.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/phase0/merge-to-main' }}
 
 permissions:
   contents: read

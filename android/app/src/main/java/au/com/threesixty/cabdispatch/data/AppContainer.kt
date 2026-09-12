@@ -11,6 +11,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_10_11
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_11_12
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_12_13
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_13_14
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_14_15
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -264,7 +265,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
             .build()
 
         // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
@@ -529,8 +530,9 @@ object AppContainer {
     val airportZoneDao by lazy { database.airportZoneDao() }
     val trafficCameraDao by lazy { database.trafficCameraDao() }
     val trafficHazardDao by lazy { database.trafficHazardDao() }
+    val tripBlackoutSegmentDao by lazy { database.tripBlackoutSegmentDao() }
 
-    val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService) }
+    val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService, tripBlackoutSegmentDao) }
 
     /** Local cache of the Ed25519 public key that verifies [tariffCache]'s signed tariffs — see
      * that class's doc and `security/TariffSignatureVerifier.kt`'s `Ed25519TariffSignatureVerifier`. */
@@ -690,6 +692,7 @@ object AppContainer {
                     runCatching { cabDispatchJson.decodeFromString<TariffDto>(row.rawJson) }.getOrNull()
                 }
             },
+            blackoutSegmentDao = tripBlackoutSegmentDao,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         ).also { MeterController.publish(it) }
     }

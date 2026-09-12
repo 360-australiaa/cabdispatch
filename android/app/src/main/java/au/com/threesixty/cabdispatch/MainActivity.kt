@@ -1,6 +1,5 @@
 package au.com.threesixty.cabdispatch
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -31,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -255,7 +255,7 @@ private fun CabDispatchScreenRoot() {
     // to reach the hosting Activity from inside a Composable — MainActivity is the only Activity
     // this single-activity app ever hosts, so this is never null in practice; the `?.` below is a
     // no-op guard for previews/tests that render this Composable outside an Activity context.
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
     val commandState by AppContainer.deviceCommandHeartbeat.state.collectAsState()
 
     // Issues the actual startLockTask()/stopLockTask() call (via decideAction's own gating, a

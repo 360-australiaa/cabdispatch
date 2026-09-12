@@ -165,6 +165,7 @@ fun HudTone.color(): Color = when (this) {
  * cue a neon sign gave for free in the dark. Defaults still resolve to the dark-mode neon values so
  * an explicit caller override (there are none today) keeps working unchanged.
  */
+@Suppress("DEPRECATION")
 @Composable
 private fun rememberHudGlowPaint(
     color: Color = if (CaptainPalette.isLight) CaptainPalette.hudDayShadow else CaptainPalette.hudAccent,
@@ -327,6 +328,7 @@ private fun rememberHoloParticles(count: Int = HUD_HOLO_PARTICLE_COUNT, seed: In
  * fixed to [CaptainPalette.neonCyan] regardless of theme (the outer glow is a decorative accent,
  * not a state indicator, so it doesn't need the light-mode shadow substitution [rememberHudGlowPaint]
  * makes for the real progress arc). */
+@Suppress("DEPRECATION")
 @Composable
 private fun rememberHoloGlowPaint(): android.graphics.Paint = remember {
     Paint().asFrameworkPaint().apply {
@@ -459,8 +461,8 @@ fun GlowingMeterGauge(
 @Composable
 fun GlowingSpeedometer(
     speedKmh: Float,
-    maxKmh: Float = 120f,
     modifier: Modifier = Modifier,
+    maxKmh: Float = 120f,
     strokeWidthDp: Int = 14,
     sweepDeg: Float = 270f,
     startDeg: Float = 135f,
@@ -743,6 +745,7 @@ private const val HUM_MAX_CYCLES_PER_SEC = 0.8f
 /** The ember's own small blurred paint — same [BlurMaskFilter] technique as [rememberHudGlowPaint]
  * but a tighter radius and the sweep's mid colour, so it reads as one bright bead of light inside
  * the existing glow rather than a second, competing halo. */
+@Suppress("DEPRECATION")
 @Composable
 private fun rememberEmberPaint(): android.graphics.Paint = remember {
     Paint().asFrameworkPaint().apply {
@@ -843,9 +846,9 @@ object HudRoll {
 @Composable
 fun RollingMoneyText(
     amount: String,
+    modifier: Modifier = Modifier,
     fontSize: TextUnit = 44.sp,
     color: Color = CaptainPalette.textPrimary,
-    modifier: Modifier = Modifier,
     fontFamily: FontFamily = ChakraPetch,
     fontWeight: FontWeight = FontWeight.Bold,
 ) {
@@ -1059,8 +1062,8 @@ fun Color.toMapboxHex(): String = "#%06X".format(0xFFFFFF and toArgb())
 fun HudStatusPill(
     label: String,
     value: String,
-    tone: HudTone = HudTone.Neutral,
     modifier: Modifier = Modifier,
+    tone: HudTone = HudTone.Neutral,
     pulsing: Boolean = tone != HudTone.Neutral,
 ) {
     val toneColor = tone.color()
@@ -1117,10 +1120,10 @@ fun HudStatTile(
     icon: ImageVector,
     label: String,
     value: String,
+    modifier: Modifier = Modifier,
     sub: String? = null,
     ring: Float? = null,
     tone: HudTone = HudTone.Accent,
-    modifier: Modifier = Modifier,
     valueFontSize: TextUnit = 24.sp,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) = HudStatTile(
@@ -1172,10 +1175,10 @@ fun HudStatTile(
     icon: ImageVector,
     label: String,
     value: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
     sub: String? = null,
     ring: Float? = null,
     tone: HudTone = HudTone.Accent,
-    modifier: Modifier = Modifier,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val toneColor = tone.color()

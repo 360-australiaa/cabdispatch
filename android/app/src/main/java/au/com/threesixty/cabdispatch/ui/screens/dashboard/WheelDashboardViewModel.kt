@@ -302,9 +302,16 @@ class WheelDashboardViewModel(application: Application) : AndroidViewModel(appli
     private fun pollStatus(): DashboardStatusStrip {
         val context = getApplication<Application>()
         val batteryPercent = readBatteryPercent(context)
+        val currentFix = AppContainer.speedSource.locationFix.value
         val gpsQuality = GpsQualityClassifier.classify(
             permissionGranted = hasFineLocationPermission(context),
-            accuracyM = AppContainer.speedSource.locationFix.value?.accuracyM,
+            accuracyM = currentFix?.accuracyM,
+            // G2 (GPS blackout program, 2026-09-12): age on the SAME monotonic clock
+            // FareEngineImpl.tick bills against, via LocationFix.receivedAtNanos -- see that
+            // field's own doc for why nanoTime rather than the fix's wall-clock timestamp. A
+            // frozen fix inside a tunnel now reads STALE here exactly when it stops being
+            // trustworthy for billing, not merely whenever its accuracy happens to look poor.
+            fixAgeMs = currentFix?.let { (System.nanoTime() - it.receivedAtNanos) / 1_000_000L },
         )
         val networkType = DeviceTelemetry.readNetworkType(context)
         return DashboardStatusStrip(

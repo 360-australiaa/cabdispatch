@@ -12,11 +12,24 @@
 // KSP is the vendor-recommended path forward and is what let Room's schema export actually run
 // (see the Room migration test doc in androidTest for why that mattered here).
 plugins {
-    id("com.android.application") version "8.7.3" apply false
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
-    id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
+    // W0 toolchain refresh (2026-09-12): AGP 8.7.3 -> 8.13.2 (latest stable 8.x), Gradle
+    // 8.10.2 -> 9.5.1 (the newest Gradle AGP 8.x actually supports -- 9.6.0+ removed a Gradle
+    // internal API AGP 8.x still calls, verified by an actual failed build during this pass), Kotlin
+    // 2.0.21 -> 2.3.21, KSP -> 2.3.12. Deliberately NOT AGP 9.x: AGP 9.0 made Kotlin support
+    // "built in" to the Android plugin and rejects `org.jetbrains.kotlin.android` outright ("no
+    // longer required... Remove the plugin"), which also drops the classic variant API this
+    // project's build logic was written against -- a real DSL migration, not a version bump,
+    // also verified by an actual failed build (see the W0 section of this program's plan doc).
+    // Every GradleDependency-lint dependency bump in app/build.gradle.kts was chosen to be the
+    // newest version that still compiles under compileSdk 36/AGP 8.x for exactly that reason -- a
+    // small number of libraries (whichever pulls in AGP-9-only compose-ui/core-ktx/lifecycle
+    // releases) are one or two minor versions behind their own absolute latest as a result; the
+    // full AGP-9 migration is real, future work, not something to fold into this pass.
+    id("com.android.application") version "8.13.2" apply false
+    id("org.jetbrains.kotlin.android") version "2.3.21" apply false
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.3.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.3.21" apply false
+    id("com.google.devtools.ksp") version "2.3.12" apply false
 }
 
 tasks.register("clean", Delete::class) {

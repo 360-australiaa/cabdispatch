@@ -128,7 +128,7 @@ internal fun ShiftStatsBar(
         // A one-shot pop the moment the count actually increments (A3) - the trip a driver just
         // finished should register as an event, not as a digit that quietly became a different
         // digit. Keyed on the value, so it costs nothing and animates nothing until one changes.
-        val tripsPop = rememberValueChangePop(state.todayStats.tripsCount)
+        val tripsPop = Modifier.rememberValueChangePop(state.todayStats.tripsCount)
         HudStatTile(
             icon = Icons.Rounded.DirectionsCar,
             label = "Trips",

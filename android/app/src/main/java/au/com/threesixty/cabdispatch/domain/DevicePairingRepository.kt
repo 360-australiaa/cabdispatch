@@ -46,6 +46,11 @@ object DevicePairingRepository {
      * Deliberately requires no driver session: the gate runs before anyone logs in, and the backend
      * route takes the pairing code itself as the credential for exactly that reason.
      */
+    // Device-identifier lint (HardwareIds): ANDROID_ID here is a real fleet-pairing use, not
+    // user tracking -- it lets the backend recognise "this same physical tablet" across a factory
+    // reset/reinstall for MDM purposes, which is exactly what ANDROID_ID is for (it resets on
+    // factory reset per-app-per-signing-key, which is the correct scope for this use).
+    @Suppress("HardwareIds")
     suspend fun pair(context: Context, pairingCode: String): PairResult {
         val normalized = pairingCode.trim().uppercase()
         if (normalized.isBlank()) return PairResult.Failure("Enter the pairing code first")

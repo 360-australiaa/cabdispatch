@@ -137,7 +137,16 @@ fun CabDispatchTheme(
         ThemeMode.DARK -> false
         ThemeMode.SYSTEM -> !systemInDarkTheme
     }
-    remember(isLight) {
+    // Suppressed, not restructured into a LaunchedEffect per the lint's generic advice: this is
+    // deliberately `remember`, not a coroutine-based effect, exactly so the theme tokens are
+    // already correct on the very first frame after a switch -- see CaptainPalette.applyTheme's
+    // own doc, which names this call site by name. A LaunchedEffect here would run one frame late
+    // and reintroduce the flash-of-old-theme this code was written to avoid. The Unit return is
+    // intentional: this call exists only for the synchronous side effect, gated on `isLight` so it
+    // runs exactly once per theme change rather than every recomposition. Bound to a local `val`
+    // (annotations can only target a declaration, not a bare expression statement).
+    @Suppress("RememberReturnType", "UNUSED_VARIABLE")
+    val applyThemeTokensOnce = remember(isLight) {
         CaptainPalette.applyTheme(isLight)
         Deck.applyTheme(isLight)
     }

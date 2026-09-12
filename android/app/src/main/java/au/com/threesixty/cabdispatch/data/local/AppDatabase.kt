@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
 import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.dao.TrafficCameraDao
 import au.com.threesixty.cabdispatch.data.local.dao.TrafficHazardDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.AirportZoneEntity
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
@@ -23,6 +24,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TrafficCameraEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TrafficHazardEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 
 /**
@@ -121,8 +123,9 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         AirportZoneEntity::class,
         TrafficCameraEntity::class,
         TrafficHazardEntity::class,
+        TripBlackoutSegmentEntity::class,
     ],
-    version = 14,
+    version = 15,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -144,6 +147,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun airportZoneDao(): AirportZoneDao
     abstract fun trafficCameraDao(): TrafficCameraDao
     abstract fun trafficHazardDao(): TrafficHazardDao
+    abstract fun tripBlackoutSegmentDao(): TripBlackoutSegmentDao
 }
 
 /**
@@ -190,6 +194,46 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
                 PRIMARY KEY(`id`)
             )
             """.trimIndent(),
+        )
+    }
+}
+
+/**
+ * 14 -> 15: the GPS-blackout audit-trail table (W1, GPS blackout program, 2026-09-12) — see
+ * [TripBlackoutSegmentEntity]'s own doc for what it records and why. A fresh table with a foreign
+ * key onto `trips`, no data migration needed (nothing existed to migrate from).
+ *
+ * Verified against Room's own generated `createAllTables` per [MIGRATION_9_10]'s "How to check
+ * this SQL is right" note, matching column order/types straight off
+ * [TripBlackoutSegmentEntity]'s own declaration.
+ */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `trip_blackout_segments` (
+                `clientUuid` TEXT NOT NULL,
+                `tripClientUuid` TEXT NOT NULL,
+                `startedAtIso` TEXT NOT NULL,
+                `endedAtIso` TEXT,
+                `entryLat` REAL NOT NULL,
+                `entryLng` REAL NOT NULL,
+                `exitLat` REAL,
+                `exitLng` REAL,
+                `entryWasMoving` INTEGER NOT NULL,
+                `resolution` TEXT NOT NULL DEFAULT 'NONE',
+                `billedDistanceKm` TEXT NOT NULL DEFAULT '0',
+                `corridorRoadId` TEXT,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`clientUuid`),
+                FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_trip_blackout_segments_tripClientUuid` " +
+                "ON `trip_blackout_segments` (`tripClientUuid`)",
         )
     }
 }

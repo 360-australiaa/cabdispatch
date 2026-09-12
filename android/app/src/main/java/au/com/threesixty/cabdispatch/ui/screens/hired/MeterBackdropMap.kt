@@ -34,7 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -217,6 +217,18 @@ internal data class MapPoint(val lat: Double, val lng: Double)
  * from, those controls.
  */
 @Composable
+// Suppressed, not fixed per the lint's own suggestion: Mapbox's lint text says its
+// plugin-lifecycle makes manual onStart/onStop/onDestroy forwarding unnecessary because the
+// MapView "leverages androidx.lifecycle to make [itself] a lifecycle aware component" -- but that
+// automatic hookup only fires FUTURE lifecycle transitions relative to when the MapView attaches
+// to a ViewTreeLifecycleOwner. This MapView is created inside a Compose `AndroidView` factory,
+// after the host Activity has already reached STARTED -- so the automatic ON_START this lint
+// assumes already happened, and this MapView would never receive it. Confirmed as a real,
+// user-visible regression on the pilot tablet, 2026-09-08: a black canvas with the scale bar and
+// logo drawn but no tiles or zones, exactly this failure mode. The explicit mapView.onStart() call
+// plus this DisposableEffect's manual ON_START/ON_STOP forwarding are the fix, verified on-device,
+// and stay exactly as they are.
+@Suppress("Lifecycle")
 internal fun MeterBackdropMap(
     startLat: Double?,
     startLng: Double?,

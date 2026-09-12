@@ -566,8 +566,8 @@ internal fun AddressKeypad(onKey: (Char) -> Unit, onSpace: () -> Unit, onBackspa
 
 @Composable
 private fun AddressKey(
-    label: String? = null,
     modifier: Modifier = Modifier,
+    label: String? = null,
     accent: Boolean = false,
     onClick: () -> Unit,
     content: (@Composable () -> Unit)? = null,

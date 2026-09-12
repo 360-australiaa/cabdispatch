@@ -26,7 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,6 +80,23 @@ import kotlin.math.min
  * computation above are untouched.
  */
 @Composable
+// Suppressed, not fixed per the lint's own suggestion: Mapbox's lint text says its
+// plugin-lifecycle makes manual onStart/onStop/onDestroy forwarding unnecessary because the
+// MapView "leverages androidx.lifecycle to make [itself] a lifecycle aware component" -- but that
+// automatic hookup only fires FUTURE lifecycle transitions relative to when the MapView attaches
+// to a ViewTreeLifecycleOwner. This MapView is created inside a Compose `AndroidView` factory,
+// after the host Activity has already reached STARTED -- so the automatic ON_START this lint
+// assumes already happened, and this MapView would never receive it. Confirmed as a real,
+// user-visible regression on the pilot tablet, 2026-09-08: a black canvas with the scale bar and
+// logo drawn but no tiles or zones, exactly this failure mode. The explicit mapView.onStart() call
+// plus this DisposableEffect's manual ON_START/ON_STOP forwarding are the fix, verified on-device,
+// and stay exactly as they are.
+// Also suppresses OPT_IN_USAGE: Mapbox's MapboxMap.cameraForCoordinates below is marked a
+// delicate API (its own generic warning text is "make sure you fully read and understand
+// the documentation" -- not a deprecation with a replacement API). It is used here exactly
+// as documented, to fit the camera to a bounding box of real zone coordinates, and its
+// result is read once and applied to the camera, never assumed stable across calls.
+@Suppress("Lifecycle", "OPT_IN_USAGE")
 fun HeatMapTabContent(
     plotViewModel: PlotZoneViewModel = viewModel(),
     statsViewModel: ZoneStatisticsViewModel = viewModel(),

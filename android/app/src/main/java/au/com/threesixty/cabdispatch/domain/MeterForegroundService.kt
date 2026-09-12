@@ -8,11 +8,13 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import au.com.threesixty.cabdispatch.MainActivity
 import au.com.threesixty.cabdispatch.R
+import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
+import au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution
+import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
@@ -106,14 +108,12 @@ class MeterForegroundService : Service() {
     }
 
     private fun startForegroundCompat(notification: Notification) {
-        // API 29+ (this app's minSdk) requires the type at startForeground time; API 34 made an
-        // untyped call throw outright. `location` is the honest type: this service exists to keep a
+        // Unconditional, not an SDK_INT branch (W0, 2026-09-12): this app's minSdk is 29
+        // (Build.VERSION_CODES.Q) -- the exact floor API 29+ required the type at, and the
+        // pre-29 untyped overload this used to fall back to is unreachable on any device this
+        // app can install on. `location` is the honest type: this service exists to keep a
         // GPS-driven fare accruing.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
     }
 
     private fun buildNotification(state: FareState?): Notification {
@@ -154,7 +154,9 @@ class MeterForegroundService : Service() {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        // No SDK_INT guard (W0, 2026-09-12): notification channels have existed since API 26,
+        // below this app's minSdk 29 -- the early return this used to have for pre-26 devices was
+        // unreachable on any device this app can install on.
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Meter",
@@ -180,13 +182,10 @@ class MeterForegroundService : Service() {
             // acquire foreground status must still tick -- the engine is process-scoped and does not
             // depend on this service existing -- so a failure here degrades to exactly the old
             // behaviour rather than taking the fare down with it.
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-            }
+            // No SDK_INT branch (W0, 2026-09-12): startForegroundService has existed since
+            // API 26, below this app's minSdk 29 -- the pre-26 startService() fallback this used
+            // to have was unreachable on any device this app can install on.
+            runCatching { context.startForegroundService(intent) }
         }
 
         fun stop(context: Context) {
@@ -210,7 +209,14 @@ class MeterForegroundService : Service() {
  * So this class owns both, on a scope that ends with the process. `HiredViewModel` becomes what the
  * audit asked for — a thin observer that reads [state] and forwards driver actions — and can be
  * created and destroyed as often as navigation likes without the fare noticing.
+ *
+ * Seven constructor parameters -- one over this codebase's usual threshold, and a deliberate
+ * exception rather than a parameter-object refactor: this is a plain dependency-injection
+ * constructor (no Hilt/KSP DI in this project, see AppContainer's own doc for why), and each
+ * parameter is a distinct, necessary singleton this class genuinely uses -- bundling them into a
+ * synthetic "dependencies" object would rename the problem, not solve it.
  */
+@Suppress("LongParameterList")
 class MeterController(
     private val appContext: Context,
     private val fareEngine: FareEngine,
@@ -219,6 +225,11 @@ class MeterController(
     /** Resolves a cached tariff row to its DTO — the restore path's one data dependency. Injected
      * as a function so this class stays testable without a Room instance. */
     private val tariffLookup: suspend (String) -> TariffDto?,
+    /** GPS-blackout audit trail (G3, W1, 2026-09-12) — see [TripBlackoutSegmentEntity]'s own doc.
+     * Written from [persistTick] alongside the ordinary tick persistence, and read from
+     * [restoreOpenTripIfAny] to re-arm a pending known-corridor catch-up after a process death
+     * mid-blackout (G6). */
+    private val blackoutSegmentDao: TripBlackoutSegmentDao,
     val scope: CoroutineScope,
 ) {
 
@@ -230,6 +241,17 @@ class MeterController(
         private set
 
     private var persistJob: Job? = null
+
+    /** The last [FareState.blackout] segment id whose OPEN row was actually written -- guards
+     * against re-writing the identical open row every tick throughout a long blackout (G3, W1,
+     * 2026-09-12); the row only needs to exist, not be refreshed every second. Reset to `null`
+     * once that blackout resolves (see [persistTick]). */
+    private var openBlackoutWrittenFor: String? = null
+
+    /** The last [FareState.lastResolvedBlackout] segment id whose CLOSING row was actually
+     * written -- guards against re-writing the same closing data on every subsequent tick, since
+     * [FareState.lastResolvedBlackout] never resets to `null` (see that field's own doc). */
+    private var lastPersistedResolvedBlackoutId: String? = null
 
     /**
      * Begins a new hiring: starts the engine, starts persisting every tick, and brings the
@@ -274,12 +296,19 @@ class MeterController(
         if (open.status != RoomTripStatus.OPEN) return
         val tariffDto = tariffLookup(open.tariffId) ?: return
         val restored = runCatching { reconstructFareState(open, tariffDto.toDomainTariff()) }.getOrNull() ?: return
+        // G6 (GPS blackout program, W1, 2026-09-12): a blackout still open (no `endedAtIso`) when
+        // the process died -- re-armed below so the pending known-corridor catch-up survives the
+        // restart instead of being silently forgotten. `null` in the overwhelmingly common case
+        // (no blackout in progress at the moment of death), which resumeTrip's own default handles
+        // exactly as before this parameter existed.
+        val openBlackoutSegment = runCatching { blackoutSegmentDao.openSegmentFor(open.clientUuid) }.getOrNull()
 
         fareEngine.resumeTrip(
             tariff = tariffDto,
             restored = restored,
             movingSeconds = open.movingS,
             waitingSeconds = open.waitingS,
+            openBlackoutSegment = openBlackoutSegment,
         )
         SessionHolder.markTripLive(open.clientUuid)
         beginPersisting(open.clientUuid)
@@ -320,6 +349,13 @@ class MeterController(
      */
     private fun beginPersisting(clientUuid: String) {
         activeClientUuid = clientUuid
+        // Fresh per trip -- this controller is process-scoped and outlives any single hiring, so
+        // a segment id from the trip before this one must never suppress a real write on this one
+        // (see persistBlackout's own doc). Restore's own re-seeding of a still-open blackout row
+        // happens through resumeTrip/openBlackoutSegment, not through these two -- they only ever
+        // guard against re-writing what THIS controller instance already wrote this trip.
+        openBlackoutWrittenFor = null
+        lastPersistedResolvedBlackoutId = null
         persistJob?.cancel()
         persistJob = state
             .onEach { fareState -> persistTick(clientUuid, fareState) }
@@ -347,6 +383,62 @@ class MeterController(
                 accruedDistanceCharge = fareState.breakdown.distanceAmount.toPlainString(),
                 accruedWaitingCharge = fareState.breakdown.waitingAmount.toPlainString(),
             )
+        }
+        persistBlackout(clientUuid, fareState)
+    }
+
+    /**
+     * The GPS-blackout audit trail (G3, W1, 2026-09-12) — written on exactly two ticks per
+     * blackout, never every tick throughout one: the tick a blackout is first observed (an OPEN
+     * row, [openBlackoutWrittenFor] guards against repeating it), and the tick it resolves (the
+     * CLOSING row, [lastPersistedResolvedBlackoutId] guards the same way against
+     * [FareState.lastResolvedBlackout]'s own "never resets to null" shape re-triggering a rewrite
+     * on every later tick). Best-effort ([runCatching]): a failure here must never interrupt the
+     * ordinary tick persistence [persistTick] just did — this is evidence, not a billing input.
+     */
+    private suspend fun persistBlackout(clientUuid: String, fareState: FareState) {
+        val active = fareState.blackout
+        if (active != null && openBlackoutWrittenFor != active.segmentId) {
+            runCatching {
+                blackoutSegmentDao.upsert(
+                    TripBlackoutSegmentEntity(
+                        clientUuid = active.segmentId,
+                        tripClientUuid = clientUuid,
+                        startedAtIso = active.startedAtIso,
+                        entryLat = active.entryLat,
+                        entryLng = active.entryLng,
+                        entryWasMoving = active.entryWasMoving,
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+            openBlackoutWrittenFor = active.segmentId
+        }
+        val resolved = fareState.lastResolvedBlackout
+        if (resolved != null && lastPersistedResolvedBlackoutId != resolved.segmentId) {
+            runCatching {
+                blackoutSegmentDao.upsert(
+                    TripBlackoutSegmentEntity(
+                        clientUuid = resolved.segmentId,
+                        tripClientUuid = clientUuid,
+                        startedAtIso = resolved.startedAtIso,
+                        endedAtIso = resolved.endedAtIso,
+                        entryLat = resolved.entryLat,
+                        entryLng = resolved.entryLng,
+                        exitLat = resolved.exitLat,
+                        exitLng = resolved.exitLng,
+                        entryWasMoving = resolved.entryWasMoving,
+                        resolution = resolved.resolution,
+                        billedDistanceKm = resolved.billedDistanceKm.toPlainString(),
+                        corridorRoadId = resolved.corridorRoadId,
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+            lastPersistedResolvedBlackoutId = resolved.segmentId
+            openBlackoutWrittenFor = null
         }
     }
 

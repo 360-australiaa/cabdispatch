@@ -62,6 +62,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -827,6 +828,10 @@ private fun GpsTile(state: SettingsUiState, modifier: Modifier) {
         GpsQuality.GOOD -> "Lock · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.OK
         GpsQuality.FAIR -> "Fair · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.OK
         GpsQuality.POOR -> "Poor · ±${state.gpsAccuracyM?.toInt()} m" to DiagTone.WARN
+        // STALE (G2, GPS blackout program, 2026-09-12): the driver-facing meaning is "the meter
+        // cannot see you right now" -- worded like NO_FIX, not like a degraded-but-live POOR fix,
+        // because a stale fix is not a live signal at all, just an old one still sitting there.
+        GpsQuality.STALE -> "Signal lost" to DiagTone.BAD
         GpsQuality.NO_FIX -> "No fix" to DiagTone.BAD
         GpsQuality.PERMISSION_DENIED -> "Location permission not granted" to DiagTone.BAD
     }
@@ -1282,7 +1287,7 @@ private fun formatMaxiPercent(multiplier: String): String {
  */
 @Composable
 private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -> Unit) {
-    val activity = LocalContext.current as android.app.Activity
+    val activity = LocalActivity.current!!
     var code by remember { mutableStateOf("") }
     val pairState = state.pairMeter
 
@@ -1349,7 +1354,7 @@ private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewMode
                             ),
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.Characters,
-                                autoCorrect = false,
+                                autoCorrectEnabled = false,
                                 imeAction = ImeAction.Done,
                             ),
                             keyboardActions = KeyboardActions(

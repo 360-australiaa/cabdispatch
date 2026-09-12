@@ -294,8 +294,21 @@ class RoomMigrationTest {
         // 13, not 12: MIGRATION_12_13 (airport zones + trips.airportAccessFeeJson) joins the
         // chain, and its end-state schema is app/schemas/.../13.json, copied to main/assets per
         // this class's doc.
+        //
+        // The FULLY RESOLVED path, not the bare `dbName` (W0, 2026-09-12, Room 2.6.1 -> 2.8.5):
+        // `MigrationTestHelper.runMigrationsAndValidate(String, ...)` -- the deprecated overload
+        // this test uses -- has a real bug/incompatibility in 2.8.5 under Robolectric: it
+        // resolves the bare name to a full on-disk path when actually OPENING the connection, but
+        // configures its internal `SupportSQLiteDriver` against the UNRESOLVED bare name, and
+        // then rejects its own two answers for "where is this database" as a mismatch --
+        // `IllegalArgumentException: This driver is configured to open a database named
+        // 'migration-test.db' but '<full Robolectric temp path>/migration-test.db' was
+        // requested`. Passing the already-resolved absolute path sidesteps it: Android's real
+        // `Context.getDatabasePath` treats a name containing a path separator as already
+        // resolved and returns it unchanged, so both of Room's internal code paths land on the
+        // identical string instead of two different ones for the same file.
         helper.runMigrationsAndValidate(
-            dbName,
+            ApplicationProvider.getApplicationContext<android.content.Context>().getDatabasePath(dbName).path,
             13,
             true,
             MIGRATION_8_9,
@@ -315,13 +328,14 @@ class RoomMigrationTest {
         // method to a production DAO interface.
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            // MIGRATION_13_14 (live map redesign, 2026-09-09) added so this real Room open —
-            // which always targets AppDatabase's compiled CURRENT version, 14 now — can complete
-            // the 13->14 step too; runMigrationsAndValidate above deliberately still stops at 13
-            // (the last version with an exported/asset-copied schema JSON this test hand-verifies
-            // against), so the raw file handed to this builder is genuinely at 13 and needs this
-            // one extra step, exactly mirroring AppContainer's own migrations list.
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+            // MIGRATION_13_14/MIGRATION_14_15 added so this real Room open — which always
+            // targets AppDatabase's compiled CURRENT version (15 now, W1 GPS-blackout audit-trail
+            // table) — can complete every step up to it; runMigrationsAndValidate above
+            // deliberately still stops at 13 (the last version with an exported/asset-copied
+            // schema JSON this test hand-verifies against), so the raw file handed to this builder
+            // is genuinely at 13 and needs every later step, exactly mirroring AppContainer's own
+            // migrations list.
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
             .build()
         try {
             val raw = db.openHelper.readableDatabase

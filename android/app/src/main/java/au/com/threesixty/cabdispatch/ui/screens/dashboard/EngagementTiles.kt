@@ -376,6 +376,7 @@ private fun RatingTile(section: EngagementSection<RatingDto>, onRetry: () -> Uni
     }
 }
 
+@Suppress("DEPRECATION")
 @Composable
 private fun StarRow(fills: List<StarFill>) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {

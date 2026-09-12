@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Project-wide lint suppressions that cannot be expressed as an in-place @Suppress/tools:ignore
+  because the issue lives in a resource-directory NAME, not a file's content (Kotlin/XML-element
+  suppressions target a declaration or an XML tag, not a folder). Every entry here must carry the
+  same "why not fixed" reasoning a @Suppress comment would.
+-->
+<lint>
+    <!-- mipmap-anydpi-v26: the "-v26" qualifier is redundant given minSdk 29 (ObsoleteSdkInt's own
+         point), but AAPT2 fails resource linking ("resource mipmap/ic_launcher ... not found")
+         when the folder is renamed to the unqualified "mipmap-anydpi" in this project -- verified
+         2026-09-12, W0 pass. Purely informational either way (zero runtime difference on any
+         device this app can install on); kept at -v26 because it is the form that actually builds. -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+
+    <!-- OldTargetApi: targetSdk 35 vs. compileSdk 36 is a deliberate, documented split (W0
+         toolchain refresh, 2026-09-12, see app/build.gradle.kts's own comment on `compileSdk`) --
+         compileSdk was raised only as far as the bumped dependencies require; targetSdk stays
+         where it is until a real device regression pass covers whatever behaviour changes API 36
+         opts the app into. Revisit both together, not as a side effect of a lint fix. -->
+    <issue id="OldTargetApi">
+        <ignore path="build.gradle.kts" />
+    </issue>
+
+    <!-- GradleDependency: compose-bom, navigation-compose, core-ktx and the androidx.lifecycle/
+         androidx.camera artifacts are deliberately capped one or more minor versions below their
+         absolute latest -- their true latest releases require AGP 9.1.0/compileSdk 37, and this
+         project is deliberately on AGP 8.13.2 (see root build.gradle.kts's own comment: AGP 9.0's
+         "built-in Kotlin" is a real DSL migration, not a version bump, verified by an actual
+         failed build during the W0 pass). Every OTHER dependency in this file is at its genuine
+         latest stable version; only the ones this specific AGP ceiling blocks are held back, and
+         this check would otherwise flag them forever with no fix available short of the AGP-9
+         migration itself. Re-enable once that migration lands. -->
+    <issue id="GradleDependency">
+        <ignore path="build.gradle.kts" />
+    </issue>
+
+    <!-- NewerVersionAvailable: same reasoning as GradleDependency above, for the two dependencies
+         it flags that GradleDependency does not -- com.squareup.retrofit2:retrofit/converter-
+         kotlinx-serialization (2.12.0, one major version behind 3.0.0) and com.squareup.okhttp3:
+         okhttp/logging-interceptor (4.12.0, one major version behind 5.5.0). Both are deliberately
+         held at their latest 4.x/2.x patch (not the AGP-9 ceiling this time -- these two majors
+         genuinely require their own compatibility review, not a version-number bump) rather than
+         taken to their new major version blind, in the same pass as an already-large toolchain
+         refresh. Every other dependency in this file that COULD move without a major-version or
+         AGP-9 jump was moved, in the same W0 pass (2026-09-12) that added this entry. -->
+    <issue id="NewerVersionAvailable">
+        <ignore path="build.gradle.kts" />
+    </issue>
+
+    <!-- UseKtx: 13 files' worth of SharedPreferences.edit()...apply()/commit() call sites could
+         use the androidx.core.content.edit KTX lambda instead -- a real, legitimate modernisation
+         (surfaced for the first time by this same W0 compileSdk bump, not introduced by it), but
+         several of the 13 are security-sensitive credential stores (TokenStore, DevicePairingStore,
+         DriverAuthRepository, SecurePrefs -- see SecurePrefs.stashLegacyPlaintext's own
+         @Suppress("ApplySharedPref") doc for exactly why commit()-vs-apply() is a real correctness
+         question in this codebase, not a style nit). Converting all 13 correctly means checking
+         each site's commit/apply choice individually against KTX's `edit(commit = ...)` parameter,
+         which deserves its own reviewed pass, not a batch mechanical rewrite done under this
+         pass's time budget. Deferred deliberately; not silently dropped. -->
+    <issue id="UseKtx">
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/CommissioningStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/DevicePairingStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/DriverAuthRepository.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/MaxiVehicleStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/RuntimePermissions.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/SecurePrefs.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/SessionStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/SettingsPreferencesStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/TermsAcceptance.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/domain/TokenStore.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/ui/overlays/NavigateOverlay.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/ui/screens/hired/MeterBackdropMap.kt" />
+        <ignore path="src/main/java/au/com/threesixty/cabdispatch/ui/screens/permissions/PermissionsChecklistScreen.kt" />
+    </issue>
+</lint>

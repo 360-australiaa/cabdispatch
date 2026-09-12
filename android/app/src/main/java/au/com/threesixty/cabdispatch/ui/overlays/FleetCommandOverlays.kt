@@ -1,6 +1,5 @@
 package au.com.threesixty.cabdispatch.ui.overlays
 
-import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,7 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,7 +139,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ForceUpdatePendingBanner(modifier: Modifier = Modifier) {
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
     val checker = AppContainer.appUpdateChecker
     val updateState by checker.state.collectAsState()
     val scope = rememberCoroutineScope()

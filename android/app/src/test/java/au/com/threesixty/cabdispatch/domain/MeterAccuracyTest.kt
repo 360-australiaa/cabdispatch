@@ -1,6 +1,8 @@
 package au.com.threesixty.cabdispatch.domain
 
+import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -63,7 +65,7 @@ class MeterAccuracyTest {
         // Simulated here by advancing the virtual clock 2000ms per tick instead of 1000: the
         // engine's delay(1000) is satisfied, and 2.0s of wall clock have really passed.
         val gps = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         repeat(30) {
@@ -89,7 +91,7 @@ class MeterAccuracyTest {
         // would invent kilometres out of a window in which the app was not running and observed
         // nothing.
         val gps = FakeMeterGps(80.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         // One ten-minute gap between ticks, with GPS live at both ends.
@@ -114,7 +116,7 @@ class MeterAccuracyTest {
     @Test
     fun `distance comes from the haversine between fixes, matching the ground actually driven`() = runTest {
         val gps = FakeMeterGps(60.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         repeat(60) { advanceOneTick(gps) }
@@ -135,7 +137,7 @@ class MeterAccuracyTest {
         // of metres between one sample and the next. Trusting the haversine blindly would charge
         // that as travel. The cap is speed x dt x 1.5.
         val gps = FakeMeterGps(30.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         // Settle one normal tick so there is a previous fix to jump away from.
@@ -160,7 +162,7 @@ class MeterAccuracyTest {
         // The audit's own worked example: enter at 80 km/h, lose GPS, and the old meter billed the
         // frozen speed for the whole blackout — 5.3 km over four minutes that nobody drove.
         val gps = FakeMeterGps(80.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         // Ten seconds of normal driving into the tunnel mouth.
@@ -212,7 +214,7 @@ class MeterAccuracyTest {
         // that time; refusing to charge it would be its own quiet error, just in the driver's
         // direction rather than the passenger's.
         val gps = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         repeat(10) { advanceOneTick(gps) }
@@ -228,12 +230,16 @@ class MeterAccuracyTest {
             state.breakdown.waitingAmount > waitingBefore,
         )
         assertEquals("but still no distance", BigDecimal.ZERO.compareTo(state.distanceKm), 0)
+        // G3: the audit-trail record correctly classifies this as a NOT-moving entry -- the
+        // resolution this blackout would get on reacquisition is STATIONARY, never CORRIDOR.
+        assertTrue("an active blackout record must exist", state.blackout != null)
+        assertFalse("this blackout began with the vehicle already stationary", state.blackout!!.entryWasMoving)
     }
 
     @Test
     fun `GPS coming back clears gpsLost and resumes accrual`() = runTest {
         val gps = FakeMeterGps(60.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
         repeat(5) { advanceOneTick(gps) }
@@ -273,7 +279,7 @@ class MeterAccuracyTest {
         val engine = FareEngineImpl(
             gps,
             backgroundScope,
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
             knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
@@ -294,6 +300,20 @@ class MeterAccuracyTest {
         assertTrue("GPS must be known lost mid-tunnel", engine.state.value.gpsLost)
         val distanceWhenLostDeclared = engine.state.value.distanceKm
 
+        // G3 (GPS blackout program, W1, 2026-09-12): the audit-trail record must exist WHILE the
+        // blackout is in progress, not only once it resolves -- this is what
+        // MeterController.persistBlackout writes an OPEN row from, and what survives a process
+        // death mid-tunnel (see the resumeTrip/openBlackoutSegment test below).
+        val activeBlackout = engine.state.value.blackout
+        assertTrue("an active blackout record must exist while gpsLost is true", activeBlackout != null)
+        assertEquals(TUNNEL_ENTRY_LAT, activeBlackout!!.entryLat, 0.0001)
+        assertEquals(TUNNEL_ENTRY_LNG, activeBlackout.entryLng, 0.0001)
+        assertTrue("this blackout began while the vehicle was moving at 80km/h", activeBlackout.entryWasMoving)
+        assertTrue(
+            "lastResolvedBlackout must not yet report anything for this still-open blackout",
+            engine.state.value.lastResolvedBlackout == null,
+        )
+
         // The remaining tunnel transit -- confirms nothing accrues purely from more dark ticks.
         repeat(24) { advanceOneTickWithNoNewFix() }
         assertEquals(
@@ -308,10 +328,24 @@ class MeterAccuracyTest {
 
         val state = engine.state.value
         assertFalse("GPS is healthy again", state.gpsLost)
+        assertTrue("the active-blackout record must clear the instant it resolves", state.blackout == null)
 
         val expectedKnownKm = au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm(
             registry, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG,
         )!!
+
+        // G3: the closing half of the audit trail -- this is exactly what
+        // MeterController.persistBlackout writes the CLOSING row from.
+        val resolved = state.lastResolvedBlackout
+        assertTrue("a resolved-blackout record must be published the tick it resolves", resolved != null)
+        assertEquals("CORRIDOR", resolved!!.resolution)
+        assertEquals(activeBlackout.segmentId, resolved.segmentId)
+        assertEquals(TUNNEL_EXIT_LAT, resolved.exitLat, 0.0001)
+        assertEquals(TUNNEL_EXIT_LNG, resolved.exitLng, 0.0001)
+        assertTrue(
+            "the resolved record's own billed distance must match the corridor km actually charged",
+            (resolved.billedDistanceKm - expectedKnownKm).abs().toDouble() < 0.001,
+        )
         val straightLineKm = BigDecimal.valueOf(
             au.com.threesixty.cabdispatch.domain.fare.tollHaversineM(
                 TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG,
@@ -360,7 +394,7 @@ class MeterAccuracyTest {
         val engine = FareEngineImpl(
             gps,
             backgroundScope,
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
             knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
@@ -384,6 +418,84 @@ class MeterAccuracyTest {
             "an unrelated blackout must accrue nothing beyond the ordinary post-recovery tick (billed $billed km)",
             billed < 0.05,
         )
+        // G3: an unmatched blackout still resolves to a real, honest audit-trail record -- NONE,
+        // billing zero -- not silence. A dispute over "why did the meter stop for two minutes"
+        // needs this row to exist even when nothing was charged for the gap.
+        val resolved = engine.state.value.lastResolvedBlackout
+        assertTrue("even an unmatched blackout must publish a resolved record", resolved != null)
+        assertEquals("NONE", resolved!!.resolution)
+        assertEquals(BigDecimal.ZERO, resolved.billedDistanceKm)
+        assertTrue("no corridor road can be named for a NONE resolution", resolved.corridorRoadId == null)
+    }
+
+    @Test
+    fun `a process killed mid-tunnel still bills the corridor catch-up after restart`() = runTest {
+        // G6 (GPS blackout program, W1, 2026-09-12): the scenario F4's own restart path was built
+        // for, extended to the blackout catch-up specifically -- a driver's tablet dies mid-tunnel,
+        // MeterController.restoreOpenTripIfAny reads the still-OPEN blackout row and re-arms
+        // resumeTrip's openBlackoutSegment, and the FRESH FareEngineImpl instance below (this test
+        // never called startTrip/tick on it before this point -- it has no memory of the blackout
+        // ever starting, exactly like a real post-restart process) must still fire the corridor
+        // catch-up the moment it sees a real fix again, using ONLY what was restored.
+        val registry = bentTunnelRegistry()
+        val openSegment = TripBlackoutSegmentEntity(
+            clientUuid = "segment-1",
+            tripClientUuid = "trip-1",
+            startedAtIso = "2026-09-12T02:00:00Z",
+            entryLat = TUNNEL_ENTRY_LAT,
+            entryLng = TUNNEL_ENTRY_LNG,
+            entryWasMoving = true,
+            createdAt = 0L,
+            updatedAt = 0L,
+        )
+        val gps = FakeMeterGps(0.0) // starts with locationFix == null, exactly like a fresh restart
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
+            knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
+        )
+        val restoredCalcState = au.com.threesixty.cabdispatch.domain.fare.FareState(
+            tariff = urbanTariffDto().toDomainTariff(),
+        )
+        engine.resumeTrip(
+            tariff = urbanTariffDto(),
+            restored = restoredCalcState,
+            movingSeconds = 0,
+            waitingSeconds = 0,
+            openBlackoutSegment = openSegment,
+        )
+
+        // Still dark -- the restored blackout must survive ordinary ticks unchanged, same as a
+        // blackout this same instance had observed from the start would.
+        repeat(5) { advanceOneTickWithNoNewFix() }
+        assertTrue("the restored blackout must read as in-progress", engine.state.value.gpsLost)
+        val activeBlackout = engine.state.value.blackout
+        assertTrue("the restored blackout's own record must be visible", activeBlackout != null)
+        assertEquals("segment-1", activeBlackout!!.segmentId)
+        assertEquals(TUNNEL_ENTRY_LAT, activeBlackout.entryLat, 0.0001)
+        val distanceBeforeReacquisition = engine.state.value.distanceKm
+
+        // Reacquire at the tunnel's real exit gantry -- the moment resumeTrip's re-seeding is
+        // actually put to the test.
+        gps.emitFixAt(testScheduler.currentTime, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG)
+        advanceOneTickWithNoNewFix()
+
+        val state = engine.state.value
+        assertFalse("GPS is healthy again", state.gpsLost)
+        val expectedKnownKm = au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm(
+            registry, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG,
+        )!!
+        val billed = (state.distanceKm - distanceBeforeReacquisition).toDouble()
+        assertTrue(
+            "the restart-restored blackout must still bill the real corridor distance " +
+                "(expected ~$expectedKnownKm km, billed $billed km)",
+            (billed - expectedKnownKm.toDouble()) in -0.001..0.05,
+        )
+        val resolved = state.lastResolvedBlackout
+        assertTrue("a resolved record must be published even for a restart-restored blackout", resolved != null)
+        assertEquals("CORRIDOR", resolved!!.resolution)
+        assertEquals("segment-1", resolved.segmentId)
     }
 
     @Test
@@ -393,7 +505,7 @@ class MeterAccuracyTest {
         val engine = FareEngineImpl(
             gps,
             backgroundScope,
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
             knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
@@ -432,7 +544,7 @@ class MeterAccuracyTest {
         val engine = FareEngineImpl(
             gps,
             backgroundScope,
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
             knownCorridorDistanceLookup = KnownCorridorDistanceLookup.of(registry),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
@@ -470,7 +582,7 @@ class MeterAccuracyTest {
         // the RAW cumulative flagfall/distance/waiting figures — the 150% maxi multiplier is applied
         // once, wholesale, at close time, and the sum never knew about it.
         val gps = FakeMeterGps(60.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(
             urbanTariffDto(),
             startLat = -33.87,
@@ -505,7 +617,7 @@ class MeterAccuracyTest {
     @Test
     fun `an ordinary metered dial is the round-down of the accrued components`() = runTest {
         val gps = FakeMeterGps(0.0)
-        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource())
+        val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         repeat(45) { advanceOneTick(gps) }
 
@@ -528,7 +640,7 @@ class MeterAccuracyTest {
             gps,
             backgroundScope,
             TollRegistryProvider { m5Registry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent() // let the registry snapshot load
@@ -560,7 +672,7 @@ class MeterAccuracyTest {
             gps,
             backgroundScope,
             TollRegistryProvider { m5Registry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()
@@ -586,7 +698,7 @@ class MeterAccuracyTest {
             gps,
             backgroundScope,
             TollRegistryProvider { m5Registry() },
-            nanoTimeSource = virtualNanoTimeSource(),
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
         runCurrent()

@@ -140,6 +140,22 @@ class FakeMeterGps(
 fun TestScope.virtualNanoTimeSource(): () -> Long = { testScheduler.currentTime * 1_000_000L }
 
 /**
+ * A fixed, known-DAY, known-not-peak Sydney instant to hand [FareEngineImpl]'s `wallClockNow`
+ * seam (W0, 2026-09-12) — a Tuesday at 2pm NSW time: hour 14 is nowhere near the 22:00-06:00 night
+ * window [resolveTimeClassFor]/[resolveIsPeakFor] both key off, and Tuesday is neither Friday,
+ * Saturday, nor (2026-09-15 is an ordinary Tuesday, verified against [NswPublicHolidays]) the eve
+ * of a gazetted public holiday. Any test whose scenario is genuinely ABOUT night/peak/holiday
+ * pricing passes its own explicit `ZonedDateTime` instead — this exists so every OTHER test gets a
+ * boring, unsurprising DAY fare regardless of the real time the suite happens to run at, closing
+ * exactly the flake this fixed six tests in this same pass: a suite run landing inside the real
+ * Peak Time Hiring window silently added the peak surcharge to trips that were never testing peak
+ * at all.
+ */
+fun fixedDayWallClock(): () -> java.time.ZonedDateTime = {
+    java.time.ZonedDateTime.of(2026, 9, 15, 14, 0, 0, 0, au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE)
+}
+
+/**
  * Advances the meter by exactly one real tick, with GPS behaving normally.
  *
  * A fix is published *before* the clock moves, so that when the engine's own `delay(1000)` fires a

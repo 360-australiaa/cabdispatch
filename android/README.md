@@ -1,22 +1,38 @@
 # Cab Dispatch — Android meter app
 
 Kotlin + Jetpack Compose, offline-first taxi meter. Package `au.com.threesixty.cabdispatch`,
-minSdk 29, compileSdk/targetSdk 35, AGP 8.5.2, Kotlin 1.9.24 (see `app/build.gradle.kts` /
-`build.gradle.kts` for the authoritative versions if this drifts).
+minSdk 29, compileSdk 36, targetSdk 35, AGP 8.13.2, Kotlin 2.3.21 (see `app/build.gradle.kts` /
+`build.gradle.kts` for the authoritative versions if this drifts — updated here 2026-09-12, W0
+toolchain refresh; do not let this comment go stale again the way the section below it did).
 
 ## Build status — read this first
 
-**This app has NOT been compiled or run in this environment.** The sandbox that produced (and, in
-a later reconciliation pass, edited) this code has no Android SDK, no emulator, and no Gradle
-wrapper jar — `./gradlew build`/`assembleDebug` were never invoked here and would fail immediately
-for lack of an SDK, independent of whether the Kotlin itself is correct. Every consistency check
-described in this repo's task history for this module (API signatures between screens and
-`TripRepository`/`FareEngine`/`AppContainer`, `AppContainer` singleton wiring, `FareEngineTest.kt`
-golden vectors vs. the backend's `test_fare_engine_golden.py`) was done by **reading the source,
-not by compiling it**. Treat this as a careful manual review, not a green build. The two JVM unit
-test files (`FareEngineTest.kt`, `OutboxDrainerTest.kt`) are plain JUnit4/plain-Kotlin — no Android
-framework classes — so they're the most likely to actually run correctly on a real machine without
-further changes, but even those have only been read, not executed, here.
+**The app builds, and every gate below is genuinely green as of 2026-09-12** (verified in this
+same pass, not carried forward from an earlier claim — see `docs/plans/2026-09-12-android-meter-
+optimisation-and-gps-blackout-plan.md` W0 for what was fixed to get here). A stale, much older
+version of this section used to say the opposite ("has NOT been compiled or run in this
+environment") — that was true of an earlier sandbox pass long since superseded; it is not true of
+this checkout, and it should never again be trusted over actually running the two commands below.
+
+**The two commands that gate a merge to `phase0/merge-to-main` or `main`** (identical to what
+`.github/workflows/ci.yml`'s `android` job runs):
+
+```
+./gradlew :app:testDebugUnitTest :app:lintDebug
+./gradlew :app:detekt
+```
+
+Both must exit 0 with no baseline changes. `lintDebug` has **no baseline file** — every lint
+issue in the tree is either fixed or suppressed in place with a comment explaining why (see
+`app/lint.xml` for the one issue that can only be suppressed at the resource-directory level); a
+regression here is a real, new problem, never something to re-baseline away. `detekt` DOES run
+against a baseline (`app/detekt-baseline.xml`) — regenerate it with `./gradlew :app:detektBaseline`
+only when deliberately accepting new debt, and say so in the commit message; the normal way to
+clear an entry is to fix the code so it disappears from the report.
+
+Both commands need `local.properties` (gitignored) with `MAPBOX_DOWNLOADS_TOKEN` set — see
+`settings.gradle.kts`'s own comment — or dependency resolution fails with a 401 before either task
+runs. CI reads the same token from a repository secret.
 
 ## Opening and building this in Android Studio
 

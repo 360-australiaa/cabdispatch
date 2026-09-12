@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
 import androidx.core.app.ActivityCompat
@@ -644,7 +644,7 @@ private fun PairPanel(
             ),
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.Characters,
-                autoCorrect = false,
+                autoCorrectEnabled = false,
                 keyboardType = KeyboardType.Text,
                 imeAction = ImeAction.Done,
             ),

@@ -219,6 +219,31 @@ data class SplitPaymentEntryDto(
     val amount: String,
 )
 
+/**
+ * One GPS blackout the meter observed on this trip -- the wire mirror of
+ * [au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity] (GPS blackout
+ * program, G3, W1, 2026-09-12). See that class's own doc for what each field records and why this
+ * exists as dispute evidence rather than a billing input -- the trip's ordinary `tolls`/`moving_s`/
+ * `waiting_s`/`distance_m` totals already include whatever this segment resolved to; nothing on
+ * the server re-derives money from this list.
+ */
+@Serializable
+data class GpsBlackoutSegmentDto(
+    @SerialName("client_uuid") val clientUuid: String,
+    @SerialName("started_at") val startedAt: String,
+    @SerialName("ended_at") val endedAt: String,
+    @SerialName("entry_lat") val entryLat: Double,
+    @SerialName("entry_lng") val entryLng: Double,
+    @SerialName("exit_lat") val exitLat: Double,
+    @SerialName("exit_lng") val exitLng: Double,
+    @SerialName("entry_was_moving") val entryWasMoving: Boolean,
+    /** [au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution]'s name: NONE |
+     * CORRIDOR | STATIONARY. */
+    val resolution: String,
+    @SerialName("billed_distance_km") val billedDistanceKm: String,
+    @SerialName("corridor_road_id") val corridorRoadId: String? = null,
+)
+
 @Serializable
 data class TripCloseRequestDto(
     @SerialName("end_at") val endAt: String? = null,
@@ -307,6 +332,10 @@ data class TripSyncItemDto(
     @SerialName("include_psl") val includePsl: Boolean = false,
     @SerialName("gps_trace") val gpsTrace: List<TelemetryPointDto> = emptyList(),
     @SerialName("gps_trace_ref") val gpsTraceRef: String? = null,
+    /** See [GpsBlackoutSegmentDto]'s own doc -- dispute evidence, never itself a billing input.
+     * Empty for every trip with no GPS blackout (the overwhelming majority), and for every
+     * pre-existing call site that never named this field. */
+    @SerialName("gps_blackout_segments") val gpsBlackoutSegments: List<GpsBlackoutSegmentDto> = emptyList(),
     @SerialName("receipt_ref") val receiptRef: String? = null,
     /** The total the offline device computed on-vehicle. */
     @SerialName("device_total") val deviceTotal: String,

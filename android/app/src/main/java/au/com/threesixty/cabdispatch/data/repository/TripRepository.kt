@@ -2,6 +2,7 @@ package au.com.threesixty.cabdispatch.data.repository
 
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
@@ -10,6 +11,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
+import au.com.threesixty.cabdispatch.data.remote.GpsBlackoutSegmentDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.domain.AirportAccessFeeRecord
 import au.com.threesixty.cabdispatch.domain.SessionHolder
@@ -40,6 +42,9 @@ class TripRepository(
     private val tripDao: TripDao,
     private val outboxDao: SyncOutboxDao,
     @Suppress("unused") private val apiService: ApiService,
+    /** GPS-blackout audit trail (G3, W1, 2026-09-12) -- read once at close time to populate
+     * [TripSyncItemDto.gpsBlackoutSegments]. See [TripBlackoutSegmentDao]'s own doc. */
+    private val blackoutSegmentDao: TripBlackoutSegmentDao,
 ) {
 
     fun observeActiveTrip(): Flow<TripEntity?> = tripDao.observeActiveTrip()
@@ -434,8 +439,15 @@ class TripRepository(
         )
     }
 
-    private fun toSyncItemDto(trip: TripEntity): TripSyncItemDto {
+    private suspend fun toSyncItemDto(trip: TripEntity): TripSyncItemDto {
         checkNotNull(trip.endAt) { "toSyncItemDto() requires a closed trip (endAt is null), clientUuid=${trip.clientUuid}" }
+        // GPS-blackout audit trail (G3, W1, 2026-09-12) -- read once here rather than kept live in
+        // memory: by close time every segment this trip will ever have is already resolved and
+        // persisted (MeterController.persistBlackout writes the closing row on the same tick a
+        // blackout resolves, well before the driver can reach Close & Pay). Best-effort: a read
+        // failure here must never block a trip from syncing over evidence that is, at worst, one
+        // this app has to reconstruct from the raw gps_trace instead.
+        val blackoutSegments = runCatching { blackoutSegmentDao.forTrip(trip.clientUuid) }.getOrDefault(emptyList())
         return TripSyncItemDto(
             clientUuid = trip.clientUuid,
             vehicleId = trip.vehicleId,
@@ -478,6 +490,28 @@ class TripRepository(
             surchargePct = trip.surchargePct,
             includePsl = trip.includePsl,
             gpsTrace = decodeGpsTrace(trip.gpsTraceJson),
+            // Only ever resolved segments (endedAtIso != null) -- a blackout still open when the
+            // driver pressed END FARE mid-tunnel is a real, if rare, edge case (reacquisition
+            // never comes because the trip closed first); its own billing effect is already fully
+            // reflected in the trip's ordinary totals either way, and the unresolved local row
+            // stays on-device as-is rather than being force-fit into a DTO shape that assumes a
+            // resolution happened.
+            gpsBlackoutSegments = blackoutSegments.mapNotNull { seg ->
+                val endedAt = seg.endedAtIso ?: return@mapNotNull null
+                GpsBlackoutSegmentDto(
+                    clientUuid = seg.clientUuid,
+                    startedAt = seg.startedAtIso,
+                    endedAt = endedAt,
+                    entryLat = seg.entryLat,
+                    entryLng = seg.entryLng,
+                    exitLat = seg.exitLat ?: seg.entryLat,
+                    exitLng = seg.exitLng ?: seg.entryLng,
+                    entryWasMoving = seg.entryWasMoving,
+                    resolution = seg.resolution,
+                    billedDistanceKm = seg.billedDistanceKm,
+                    corridorRoadId = seg.corridorRoadId,
+                )
+            },
             receiptRef = trip.receiptRef,
             deviceTotal = trip.deviceTotal,
             // See TripEntity.tip's doc — a tip is never folded into deviceTotal above (the

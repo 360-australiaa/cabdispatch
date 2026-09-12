@@ -22,6 +22,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -243,7 +244,7 @@ internal fun TripDetailsDialog(
     onDismiss: () -> Unit,
     onConfirm: (passengerCount: Int, isMaxiVehicle: Boolean, wheelchairHiring: Boolean, airportRankRequestedMaxi: Boolean) -> Unit,
 ) {
-    var passengerCount by rememberSaveable { mutableStateOf(1) }
+    var passengerCount by rememberSaveable { mutableIntStateOf(1) }
     var isMaxiVehicle by rememberSaveable { mutableStateOf(initialMaxiVehicle) }
     var wheelchairHiring by rememberSaveable { mutableStateOf(false) }
     var airportRankRequestedMaxi by rememberSaveable { mutableStateOf(false) }

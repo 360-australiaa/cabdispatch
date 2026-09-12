@@ -97,7 +97,7 @@ private const val STAGGER_FADE_MS = 240
  * pointlessly bounce. Only a genuine increment (or any later change) fires it.
  */
 @Composable
-internal fun rememberValueChangePop(value: Any?, peak: Float = 1.18f): Modifier {
+internal fun Modifier.rememberValueChangePop(value: Any?, peak: Float = 1.18f): Modifier {
     // An Animatable, not two assignments to an animateFloatAsState target: a "go to peak, then
     // come back" gesture has to *await* the outward leg before starting the return one. Setting a
     // target twice in a row within the same frame would simply coalesce to the final value and
@@ -115,5 +115,5 @@ internal fun rememberValueChangePop(value: Any?, peak: Float = 1.18f): Modifier 
         scale.animateTo(peak, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh))
         scale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
     }
-    return Modifier.scale(scale.value)
+    return this.scale(scale.value)
 }

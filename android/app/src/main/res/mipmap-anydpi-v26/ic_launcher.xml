@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- monochrome points at the same placeholder "C" glyph as the foreground layer (see
+     drawable/ic_launcher_foreground.xml's own doc: "Placeholder mark ... until real launcher
+     artwork is supplied"). It is already a single flat-filled path, so Android's single-tone
+     monochrome tinting renders it correctly as-is; whoever replaces the placeholder with real
+     brand artwork should supply a purpose-made monochrome layer at the same time. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

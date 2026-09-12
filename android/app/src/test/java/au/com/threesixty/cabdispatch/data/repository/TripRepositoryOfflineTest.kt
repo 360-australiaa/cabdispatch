@@ -1,7 +1,9 @@
 package au.com.threesixty.cabdispatch.data.repository
 
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
@@ -200,8 +202,21 @@ class TripRepositoryOfflineTest {
         throw AssertionError("the offline trip path must not call the network, but called ApiService.${method.name}")
     } as ApiService
 
+    /** No blackout in any of this file's tests -- an empty in-memory fake is enough; nothing here
+     * exercises the GPS-blackout audit trail (see MeterAccuracyTest for that). */
+    private class FakeBlackoutSegmentDao : TripBlackoutSegmentDao {
+        private val rows = mutableMapOf<String, TripBlackoutSegmentEntity>()
+        override suspend fun upsert(segment: TripBlackoutSegmentEntity) {
+            rows[segment.clientUuid] = segment
+        }
+        override suspend fun forTrip(tripClientUuid: String): List<TripBlackoutSegmentEntity> =
+            rows.values.filter { it.tripClientUuid == tripClientUuid }.sortedBy { it.startedAtIso }
+        override suspend fun openSegmentFor(tripClientUuid: String): TripBlackoutSegmentEntity? =
+            rows.values.firstOrNull { it.tripClientUuid == tripClientUuid && it.endedAtIso == null }
+    }
+
     private fun repository(tripDao: TripDao, outboxDao: SyncOutboxDao) =
-        TripRepository(tripDao, outboxDao, neverCalledApi())
+        TripRepository(tripDao, outboxDao, neverCalledApi(), FakeBlackoutSegmentDao())
 
     private suspend fun openATrip(repo: TripRepository, clientUuid: String = "trip-1"): TripEntity =
         repo.openTrip(
@@ -432,9 +447,15 @@ class TripRepositoryOfflineTest {
     }
 }
 
+// A single shared instance, not one per call (W0, 2026-09-12): kotlinx.serialization's own
+// compiler warning flags a fresh `Json { ... }` per invocation as needless setup cost, and this
+// function has exactly one caller-visible configuration, so there is nothing that could vary
+// between calls to justify rebuilding it each time.
+private val traceDecodeJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
 /** Decodes a stored trace for assertion purposes — the repository's own encoding, read back. */
 private fun TripRepository.decodeTraceForTest(json: String): List<TelemetryPointDto> =
-    kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString(
+    traceDecodeJson.decodeFromString(
         kotlinx.serialization.builtins.ListSerializer(TelemetryPointDto.serializer()),
         json,
     )

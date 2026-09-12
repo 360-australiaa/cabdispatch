@@ -16,6 +16,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,8 +57,15 @@ fun ShiftStartScreen(navController: NavHostController) {
     // whole job is to confirm what the driver is about to work under. Now: the region the
     // resolver actually picks from the current fix, and the cached signed tariff for it, or an
     // honest "none yet" when there is none.
-    val hasFix = AppContainer.speedSource.locationFix.value != null
-    val region = remember { RegionResolver.resolve(AppContainer.speedSource.locationFix.value) }
+    // Collected once, lifecycle-aware (StateFlowValueCalledInComposition lint) -- the previous
+    // two separate `.value` reads were each a raw StateFlow snapshot outside Compose's
+    // recomposition tracking, and the `remember { }` below had no key at all, so a fix arriving
+    // after this screen's first composition (a real case: a driver reaching Shift Start before
+    // GPS has locked) never updated the region shown, only whatever "none yet"/wrong-region
+    // guess existed at that first frame.
+    val locationFix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
+    val hasFix = locationFix != null
+    val region = remember(locationFix) { RegionResolver.resolve(locationFix) }
     val tariff by remember(region) { AppContainer.tariffCache.observeActiveTariff(region) }.collectAsState(initial = null)
 
     Box(modifier = Modifier.fillMaxSize().background(CaptainPalette.bg)) {

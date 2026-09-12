@@ -72,12 +72,20 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
             ?.sorted()
             ?.mapNotNull { SimulatedRoutes.throughTollRoad(registry, it) }
             .orEmpty()
+        // GPS blackout routes (W1, 2026-09-12): laneCoveTunnelBlackout needs the same synced
+        // registry the toll routes above do (real LCT gantries), so it is built here alongside
+        // them and is simply absent -- not faked -- on a tablet that has never synced. carPark
+        // needs no registry at all.
+        val blackoutRoutes = listOfNotNull(
+            registry?.let { SimulatedRoutes.laneCoveTunnelBlackout(it) },
+            SimulatedRoutes.carParkBlackout(),
+        )
         routes = listOf(
             SimulatedRoutes.bandSweep(),
             SimulatedRoutes.plainDrive(),
             SimulatedRoutes.stopAndGo(),
             SimulatedRoutes.airportPickupToCbd(),
-        ) + tollRoutes
+        ) + blackoutRoutes + tollRoutes
     }
 
     Column(modifier = modifier) {

@@ -408,6 +408,7 @@ private fun EarningsTrendCard(trend: List<DailyEarnings>, modifier: Modifier = M
  * per the SM-T575 frame budget), then a crisp `hudSweep`-gradient stroke on top. The newest point
  * breathes so the eye lands on "today" first.
  */
+@Suppress("DEPRECATION")
 @Composable
 private fun EarningsTrendChart(trend: List<DailyEarnings>, modifier: Modifier = Modifier) {
     val maxTotal = trend.maxOf { it.total }.let { if (it.signum() == 0) BigDecimal.ONE else it }.toFloat()

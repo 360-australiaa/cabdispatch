@@ -7,6 +7,7 @@ import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
 import au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm
 import au.com.threesixty.cabdispatch.domain.fare.onFix
+import au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,8 @@ import java.math.RoundingMode
 import au.com.threesixty.cabdispatch.domain.fare.AreaClass
 import au.com.threesixty.cabdispatch.domain.fare.NSW_FARE_ZONE
 import java.time.DayOfWeek
+import java.time.Instant
+import java.util.UUID
 import kotlin.math.roundToInt
 import java.time.ZonedDateTime
 import au.com.threesixty.cabdispatch.domain.fare.FareEngine as CalcFareEngine
@@ -86,7 +89,21 @@ data class LocationFix(
      * keeps compiling and gets an honest answer -- while letting a test pin an explicit age.
      */
     val receivedAtNanos: Long = System.nanoTime(),
-)
+) {
+    companion object {
+        /**
+         * How old a fix may be before it is no longer trusted -- the ONE definition, shared by
+         * [au.com.threesixty.cabdispatch.domain.FareEngineImpl.tick]'s billing decision (F3) and
+         * [GpsQualityClassifier]'s UI-facing quality tier (G2, GPS blackout program, 2026-09-12),
+         * so a driver watching the GPS status dot and the fare engine deciding whether to bill
+         * distance are never looking at two different clocks. Previously duplicated as a private
+         * constant on `FareEngineImpl` alone; moved here once a second, independent consumer
+         * needed the identical figure for the identical reason -- see this field's own
+         * [receivedAtNanos] doc for why it is measured on a monotonic clock, not wall time.
+         */
+        const val MAX_FIX_AGE_MS = 5_000L
+    }
+}
 
 /**
  * Live GPS speed feed the fare engine ticks against — see spec B6 tick loop
@@ -247,8 +264,14 @@ interface FareEngine {
      * Re-enters a trip that is already under way, from a state rebuilt off the persisted trip row --
      * the process-restart path. See [FareEngineImpl.resumeTrip]'s doc for the full reasoning; on
      * this interface it exists so [au.com.threesixty.cabdispatch.domain.MeterController] can drive
-     * restoration without depending on the implementation type.
+     * restoration without depending on the implementation type. Seven parameters -- one over
+     * this codebase's usual threshold, and a deliberate exception rather than a parameter-object
+     * refactor: each one is a distinct, independently-optional piece of restored trip state (see
+     * [FareEngineImpl.resumeTrip]'s own doc for [openBlackoutSegment] specifically), and bundling
+     * them would touch every call site for no real clarity gain on a function with exactly one
+     * production caller ([au.com.threesixty.cabdispatch.domain.MeterController.restoreOpenTripIfAny]).
      */
+    @Suppress("LongParameterList")
     fun resumeTrip(
         tariff: TariffDto,
         restored: au.com.threesixty.cabdispatch.domain.fare.FareState,
@@ -256,6 +279,11 @@ interface FareEngine {
         waitingSeconds: Int,
         tollsApplied: List<TollPreset> = emptyList(),
         autoTollsApplied: List<AutoTollEntry> = emptyList(),
+        /** A blackout segment still open (no `endedAtIso`) when the process died, if any -- see
+         * [FareEngineImpl.resumeTrip]'s own doc for how this re-seeds the pending known-corridor
+         * catch-up (G3/G6, GPS blackout program, W1, 2026-09-12). `null` (the default) for the
+         * ordinary case, and for every pre-existing call site that never named this. */
+        openBlackoutSegment: au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity? = null,
     )
 
     fun pause()
@@ -400,6 +428,23 @@ class FareEngineImpl(
      * section) with no separate wiring needed here.
      */
     private val knownCorridorDistanceLookup: KnownCorridorDistanceLookup = KnownCorridorDistanceLookup.NONE,
+    /**
+     * The wall clock [resolveTimeClass]/[resolveIsPeak] read the current Sydney instant from, at
+     * the single moment a trip commences (both are read once in [openTrip]/[restoreOpenTrip], per
+     * the Fares Order's own "fixed at commencement" rule — see [TimeClass]'s doc — never re-read
+     * mid-trip). Defaulted to the real [ZonedDateTime.now] against [NSW_FARE_ZONE], so every
+     * pre-existing call site keeps behaving exactly as in production.
+     *
+     * A seam for the same reason [nanoTimeSource] is one, and a real, not hypothetical, bug it
+     * fixes (W0, 2026-09-12): every test in this file that opens a trip without pinning this
+     * clock is at the mercy of whatever the real Sydney instant happens to be when the test suite
+     * runs — a run landing inside the real Peak Time Hiring window (10pm-6am Fri/Sat/pre-holiday)
+     * silently added the peak surcharge to trips six tests expected to be plain DAY fares,
+     * exactly the flakiness the program plan's P0.2 ("pin every peak/night/holiday test to
+     * explicit Sydney instants") calls out. Tests now pass a fixed instant; production passes
+     * nothing and gets the real clock, unchanged.
+     */
+    private val wallClockNow: () -> ZonedDateTime = { ZonedDateTime.now(NSW_FARE_ZONE) },
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -491,6 +536,20 @@ class FareEngineImpl(
     private var blackoutEntryWasMoving: Boolean = false
 
     /**
+     * Identity + wall-clock start time of the CURRENT blackout, minted once alongside
+     * [blackoutEntryFix] — the audit-trail half of the blackout program (G3, W1, 2026-09-12; see
+     * [au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity]'s own doc for
+     * what this ultimately becomes on disk). `null` exactly when [blackoutEntryFix] is `null`
+     * (no blackout in progress); the two are always set and cleared together.
+     *
+     * A fresh random id per blackout, not derived from [blackoutStartedAtIso] or the entry fix: two
+     * blackouts starting in the same wall-clock second (a flaky signal bouncing lost/found) must
+     * never collide on the same persisted row.
+     */
+    private var blackoutSegmentId: String? = null
+    private var blackoutStartedAtIso: String? = null
+
+    /**
      * Fractional-second accumulators behind [FareState.movingSeconds]/[FareState.waitingSeconds].
      *
      * Those two are `Int` because [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
@@ -540,6 +599,8 @@ class FareEngineImpl(
         lastKnownSpeedKmh = 0.0
         blackoutEntryFix = null
         blackoutEntryWasMoving = false
+        blackoutSegmentId = null
+        blackoutStartedAtIso = null
         autoTollAlertSeq = 0L
         tollDetectionState.reset()
 
@@ -641,6 +702,7 @@ class FareEngineImpl(
      * charged: the meter cannot attest to travel it did not observe, and a passenger must never be
      * billed for a gap in our own record-keeping.
      */
+    @Suppress("LongParameterList")
     override fun resumeTrip(
         tariff: TariffDto,
         restored: CalcFareState,
@@ -648,6 +710,7 @@ class FareEngineImpl(
         waitingSeconds: Int,
         tollsApplied: List<TollPreset>,
         autoTollsApplied: List<AutoTollEntry>,
+        openBlackoutSegment: au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity?,
     ) {
         this.tariff = tariff
         calcState = restored
@@ -660,8 +723,7 @@ class FareEngineImpl(
         waitingSecondsAccum = waitingSeconds.toDouble()
         lastTickFix = null
         lastKnownSpeedKmh = 0.0
-        blackoutEntryFix = null
-        blackoutEntryWasMoving = false
+        reseedBlackoutState(openBlackoutSegment)
         autoTollAlertSeq = 0L
         // Deliberately NOT repopulated from the persisted per-road audit trail: [TollDetectionState]
         // is in-memory dedup bookkeeping, and seeding it would require reconstructing gantry
@@ -711,6 +773,39 @@ class FareEngineImpl(
         )
         scope.launch { tollRegistry = runCatching { tollRegistryProvider.snapshot() }.getOrNull() }
         startTicking()
+    }
+
+    /**
+     * G6 (GPS blackout program, W1, 2026-09-12): if a blackout was still open when the process
+     * died, re-seeds the SAME tracking fields [tick] would have populated on the tick that first
+     * declared it -- without this, a process killed mid-tunnel silently forgets the pending
+     * known-corridor catch-up, and the driver is under-billed for a real crossing that was already
+     * three-quarters of the way to being correctly charged. Nulled out (rather than left as a
+     * stale open row) the moment GPS reacquires, same as [tick]'s own resolving branch -- this
+     * restore path never itself resolves a blackout, only re-arms [tick] to do so on the next real
+     * reacquisition. Extracted out of [resumeTrip] purely to keep that function's own length
+     * within this codebase's complexity budget.
+     */
+    private fun reseedBlackoutState(
+        openSegment: au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity?,
+    ) {
+        if (openSegment == null) {
+            blackoutEntryFix = null
+            blackoutEntryWasMoving = false
+            blackoutSegmentId = null
+            blackoutStartedAtIso = null
+            return
+        }
+        blackoutEntryFix = LocationFix(
+            lat = openSegment.entryLat,
+            lng = openSegment.entryLng,
+            speedKmh = 0.0,
+            accuracyM = 0f,
+            timestampMillis = 0L,
+        )
+        blackoutEntryWasMoving = openSegment.entryWasMoving
+        blackoutSegmentId = openSegment.clientUuid
+        blackoutStartedAtIso = openSegment.startedAtIso
     }
 
     override fun updatePassengerCount(count: Int) {
@@ -975,29 +1070,26 @@ class FareEngineImpl(
         // signal dropped has been billing WAITING time throughout it already (the branch immediately
         // below); adding a corridor's known distance on top of that would double-bill the same
         // minutes, once as waiting and once as distance.
-        if (gpsLost) {
+        val resolvedBlackout: ResolvedBlackout? = if (gpsLost) {
             if (blackoutEntryFix == null) {
                 blackoutEntryFix = previousFix
                 blackoutEntryWasMoving = !wasStationaryWhenLost
+                // Audit-trail identity for this blackout (G3, W1, 2026-09-12) -- minted here, the
+                // exact same instant the billing-relevant entry fix/speed are captured, so a
+                // process death one tick later still has both halves of the story consistent.
+                blackoutSegmentId = UUID.randomUUID().toString()
+                blackoutStartedAtIso = Instant.now().toString()
             }
+            null
         } else if (blackoutEntryFix != null) {
-            val entryFix = blackoutEntryFix
-            if (blackoutEntryWasMoving && entryFix != null && fix != null) {
-                val knownKm = knownCorridorDistanceLookup.knownDistanceKm(entryFix.lat, entryFix.lng, fix.lat, fix.lng)
-                    ?: tollRegistry?.let { registry ->
-                        knownCorridorDistanceKm(registry, entryFix.lat, entryFix.lng, fix.lat, fix.lng)
-                    }
-                if (knownKm != null && knownKm.signum() > 0) {
-                    calcEngine.tick(
-                        cs,
-                        speedKmh = threshold + 1.0,
-                        distanceDeltaKm = knownKm,
-                        elapsedSeconds = BigDecimal.ZERO,
-                    )
-                }
+            resolveBlackout(cs, fix, threshold).also {
+                blackoutEntryFix = null
+                blackoutEntryWasMoving = false
+                blackoutSegmentId = null
+                blackoutStartedAtIso = null
             }
-            blackoutEntryFix = null
-            blackoutEntryWasMoving = false
+        } else {
+            null
         }
 
         // --- F2: distance from real positions, not integrated speed --------------------------
@@ -1044,6 +1136,25 @@ class FareEngineImpl(
             if (mode == AccrualMode.DISTANCE) movingSecondsAccum += dtSeconds else waitingSecondsAccum += dtSeconds
         }
 
+        // The engine's own view of "is a blackout in progress" -- always in sync with `gpsLost`
+        // since [blackoutSegmentId] is minted/cleared in the exact same branches that set it (G3,
+        // W1, 2026-09-12). `entryFix`/`entryWasMoving` snapshot the tracking fields directly
+        // rather than re-deriving anything, so this can never disagree with the billing decision
+        // those same fields just drove above.
+        val activeBlackout = blackoutEntryFix?.let { entry ->
+            blackoutSegmentId?.let { id ->
+                blackoutStartedAtIso?.let { startedAt ->
+                    ActiveBlackout(
+                        segmentId = id,
+                        startedAtIso = startedAt,
+                        entryLat = entry.lat,
+                        entryLng = entry.lng,
+                        entryWasMoving = blackoutEntryWasMoving,
+                    )
+                }
+            }
+        }
+
         _state.value = current.copy(
             mode = mode,
             band = band,
@@ -1055,6 +1166,11 @@ class FareEngineImpl(
             movingSeconds = movingSecondsAccum.roundToInt(),
             waitingSeconds = waitingSecondsAccum.roundToInt(),
             gpsLost = gpsLost,
+            blackout = activeBlackout,
+            // Never reset to null once set -- same "key off id, not nullness" contract as
+            // [FareState.lastAutoTollAlert] (see that field's own doc); a `resolvedBlackout` of
+            // `null` on THIS tick means nothing resolved just now, not "forget the last one".
+            lastResolvedBlackout = resolvedBlackout ?: current.lastResolvedBlackout,
             breakdown = current.breakdown.copy(
                 distanceAmount = cs.accruedDistanceCharge,
                 waitingAmount = cs.accruedWaitingCharge,
@@ -1062,6 +1178,99 @@ class FareEngineImpl(
             runningTotal = runningTotal(cs),
         )
     }
+
+    /**
+     * Resolves the blackout [tick] just reacquired GPS from -- the closing half of the audit trail
+     * (G3, W1, 2026-09-12), extracted out of [tick] itself purely to keep that already-dense
+     * function's own nesting/length within this codebase's complexity budget; the billing logic
+     * and its comments are otherwise unchanged from where they used to sit inline. Reads
+     * [blackoutEntryFix]/[blackoutEntryWasMoving]/[blackoutSegmentId]/[blackoutStartedAtIso]
+     * (still valid at the moment of the call -- the caller clears them immediately after), never
+     * mutates them itself.
+     *
+     * Two things happen here, on opposite ends of one blackout that this specific call only ever
+     * handles the closing half of -- see [tick]'s own remaining "Known-corridor blackout catch-up"
+     * doc for the FIRST-tick-of-a-blackout half, which stays inline (it is a two-line assignment,
+     * not worth its own function).
+     */
+    // ReturnCount: four guard-clause early returns (each answering "is there enough restored
+    // context to resolve this blackout at all") plus the one real result -- kept as guard clauses
+    // deliberately, matching this file's own established style (see GpsQualityClassifier.classify
+    // and SimulatedRoutes.laneCoveTunnelBlackout for the same accepted pattern) rather than a
+    // nested-if pyramid that would trade this finding for NestedBlockDepth instead.
+    @Suppress("ReturnCount")
+    private fun resolveBlackout(cs: CalcFareState, fix: LocationFix?, threshold: Double): ResolvedBlackout? {
+        val entryFix = blackoutEntryFix ?: return null
+        val segmentId = blackoutSegmentId ?: return null
+        val startedAtIso = blackoutStartedAtIso ?: return null
+        val exitFix = fix ?: return null
+
+        var billedKm = BigDecimal.ZERO
+        var corridorRoadId: String? = null
+        var resolution = BlackoutResolution.STATIONARY
+        if (blackoutEntryWasMoving) {
+            val knownKm = knownCorridorDistanceLookup.knownDistanceKm(
+                entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng,
+            )
+                ?: tollRegistry?.let { registry ->
+                    knownCorridorDistanceKm(registry, entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng)
+                }
+            if (knownKm != null && knownKm.signum() > 0) {
+                calcEngine.tick(
+                    cs,
+                    speedKmh = threshold + 1.0,
+                    distanceDeltaKm = knownKm,
+                    elapsedSeconds = BigDecimal.ZERO,
+                )
+                billedKm = knownKm
+                resolution = BlackoutResolution.CORRIDOR
+                corridorRoadId = nearestGantryRoadId(entryFix, exitFix)
+            } else {
+                resolution = BlackoutResolution.NONE
+            }
+        }
+        return ResolvedBlackout(
+            segmentId = segmentId,
+            startedAtIso = startedAtIso,
+            endedAtIso = Instant.now().toString(),
+            entryLat = entryFix.lat,
+            entryLng = entryFix.lng,
+            entryWasMoving = blackoutEntryWasMoving,
+            exitLat = exitFix.lat,
+            exitLng = exitFix.lng,
+            resolution = resolution.name,
+            billedDistanceKm = billedKm,
+            corridorRoadId = corridorRoadId,
+        )
+    }
+
+    /**
+     * Cosmetic label only ("which road did this bill against") for a resolved CORRIDOR blackout
+     * -- see [CORRIDOR_ROAD_ID_MATCH_RADIUS_KM]'s own doc for why this can never itself change
+     * what was billed, only how it is described.
+     */
+    private fun nearestGantryRoadId(entryFix: LocationFix, exitFix: LocationFix): String? {
+        val registry = tollRegistry ?: return null
+        return registry.gantries
+            .filter { g -> gantryNearEitherFix(g, entryFix, exitFix) }
+            .minByOrNull { g -> nearestFixDistanceKm(g, entryFix, exitFix) }
+            ?.tollRoadId
+    }
+
+    private fun gantryNearEitherFix(
+        gantry: au.com.threesixty.cabdispatch.domain.fare.TollGantryRef,
+        entryFix: LocationFix,
+        exitFix: LocationFix,
+    ): Boolean = nearestFixDistanceKm(gantry, entryFix, exitFix) <= CORRIDOR_ROAD_ID_MATCH_RADIUS_KM
+
+    private fun nearestFixDistanceKm(
+        gantry: au.com.threesixty.cabdispatch.domain.fare.TollGantryRef,
+        entryFix: LocationFix,
+        exitFix: LocationFix,
+    ): Double = minOf(
+        GeoMath.distanceKm(entryFix.lat, entryFix.lng, gantry.latitude, gantry.longitude),
+        GeoMath.distanceKm(exitFix.lat, exitFix.lng, gantry.latitude, gantry.longitude),
+    )
 
     /**
      * The one authoritative "what does the passenger owe right now" figure -- F8. Delegates
@@ -1109,7 +1318,13 @@ class FareEngineImpl(
             lat = fix.lat,
             lng = fix.lng,
             // NSW local: SHB/SHT's time-of-day bands are Sydney wall clock (see shbShtBand).
-            ts = ZonedDateTime.now(NSW_FARE_ZONE),
+            // wallClockNow(), not a fresh ZonedDateTime.now() (W0, 2026-09-12): same testability
+            // seam resolveTimeClass/resolveIsPeak use -- unlike those, this one legitimately reads
+            // the clock fresh every tick rather than once at commencement (a toll's time-of-day
+            // band is decided at the moment of crossing, not frozen from trip start), but it still
+            // needs to be the SAME pinnable clock a test controls, not a second, independent
+            // `ZonedDateTime.now()` call a test has no way to freeze.
+            ts = wallClockNow(),
             cumulativeDistanceKm = cs.cumulativeDistanceKm,
         )
         if (result.isEmpty) return
@@ -1214,11 +1429,11 @@ class FareEngineImpl(
      * sync.
      */
     private fun resolveTimeClass(area: AreaClass): TimeClass =
-        resolveTimeClassFor(ZonedDateTime.now(NSW_FARE_ZONE), area)
+        resolveTimeClassFor(wallClockNow(), area)
 
     /** Peak Time Hiring Charge: urban, hiring commences 10pm-6am Fri/Sat/pre-holiday (spec B6) —
      * see [resolveIsPeakFor]'s doc for the actual rule. */
-    private fun resolveIsPeak(): Boolean = resolveIsPeakFor(ZonedDateTime.now(NSW_FARE_ZONE))
+    private fun resolveIsPeak(): Boolean = resolveIsPeakFor(wallClockNow())
 
     companion object {
         /** Nominal loop cadence. The meter no longer *bills* this figure -- see [tick]'s F1 note --
@@ -1254,6 +1469,18 @@ class FareEngineImpl(
          * acceleration within a tick unclipped while making a fabricated kilometre impossible.
          */
         private const val MAX_DISTANCE_OVERSHOOT_FACTOR = 1.5
+
+        /**
+         * How close either end of a resolved-CORRIDOR blackout must sit to a road's own gantry for
+         * [ResolvedBlackout.corridorRoadId] to name that road (G3, W1, 2026-09-12) -- purely a
+         * cosmetic/audit-trail label ("which road did this bill against"), never itself a billing
+         * decision: [knownCorridorDistanceLookup] already independently decided a corridor
+         * matched and what distance to bill before this constant is ever consulted. Matches
+         * [au.com.threesixty.cabdispatch.domain.fare.CORRIDOR_PORTAL_MATCH_RADIUS_M]'s own 250m
+         * portal radius (see that constant's doc) so this label always agrees with the match that
+         * actually fired, converted to km for [GeoMath.distanceKm]'s own unit.
+         */
+        private const val CORRIDOR_ROAD_ID_MATCH_RADIUS_KM = 0.25
 
         private const val NANOS_PER_SECOND = 1_000_000_000.0
         private const val NANOS_PER_MILLI = 1_000_000L

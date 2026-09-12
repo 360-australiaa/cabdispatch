@@ -101,15 +101,42 @@ data class SimulatedRoute(
     /** When set, the speed varies over time and [speedKmh] is only the headline figure shown in
      * the picker. Null — every existing route — keeps the constant-speed path exactly as it was. */
     val speedProfile: SpeedProfile? = null,
+    /**
+     * Windows of elapsed-seconds, relative to route start, during which [GpsSimulator] emits NO
+     * fixes at all -- a real GPS blackout (tunnel, underground car park), not a stationary or
+     * zero-speed fix. Empty for every route that existed before this field (2026-09-12, GPS
+     * blackout program W1): a route with no blackout window behaves exactly as it always did.
+     *
+     * Deliberately absence-of-fixes, not a fabricated "zero fix" or "frozen fix": that is the one
+     * thing that actually exercises [au.com.threesixty.cabdispatch.domain.FareEngineImpl.tick]'s
+     * real staleness path ([au.com.threesixty.cabdispatch.domain.FareEngineImpl]'s `gpsLost`,
+     * keyed on [au.com.threesixty.cabdispatch.domain.LocationFix.receivedAtNanos] aging past
+     * `MAX_FIX_AGE_MS`) the same way a real tunnel does -- see [isBlackoutAt]'s own doc for how
+     * [GpsSimulator] uses this.
+     */
+    val blackoutWindows: List<ClosedFloatingPointRange<Double>> = emptyList(),
 ) {
     init {
         require(waypoints.size >= 2) { "a route needs at least two waypoints, got ${waypoints.size}" }
         require(speedKmh > 0) { "speedKmh must be positive, got $speedKmh" }
+        blackoutWindows.forEach {
+            require(it.start >= 0.0) { "a blackout window cannot start before route start: $it" }
+            require(it.start < it.endInclusive) { "a blackout window must have positive duration: $it" }
+        }
     }
 
     /** Speed at [elapsedSeconds] — the profile's, or the constant. */
     fun speedAt(elapsedSeconds: Double): Double =
         speedProfile?.speedAt(elapsedSeconds) ?: speedKmh
+
+    /**
+     * True when [elapsedSeconds] falls inside one of [blackoutWindows] -- [GpsSimulator] reads
+     * this every tick and, while true, skips publishing a fix/speed update entirely (see that
+     * class's own doc), leaving its `StateFlow`s exactly as a real fused-location provider leaves
+     * them mid-tunnel: frozen at the last accepted value, aging toward
+     * [au.com.threesixty.cabdispatch.domain.FareEngineImpl]'s `MAX_FIX_AGE_MS` staleness cutoff.
+     */
+    fun isBlackoutAt(elapsedSeconds: Double): Boolean = blackoutWindows.any { elapsedSeconds in it }
 
     /** Total ground distance, metres. */
     val lengthM: Double
@@ -399,5 +426,117 @@ object SimulatedRoutes {
             LatLng(-33.8612, 151.2108), // Circular Quay
         ),
         speedKmh = speedKmh,
+    )
+
+    /**
+     * A real GPS blackout through the Lane Cove Tunnel -- built from the device's own cached toll
+     * registry, the same "read real data, don't invent coordinates" discipline [throughTollRoad]
+     * documents (GPS blackout program, W1, 2026-09-12; see the optimisation plan doc's §1.2 "G1").
+     *
+     * The registry's own LCT gantries cluster in two groups ~7km apart -- "Falcon St
+     * North/South" (the Lane Cove/eastern portal) and "east"/"west" (the M2/western portal,
+     * despite the confusing names -- see `nsw_toll_gantries.csv`'s own `location` column, which
+     * this reads by substring rather than hardcoding lat/lng, so a registry re-seed with corrected
+     * coordinates flows through automatically). That real ~7km, ~90 km/h separation is exactly
+     * what a tunnel-length blackout needs to be genuine rather than illustrative: this is not a
+     * contrived "blackout for N seconds" timer, it is "the vehicle cannot be seen for as long as
+     * it actually takes to drive between these two real, cached points" -- around 4.5 minutes,
+     * comfortably exercising [au.com.threesixty.cabdispatch.domain.FareEngineImpl]'s
+     * `MAX_TICK_SECONDS` clamp on reacquisition the way a short contrived gap would not.
+     *
+     * The blackout window opens [BLACKOUT_MARGIN_S] after leaving the east portal (so the fare
+     * engine has a moving, GPS-confirmed baseline before signal drops -- see
+     * [au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm]'s own doc for why the
+     * corridor match needs a genuine "was moving" entry) and closes the same margin before the
+     * west portal, leaving a live approach on both ends for reacquisition to actually reacquire.
+     *
+     * Returns null when the registry has no LCT gantries at all -- honest "cannot build this
+     * route" rather than a fabricated tunnel, matching [throughTollRoad]'s own convention.
+     */
+    fun laneCoveTunnelBlackout(
+        registry: TollRegistrySnapshot,
+        speedKmh: Double = 90.0,
+    ): SimulatedRoute? {
+        val gantries = registry.gantries.filter { it.tollRoadId == "LCT" }
+        if (gantries.size < 2) return null
+
+        // The two portal clusters, deduplicated by coordinate (the registry carries literal
+        // duplicate points for some gantries -- e.g. two rows at the exact same "Falcon St North"
+        // coordinate -- which would otherwise contribute a zero-length leg to the drive).
+        fun clusterCentroid(matchesEast: Boolean): LatLng? {
+            val cluster = gantries.filter { g ->
+                val eastPortal = g.id.contains("falcon_st", ignoreCase = true)
+                eastPortal == matchesEast
+            }
+            if (cluster.isEmpty()) return null
+            return LatLng(cluster.map { it.latitude }.average(), cluster.map { it.longitude }.average())
+        }
+
+        val eastPortal = clusterCentroid(matchesEast = true) ?: return null
+        val westPortal = clusterCentroid(matchesEast = false) ?: return null
+
+        val leadIn = leadInBefore(listOf(eastPortal, westPortal))
+        val waypoints = listOf(leadIn, eastPortal, westPortal)
+        val route = SimulatedRoute(
+            id = "blackout:lane_cove_tunnel",
+            name = "GPS blackout — Lane Cove Tunnel",
+            description = "A real tunnel run through the cached Lane Cove Tunnel gantries: GPS " +
+                "drops entirely for the ~7km underground crossing and returns at the far portal. " +
+                "Confirms no distance accrues during the gap and the known-corridor catch-up " +
+                "bills the real tunnel length once on reacquisition.",
+            waypoints = waypoints,
+            speedKmh = speedKmh,
+        )
+
+        val leadInDurationS = haversineM(leadIn, eastPortal) / (speedKmh / 3.6)
+        val tunnelDurationS = haversineM(eastPortal, westPortal) / (speedKmh / 3.6)
+        val blackoutStartS = leadInDurationS + BLACKOUT_MARGIN_S
+        val blackoutEndS = leadInDurationS + tunnelDurationS - BLACKOUT_MARGIN_S
+        require(blackoutStartS < blackoutEndS) {
+            "LCT portal separation too short for a $BLACKOUT_MARGIN_S s margin on both ends " +
+                "at $speedKmh km/h -- widen the margin down or drive it faster"
+        }
+
+        return route.copy(blackoutWindows = listOf(blackoutStartS..blackoutEndS))
+    }
+
+    /** Seconds of live GPS kept on each side of a blackout window, for a moving baseline before
+     * loss and a real reacquisition after -- see [laneCoveTunnelBlackout]'s own doc. */
+    private const val BLACKOUT_MARGIN_S = 6.0
+
+    /**
+     * A GPS blackout while the vehicle is genuinely stationary -- an underground car park, not a
+     * moving tunnel crossing (GPS blackout program, W1, 2026-09-12; see the optimisation plan
+     * doc's §1.2 "G1"). Exercises the OTHER half of [au.com.threesixty.cabdispatch.domain
+     * .FareEngineImpl.tick]'s F3 rule: a blackout that begins while the vehicle is already below
+     * the tariff's speed threshold must keep billing WAITING time throughout the gap, never
+     * distance and never nothing -- the mirror image of [laneCoveTunnelBlackout]'s moving case.
+     *
+     * Synthetic coordinates (a driveway short enough that no real toll gantry is anywhere near
+     * it), not registry-built: this route needs no real toll data, only "drive a short distance,
+     * stop, lose signal for two minutes while stopped, regain it".
+     */
+    fun carParkBlackout(): SimulatedRoute = SimulatedRoute(
+        id = "blackout:car_park",
+        name = "GPS blackout — underground car park",
+        description = "Drives into a car park, stops, and GPS drops for 2 minutes while parked. " +
+            "Confirms waiting time keeps accruing through the gap and no distance is invented.",
+        waypoints = listOf(
+            LatLng(-33.8900, 151.3200),
+            LatLng(-33.8903, 151.3204),
+        ),
+        speedKmh = 15.0,
+        speedProfile = SpeedProfile(
+            listOf(
+                SpeedProfile.Segment(20.0, 15.0, 15.0), // drive in
+                SpeedProfile.Segment(10.0, 15.0, 0.0),  // slow to a stop
+                SpeedProfile.Segment(150.0, 0.0, 0.0),  // parked -- the blackout window sits here
+                SpeedProfile.Segment(10.0, 0.0, 15.0),  // drive off
+                SpeedProfile.Segment(20.0, 15.0, 15.0),
+            ),
+        ),
+        // Opens 10s into the stationary segment (a confirmed-stopped baseline first) and closes
+        // 10s before the drive-off resumes (a live reacquisition before motion, not mid-jump).
+        blackoutWindows = listOf(40.0..170.0),
     )
 }

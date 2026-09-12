@@ -128,7 +128,12 @@ private fun LocateOutcome.toScreenState(): LocateResponseState = when (this) {
  * Flip this to `true` to restore the PIN gate — the whole PIN path is intact and untouched — or
  * delete the simulator outright, which is the stated end state. One line either way, on purpose.
  */
-const val SIMULATOR_REQUIRES_ADMIN_PIN = false
+// Flipped 2026-09-12 (GPS blackout program, W1, N1/G5): every tablet now used in this program is
+// carrying the two new real blackout simulator routes (laneCoveTunnelBlackout, carParkBlackout)
+// specifically to prove the meter's own blackout billing, which makes the gate's own "field-test
+// unit under the owner's own eye" exemption moot -- these ARE the runs a real fleet's own testing
+// would need too. The PIN path stays exactly as it was; only this constant moved.
+const val SIMULATOR_REQUIRES_ADMIN_PIN = true
 
 /** Whether the simulator panel starts visible. Inverse of [SIMULATOR_REQUIRES_ADMIN_PIN]. */
 const val SIMULATOR_OPEN_TO_ALL = !SIMULATOR_REQUIRES_ADMIN_PIN
@@ -290,8 +295,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         // via GpsQualityClassifier — see that object's own doc. Behavior-preserving: granted==true
         // here always (the early-return above already handled the false case), fix?.accuracy null
         // maps to NO_FIX exactly as the old inline `if (fix == null)` branch did.
+        //
+        // fixAgeMs (G2, GPS blackout program, 2026-09-12): this screen reads straight from
+        // LocationManager, not AppContainer.speedSource, so there is no LocationFix.receivedAtNanos
+        // (monotonic) to read here — only Location.getTime(), a wall-clock timestamp. Wall-clock
+        // age can be wrong if the tablet's clock is corrected mid-read, but that is a rare glitch
+        // on a settings diagnostics screen, not a fare-affecting decision (contrast
+        // WheelDashboardViewModel.pollStatus, which reads the real monotonic age because its
+        // GPS dot sits on the same live status strip the fare engine's own dial does). Approximate
+        // is the right tradeoff here, not wrong to use at all.
+        val fixAgeMs = fix?.let { (System.currentTimeMillis() - it.time).coerceAtLeast(0L) }
         _uiState.update {
-            it.copy(gpsQuality = GpsQualityClassifier.classify(granted, fix?.accuracy), gpsAccuracyM = fix?.accuracy)
+            it.copy(
+                gpsQuality = GpsQualityClassifier.classify(granted, fix?.accuracy, fixAgeMs),
+                gpsAccuracyM = fix?.accuracy,
+            )
         }
     }
 
