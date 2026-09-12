@@ -1,0 +1,1090 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 15,
+    "identityHash": "beb95d1a81feabde01aae4c5a3f14b7a",
+    "entities": [
+      {
+        "tableName": "trips",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientUuid` TEXT NOT NULL, `serverId` TEXT, `vehicleId` TEXT NOT NULL, `driverId` TEXT NOT NULL, `shiftId` TEXT, `tariffId` TEXT NOT NULL, `type` TEXT NOT NULL, `simulated` INTEGER NOT NULL, `status` TEXT NOT NULL, `timeClass` TEXT NOT NULL, `isPeak` INTEGER NOT NULL, `maxi` INTEGER NOT NULL, `passengerCount` INTEGER NOT NULL, `wheelchairHiring` INTEGER NOT NULL, `airportRankRequestedMaxi` INTEGER NOT NULL, `startAt` TEXT NOT NULL, `endAt` TEXT, `startLat` REAL NOT NULL, `startLng` REAL NOT NULL, `endLat` REAL, `endLng` REAL, `distanceM` INTEGER NOT NULL, `movingS` INTEGER NOT NULL, `waitingS` INTEGER NOT NULL, `paymentMethod` TEXT NOT NULL, `tolls` TEXT NOT NULL, `extras` TEXT NOT NULL, `cleaningFee` TEXT NOT NULL, `surchargePct` TEXT, `includePsl` INTEGER NOT NULL, `receiptRef` TEXT, `voucherCode` TEXT, `accountReference` TEXT, `splitPaymentsJson` TEXT, `negotiatedTotal` TEXT, `tip` TEXT, `pickupAddress` TEXT, `dropoffAddress` TEXT, `autoTolledRoadsJson` TEXT NOT NULL, `unpricedTollRoadIdsJson` TEXT NOT NULL, `airportAccessFeeJson` TEXT, `accruedDistanceCharge` TEXT NOT NULL, `accruedWaitingCharge` TEXT NOT NULL, `deviceTotal` TEXT NOT NULL, `gpsTraceJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`clientUuid`))",
+        "fields": [
+          {
+            "fieldPath": "clientUuid",
+            "columnName": "clientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "vehicleId",
+            "columnName": "vehicleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "driverId",
+            "columnName": "driverId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shiftId",
+            "columnName": "shiftId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tariffId",
+            "columnName": "tariffId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "simulated",
+            "columnName": "simulated",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeClass",
+            "columnName": "timeClass",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPeak",
+            "columnName": "isPeak",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxi",
+            "columnName": "maxi",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "passengerCount",
+            "columnName": "passengerCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wheelchairHiring",
+            "columnName": "wheelchairHiring",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "airportRankRequestedMaxi",
+            "columnName": "airportRankRequestedMaxi",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startAt",
+            "columnName": "startAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endAt",
+            "columnName": "endAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startLat",
+            "columnName": "startLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startLng",
+            "columnName": "startLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endLat",
+            "columnName": "endLat",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "endLng",
+            "columnName": "endLng",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "distanceM",
+            "columnName": "distanceM",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "movingS",
+            "columnName": "movingS",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "waitingS",
+            "columnName": "waitingS",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentMethod",
+            "columnName": "paymentMethod",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tolls",
+            "columnName": "tolls",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "extras",
+            "columnName": "extras",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cleaningFee",
+            "columnName": "cleaningFee",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "surchargePct",
+            "columnName": "surchargePct",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "includePsl",
+            "columnName": "includePsl",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receiptRef",
+            "columnName": "receiptRef",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "voucherCode",
+            "columnName": "voucherCode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accountReference",
+            "columnName": "accountReference",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "splitPaymentsJson",
+            "columnName": "splitPaymentsJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "negotiatedTotal",
+            "columnName": "negotiatedTotal",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tip",
+            "columnName": "tip",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pickupAddress",
+            "columnName": "pickupAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dropoffAddress",
+            "columnName": "dropoffAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "autoTolledRoadsJson",
+            "columnName": "autoTolledRoadsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unpricedTollRoadIdsJson",
+            "columnName": "unpricedTollRoadIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "airportAccessFeeJson",
+            "columnName": "airportAccessFeeJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accruedDistanceCharge",
+            "columnName": "accruedDistanceCharge",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accruedWaitingCharge",
+            "columnName": "accruedWaitingCharge",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceTotal",
+            "columnName": "deviceTotal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsTraceJson",
+            "columnName": "gpsTraceJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "clientUuid"
+          ]
+        }
+      },
+      {
+        "tableName": "shifts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientUuid` TEXT NOT NULL, `serverId` TEXT, `driverId` TEXT NOT NULL, `vehicleId` TEXT NOT NULL, `status` TEXT NOT NULL, `startAt` TEXT NOT NULL, `endAt` TEXT, `inspectionJson` TEXT, `tripsCount` INTEGER NOT NULL, `kmTotal` TEXT NOT NULL, `cashTotal` TEXT NOT NULL, `cardTotal` TEXT NOT NULL, `pslOwed` TEXT NOT NULL, `reconciled` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`clientUuid`))",
+        "fields": [
+          {
+            "fieldPath": "clientUuid",
+            "columnName": "clientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "driverId",
+            "columnName": "driverId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vehicleId",
+            "columnName": "vehicleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startAt",
+            "columnName": "startAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endAt",
+            "columnName": "endAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "inspectionJson",
+            "columnName": "inspectionJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tripsCount",
+            "columnName": "tripsCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kmTotal",
+            "columnName": "kmTotal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cashTotal",
+            "columnName": "cashTotal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cardTotal",
+            "columnName": "cardTotal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pslOwed",
+            "columnName": "pslOwed",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reconciled",
+            "columnName": "reconciled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "clientUuid"
+          ]
+        }
+      },
+      {
+        "tableName": "tariffs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `region` TEXT NOT NULL, `effectiveFrom` TEXT NOT NULL, `effectiveTo` TEXT, `rawJson` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "region",
+            "columnName": "region",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveFrom",
+            "columnName": "effectiveFrom",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveTo",
+            "columnName": "effectiveTo",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawJson",
+            "columnName": "rawJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "sync_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `entityType` TEXT NOT NULL, `clientUuid` TEXT NOT NULL, `entityJson` TEXT NOT NULL, `readyToSync` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, `lastError` TEXT, `nextAttemptAt` INTEGER NOT NULL, `deadLettered` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityType",
+            "columnName": "entityType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clientUuid",
+            "columnName": "clientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityJson",
+            "columnName": "entityJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readyToSync",
+            "columnName": "readyToSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nextAttemptAt",
+            "columnName": "nextAttemptAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deadLettered",
+            "columnName": "deadLettered",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_outbox_entityType_clientUuid",
+            "unique": true,
+            "columnNames": [
+              "entityType",
+              "clientUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_outbox_entityType_clientUuid` ON `${TABLE_NAME}` (`entityType`, `clientUuid`)"
+          }
+        ]
+      },
+      {
+        "tableName": "tariff_signing_keys",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `publicKeyBase64` TEXT NOT NULL, `algorithm` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "publicKeyBase64",
+            "columnName": "publicKeyBase64",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "algorithm",
+            "columnName": "algorithm",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "toll_roads",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `pricingModel` TEXT NOT NULL, `chargingPolicy` TEXT NOT NULL, `networkGroup` TEXT, `directional` TEXT, `derivedCorridorKm` TEXT, `priceClassAMax` TEXT, `capClassA` TEXT, `rateClassAPerKm` TEXT, `flagfallClassA` TEXT, `networkCapClassA` TEXT, `timeOfDayRatesJson` TEXT, `confidence` TEXT, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pricingModel",
+            "columnName": "pricingModel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chargingPolicy",
+            "columnName": "chargingPolicy",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "networkGroup",
+            "columnName": "networkGroup",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "directional",
+            "columnName": "directional",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "derivedCorridorKm",
+            "columnName": "derivedCorridorKm",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "priceClassAMax",
+            "columnName": "priceClassAMax",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "capClassA",
+            "columnName": "capClassA",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rateClassAPerKm",
+            "columnName": "rateClassAPerKm",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "flagfallClassA",
+            "columnName": "flagfallClassA",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "networkCapClassA",
+            "columnName": "networkCapClassA",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timeOfDayRatesJson",
+            "columnName": "timeOfDayRatesJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "toll_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `tollRoadId` TEXT NOT NULL, `name` TEXT NOT NULL, `priceClassA` TEXT, `confidence` TEXT, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tollRoadId",
+            "columnName": "tollRoadId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priceClassA",
+            "columnName": "priceClassA",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_toll_points_tollRoadId",
+            "unique": false,
+            "columnNames": [
+              "tollRoadId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_toll_points_tollRoadId` ON `${TABLE_NAME}` (`tollRoadId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "toll_roads",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tollRoadId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "toll_gantries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `tollRoadId` TEXT NOT NULL, `tollPointId` TEXT, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`tollRoadId`) REFERENCES `toll_roads`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tollRoadId",
+            "columnName": "tollRoadId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tollPointId",
+            "columnName": "tollPointId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_toll_gantries_tollRoadId",
+            "unique": false,
+            "columnNames": [
+              "tollRoadId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_toll_gantries_tollRoadId` ON `${TABLE_NAME}` (`tollRoadId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "toll_roads",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tollRoadId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "airport_zones",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `centerLat` REAL NOT NULL, `centerLng` REAL NOT NULL, `radiusM` REAL NOT NULL, `feeAmount` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centerLat",
+            "columnName": "centerLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centerLng",
+            "columnName": "centerLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "radiusM",
+            "columnName": "radiusM",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "feeAmount",
+            "columnName": "feeAmount",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "traffic_cameras",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `direction` TEXT, `imageUrl` TEXT, `region` TEXT, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "direction",
+            "columnName": "direction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "imageUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "region",
+            "columnName": "region",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "traffic_hazards",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `category` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `headline` TEXT, `closureType` TEXT, `direction` TEXT, `speedLimit` INTEGER, `expectedDelayMinutes` INTEGER, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "headline",
+            "columnName": "headline",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "closureType",
+            "columnName": "closureType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "direction",
+            "columnName": "direction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "speedLimit",
+            "columnName": "speedLimit",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "expectedDelayMinutes",
+            "columnName": "expectedDelayMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetchedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "trip_blackout_segments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientUuid` TEXT NOT NULL, `tripClientUuid` TEXT NOT NULL, `startedAtIso` TEXT NOT NULL, `endedAtIso` TEXT, `entryLat` REAL NOT NULL, `entryLng` REAL NOT NULL, `exitLat` REAL, `exitLng` REAL, `entryWasMoving` INTEGER NOT NULL, `resolution` TEXT NOT NULL, `billedDistanceKm` TEXT NOT NULL, `corridorRoadId` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`clientUuid`), FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "clientUuid",
+            "columnName": "clientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripClientUuid",
+            "columnName": "tripClientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtIso",
+            "columnName": "startedAtIso",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endedAtIso",
+            "columnName": "endedAtIso",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "entryLat",
+            "columnName": "entryLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryLng",
+            "columnName": "entryLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exitLat",
+            "columnName": "exitLat",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "exitLng",
+            "columnName": "exitLng",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "entryWasMoving",
+            "columnName": "entryWasMoving",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolution",
+            "columnName": "resolution",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "billedDistanceKm",
+            "columnName": "billedDistanceKm",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "corridorRoadId",
+            "columnName": "corridorRoadId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "clientUuid"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_blackout_segments_tripClientUuid",
+            "unique": false,
+            "columnNames": [
+              "tripClientUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_blackout_segments_tripClientUuid` ON `${TABLE_NAME}` (`tripClientUuid`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripClientUuid"
+            ],
+            "referencedColumns": [
+              "clientUuid"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'beb95d1a81feabde01aae4c5a3f14b7a')"
+    ]
+  }
+}
