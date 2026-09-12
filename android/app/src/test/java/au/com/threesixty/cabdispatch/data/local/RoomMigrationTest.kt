@@ -402,4 +402,303 @@ class RoomMigrationTest {
             db.close()
         }
     }
+
+    /**
+     * W6 (Tests and CI depth, 2026-09-12), task 3: the full chain from the true oldest supported
+     * schema (v8) all the way to CURRENT (v15) validated in ONE
+     * `runMigrationsAndValidate` call, not the two-hop `migrate8To13_preservesDataAndEndsAtTheRealSchema`
+     * + a plain `Room.databaseBuilder` open above. That test's own doc explains why it stopped at
+     * 13 when it was written -- `14.json`/`15.json` did not exist under `main/assets` yet, so
+     * `runMigrationsAndValidate`'s schema lookup for those end versions would have thrown
+     * `FileNotFoundException` (see that class doc's own "if a future version bump adds .../13.json,
+     * copy it..." warning). This same W6 pass copies `14.json` and `15.json` alongside the existing
+     * `12.json`/`13.json` for exactly that reason, so THIS test can validate every one of
+     * 8->9, 9->10, 10->11, 11->12, 12->13, 13->14 AND 14->15 against Room's real compiled schema in
+     * a single run, not just the first five plus an un-schema-checked plain open.
+     */
+    @Test
+    fun migrate8To15_fullChainInOneRunValidatesEveryHopIncludingTheGpsBlackoutTable() {
+        createV8Database()
+        openV8DatabaseForSeeding().apply {
+            execSQL(
+                """
+                INSERT INTO trips (
+                    clientUuid, vehicleId, driverId, shiftId, tariffId, type, status, timeClass,
+                    isPeak, maxi, startAt, startLat, startLng, createdAt, updatedAt
+                ) VALUES (
+                    'trip-full-chain', 'veh-1', 'drv-1', NULL, 'tariff-1', 'rank_hail', 'closed',
+                    'day', 0, 0, '2026-09-01T00:00:00Z', -33.8, 151.2, 1000, 2000
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        // Same resolved-absolute-path workaround as the 8->13 test above (Room 2.8.5's deprecated
+        // `runMigrationsAndValidate(String, ...)` overload under Robolectric) -- see that test's
+        // own comment for the exact mismatch this sidesteps. Reuses the same `dbName` file as that
+        // test, which is safe: JUnit4 gives each `@Test` method its own fresh instance of this
+        // class (so there is no shared mutable state), and `createV8Database()` above always
+        // `deleteDatabase`s it before recreating, exactly as the 8->13 test's own run does.
+        helper.runMigrationsAndValidate(
+            ApplicationProvider.getApplicationContext<android.content.Context>().getDatabasePath(dbName).path,
+            15,
+            true,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12,
+            MIGRATION_12_13,
+            MIGRATION_13_14,
+            MIGRATION_14_15,
+        )
+
+        // Re-open through real Room (Room's own onOpen schema validation, the same second,
+        // independent check the 8->13 test performs) and confirm the pre-existing row AND the new
+        // v15 table both read back correctly -- this is the proof that the LAST hop (14->15, the
+        // GPS-blackout audit-trail table this same W1 pass introduced) is validated by this test,
+        // not just opened.
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(
+                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+            )
+            .build()
+        try {
+            val raw = db.openHelper.readableDatabase
+            raw.query("SELECT * FROM trips WHERE clientUuid = 'trip-full-chain'").use { c ->
+                check(c.moveToFirst()) { "trip did not survive the full 8->15 migration chain" }
+            }
+            raw.query("SELECT COUNT(*) FROM trip_blackout_segments").use { c ->
+                check(c.moveToFirst() && c.getInt(0) == 0) {
+                    "trip_blackout_segments (MIGRATION_14_15) should exist and start empty"
+                }
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * W6, task 3's second half: seeds a real row into EVERY pre-existing table at v14 (not just
+     * `trips`/`sync_outbox` as the 8->13 test above does), migrates that single database to v15,
+     * and confirms every one of those rows -- across all eleven pre-14 tables -- survived with its
+     * data unchanged. `MIGRATION_14_15` only ever adds a brand-new table (`trip_blackout_segments`)
+     * and touches no existing table's schema, so "no data loss" here specifically means "every
+     * column of every pre-existing row reads back identical to what went in" -- a regression this
+     * migration could plausibly introduce would be an errant `DROP TABLE`/`ALTER TABLE` on the
+     * wrong table, or a foreign-key cascade misconfigured to fire on an unrelated write, neither of
+     * which the 8->13 test's narrower trips/sync_outbox check would ever catch.
+     *
+     * Uses `helper.createDatabase(dbName, 14)` -- the NORMAL, asset-backed `MigrationTestHelper`
+     * path (Room resolves `app/schemas/.../14.json`, now copied to `main/assets` per this class's
+     * own doc, into a starting v14 database with the real Room-generated schema) -- rather than the
+     * hand-built `v8OpenHelper` this file otherwise uses, exactly because a v14 schema JSON exists
+     * to build from and the hand-built path exists ONLY for versions that have none (v8, per this
+     * class's own doc).
+     */
+    @Test
+    fun migrate14To15_noDataLossOnAnyPreExistingTable() {
+        val dbNameV14 = "migration-test-v14.db"
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.deleteDatabase(dbNameV14)
+
+        // The resolved absolute path, same reason as this class's other two tests: Room 2.8.5's
+        // MigrationTestHelper under Robolectric disagrees with itself about a bare filename.
+        val resolvedPath = context.getDatabasePath(dbNameV14).path
+        helper.createDatabase(resolvedPath, 14).use { seedRowIntoEveryPreV14Table(it) }
+
+        helper.runMigrationsAndValidate(resolvedPath, 15, true, MIGRATION_14_15)
+
+        val db = Room.databaseBuilder(context, AppDatabase::class.java, dbNameV14)
+            .addMigrations(MIGRATION_14_15)
+            .build()
+        try {
+            assertEveryPreV14RowSurvivedMigration(db.openHelper.readableDatabase)
+        } finally {
+            db.close()
+        }
+    }
+
+    /** Inserts exactly one row into each of the eleven tables [AppDatabase] had at v14, using
+     * plain values a real driver's device would carry -- see the calling test's own doc for why
+     * every table, not just `trips`/`sync_outbox`, needs a seeded row here. Extracted purely to
+     * keep the calling `@Test` method within this file's own LongMethod/complexity budget; the
+     * SQL itself is unchanged from where it used to sit inline. */
+    private fun seedRowIntoEveryPreV14Table(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        seedTripAndShiftTables(db)
+        seedTariffAndOutboxTables(db)
+        seedTollAndReferenceTables(db)
+    }
+
+    private fun seedTripAndShiftTables(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            INSERT INTO trips (
+                clientUuid, serverId, vehicleId, driverId, shiftId, tariffId, type, simulated,
+                status, timeClass, isPeak, maxi, passengerCount, wheelchairHiring,
+                airportRankRequestedMaxi, startAt, endAt, startLat, startLng, endLat, endLng,
+                distanceM, movingS, waitingS, paymentMethod, tolls, extras, cleaningFee,
+                surchargePct, includePsl, receiptRef, voucherCode, accountReference,
+                splitPaymentsJson, negotiatedTotal, tip, pickupAddress, dropoffAddress,
+                autoTolledRoadsJson, unpricedTollRoadIdsJson, airportAccessFeeJson,
+                accruedDistanceCharge, accruedWaitingCharge, deviceTotal, gpsTraceJson,
+                createdAt, updatedAt
+            ) VALUES (
+                'v14-trip', NULL, 'veh-1', 'drv-1', NULL, 'tariff-1', 'rank_hail', 0,
+                'closed', 'day', 0, 0, 1, 0,
+                0, '2026-09-01T00:00:00Z', '2026-09-01T00:20:00Z', -33.8, 151.2, -33.9, 151.3,
+                5000, 900, 100, 'cash', '2.50', '0', '0',
+                NULL, 0, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                '{}', '[]', NULL,
+                '3.10', '0.85', '12.34', '[]',
+                1000, 2000
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO shifts (
+                clientUuid, serverId, driverId, vehicleId, status, startAt, endAt,
+                inspectionJson, tripsCount, kmTotal, cashTotal, cardTotal, pslOwed, reconciled,
+                createdAt, updatedAt
+            ) VALUES (
+                'v14-shift', NULL, 'drv-1', 'veh-1', 'open', '2026-09-01T00:00:00Z', NULL,
+                NULL, 3, '42.5', '30.00', '12.00', '1.32', 0,
+                1000, 2000
+            )
+            """.trimIndent(),
+        )
+    }
+
+    private fun seedTariffAndOutboxTables(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            INSERT INTO tariffs (id, region, effectiveFrom, effectiveTo, rawJson, fetchedAt)
+            VALUES ('tariff-1', 'urban', '2026-06-01T00:00:00Z', NULL, '{"flag_fall":"5.17"}', 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO tariff_signing_keys (id, publicKeyBase64, algorithm, fetchedAt)
+            VALUES ('key-1', 'YmFzZTY0', 'Ed25519', 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO sync_outbox (
+                entityType, clientUuid, entityJson, readyToSync, createdAt, attempts, lastError,
+                nextAttemptAt, deadLettered
+            ) VALUES ('trip', 'v14-trip', '{}', 1, 1000, 0, NULL, 0, 0)
+            """.trimIndent(),
+        )
+    }
+
+    private fun seedTollAndReferenceTables(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            INSERT INTO toll_roads (
+                id, name, pricingModel, chargingPolicy, networkGroup, directional,
+                derivedCorridorKm, priceClassAMax, capClassA, rateClassAPerKm, flagfallClassA,
+                networkCapClassA, timeOfDayRatesJson, confidence, fetchedAt
+            ) VALUES (
+                'M5SW', 'M5 South-West Motorway', 'flat', 'gantry', NULL, 'one_way',
+                NULL, '4.09', NULL, NULL, NULL,
+                NULL, NULL, 'verified', 1000
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO toll_points (id, tollRoadId, name, priceClassA, confidence, fetchedAt)
+            VALUES ('m5-point-1', 'M5SW', 'M5SW gantry', '4.09', 'verified', 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO toll_gantries (id, tollRoadId, tollPointId, latitude, longitude, fetchedAt)
+            VALUES ('m5g1', 'M5SW', 'm5-point-1', -33.95, 151.05, 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO airport_zones (id, name, centerLat, centerLng, radiusM, feeAmount, fetchedAt)
+            VALUES ('syd-t1', 'Sydney Airport T1', -33.9461, 151.1772, 800.0, '6.43', 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO traffic_cameras (id, name, latitude, longitude, direction, imageUrl, region, fetchedAt)
+            VALUES ('cam-1', 'M4 East', -33.85, 151.05, 'east', NULL, 'sydney', 1000)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO traffic_hazards (
+                id, category, latitude, longitude, headline, closureType, direction,
+                speedLimit, expectedDelayMinutes, fetchedAt
+            ) VALUES (
+                'hazard-1', 'roadwork', -33.86, 151.06, 'Lane closure', 'partial', 'both',
+                60, 10, 1000
+            )
+            """.trimIndent(),
+        )
+    }
+
+    /** Confirms the row [seedRowIntoEveryPreV14Table] wrote into each of the eleven pre-v14 tables
+     * survived `MIGRATION_14_15` unchanged, plus that the migration's own new table exists and
+     * starts empty. Extracted for the same LongMethod/complexity reason as its seeding
+     * counterpart above. */
+    private fun assertEveryPreV14RowSurvivedMigration(raw: androidx.sqlite.db.SupportSQLiteDatabase) {
+        raw.query("SELECT * FROM trips WHERE clientUuid = 'v14-trip'").use { c ->
+            check(c.moveToFirst()) { "trips row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("tariffId")) == "tariff-1")
+            check(c.getString(c.getColumnIndexOrThrow("accruedDistanceCharge")) == "3.10")
+            check(c.getString(c.getColumnIndexOrThrow("gpsTraceJson")) == "[]")
+        }
+        raw.query("SELECT * FROM shifts WHERE clientUuid = 'v14-shift'").use { c ->
+            check(c.moveToFirst()) { "shifts row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("kmTotal")) == "42.5")
+        }
+        raw.query("SELECT * FROM tariffs WHERE id = 'tariff-1'").use { c ->
+            check(c.moveToFirst()) { "tariffs row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("region")) == "urban")
+        }
+        raw.query("SELECT * FROM tariff_signing_keys WHERE id = 'key-1'").use { c ->
+            check(c.moveToFirst()) { "tariff_signing_keys row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("algorithm")) == "Ed25519")
+        }
+        raw.query("SELECT * FROM sync_outbox WHERE clientUuid = 'v14-trip'").use { c ->
+            check(c.moveToFirst()) { "sync_outbox row lost across MIGRATION_14_15" }
+            check(c.getInt(c.getColumnIndexOrThrow("readyToSync")) == 1)
+        }
+        raw.query("SELECT * FROM toll_roads WHERE id = 'M5SW'").use { c ->
+            check(c.moveToFirst()) { "toll_roads row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("priceClassAMax")) == "4.09")
+        }
+        raw.query("SELECT * FROM toll_points WHERE id = 'm5-point-1'").use { c ->
+            check(c.moveToFirst()) { "toll_points row lost across MIGRATION_14_15" }
+        }
+        raw.query("SELECT * FROM toll_gantries WHERE id = 'm5g1'").use { c ->
+            check(c.moveToFirst()) { "toll_gantries row lost across MIGRATION_14_15" }
+            check(c.getDouble(c.getColumnIndexOrThrow("latitude")) == -33.95)
+        }
+        raw.query("SELECT * FROM airport_zones WHERE id = 'syd-t1'").use { c ->
+            check(c.moveToFirst()) { "airport_zones row lost across MIGRATION_14_15" }
+            check(c.getString(c.getColumnIndexOrThrow("feeAmount")) == "6.43")
+        }
+        raw.query("SELECT * FROM traffic_cameras WHERE id = 'cam-1'").use { c ->
+            check(c.moveToFirst()) { "traffic_cameras row lost across MIGRATION_14_15" }
+        }
+        raw.query("SELECT * FROM traffic_hazards WHERE id = 'hazard-1'").use { c ->
+            check(c.moveToFirst()) { "traffic_hazards row lost across MIGRATION_14_15" }
+            check(c.getInt(c.getColumnIndexOrThrow("speedLimit")) == 60)
+        }
+        // And the new table from this exact migration exists and starts empty.
+        raw.query("SELECT COUNT(*) FROM trip_blackout_segments").use { c ->
+            check(c.moveToFirst() && c.getInt(0) == 0)
+        }
+    }
 }

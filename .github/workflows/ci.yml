@@ -43,8 +43,22 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # setup-gradle already caches the whole Gradle User Home (~/.gradle/caches: dependencies,
+      # wrapper distributions, and -- now that android/gradle.properties sets
+      # `org.gradle.caching=true` (W6, 2026-09-12) -- Gradle's own task-output build cache too)
+      # keyed on the wrapper/lockfile hashes, so no separate actions/cache step is needed here.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      # W6 (Tests and CI depth, 2026-09-12): this project deliberately ships NO lint baseline
+      # (app/build.gradle.kts's detekt block has one; Android Lint does not -- see this repo's own
+      # W0 green-baseline pass, which fixed every lint finding rather than baselining them away). A
+      # regenerated `app/lint-baseline.xml` would silently switch `lintDebug` back to "existing
+      # findings suppressed" and this is the tripwire that catches it before it merges.
+      # Path is relative to this job's own `working-directory: android` default above, i.e. this
+      # checks android/app/lint-baseline.xml.
+      - name: Refuse a regenerated Android Lint baseline
+        run: test ! -f app/lint-baseline.xml
 
       # The Mapbox Maps SDK resolves from a private Maven repo behind HTTP Basic auth with a
       # secret sk.* "downloads" token (see android/settings.gradle.kts). Locally that comes from

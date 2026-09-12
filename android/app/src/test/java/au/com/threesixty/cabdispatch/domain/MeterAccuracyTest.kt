@@ -1,7 +1,6 @@
 package au.com.threesixty.cabdispatch.domain
 
 import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
-import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
@@ -26,30 +25,14 @@ import java.math.RoundingMode
  *
  * F6 lives in [au.com.threesixty.cabdispatch.domain.location.RealLocationProvider] rather than in
  * this engine, and is covered in `location/LocationFilteringTest.kt`.
+ *
+ * The restart/process-death races and the exact-cent blackout golden vectors (W6, Tests and CI
+ * depth, 2026-09-12) live in `BlackoutRestartAndGoldenVectorsTest.kt` instead of here, to keep
+ * this already-large class from growing further; both files share the tariff/corridor fixtures in
+ * `BlackoutTestFixtures.kt`.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MeterAccuracyTest {
-
-    /** The 2026 Order urban rate card, matching `domain.fare.URBAN_TARIFF` field-for-field —
-     * decimal-as-string per this project's wire convention. */
-    private fun urbanTariffDto(): TariffDto = TariffDto(
-        id = "tariff-urban-2026",
-        tenantId = null,
-        name = "urban-2026",
-        region = "urban",
-        effectiveFrom = "2026-06-01T00:00:00+00:00",
-        booked = false,
-        flagFall = "5.17",
-        peakCharge = "2.65",
-        distRate1 = "2.61",
-        distRate2 = "2.37",
-        nightRate1 = "3.10",
-        nightRate2 = "2.82",
-        waitingRatePerMin = "1.130",
-        pslAmount = "1.32",
-        createdAt = "2026-06-01T00:00:00+00:00",
-        updatedAt = "2026-06-01T00:00:00+00:00",
-    )
 
     // ================================================================================
     // F1 — the tick bills the time that actually passed, not the time it hoped for
@@ -303,7 +286,8 @@ class MeterAccuracyTest {
         // G3 (GPS blackout program, W1, 2026-09-12): the audit-trail record must exist WHILE the
         // blackout is in progress, not only once it resolves -- this is what
         // MeterController.persistBlackout writes an OPEN row from, and what survives a process
-        // death mid-tunnel (see the resumeTrip/openBlackoutSegment test below).
+        // death mid-tunnel (see `BlackoutRestartAndGoldenVectorsTest`'s resumeTrip/
+        // openBlackoutSegment tests).
         val activeBlackout = engine.state.value.blackout
         assertTrue("an active blackout record must exist while gpsLost is true", activeBlackout != null)
         assertEquals(TUNNEL_ENTRY_LAT, activeBlackout!!.entryLat, 0.0001)
@@ -739,41 +723,6 @@ class MeterAccuracyTest {
                 roadsById = mapOf(road.id to road),
                 gantries = listOf(
                     au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("m5g1", road.id, M5_GANTRY_LAT, M5_GANTRY_LNG),
-                ),
-            )
-        }
-
-        // A bent three-gantry corridor -- entry near A, exit near C, with B off to the side between
-        // them (same shape [au.com.threesixty.cabdispatch.domain.fare.KnownCorridorTest] uses) so the
-        // real path through B is measurably longer than the straight A-C chord: a test that only
-        // checked "did SOME distance get billed" could not tell the correct behaviour apart from a
-        // regression back to the straight-line chord.
-        const val TUNNEL_ENTRY_LAT = -33.9200
-        const val TUNNEL_ENTRY_LNG = 151.1500
-        const val TUNNEL_MID_LAT = -33.9180
-        const val TUNNEL_MID_LNG = 151.1550
-        const val TUNNEL_EXIT_LAT = -33.9200
-        const val TUNNEL_EXIT_LNG = 151.1600
-
-        /** `unpriced` deliberately: toll charging is a wholly separate concern from the known-
-         * corridor distance catch-up (see that feature's own doc), and giving this road no real
-         * price makes "this path never adds a toll" a trivially checkable assertion rather than one
-         * that depends on also getting [au.com.threesixty.cabdispatch.domain.fare.onFix]'s own
-         * corroboration rules right in the same fixture. */
-        fun bentTunnelRegistry(): au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot {
-            val road = au.com.threesixty.cabdispatch.domain.fare.TollRoadRef(
-                id = "TUNNEL",
-                name = "Test Tunnel",
-                pricingModel = "unpriced",
-                directional = "both",
-                currentPrice = null,
-            )
-            return au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot(
-                roadsById = mapOf(road.id to road),
-                gantries = listOf(
-                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-A", road.id, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG),
-                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-B", road.id, TUNNEL_MID_LAT, TUNNEL_MID_LNG),
-                    au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-C", road.id, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG),
                 ),
             )
         }
