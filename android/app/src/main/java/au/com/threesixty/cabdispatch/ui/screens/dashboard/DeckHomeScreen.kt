@@ -32,7 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import au.com.threesixty.cabdispatch.data.remote.JobDto
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -211,8 +211,8 @@ fun DeckHomeScreen(
     // move, only what it renders.
     startOnMeter: Boolean = false,
 ) {
-    val state by viewModel.uiState.collectAsState()
-    val dispatchState by dispatchViewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val dispatchState by dispatchViewModel.uiState.collectAsStateWithLifecycle()
     var pane by rememberSaveable { mutableStateOf(if (startOnMeter) CaptainPane.METER else CaptainPane.DASHBOARD) }
     // Real "is a fare actually open right now" signal (Phase A shell-integration) — TripEntity
     // stays status=OPEN from the moment [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]
@@ -222,7 +222,7 @@ fun DeckHomeScreen(
     // starts, so it would stay "truthy" long after a trip actually closes). Screen-local loader,
     // same convention as [HomeExtras] below. Drives the nav rail's METER alias (see RAIL_ITEMS'
     // own comment) and gates the footer stats bar for the Meter pane.
-    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsState(initial = null)
+    val activeTrip by AppContainer.tripRepository.observeActiveTrip().collectAsStateWithLifecycle(initialValue = null)
     val hasActiveTrip = activeTrip != null
     var showSetPrice by rememberSaveable { mutableStateOf(false) }
     // Point to Point Transport (Fares) Order 2026 UI-wiring pass: the plain (non-Set-Price)
@@ -248,12 +248,12 @@ fun DeckHomeScreen(
     }
     val scope = rememberCoroutineScopeCompat()
 
-    val duressState by AppContainer.duressController.state.collectAsState()
+    val duressState by AppContainer.duressController.state.collectAsStateWithLifecycle()
     val homeExtras = rememberHomeExtras(driverId = state.session?.driverId, shiftId = state.session?.shiftId)
     // Real bug fixed (2026-09-02): the SET PRICE tile's "ACTIVE" subtitle used to be an
     // unconditional hardcoded literal regardless of whether a fixed fare was actually pending —
     // see MeterCard's own doc. SessionHolder.pendingTrip is the real signal.
-    val pendingTrip by SessionHolder.pendingTrip.collectAsState()
+    val pendingTrip by SessionHolder.pendingTrip.collectAsStateWithLifecycle()
 
     // Accepting a live dispatch offer hands off to S3 exactly like a driver-initiated Start Meter —
     // see AvailableTripsWheelViewModel.beginHiredHandoff's own doc. Same one-shot
@@ -570,7 +570,7 @@ fun DeckHomeScreen(
                             // TripsWheelContent's onOpenActiveTrip already uses above, since
                             // CloseAndPayViewModel reconstructs a full, correct bill from Room
                             // alone, no live FareEngine required.
-                            val liveTripClientUuid by SessionHolder.liveTripClientUuid.collectAsState()
+                            val liveTripClientUuid by SessionHolder.liveTripClientUuid.collectAsStateWithLifecycle()
                             if (hasActiveTrip && activeTrip?.clientUuid != liveTripClientUuid) {
                                 LaunchedEffect(activeTrip?.clientUuid) {
                                     navController.navigate(CabDispatchRoutes.CLOSE_PAY)

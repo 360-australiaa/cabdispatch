@@ -1317,6 +1317,7 @@ private fun PreviewRollingMoneyText() {
     // Tap-free demo: the figure steps once shortly after composition so the roll is visible in an
     // interactive preview; a static render shows the resting state.
     var amount by remember { mutableStateOf("\$18.65") }
+    // Unit is correct: a preview-only, one-shot demo step with no real dependency to key on.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(900)
         amount = "\$19.05"

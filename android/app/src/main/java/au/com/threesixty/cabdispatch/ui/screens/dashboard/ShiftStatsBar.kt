@@ -376,6 +376,13 @@ internal fun NextBreakTile(
 
 // --- Shift-time formatting helpers (real session.shiftStartAt, no fabricated numbers) ---------
 
+// Hoisted to file scope (W5 recomposition-hygiene pass, 2026-09-12): this bar's own clock re-renders
+// every second (see the header's live-clock effect), and `workingUntilLabel`/`formatClockTime` are
+// plain functions, not composables, so they cannot `remember` a formatter themselves -- a `val`
+// inside either one was a brand new `DateTimeFormatter.ofPattern` parse on every single tick. One
+// instance, built once at class-init, same pattern this file's own module already uses elsewhere.
+private val CLOCK_TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
+
 private fun shiftElapsedLabel(shiftStartAtIso: String?): String? {
     val start = shiftStartAtIso?.let { parseInstantOrOffset(it) } ?: return null
     val elapsed = Duration.between(start, Instant.now()).let { if (it.isNegative) Duration.ZERO else it }
@@ -387,14 +394,12 @@ private fun workingUntilLabel(shiftStartAtIso: String?): String? {
     val start = shiftStartAtIso?.let { parseInstantOrOffset(it) } ?: return null
     val end = start.plusSeconds((ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS * 3600.0).toLong())
     val zoned = end.atZone(java.time.ZoneId.systemDefault())
-    val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
-    return "Working until ${fmt.format(zoned)}"
+    return "Working until ${CLOCK_TIME_FORMATTER.format(zoned)}"
 }
 
 private fun formatClockTime(iso: String): String {
     val instant = parseInstantOrOffset(iso) ?: return iso
-    val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
-    return fmt.format(instant.atZone(java.time.ZoneId.systemDefault()))
+    return CLOCK_TIME_FORMATTER.format(instant.atZone(java.time.ZoneId.systemDefault()))
 }
 
 private fun formatDurationHm(d: Duration): String {

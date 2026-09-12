@@ -99,7 +99,7 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     /** Shared with every other screen via [AppContainer.duressController] — see that class's doc
      * for why the state machine lives there and not here. This is a straight passthrough so
      * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] has a single `StateFlow` to
-     * `collectAsState()`, same as every other field on this ViewModel. */
+     * `collectAsStateWithLifecycle()`, same as every other field on this ViewModel. */
     val duressState: StateFlow<DuressUiState> = AppContainer.duressController.state
 
     private val speechAnnouncer = TextToSpeechAnnouncer(application)

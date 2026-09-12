@@ -26,10 +26,19 @@ plugins {
     // releases) are one or two minor versions behind their own absolute latest as a result; the
     // full AGP-9 migration is real, future work, not something to fold into this pass.
     id("com.android.application") version "8.13.2" apply false
+    // `com.android.test` (not `com.android.application`/`com.android.library`) is the module type
+    // AGP's Baseline Profile tooling requires for the `:baselineprofile` generator module below --
+    // same AGP artifact/version as `com.android.application` above, just a different plugin id.
+    id("com.android.test") version "8.13.2" apply false
     id("org.jetbrains.kotlin.android") version "2.3.21" apply false
     id("org.jetbrains.kotlin.plugin.serialization") version "2.3.21" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.3.21" apply false
     id("com.google.devtools.ksp") version "2.3.12" apply false
+    // Baseline Profile Gradle plugin (W5 optimisation plan, 2026-09-12) -- applied to both `:app`
+    // (consumes the generated profile) and `:baselineprofile` (produces it). 1.5.0 is the current
+    // stable release compatible with AGP 8.13.2/this project's Kotlin 2.3.21 at the time of this
+    // pass.
+    id("androidx.baselineprofile") version "1.5.0" apply false
 }
 
 tasks.register("clean", Delete::class) {

@@ -215,9 +215,16 @@ private fun ColorDot(color: Color, size: Dp) {
  * row, rendering "—". Drop-off time is always "—" here: the trip is in progress. Addresses are
  * `TripContext.originAddress`/`.destAddress` — "—" when absent (see that doc), never fabricated.
  * DISTANCE and DURATION live on the dial (its own readouts); AVG SPEED is genuinely only here.
+ *
+ * Takes [movingSeconds]/[distanceKm] rather than the whole `FareState` (W5 recomposition-hygiene
+ * pass, 2026-09-12) — this card is reached only via [ControlsDrawer], and the old whole-`FareState`
+ * parameter meant it recomposed on every ONE-second tick even while parked/waiting (currentSpeedKmh,
+ * waitingSeconds etc. still change every tick with the meter running), even though AVG SPEED is the
+ * only figure here that depends on the fare at all. Narrowing to the two fields it actually reads
+ * lets Compose skip this card's recomposition on every tick where neither one moved.
  */
 @Composable
-internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, startAtIso: String?) {
+internal fun TripDetailsCard(tripContext: TripContext?, movingSeconds: Int, distanceKm: BigDecimal, startAtIso: String?) {
     GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadiusDp = 18) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -250,8 +257,8 @@ internal fun TripDetailsCard(tripContext: TripContext?, fareState: FareState, st
             Spacer(Modifier.height(8.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(CaptainPalette.panelBorder))
             Spacer(Modifier.height(8.dp))
-            val avgSpeedKmh = if (fareState.movingSeconds > 0) {
-                (fareState.distanceKm.toDouble() / (fareState.movingSeconds / 3600.0)).roundToInt()
+            val avgSpeedKmh = if (movingSeconds > 0) {
+                (distanceKm.toDouble() / (movingSeconds / 3600.0)).roundToInt()
             } else {
                 0
             }

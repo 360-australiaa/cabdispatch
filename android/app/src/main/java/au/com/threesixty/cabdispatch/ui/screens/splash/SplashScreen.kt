@@ -61,6 +61,9 @@ import kotlinx.coroutines.delay
 @Composable
 fun SplashScreen(navController: NavHostController) {
     val context = LocalContext.current
+    // Unit is correct: this is the splash screen's one-shot "decide where to go" routing effect —
+    // it runs exactly once per cold start (this composable is never re-entered without the
+    // process restarting), so there is no real dependency to key it on.
     LaunchedEffect(Unit) {
         delay(SPLASH_MIN_DWELL_MS)
         val termsAccepted = TermsAcceptance.isAccepted(context, BuildConfig.VERSION_CODE)

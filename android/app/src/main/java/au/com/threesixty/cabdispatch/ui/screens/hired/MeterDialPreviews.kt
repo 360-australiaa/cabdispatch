@@ -8,10 +8,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import au.com.threesixty.cabdispatch.domain.ActiveBlackout
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.TripStatus
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import java.math.BigDecimal
+import java.time.Instant
 
 /**
  * Design previews for [MeterDial] at the tablet's real canvas size (A4, 2026-09-08).
@@ -23,11 +25,14 @@ import java.math.BigDecimal
  * the dial's diameter and tells you nothing about whether the real thing fits. The audit (§6) flags
  * exactly this: `FixedDesignCanvas` scales from width only, so height is where things clip.
  *
- * The four states are the ones this workstream changed behaviour in, and are meant to be compared
+ * The states below are the ones this workstream changed behaviour in, and are meant to be compared
  * side by side in the preview pane:
  * - RUNNING — the speed-driven glow at a real road speed, distance readout at full brightness.
  * - PAUSED — amber, static glow, no speed term at all. A paused meter must not look alive.
- * - GPS LOST — the persistent "GPS LOST — WAITING TIME ONLY" pill and the dimmed DISTANCE readout.
+ * - GPS LOST (waiting) — a blackout that began stationary: "GPS LOST m:ss · WAITING ONLY", the
+ *   whole, final story for this case (see [gpsLostPillText]'s own doc).
+ * - GPS LOST (moving) — a blackout that began in motion: "GPS LOST m:ss · NO CHARGE YET" — nothing
+ *   is being billed while the outcome (corridor vs. nothing) is still unknown.
  * - MAXI — `maxiRateApplied`, the state the dial's total is most often checked against.
  *
  * These are `@Preview`s, not tests: they render, they are not asserted on. The behaviour they
@@ -39,6 +44,7 @@ import java.math.BigDecimal
 private fun previewFareState(
     speedKmh: Double = 48.0,
     gpsLost: Boolean = false,
+    blackout: ActiveBlackout? = null,
     maxi: Boolean = false,
     paused: Boolean = false,
 ): FareState = FareState(
@@ -49,6 +55,21 @@ private fun previewFareState(
     waitingSeconds = 143,
     maxiRateApplied = maxi,
     gpsLost = gpsLost,
+    blackout = blackout,
+)
+
+/** How long ago [previewBlackout]'s fixture blackout "started" — 90s renders as a real, non-zero
+ * "1:30" on the pill in the preview pane, rather than "0:00" for a blackout that just began. */
+private const val PREVIEW_BLACKOUT_ELAPSED_SECONDS = 90L
+
+/** A real [ActiveBlackout] fixture for the two GPS-LOST previews below — see
+ * [PREVIEW_BLACKOUT_ELAPSED_SECONDS]'s own doc for why [startedAtIso] isn't just "now". */
+private fun previewBlackout(entryWasMoving: Boolean): ActiveBlackout = ActiveBlackout(
+    segmentId = "preview-blackout",
+    startedAtIso = Instant.now().minusSeconds(PREVIEW_BLACKOUT_ELAPSED_SECONDS).toString(),
+    entryLat = -33.8688,
+    entryLng = 151.2093,
+    entryWasMoving = entryWasMoving,
 )
 
 @Composable
@@ -79,13 +100,41 @@ private fun PreviewMeterDialPaused() {
     DialPreviewFrame(previewFareState(speedKmh = 0.0, paused = true), isPaused = true)
 }
 
-@Preview(name = "Meter dial — GPS LOST", widthDp = 1280, heightDp = 800, backgroundColor = 0xFF0B0B10, showBackground = true)
+@Preview(
+    name = "Meter dial — GPS LOST (waiting)",
+    widthDp = 1280,
+    heightDp = 800,
+    backgroundColor = 0xFF0B0B10,
+    showBackground = true,
+)
 @Composable
-private fun PreviewMeterDialGpsLost() {
+private fun PreviewMeterDialGpsLostWaiting() {
     // Speed reads 0 because the engine publishes 0 when the fix is stale (FareEngine's
     // `billedSpeedKmh`), which is also why the glow sits still here — the honest rendering of "we
-    // do not know how fast this cab is going".
-    DialPreviewFrame(previewFareState(speedKmh = 0.0, gpsLost = true), isPaused = false)
+    // do not know how fast this cab is going". entryWasMoving = false: the blackout began
+    // stationary, so "waiting only" is the whole, final story for this segment.
+    DialPreviewFrame(
+        previewFareState(speedKmh = 0.0, gpsLost = true, blackout = previewBlackout(entryWasMoving = false)),
+        isPaused = false,
+    )
+}
+
+@Preview(
+    name = "Meter dial — GPS LOST (moving)",
+    widthDp = 1280,
+    heightDp = 800,
+    backgroundColor = 0xFF0B0B10,
+    showBackground = true,
+)
+@Composable
+private fun PreviewMeterDialGpsLostMoving() {
+    // entryWasMoving = true: the blackout began mid-drive (the tunnel-entry case) — the outcome
+    // (a real corridor distance, or nothing) isn't known until reacquisition, so the pill says
+    // "no charge yet" rather than committing to either answer early.
+    DialPreviewFrame(
+        previewFareState(speedKmh = 0.0, gpsLost = true, blackout = previewBlackout(entryWasMoving = true)),
+        isPaused = false,
+    )
 }
 
 @Preview(name = "Meter dial — MAXI", widthDp = 1280, heightDp = 800, backgroundColor = 0xFF0B0B10, showBackground = true)

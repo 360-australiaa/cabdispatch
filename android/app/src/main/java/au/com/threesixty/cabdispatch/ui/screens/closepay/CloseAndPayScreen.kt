@@ -43,7 +43,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -105,7 +104,7 @@ fun CloseAndPayScreen(
     onDone: () -> Unit,
     viewModel: CloseAndPayViewModel = viewModel(),
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     // Rate Passenger hand-off (2026-09-04): CloseAndPayUiState.Done carries no fields of its own
     // (see that state's doc), so the just-closed trip's clientUuid is captured here — off the
@@ -740,7 +739,7 @@ private fun MethodPickerScreen(
     // instead of it silently vanishing. See au.com.threesixty.cabdispatch.domain
     // .SettingsPreferencesStore's own doc. Defaults true, matching this screen's behaviour before
     // this toggle existed.
-    val allowCash by AppContainer.settingsPreferencesStore.allowCash.collectAsState()
+    val allowCash by AppContainer.settingsPreferencesStore.allowCash.collectAsStateWithLifecycle()
 
     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 32.dp)) {
         Row(modifier = Modifier.fillMaxSize()) {

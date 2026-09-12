@@ -92,6 +92,9 @@ fun VouchersPaneContent(modifier: Modifier = Modifier) {
     var loadError by remember { mutableStateOf(false) }
     var tab by remember { mutableStateOf(VoucherTab.AVAILABLE) }
 
+    // Unit is correct: a parameterless pane loading its one list on open, not reacting to
+    // anything already in composition (tab switches filter the already-loaded list client-side —
+    // see the tab content below — they never need a re-fetch).
     LaunchedEffect(Unit) {
         val result = runCatching { AppContainer.apiService.listVouchers(redeemed = null, limit = 200) }
         vouchers = result.getOrNull()?.items

@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch
 
 import android.app.Application
+import android.os.StrictMode
 import au.com.threesixty.cabdispatch.data.AppContainer
 import com.mapbox.common.MapboxOptions
 
@@ -23,6 +24,28 @@ import com.mapbox.common.MapboxOptions
 class CabDispatchApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // StrictMode, DEBUG builds only (W5 optimisation plan, 2026-09-12) -- `penaltyLog()`
+        // ONLY, never `penaltyDeath()`. This is a real, safety-critical taxi-meter app a working
+        // driver depends on mid-shift; a StrictMode violation is a signal to fix in the next debug
+        // build, never a reason to crash a live fare in front of a passenger. `BuildConfig.DEBUG`
+        // means a release build (what actually ships to the fleet) never pays this cost and can
+        // never be affected by it — this exists purely to surface main-thread disk/network calls
+        // and leaked closables to whoever is looking at `adb logcat` on a debug build, the same way
+        // Android's own "Detect all" preset is documented to be used during development.
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectAll()
+                    .penaltyLog()
+                    .build(),
+            )
+            StrictMode.setVmPolicy(
+                StrictMode.VmPolicy.Builder()
+                    .detectAll()
+                    .penaltyLog()
+                    .build(),
+            )
+        }
         MapboxOptions.accessToken = BuildConfig.MAPBOX_ACCESS_TOKEN
         AppContainer.init(this)
     }

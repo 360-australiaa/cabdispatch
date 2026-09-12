@@ -27,7 +27,6 @@ import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
@@ -69,12 +69,12 @@ import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
 
 @Composable
 internal fun StatusMapPanel(onPlotZone: () -> Unit) {
-    val fix by AppContainer.speedSource.locationFix.collectAsState()
+    val fix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
     // Show Map in Background (Settings -> Display, 2026-09-03 Settings two-pane pass) — the real
     // toggle behind this pane's Mapbox Static Images fetch (see
     // au.com.threesixty.cabdispatch.domain.SettingsPreferencesStore's own doc). Defaults true, so
     // a driver who never touches the setting sees exactly the same map this pane always rendered.
-    val showMapInBackground by AppContainer.settingsPreferencesStore.showMapInBackground.collectAsState()
+    val showMapInBackground by AppContainer.settingsPreferencesStore.showMapInBackground.collectAsStateWithLifecycle()
     var sizePx by remember { mutableStateOf(IntSize.Zero) }
     val centerLat = fix?.lat ?: SydneyCbdFallback.LAT
     val centerLng = fix?.lng ?: SydneyCbdFallback.LNG

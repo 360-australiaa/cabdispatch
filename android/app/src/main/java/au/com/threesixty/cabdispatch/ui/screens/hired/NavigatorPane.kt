@@ -427,7 +427,20 @@ internal fun NavBottomBar(
 @Composable
 private fun MiniEtaStat(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 8.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)
+        // 8sp -> 12sp (W5 accessibility pass, 2026-09-12: the same A4 text-size floor already
+        // applied throughout this file/screen — see e.g. the RETRY button and routeError text
+        // above). Kept as a literal fontSize (not Type.tiny) to keep this caption's own Bold
+        // weight + 1sp letter-spacing, which Type.tiny's SemiBold doesn't carry.
+        Text(
+            label,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            letterSpacing = 1.sp,
+            color = CaptainPalette.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(top = 1.dp))
     }
 }
