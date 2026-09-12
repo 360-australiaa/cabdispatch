@@ -1,13 +1,16 @@
 package au.com.threesixty.cabdispatch.data.repository
 
+import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripTracePointDao
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
+import au.com.threesixty.cabdispatch.data.local.entity.TripTracePointEntity
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.SplitPaymentEntryDto
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
@@ -45,32 +48,65 @@ class TripRepository(
     /** GPS-blackout audit trail (G3, W1, 2026-09-12) -- read once at close time to populate
      * [TripSyncItemDto.gpsBlackoutSegments]. See [TripBlackoutSegmentDao]'s own doc. */
     private val blackoutSegmentDao: TripBlackoutSegmentDao,
+    /** Append-only GPS trace storage (G8, W4, 2026-09-12 optimisation plan §3) -- replaces the old
+     * "decode/append/re-encode the whole [TripEntity.gpsTraceJson] blob on every tick" pattern.
+     * See [TripTracePointDao]'s own doc, and [tick]/[closeTrip]/[observeActiveTripGpsTrace] below
+     * for exactly how it is written to, materialised and cleaned up. */
+    private val tracePointDao: TripTracePointDao,
 ) {
 
     fun observeActiveTrip(): Flow<TripEntity?> = tripDao.observeActiveTrip()
 
     /**
-     * Read-only view of the active trip's persisted GPS trace ([TripEntity.gpsTraceJson], decoded)
-     * for the Meter screen's route-polyline backdrop (Meter "game-level" visual pass, 2026-09-03).
-     * Purely additive: same Room `Flow` as [observeActiveTrip], same [decodeGpsTrace] this class
-     * already uses for sync — no new write path, no behavior change. Emits an empty list when there
-     * is no open trip or the trace is still `"[]"`.
+     * In-memory, per-trip write-behind buffer for [tick]'s trace points -- see [bufferTracePoints]/
+     * [flushTraceBuffer] for the batching itself, and [TripTracePointEntity]'s doc for why this
+     * replaced the old full-blob rewrite. Keyed by `clientUuid`; there is realistically at most one
+     * entry (this app allows only one OPEN trip at a time), but nothing here assumes that.
      *
-     * **Fixed (2026-09-07, real fare-integrity bug, not just a cosmetic map gap):** the live
-     * meter's own persister ([au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel]'s
-     * `doPersistTick`) used to always call [tick] with `newPoints = emptyList()`, so this trace
-     * never grew for the entire life of a live trip — confirmed to make `POST /v1/trips/sync`'s
-     * server-side `recompute_from_trace` (which replays this exact trace to independently validate
-     * `deviceTotal`) compute a flagfall-only fare and auto-flag every real trip for review.
-     * [HiredViewModel]'s `nextTracePoint` now feeds one real point per fare-engine tick into
-     * [tick] (see that method's own doc for a second, subtler variant of this same bug — recording
-     * a point only when the GPS fix itself changed — found and fixed on a live device the same
-     * day), so this Flow reflects the trip's actual driven path in near-real-time (bounded only by
-     * [tick]'s own Room write latency) rather than staying `"[]"` for the whole trip.
+     * Deliberately plain, unsynchronised, in-memory `MutableMap`s: [TripRepository] is a single
+     * [au.com.threesixty.cabdispatch.data.AppContainer] singleton and every write call
+     * ([tick]/[closeTrip]) for a given trip is driven from the SAME serial coroutine
+     * ([au.com.threesixty.cabdispatch.domain.MeterController]'s one `persistJob`, see that class's
+     * doc) -- there is no concurrent writer to guard against. A process death loses whatever sits
+     * in these buffers unflushed (at most [TRACE_BATCH_POINT_COUNT] points), which is the honest,
+     * documented cost of batching rather than writing every tick: the trip's own
+     * distance/moving/waiting counters (what actually decides the fare) are still written to
+     * `trips` on every single [tick] call, completely independent of this buffer -- only the
+     * route-trace evidence has this bounded, small window of loss.
+     */
+    private val traceBuffers = mutableMapOf<String, MutableList<TelemetryPointDto>>()
+    private val traceBufferFlushedAtMs = mutableMapOf<String, Long>()
+
+    /** Next [TripTracePointEntity.seq] to assign for a trip, seeded from
+     * [TripTracePointDao.maxSeq] the first time this process touches that trip (so a process
+     * restart mid-trip resumes numbering after whatever was already flushed, never colliding with
+     * it) and cached afterwards to avoid a query per flush. */
+    private val traceSeqCounters = mutableMapOf<String, Int>()
+
+    /**
+     * Read-only view of the active trip's GPS trace, decoded, for the Meter screen's
+     * route-polyline backdrop (Meter "game-level" visual pass, 2026-09-03). Reads
+     * [tracePointDao] rather than [TripEntity.gpsTraceJson] (G8, W4 §3): that column is no longer
+     * kept live-updated tick by tick (see [tick]'s own doc) -- it is materialised once, at
+     * [closeTrip] time. Emits an empty list when there is no open trip.
+     *
+     * Driven off the same [au.com.threesixty.cabdispatch.data.local.dao.TripDao.observeActiveTrip]
+     * `Flow` [observeActiveTrip] already uses, which Room re-emits on every [tick]'s
+     * `tripDao.update` (the counters change every tick regardless of trace buffering) -- so this
+     * still refreshes about once a second during a live trip. The one honest trade-off:
+     * a point still sitting in [traceBuffers] (up to [TRACE_BATCH_POINT_COUNT] points / a few
+     * seconds behind, see [bufferTracePoints]) has not reached [tracePointDao] yet and so is not
+     * yet reflected here -- a bounded, cosmetic lag on a route-polyline overlay, not a correctness
+     * issue for anything fare-affecting (which never reads this Flow at all).
      */
     fun observeActiveTripGpsTrace(): Flow<List<TelemetryPointDto>> =
         tripDao.observeActiveTrip().map { trip ->
-            trip?.let { runCatching { decodeGpsTrace(it.gpsTraceJson) }.getOrDefault(emptyList()) } ?: emptyList()
+            if (trip == null) {
+                emptyList()
+            } else {
+                runCatching { tracePointDao.forTrip(trip.clientUuid).map(TripTracePointEntity::toTelemetryPointDto) }
+                    .getOrDefault(emptyList())
+            }
         }
 
     fun observeTrip(clientUuid: String): Flow<TripEntity?> = tripDao.observeTrip(clientUuid)
@@ -205,6 +241,18 @@ class TripRepository(
      * default, silently dropping every toll the driver added. See
      * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredViewModel.doPersistTick]
      * for the call site that now passes the real cumulative total.
+     *
+     * ### [newPoints] no longer touches [TripEntity.gpsTraceJson] directly (G8, W4 §3, 2026-09-12)
+     * This used to decode the trip's ENTIRE accumulated trace, append [newPoints], and re-encode
+     * the whole thing back into one growing `TEXT` column, on every single call — for a 2-hour
+     * hire ticking at 1 Hz that is ~7,000 points decoded and ~7,000 points re-encoded on the LAST
+     * tick alone, and the sum of every tick before it: O(n^2) total work and Room writes over the
+     * trip's life, all landing on the main persistence path a driver's fare depends on. [newPoints]
+     * now goes to [bufferTracePoints] instead — an append-only [tracePointDao] write, batched every
+     * 5s or 10 points (see that method's doc) — and [TripEntity.gpsTraceJson] itself is only
+     * materialised once, at [closeTrip] time. The counters below ([distanceM]/[movingS]/[waitingS]/
+     * the accrued charges) are UNCHANGED: they are still written to `trips` on every call, exactly
+     * as before — only the trace storage shape changed.
      */
     suspend fun tick(
         clientUuid: String,
@@ -242,9 +290,9 @@ class TripRepository(
             "tick() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
         }
 
-        val mergedTrace = decodeGpsTrace(existing.gpsTraceJson) + newPoints
+        bufferTracePoints(clientUuid, newPoints)
+
         val updated = existing.copy(
-            gpsTraceJson = cabDispatchJson.encodeToString(mergedTrace),
             distanceM = distanceM,
             movingS = movingS,
             waitingS = waitingS,
@@ -257,8 +305,74 @@ class TripRepository(
             updatedAt = System.currentTimeMillis(),
         )
         tripDao.update(updated)
+        BatteryStatsCounters.recordRoomWrite()
         upsertOutboxRow(updated, ready = false)
         return updated
+    }
+
+    /**
+     * Buffers [newPoints] in memory and flushes to [tracePointDao] once the batch is due — every
+     * [TRACE_BATCH_INTERVAL_MS] (5s) or [TRACE_BATCH_POINT_COUNT] points (10), whichever comes
+     * first (G8, W4 §3). A no-op when [newPoints] is empty (nothing new to buffer) — the ordinary
+     * "no live fix yet" tick, see
+     * [au.com.threesixty.cabdispatch.domain.MeterController.nextTracePoint]'s own doc.
+     *
+     * The two thresholds bound the worst case on both axes: a fast-moving trip cannot buffer more
+     * than 10 points (10 seconds at the fare engine's 1Hz tick) before a write lands, and a
+     * completely idle tick loop still flushes whatever it has at least every 5s rather than
+     * holding it indefinitely.
+     */
+    private suspend fun bufferTracePoints(clientUuid: String, newPoints: List<TelemetryPointDto>) {
+        if (newPoints.isEmpty()) return
+        val buffer = traceBuffers.getOrPut(clientUuid) { mutableListOf() }
+        buffer.addAll(newPoints)
+        val now = System.currentTimeMillis()
+        val lastFlushedAt = traceBufferFlushedAtMs.getOrPut(clientUuid) { now }
+        val dueByCount = buffer.size >= TRACE_BATCH_POINT_COUNT
+        val dueByTime = (now - lastFlushedAt) >= TRACE_BATCH_INTERVAL_MS
+        if (dueByCount || dueByTime) {
+            flushTraceBuffer(clientUuid, buffer.toList())
+            buffer.clear()
+            traceBufferFlushedAtMs[clientUuid] = now
+        }
+    }
+
+    /**
+     * Writes [points] to [tracePointDao] as ONE `INSERT` of however many rows are due (never one
+     * `INSERT` per point, and never a read of the trip's existing trace at all — the whole point of
+     * this replacing the old full-blob rewrite). [seq] resumes from
+     * [TripTracePointDao.maxSeq] the first time this process touches [clientUuid] (a process
+     * restart mid-trip must not renumber or collide with rows already flushed before it died), then
+     * is cached in [traceSeqCounters] so every later flush for the same trip is a pure in-memory
+     * increment, not a query.
+     */
+    private suspend fun flushTraceBuffer(clientUuid: String, points: List<TelemetryPointDto>) {
+        if (points.isEmpty()) return
+        var seq = traceSeqCounters[clientUuid] ?: (tracePointDao.maxSeq(clientUuid) ?: -1)
+        val entities = points.map { point ->
+            seq += 1
+            TripTracePointEntity(
+                tripClientUuid = clientUuid,
+                seq = seq,
+                lat = point.lat,
+                lng = point.lng,
+                speedKmh = point.speedKmh,
+                ts = point.ts,
+            )
+        }
+        tracePointDao.insertAll(entities)
+        BatteryStatsCounters.recordRoomWrite()
+        traceSeqCounters[clientUuid] = seq
+    }
+
+    /** Force-flushes [clientUuid]'s trace buffer regardless of the batch thresholds, and forgets
+     * the in-memory bookkeeping for it — called once, from [closeTrip], so nothing buffered since
+     * the last ordinary flush is lost from the materialised [TripEntity.gpsTraceJson] below. */
+    private suspend fun flushAndForgetTraceBuffer(clientUuid: String) {
+        val remaining = traceBuffers.remove(clientUuid).orEmpty()
+        flushTraceBuffer(clientUuid, remaining)
+        traceBufferFlushedAtMs.remove(clientUuid)
+        traceSeqCounters.remove(clientUuid)
     }
 
     /**
@@ -305,9 +419,19 @@ class TripRepository(
             "closeTrip() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"
         }
 
+        // G8, W4 §3: materialise the trace exactly once, here, rather than keeping it live all
+        // trip long — see tick()'s own doc. Force-flushes anything still sitting in the in-memory
+        // batch buffer first, so the last (up to 9) points driven right before END FARE was
+        // pressed are not silently dropped from the receipt/sync payload.
+        flushAndForgetTraceBuffer(clientUuid)
+        val fullTrace = runCatching {
+            tracePointDao.forTrip(clientUuid).map(TripTracePointEntity::toTelemetryPointDto)
+        }.getOrDefault(emptyList())
+
         val now = System.currentTimeMillis()
         val updated = existing.copy(
             status = TripStatus.CLOSED,
+            gpsTraceJson = cabDispatchJson.encodeToString(fullTrace),
             endAt = Instant.ofEpochMilli(now).toString(),
             endLat = endLat ?: existing.endLat,
             endLng = endLng ?: existing.endLng,
@@ -324,8 +448,26 @@ class TripRepository(
             updatedAt = now,
         )
         tripDao.update(updated)
+        BatteryStatsCounters.recordRoomWrite()
         upsertOutboxRow(updated, ready = true)
         return updated
+    }
+
+    /**
+     * Marks a trip synced ([TripDao.markSynced]) AND drops its now-redundant
+     * [tracePointDao] rows (G8 cleanup, W4 §3) — called by
+     * [au.com.threesixty.cabdispatch.sync.SyncWorker]'s `OutboxDrainer` port in place of a bare
+     * `tripDao.markSynced` call, since this is the one point in the sync pipeline that actually
+     * KNOWS the server now has this trip's trace: [TripEntity.gpsTraceJson] (materialised once at
+     * [closeTrip] time, from exactly these rows) already rode along inside the
+     * [TripSyncItemDto] payload that just synced successfully. Deleting any earlier — e.g. at
+     * [closeTrip] time — would drop the device's only copy of evidence a failed/retried sync might
+     * still need. Best-effort: a failure to delete leaves harmless already-synced rows on-device
+     * rather than failing a sync that has already, correctly, been marked complete.
+     */
+    suspend fun markSyncedAndCleanupTrace(clientUuid: String, serverId: String) {
+        tripDao.markSynced(clientUuid, serverId)
+        runCatching { tracePointDao.deleteForTrip(clientUuid) }
     }
 
     /**
@@ -524,4 +666,18 @@ class TripRepository(
 
     private fun decodeGpsTrace(json: String): List<TelemetryPointDto> =
         cabDispatchJson.decodeFromString(json)
+
+    private companion object {
+        /** [bufferTracePoints]'s point-count flush threshold — see that method's doc. */
+        const val TRACE_BATCH_POINT_COUNT = 10
+
+        /** [bufferTracePoints]'s time-based flush threshold, millis — see that method's doc. */
+        const val TRACE_BATCH_INTERVAL_MS = 5_000L
+    }
 }
+
+/** [TripTracePointEntity] -> [TelemetryPointDto] — the wire/JSON shape every consumer of a trace
+ * (the sync payload, the live route-polyline overlay) already expects, so materialising
+ * [TripEntity.gpsTraceJson] from this table is a straight `map`, not a reshape. */
+private fun TripTracePointEntity.toTelemetryPointDto(): TelemetryPointDto =
+    TelemetryPointDto(lat = lat, lng = lng, speedKmh = speedKmh, ts = ts)

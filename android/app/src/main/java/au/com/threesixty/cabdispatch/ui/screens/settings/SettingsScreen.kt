@@ -690,6 +690,16 @@ private fun AboutTabContent(
             )
         }
 
+        // Settings ▸ Diagnostics, debug-only (W4 task 7, 2026-09-12 optimisation plan) —
+        // BatteryStatsPanel self-gates on BuildConfig.DEBUG and renders nothing in a release
+        // build, so no admin-PIN gate is needed here the way the GPS simulator above needs one:
+        // reading these counters cannot fabricate a fare or otherwise affect anything a driver or
+        // the server relies on.
+        Spacer(Modifier.height(24.dp))
+        SectionLabel("DIAGNOSTICS")
+        Spacer(Modifier.height(12.dp))
+        BatteryStatsPanel(modifier = Modifier.fillMaxWidth())
+
         Spacer(Modifier.height(24.dp))
         SectionLabel("ADVANCED")
         Spacer(Modifier.height(12.dp))

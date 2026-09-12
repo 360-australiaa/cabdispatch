@@ -9,12 +9,10 @@ import au.com.threesixty.cabdispatch.data.remote.JobOfferDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.TripContext
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
@@ -123,25 +121,19 @@ class AvailableTripsWheelViewModel : ViewModel() {
     }
 
     /**
-     * Subscribes to `WS /v1/jobs/live` and reconnects with a flat 3s backoff on any
-     * disconnect/failure — same shape as
-     * [au.com.threesixty.cabdispatch.ui.screens.messages.MessagesViewModel.observeLive], see that
-     * method's doc for why (RealtimeSocket itself does not retry, per its own doc).
+     * Subscribes to `WS /v1/jobs/live`. Reconnect-with-backoff used to be hand-rolled here (a flat
+     * 3s retry loop, same shape as
+     * [au.com.threesixty.cabdispatch.ui.screens.messages.MessagesViewModel.observeLive] duplicated
+     * independently) — collapsed (W4 task 5, 2026-09-12 optimisation plan) onto
+     * [au.com.threesixty.cabdispatch.data.remote.RealtimeSocket.connectWithReconnect], which
+     * [jobsRepository.observeLiveOffers][au.com.threesixty.cabdispatch.domain.JobsRepository.observeLiveOffers]
+     * now calls internally — so this method only needs to collect once; the exponential backoff,
+     * jitter and connectivity-pause all live in that one shared implementation.
      */
     private fun observeLive(driverId: String) {
         viewModelScope.launch {
-            while (isActive) {
-                val token = AppContainer.accessToken
-                if (token == null) {
-                    delay(RECONNECT_DELAY_MS)
-                    continue
-                }
-                runCatching {
-                    jobsRepository.observeLiveOffers(token).collect { raw -> handleLiveFrame(raw, driverId) }
-                }
-                if (!isActive) break
-                delay(RECONNECT_DELAY_MS)
-            }
+            jobsRepository.observeLiveOffers { AppContainer.accessToken }
+                .collect { raw -> handleLiveFrame(raw, driverId) }
         }
     }
 
@@ -277,7 +269,6 @@ class AvailableTripsWheelViewModel : ViewModel() {
     }
 
     companion object {
-        private const val RECONNECT_DELAY_MS = 3000L
         private const val JOB_PAGE_LIMIT = 50
     }
 }

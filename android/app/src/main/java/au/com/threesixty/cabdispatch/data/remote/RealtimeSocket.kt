@@ -1,8 +1,16 @@
 package au.com.threesixty.cabdispatch.data.remote
 
+import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -30,9 +38,10 @@ class RealtimeSocket(private val okHttpClient: OkHttpClient) {
     /**
      * Opens a WS connection to [url] and emits every text frame received as a raw JSON string.
      * Cancelling collection of the returned [Flow] closes the socket (normal closure, code 1000).
-     * A connection failure closes the flow with that [Throwable] — callers wanting
-     * reconnect-with-backoff should catch/retry around their own `collect`, this class does not
-     * retry internally.
+     * A connection failure closes the flow with that [Throwable] — this class does not retry
+     * internally. Most callers want [connectWithReconnect] instead; this raw form stays for
+     * anyone (a future consumer, or a test) that genuinely wants a single one-shot connection with
+     * no retry policy attached.
      */
     fun connect(url: String): Flow<String> = callbackFlow {
         val request = Request.Builder().url(url).build()
@@ -51,6 +60,78 @@ class RealtimeSocket(private val okHttpClient: OkHttpClient) {
         }
         val socket = okHttpClient.newWebSocket(request, listener)
         awaitClose { socket.close(NORMAL_CLOSURE_CODE, "collector cancelled") }
+    }
+
+    /**
+     * [connect], wrapped with the shared [ReconnectPolicy] (W4 task 5, 2026-09-12 optimisation
+     * plan) — exponential backoff [ReconnectPolicy.MIN_DELAY_MS] to [ReconnectPolicy.MAX_DELAY_MS]
+     * with jitter, reset once a connection has stayed open for [ReconnectPolicy.CONNECTED_GRACE_MS]
+     * without failing, paused entirely while [isOnline] reports no network, resumed the instant it
+     * flips true. Collapses what used to be independently hand-rolled flat-3s retry loops in
+     * [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel] and
+     * [au.com.threesixty.cabdispatch.ui.screens.messages.MessagesViewModel] onto this one
+     * implementation.
+     *
+     * @param urlProvider Re-evaluated on every (re)connect attempt, not read once — so a token
+     * refreshed mid-collection, or a session that only just paired, is picked up automatically
+     * without the caller having to restart the flow itself. Returning `null` (no session/token
+     * yet) is treated exactly like a failed attempt: the same backoff/jitter applies before trying
+     * again, rather than a separate fixed poll.
+     * @param isOnline The single "is there real connectivity right now" signal — this app already
+     * has one process-lifetime instance,
+     * [au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger.isOnline], reused here rather
+     * than this class standing up its own second `ConnectivityManager.NetworkCallback`
+     * registration for the identical question.
+     * @param policy Injectable so a test can observe/drive the backoff explicitly; defaults to a
+     * fresh [ReconnectPolicy] per call (i.e. per logical subscription), matching the "one policy
+     * instance per socket, not shared across independent sockets" shape this app's two real call
+     * sites (jobs, messages — see [au.com.threesixty.cabdispatch.domain.JobsRepository] and
+     * [au.com.threesixty.cabdispatch.domain.MessagesRepository]) want: a flapping jobs socket must
+     * not penalise the completely independent messages socket's own backoff.
+     */
+    fun connectWithReconnect(
+        urlProvider: () -> String?,
+        isOnline: StateFlow<Boolean>,
+        policy: ReconnectPolicy = ReconnectPolicy(),
+    ): Flow<String> = channelFlow {
+        while (isActive) {
+            isOnline.first { it } // suspends here for as long as ConnectivityManager reports none.
+            val url = urlProvider()
+            if (url == null) {
+                delay(policy.nextDelayMillis())
+                continue
+            }
+            BatteryStatsCounters.recordSocketReconnect()
+            // A genuine `CancellationException` (the collector was cancelled -- e.g. its
+            // ViewModel's scope ended) must NOT be swallowed here and treated as "connection
+            // failed, retry" -- that would keep this loop spinning after whoever was collecting it
+            // has already gone away. Every OTHER failure (the WS closing with an error, a DNS
+            // failure, `urlProvider` returning null next time) is exactly what this loop exists to
+            // retry, so only that narrower case is caught.
+            try {
+                coroutineScope {
+                    // Reset the backoff once the connection has proven itself for
+                    // CONNECTED_GRACE_MS, independent of whether any frame ever arrives on it —
+                    // jobs/messages sockets can sit open, healthy, and silent for long stretches
+                    // between real events, and a healthy-but-quiet connection must not be
+                    // penalised as if it never succeeded.
+                    val resetJob = launch {
+                        delay(ReconnectPolicy.CONNECTED_GRACE_MS)
+                        policy.reset()
+                    }
+                    try {
+                        connect(url).collect { send(it) }
+                    } finally {
+                        resetJob.cancel()
+                    }
+                }
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                throw cancellation
+            } catch (ignored: Exception) {
+                // Connection failure -- fall through to the backoff delay below and retry.
+            }
+            if (isActive) delay(policy.nextDelayMillis())
+        }
     }
 
     companion object {

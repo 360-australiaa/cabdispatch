@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.remote.JobListResponseDto
 import au.com.threesixty.cabdispatch.data.remote.JobOfferDto
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Available Trips (S11/S12) — job/offer broadcast+accept, per spec TCT-DRIVER-APP-01.md §9.
@@ -37,17 +38,28 @@ interface JobsRepository {
     /**
      * Raw JSON text frames from `WS /v1/jobs/live` (pushes `job_offer` events to this driver
      * only) — see [RealtimeSocket]'s doc for why this is untyped `String`, not a parsed event
-     * class. [accessToken] is passed explicitly (rather than read from
-     * [au.com.threesixty.cabdispatch.data.AppContainer.accessToken] internally) so the caller
-     * controls exactly which session's token is used and can restart the flow on token refresh.
+     * class.
+     *
+     * Auto-reconnecting (W4 task 5, 2026-09-12 optimisation plan) via
+     * [RealtimeSocket.connectWithReconnect] — the caller no longer needs its own retry loop; see
+     * that method's doc for the exponential-backoff/connectivity-paused shape this now shares
+     * with [MessagesRepository.observeLive].
+     *
+     * [tokenProvider] is a function (rather than one fixed token, as this used to take) so a
+     * reconnect after a token refresh picks up the CURRENT token automatically — see
+     * [RealtimeSocket.connectWithReconnect]'s `urlProvider` doc for why re-evaluating per attempt
+     * matters.
      */
-    fun observeLiveOffers(accessToken: String): Flow<String>
+    fun observeLiveOffers(tokenProvider: () -> String?): Flow<String>
 }
 
 class RemoteBackedJobsRepository(
     private val apiService: ApiService,
     private val realtimeSocket: RealtimeSocket,
     private val baseHttpUrl: String,
+    /** See [RealtimeSocket.connectWithReconnect]'s `isOnline` doc — this app's single shared
+     * connectivity signal, reused rather than a second `ConnectivityManager` registration. */
+    private val isOnline: StateFlow<Boolean>,
 ) : JobsRepository {
 
     override suspend fun listJobs(status: String?, skip: Int, limit: Int): Result<JobListResponseDto> =
@@ -73,6 +85,9 @@ class RemoteBackedJobsRepository(
             apiService.setDriverAvailability(DriverAvailabilityUpdateDto(isAvailable))
         }
 
-    override fun observeLiveOffers(accessToken: String): Flow<String> =
-        realtimeSocket.connect(RealtimeSocket.jobsLiveUrl(baseHttpUrl, accessToken))
+    override fun observeLiveOffers(tokenProvider: () -> String?): Flow<String> =
+        realtimeSocket.connectWithReconnect(
+            urlProvider = { tokenProvider()?.let { RealtimeSocket.jobsLiveUrl(baseHttpUrl, it) } },
+            isOnline = isOnline,
+        )
 }

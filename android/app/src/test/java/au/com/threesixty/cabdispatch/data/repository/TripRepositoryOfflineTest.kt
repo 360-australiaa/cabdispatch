@@ -3,11 +3,13 @@ package au.com.threesixty.cabdispatch.data.repository
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripTracePointDao
 import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
+import au.com.threesixty.cabdispatch.data.local.entity.TripTracePointEntity
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
 import au.com.threesixty.cabdispatch.domain.fare.URBAN_TARIFF
@@ -215,8 +217,42 @@ class TripRepositoryOfflineTest {
             rows.values.firstOrNull { it.tripClientUuid == tripClientUuid && it.endedAtIso == null }
     }
 
-    private fun repository(tripDao: TripDao, outboxDao: SyncOutboxDao) =
-        TripRepository(tripDao, outboxDao, neverCalledApi(), FakeBlackoutSegmentDao())
+    /** In-memory [TripTracePointDao] — see [TripRepositoryTraceStorageTest] for the dedicated
+     * batching/O(n)/materialisation coverage; this file's own fake is only what the pre-existing
+     * offline-lifecycle tests below need to keep compiling and passing under the new append-only
+     * trace storage (G8, W4 §3). */
+    class FakeTracePointDao : TripTracePointDao {
+        val rows = mutableListOf<TripTracePointEntity>()
+        var insertAllCallCount = 0
+            private set
+
+        override suspend fun insertAll(points: List<TripTracePointEntity>) {
+            insertAllCallCount++
+            points.forEach { point ->
+                rows.removeAll { it.tripClientUuid == point.tripClientUuid && it.seq == point.seq }
+                rows.add(point)
+            }
+        }
+
+        override suspend fun forTrip(tripClientUuid: String): List<TripTracePointEntity> =
+            rows.filter { it.tripClientUuid == tripClientUuid }.sortedBy { it.seq }
+
+        override suspend fun maxSeq(tripClientUuid: String): Int? =
+            rows.filter { it.tripClientUuid == tripClientUuid }.maxOfOrNull { it.seq }
+
+        override suspend fun deleteForTrip(tripClientUuid: String) {
+            rows.removeAll { it.tripClientUuid == tripClientUuid }
+        }
+
+        override suspend fun countForTrip(tripClientUuid: String): Int =
+            rows.count { it.tripClientUuid == tripClientUuid }
+    }
+
+    private fun repository(
+        tripDao: TripDao,
+        outboxDao: SyncOutboxDao,
+        tracePointDao: TripTracePointDao = FakeTracePointDao(),
+    ) = TripRepository(tripDao, outboxDao, neverCalledApi(), FakeBlackoutSegmentDao(), tracePointDao)
 
     private suspend fun openATrip(repo: TripRepository, clientUuid: String = "trip-1"): TripEntity =
         repo.openTrip(
@@ -354,13 +390,18 @@ class TripRepositoryOfflineTest {
     }
 
     @Test
-    fun `the GPS trace appends across ticks, because the server replays it`() = runTest {
-        // Unlike the counters above, the trace genuinely accumulates: `POST /v1/trips/sync`'s
-        // recompute_from_trace replays these points to validate the device total within 1%. A trace
-        // that overwrote would leave the server replaying one point and flagging every trip — which
-        // is a real failure this project has already had (see HiredViewModel's nextTracePoint doc).
+    fun `the GPS trace appends across ticks (into the trace-point table) and materialises whole at close`() = runTest {
+        // G8, W4 §3 (2026-09-12 optimisation plan): the live trace no longer lives on
+        // TripEntity.gpsTraceJson tick by tick (that was the O(n^2) full-blob-rewrite bug) — it
+        // accumulates in the append-only trace-point table instead (see
+        // TripRepositoryTraceStorageTest for the dedicated batching/O(n) coverage) and is
+        // materialised onto gpsTraceJson exactly once, at closeTrip. The SERVER-FACING guarantee
+        // this test was originally written to pin — `POST /v1/trips/sync`'s recompute_from_trace
+        // must see every point, not just the last one — still holds; only WHEN it lands on
+        // gpsTraceJson changed.
         val tripDao = FakeTripDao()
-        val repo = repository(tripDao, FakeOutboxDao())
+        val tracePointDao = FakeTracePointDao()
+        val repo = repository(tripDao, FakeOutboxDao(), tracePointDao)
         openATrip(repo)
 
         repeat(5) { i ->
@@ -373,8 +414,26 @@ class TripRepositoryOfflineTest {
             )
         }
 
-        val trip = repo.getTrip("trip-1")!!
-        assertEquals(5, repo.decodeTraceForTest(trip.gpsTraceJson).size)
+        // Mid-trip: only 5 points ticked, short of both the 10-point and 5s batch thresholds (see
+        // TripRepositoryTraceStorageTest for the dedicated batching coverage), so nothing has
+        // flushed to the trace-point table yet and gpsTraceJson is still untouched -- exactly the
+        // "up to 9 points may still be buffered" trade-off tick()'s own doc documents.
+        assertEquals("[]", repo.getTrip("trip-1")!!.gpsTraceJson)
+        assertEquals(0, tracePointDao.forTrip("trip-1").size)
+
+        repo.closeTrip(clientUuid = "trip-1", endLat = null, endLng = null, deviceTotal = "12.34")
+
+        // closeTrip force-flushes whatever was still buffered -- all 5 points land, in order.
+        assertEquals(5, tracePointDao.forTrip("trip-1").size)
+        assertEquals((0..4).toList(), tracePointDao.forTrip("trip-1").map { it.seq })
+
+        val closed = repo.getTrip("trip-1")!!
+        assertEquals(5, repo.decodeTraceForTest(closed.gpsTraceJson).size)
+        assertEquals(
+            "trace order must survive materialisation",
+            (0..4).map { i -> 151.21 + i * 0.001 },
+            repo.decodeTraceForTest(closed.gpsTraceJson).map { it.lng },
+        )
     }
 
     @Test

@@ -3,6 +3,7 @@ package au.com.threesixty.cabdispatch.domain
 import android.content.Context
 import android.content.Intent
 import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.DeviceHeartbeatRequestDto
 import au.com.threesixty.cabdispatch.data.remote.DeviceCommandAckDto
@@ -205,6 +206,14 @@ data class DeviceCommandState(
  * device-owner-level Android permissions (zero-touch/QR provisioning) this app does not hold and
  * that have never been set up, so it stays a backend-only command queue an admin can see pending.
  */
+// W4's "skip when idle" backoff (task 4) split pollOnce's network round trip into its own
+// postHeartbeat method purely to keep pollOnce's own early-return count down (see that method's
+// doc) -- that is the function that pushed this already-large class (526 lines pre-W4, per the
+// 2026-09-08 architecture audit) one function over TooManyFunctions' threshold. A real fix would
+// mean splitting this class's actual responsibilities (poll loop, locate, restart, vehicle
+// rebind) apart, which is materially larger than this pass's scope and risks the exact kind of
+// churn the plan's own "don't touch what you don't have to" operating rule warns against.
+@Suppress("TooManyFunctions")
 class DeviceCommandHeartbeat(
     private val apiService: ApiService,
     private val speedSource: SpeedSource,
@@ -236,6 +245,35 @@ class DeviceCommandHeartbeat(
      * single tick. Only touched from inside the poll loop, so no synchronisation is needed.
      */
     private var previousLocateRequested = false
+
+    /** The last battery percentage / network transport this class actually READ (regardless of
+     * whether that tick's POST was skipped) — see [pollOnce]'s "Skipping the POST" doc. Only
+     * touched from inside the poll loop, so no synchronisation is needed. */
+    private var lastKnownBattery: Int? = null
+    private var lastKnownNetwork: String? = null
+
+    /** When [lastKnownBattery]/[lastKnownNetwork] last actually CHANGED — the baseline
+     * [shouldSkipPoll]'s [DEVICE_HEARTBEAT_IDLE_SKIP_THRESHOLD_MS] check measures from. Seeded to "now" at
+     * construction (not `0L`) so a freshly-started loop needs a real 5 minutes of stability before
+     * it can ever skip a tick, never an artificial one from an epoch-zero baseline. */
+    private var lastChangedAtMs: Long = System.currentTimeMillis()
+
+    /** When this class last actually sent the heartbeat POST (skipped ticks do not update this) —
+     * the baseline [shouldSkipPoll]'s [DEVICE_HEARTBEAT_MAX_SILENCE_MS] safety cap measures from. `0L` means "never
+     * posted yet", which makes the very first tick's [shouldSkipPoll] call always `false` — the
+     * same "act then delay" immediacy [pollLoop]'s own doc already requires. */
+    private var lastPostAtMs: Long = 0L
+
+    /** Reads this class's own tracked state and delegates to [shouldSkipDeviceHeartbeatPoll] — the
+     * pure decision, unit-testable directly (see `DeviceCommandHeartbeatSkipTest`) without a fake
+     * clock/coroutine harness by calling that function with explicit values instead of going
+     * through this instance method. See [pollOnce]'s "Skipping the POST" doc for the rationale. */
+    private fun shouldSkipPoll(now: Long): Boolean = shouldSkipDeviceHeartbeatPoll(
+        now = now,
+        lastPostAtMs = lastPostAtMs,
+        lastChangedAtMs = lastChangedAtMs,
+        screenOn = ScreenStateMonitor.isScreenOn(),
+    )
 
     /**
      * Begins supervising [SessionHolder.deviceIdFlow] for the process lifetime. Call exactly once,
@@ -382,14 +420,53 @@ class DeviceCommandHeartbeat(
      * (The `runCatching` around the call swallows [kotlinx.coroutines.CancellationException] along
      * with everything else — byte-identical to [LivePositionHeartbeat.publishOnce], which is why it
      * is left as-is: it is house-consistent, and the two would be fixed together or not at all.)
+     *
+     * ### Skipping the POST when nothing is happening (W4 task 4, 2026-09-12 optimisation plan)
+     * A parked, screen-off tablet with a stable battery reading and a stable network transport is
+     * telling this class the same fact every 60 seconds: "still here, nothing changed". [shouldSkipPoll]
+     * answers whether THIS tick may skip sending that fact, on three conditions, all required:
+     * the screen is off ([ScreenStateMonitor.isScreenOn]), battery+network have read IDENTICAL to
+     * [lastKnownBattery]/[lastKnownNetwork] for at least [DEVICE_HEARTBEAT_IDLE_SKIP_THRESHOLD_MS] (5 min), and the
+     * device has not gone completely silent for [DEVICE_HEARTBEAT_MAX_SILENCE_MS] (8 min) — see that constant's own
+     * doc for why 8, not the full 10.
+     *
+     * **What a skipped tick does NOT do:** poll for `kiosk_locked`/`force_update_pending`/
+     * `locate_requested`/`reboot_requested`. This is a real, deliberate trade-off, not an
+     * oversight — a parked, idle, screen-off tablet is also the tablet an admin's "kiosk lock" or
+     * "locate" tap can least afford to reach slowly, and this class's own "Interval" doc already
+     * frames 60s as a command-latency budget an admin tolerates. [DEVICE_HEARTBEAT_MAX_SILENCE_MS] exists
+     * specifically to bound how long that trade-off can run before a real poll forces through
+     * regardless of screen/battery/network state, so the worst case is "commands queued while this
+     * tablet was genuinely idle wait up to ~8 minutes", not "indefinitely, for as long as the
+     * tablet sits still". No backend coordination was possible from this worktree to confirm the
+     * server's own online/offline threshold — see [DEVICE_HEARTBEAT_MAX_SILENCE_MS]'s own doc for the assumption
+     * this is built on and who should confirm it.
      */
     private suspend fun pollOnce(deviceId: String) {
+        val battery = DeviceTelemetry.readBatteryPercent(appContext)
+        val network = DeviceTelemetry.readNetworkType(appContext)
+        val now = System.currentTimeMillis()
+        if (battery != lastKnownBattery || network != lastKnownNetwork) {
+            lastKnownBattery = battery
+            lastKnownNetwork = network
+            lastChangedAtMs = now
+        }
+        if (shouldSkipPoll(now)) return
+        lastPostAtMs = now
+        BatteryStatsCounters.recordHeartbeat()
+        postHeartbeat(deviceId, battery, network)
+    }
+
+    /** The actual network round trip and response handling — split out of [pollOnce] purely to
+     * keep that method's own early-return count down after the "skip when idle" check (W4 task 4)
+     * joined the two pre-existing ones below; carries no state of its own beyond its parameters. */
+    private suspend fun postHeartbeat(deviceId: String, battery: Int?, network: String?) {
         val result = runCatching {
             apiService.deviceHeartbeat(
                 deviceId,
                 DeviceHeartbeatRequestDto(
-                    battery = DeviceTelemetry.readBatteryPercent(appContext),
-                    network = DeviceTelemetry.readNetworkType(appContext),
+                    battery = battery,
+                    network = network,
                     appVersion = BuildConfig.VERSION_NAME,
                 ),
                 // Closes this class's own "real precondition" gap (2026-08-29 backend change): a
@@ -591,4 +668,51 @@ class DeviceCommandHeartbeat(
          * real availability status. Same value S6 used before this moved. */
         const val LOCATE_RESPONSE_STATUS = "unknown"
     }
+}
+
+/** How long battery+network must have read unchanged, screen off, before [DeviceCommandHeartbeat.pollOnce]
+ * may skip a tick's POST (W4 task 4). 5 minutes: long enough that an ordinary brief screen-off (a
+ * driver locking the tablet between fares) never triggers it, short enough that a genuinely
+ * parked-overnight tablet starts saving requests well within its first hour. Top-level (not on
+ * that class's own `private companion object`) so [shouldSkipDeviceHeartbeatPoll]'s tests can
+ * reference it directly without reflection. */
+internal const val DEVICE_HEARTBEAT_IDLE_SKIP_THRESHOLD_MS = 5 * 60_000L
+
+/**
+ * Hard cap on how long [DeviceCommandHeartbeat.pollOnce] may go without an ACTUAL POST, regardless
+ * of how idle the device looks — see that method's "Skipping the POST" doc.
+ *
+ * The task brief for this pass states the assumption this is built on directly: *"the server
+ * treats <10min absence as still-online"* — but confirming that figure against the real backend
+ * (`backend/app/services/fleet.py`'s `record_heartbeat`/whatever reads `last_seen_at` to decide
+ * "online") needs backend coordination this Android worktree does not have (per this pass's own
+ * operating rules: no cross-workstream backend changes). 8 minutes, not 10, is a deliberately
+ * conservative margin under that UNVERIFIED figure — if the real server threshold turns out to be
+ * tighter than 10 minutes, or the assumption is simply wrong, this constant is the one place to
+ * correct once someone on the backend side confirms the real number.
+ */
+internal const val DEVICE_HEARTBEAT_MAX_SILENCE_MS = 8 * 60_000L
+
+/**
+ * Pure decision behind [DeviceCommandHeartbeat.pollOnce]'s "skip the POST" backoff (W4 task 4,
+ * 2026-09-12 optimisation plan) — no Android, no coroutines, so it is directly unit-testable
+ * against explicit millisecond values (see `DeviceCommandHeartbeatSkipTest`) rather than only
+ * through the full class with its real clock and `ScreenStateMonitor` singleton.
+ *
+ * A skip requires ALL THREE: the screen is off, the device has gone at least
+ * [DEVICE_HEARTBEAT_IDLE_SKIP_THRESHOLD_MS] since battery/network last changed, and the device has
+ * not gone completely silent for [DEVICE_HEARTBEAT_MAX_SILENCE_MS] (the safety cap). The very
+ * first ever call ([lastPostAtMs] == 0) always answers `false` — see that parameter's own doc.
+ */
+internal fun shouldSkipDeviceHeartbeatPoll(
+    now: Long,
+    lastPostAtMs: Long,
+    lastChangedAtMs: Long,
+    screenOn: Boolean,
+): Boolean {
+    // Never posted yet, or the safety cap has elapsed -- either way, a real POST is due now.
+    val neverPostedOrOverdue = lastPostAtMs == 0L || now - lastPostAtMs >= DEVICE_HEARTBEAT_MAX_SILENCE_MS
+    if (neverPostedOrOverdue) return false
+    val idleLongEnough = (now - lastChangedAtMs) >= DEVICE_HEARTBEAT_IDLE_SKIP_THRESHOLD_MS
+    return !screenOn && idleLongEnough
 }
