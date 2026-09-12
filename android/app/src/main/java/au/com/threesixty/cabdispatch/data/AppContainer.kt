@@ -685,6 +685,12 @@ object AppContainer {
         )
     }
 
+    /** Task 7's debug-only recorder — see that class's own doc for what it produces and, just as
+     * importantly, what it cannot (a real Sydney drive fixture needs a physical tablet). */
+    val imuTraceRecorder: au.com.threesixty.cabdispatch.domain.location.inertial.ImuTraceRecorder by lazy {
+        au.com.threesixty.cabdispatch.domain.location.inertial.ImuTraceRecorder(appContext)
+    }
+
     val fareEngine: FareEngine by lazy {
         FareEngineImpl(
             speedSource,

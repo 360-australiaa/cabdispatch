@@ -105,7 +105,11 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                 // distance rate.
                 AppContainer.speedSource.locationFix,
                 probes,
-            ) { command, update, fix, p ->
+                // W2 (2026-09-12): live calibration quality for the advisory "Motion sensors" row
+                // -- see DeviceReadiness.ReadinessCheck.MotionSensors' own doc for why this is
+                // advisory, never blocking.
+                AppContainer.vehicleFrameCalibrator.calibration,
+            ) { command, update, fix, p, calibration ->
                 val inputs = DeviceReadiness.Inputs(
                     deviceId = command.deviceId,
                     deviceRejected = command.deviceRejected,
@@ -131,6 +135,7 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                     mapTokenPresent = p.mapTokenPresent,
                     tariffSigningKeyCached = p.tariffSigningKeyCached,
                     vehicleClassDeclared = p.vehicleClassDeclared,
+                    motionSensorsCalibrationQuality = calibration?.quality?.name,
                 )
                 Triple(DeviceReadiness.evaluate(inputs), DeviceReadiness.blockingFailures(inputs), update)
             }.collect { (results, blocking, update) ->

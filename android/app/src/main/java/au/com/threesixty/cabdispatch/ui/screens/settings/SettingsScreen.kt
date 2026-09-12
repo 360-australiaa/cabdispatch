@@ -671,6 +671,15 @@ private fun AboutTabContent(
         RerunSetupTile(onRerunSetup, Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(24.dp))
+        // W2 (inertial dead-reckoning, 2026-09-12), task 8: shadow-mode calibration/residual
+        // evidence -- read-only (see InertialDiagnosticsPanel's own doc for why no PIN gate is
+        // needed here). Placed ahead of the GPS simulator so a technician sees the meter's real
+        // sensor state before reaching for a fabricated one.
+        SectionLabel("MOTION SENSORS")
+        Spacer(Modifier.height(12.dp))
+        InertialDiagnosticsPanel(modifier = Modifier.fillMaxWidth())
+
+        Spacer(Modifier.height(24.dp))
         SectionLabel(
             if (SIMULATOR_REQUIRES_ADMIN_PIN) "GPS SIMULATOR (TESTING)" else "GPS SIMULATOR (TESTING · UNLOCKED)",
         )

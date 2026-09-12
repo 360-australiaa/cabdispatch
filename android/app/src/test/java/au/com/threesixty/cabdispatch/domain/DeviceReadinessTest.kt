@@ -24,6 +24,11 @@ import org.junit.Test
  */
 class DeviceReadinessTest {
 
+    // LongParameterList: this fixture mirrors DeviceReadiness.Inputs field-for-field, on purpose --
+    // every test in this file calls it with only the handful of named parameters it actually cares
+    // about, defaulted to a "healthy tablet" elsewhere. Splitting it up would just move the same
+    // sixteen knobs behind an extra layer of indirection.
+    @Suppress("LongParameterList")
     private fun inputs(
         deviceId: String? = "device-1",
         deviceRejected: Boolean = false,
@@ -41,6 +46,7 @@ class DeviceReadinessTest {
         mapTokenPresent: Boolean? = true,
         tariffSigningKeyCached: Boolean? = true,
         vehicleClassDeclared: Boolean? = true,
+        motionSensorsCalibrationQuality: String? = "GOOD",
     ) = DeviceReadiness.Inputs(
         deviceId = deviceId,
         deviceRejected = deviceRejected,
@@ -57,6 +63,7 @@ class DeviceReadinessTest {
         mapTokenPresent = mapTokenPresent,
         tariffSigningKeyCached = tariffSigningKeyCached,
         vehicleClassDeclared = vehicleClassDeclared,
+        motionSensorsCalibrationQuality = motionSensorsCalibrationQuality,
     )
 
     private fun blockedChecks(inputs: DeviceReadiness.Inputs) =
@@ -161,6 +168,7 @@ class DeviceReadinessTest {
             kiosk = DeviceReadiness.KioskState.DepotWantsItButNotPinned,
             mapTokenPresent = false,
             vehicleClassDeclared = false,
+            motionSensorsCalibrationQuality = null,
         )
 
         assertTrue(DeviceReadiness.blockingFailures(everythingAdvisoryFailing).isEmpty())
@@ -406,6 +414,30 @@ class DeviceReadinessTest {
 
         assertFalse(unchecked.passed)
         assertEquals("Not checked", unchecked.detail)
+    }
+
+    // --- motion sensors (W2, 2026-09-12) ------------------------------------------------------
+
+    @Test
+    fun `motion sensors GOOD passes and is never blocking`() {
+        val row = DeviceReadiness.evaluate(inputs(motionSensorsCalibrationQuality = "GOOD"))
+            .first { it.check == DeviceReadiness.ReadinessCheck.MotionSensors }
+
+        assertTrue(row.passed)
+        assertEquals(DeviceReadiness.Severity.ADVISORY, row.severity)
+    }
+
+    @Test
+    fun `motion sensors LEARNING or uncalibrated does not pass but never blocks`() {
+        for (quality in listOf("LEARNING", "NONE", null)) {
+            val row = DeviceReadiness.evaluate(inputs(motionSensorsCalibrationQuality = quality))
+                .first { it.check == DeviceReadiness.ReadinessCheck.MotionSensors }
+            assertFalse("quality=$quality must not pass", row.passed)
+        }
+        assertTrue(
+            "MotionSensors must never be able to block a shift start",
+            DeviceReadiness.blockingFailures(inputs(motionSensorsCalibrationQuality = null)).isEmpty(),
+        )
     }
 
     // --- the whole set ----------------------------------------------------------------------

@@ -60,6 +60,13 @@ class InertialSpeedSource(
      * never [speedKmh]/[locationFix]. */
     override val estimate: StateFlow<InertialEstimate?> = _estimate.asStateFlow()
 
+    // --- task 4/8's shadow-mode residual evidence -----------------------------------------------
+    private val residualBufferAbsKmh = ArrayDeque<Double>()
+    private val _residualStats = MutableStateFlow<ResidualStats?>(null)
+
+    /** Task 8's diagnostics figure -- see [ResidualStats]'s own doc for what gates on it. */
+    val residualStats: StateFlow<ResidualStats?> = _residualStats.asStateFlow()
+
     @Volatile private var blackoutActive = false
     private var entryFix: LocationFix? = null
     private var traveledAlongHeadingKm = 0.0
@@ -77,6 +84,11 @@ class InertialSpeedSource(
                     _speedKmh.value = est.speedKmh
                     _fix.value = displayFix(est, sample.timestampNanos)
                 } else {
+                    // Task 4's "logs the residual vEst - vGps ... into a ring buffer" -- taken
+                    // BEFORE reseeding, so it measures exactly one sample interval's worth of
+                    // free-running drift since the LAST reseed, the real evidence [ResidualStats]
+                    // exists to collect (see that type's own doc for what it gates).
+                    recordResidual(est.speedKmh - real.speedKmh.value)
                     // Shadow mode (task 4): keep the estimator seeded from live ground truth so it
                     // never drifts while GPS is available, and so a blackout that starts on the very
                     // next sample begins from a trustworthy seed, not a stale one.
@@ -109,6 +121,21 @@ class InertialSpeedSource(
         blackoutActive = false
         entryFix = null
         estimator.seed(real.speedKmh.value, real.locationFix.value?.heading)
+    }
+
+    /** Rolling-window median/p95 of |residual|, recomputed on every shadow-mode sample once enough
+     * history exists to make the figure meaningful -- see [ResidualStats]'s own doc. */
+    private fun recordResidual(residualKmh: Double) {
+        residualBufferAbsKmh.addLast(kotlin.math.abs(residualKmh))
+        while (residualBufferAbsKmh.size > RESIDUAL_BUFFER_SIZE) residualBufferAbsKmh.removeFirst()
+        if (residualBufferAbsKmh.size < MIN_RESIDUAL_SAMPLES) return
+        val sorted = residualBufferAbsKmh.sorted()
+        val p95Index = (sorted.size * P95_FRACTION).toInt().coerceAtMost(sorted.size - 1)
+        _residualStats.value = ResidualStats(
+            medianAbsKmh = sorted[sorted.size / 2],
+            p95AbsKmh = sorted[p95Index],
+            sampleCount = sorted.size,
+        )
     }
 
     private fun displayFix(est: InertialEstimate, sampleNanos: Long): LocationFix? {
@@ -145,5 +172,10 @@ class InertialSpeedSource(
         /** Caps one display-position step at 30s of travel even if the sensor thread stalls —
          * cosmetic-only guard, mirrors [InertialSpeedEstimator]'s own `MAX_STEP_SECONDS` reasoning. */
         private const val MAX_DISPLAY_STEP_HOURS = MAX_DISPLAY_STEP_SECONDS / SECONDS_PER_HOUR
+
+        /** ~60s of history at [ImuSampler]'s ~10 Hz publish rate. */
+        private const val RESIDUAL_BUFFER_SIZE = 600
+        private const val MIN_RESIDUAL_SAMPLES = 10
+        private const val P95_FRACTION = 0.95
     }
 }

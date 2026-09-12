@@ -172,6 +172,19 @@ enum class CalibrationQuality {
 }
 
 /**
+ * Task 4's shadow-mode evidence: how far [InertialSpeedEstimator]'s own free-running estimate
+ * drifted from live GPS over one shadow-mode reseed interval, aggregated over a rolling window —
+ * this is the exact figure the plan's acceptance criteria (task 8/W2 acceptance: "median |residual|
+ * <= 3 km/h, p95 <= 8 km/h") gates **OWNER G3** (enabling real billing) on. Surfaced to
+ * `InertialDiagnosticsPanel.kt` (task 8) so that evidence is visible without an APK rebuild.
+ */
+data class ResidualStats(
+    val medianAbsKmh: Double,
+    val p95AbsKmh: Double,
+    val sampleCount: Int,
+)
+
+/**
  * The learned mapping from tablet frame to vehicle frame — task 3's output. Immutable; a new
  * calibration event produces a new instance rather than mutating one in place, so a consumer
  * holding a reference from one tick never sees it change under it mid-computation.

@@ -166,6 +166,23 @@ object DeviceReadiness {
 
         /** The command heartbeat is currently reaching the server. */
         Heartbeat,
+
+        /**
+         * W2 (inertial dead-reckoning, 2026-09-12): the tablet's own gyroscope/accelerometer
+         * calibration (`VehicleFrameCalibrator`) has reached [au.com.threesixty.cabdispatch.domain
+         * .location.inertial.CalibrationQuality.GOOD].
+         *
+         * Advisory, never blocking, and deliberately so: calibration only ever completes DURING a
+         * real drive with GPS live (task 3's confirming-event bar), so a tablet freshly commissioned
+         * at the depot, or one that has just been remounted, correctly starts every shift at
+         * [au.com.threesixty.cabdispatch.domain.location.inertial.CalibrationQuality.NONE] with
+         * nothing wrong at all -- gating a shift start on this would strand a driver over a
+         * condition that fixes itself within the first few minutes of ordinary driving. Also,
+         * `BuildConfig.INERTIAL_BILLING_ENABLED` is off by default (owner gate G3), so an
+         * uncalibrated estimator never actually costs a driver anything until an owner has
+         * explicitly turned billing on.
+         */
+        MotionSensors,
     }
 
     /**
@@ -225,6 +242,10 @@ object DeviceReadiness {
         val mapTokenPresent: Boolean? = null,
         val tariffSigningKeyCached: Boolean? = null,
         val vehicleClassDeclared: Boolean? = null,
+        /** [au.com.threesixty.cabdispatch.domain.location.inertial.CalibrationQuality] name, or
+         * `null` before anything has looked (treated the same as NONE for [motionSensors]'s own
+         * purposes — see that function). */
+        val motionSensorsCalibrationQuality: String? = null,
     )
 
     /**
@@ -266,6 +287,7 @@ object DeviceReadiness {
         signedTariff(inputs),
         vehicleClass(inputs),
         heartbeat(inputs),
+        motionSensors(inputs),
     )
 
     /** The permissions still missing, worst first — for the screen's expandable sub-list and for
@@ -449,6 +471,17 @@ object DeviceReadiness {
             // must still be able to start its shift.
             false -> "Cannot reach the depot right now — remote commands will arrive when it can"
             null -> "No heartbeat yet this session"
+        },
+    )
+
+    private fun motionSensors(inputs: Inputs) = ReadinessResult(
+        check = ReadinessCheck.MotionSensors,
+        passed = inputs.motionSensorsCalibrationQuality == "GOOD",
+        severity = Severity.ADVISORY,
+        detail = when (inputs.motionSensorsCalibrationQuality) {
+            "GOOD" -> "Calibrated — the meter can keep billing through a real GPS blackout"
+            "LEARNING" -> "Learning the vehicle's forward direction — drive normally for a few minutes"
+            else -> "Not yet calibrated — completes automatically during ordinary driving"
         },
     )
 }

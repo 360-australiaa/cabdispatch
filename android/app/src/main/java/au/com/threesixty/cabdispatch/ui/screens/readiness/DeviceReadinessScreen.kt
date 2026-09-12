@@ -582,6 +582,8 @@ private fun DeviceReadiness.ReadinessCheck.label(): String = when (this) {
     DeviceReadiness.ReadinessCheck.OfflineMaps -> "Offline maps"
     DeviceReadiness.ReadinessCheck.SignedTariff -> "Signed tariff"
     DeviceReadiness.ReadinessCheck.Heartbeat -> "Depot heartbeat"
+    // W2 (inertial dead-reckoning, 2026-09-12) -- see that check's own doc for why it is advisory.
+    DeviceReadiness.ReadinessCheck.MotionSensors -> "Motion sensors"
 }
 
 /**
