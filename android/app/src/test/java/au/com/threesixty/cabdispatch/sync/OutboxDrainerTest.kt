@@ -4,7 +4,9 @@ import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.dao.SyncOutboxDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripTracePointDao
 import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TripTracePointEntity
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
@@ -132,7 +134,7 @@ class OutboxDrainerTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
 
         // 1. Open a trip entirely offline (fakeServer is never touched by TripRepository).
         val opened = repository.openTrip(
@@ -167,10 +169,16 @@ class OutboxDrainerTest {
         assertEquals(1, outboxDao.countForClientUuid(opened.clientUuid))
         val afterTicks = outboxDao.getByClientUuid(OutboxEntityType.TRIP, opened.clientUuid)!!
         assertFalse(afterTicks.readyToSync)
+        // G8, W4 §3 (2026-09-12 optimisation plan): TripEntity.gpsTraceJson is no longer kept
+        // live-updated tick by tick -- the 5 points ticked above are buffered in TripRepository's
+        // own in-memory append-only trace buffer (short of the 10-point/5s flush threshold) and
+        // materialised onto gpsTraceJson exactly once, at closeTrip -- see step 3 below, where
+        // syncPayload.gpsTrace.size is asserted to be all 5, in order. TripEntity's own draft
+        // outbox snapshot (what this decodes) is honestly "[]" until then.
         val traceAfterTicks = cabDispatchJson.decodeFromString<List<TelemetryPointDto>>(
             cabDispatchJson.decodeFromString(TripEntity.serializer(), afterTicks.entityJson).gpsTraceJson,
         )
-        assertEquals(5, traceAfterTicks.size)
+        assertEquals(0, traceAfterTicks.size)
 
         // 3. Close offline.
         val closed = repository.closeTrip(
@@ -192,7 +200,9 @@ class OutboxDrainerTest {
 
         // 4. "App killed and relaunched": new TripRepository/OutboxDrainer instances,
         // same underlying fake store (== the same on-disk Room DB across a process restart).
-        val relaunchedRepository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val relaunchedRepository = TripRepository(
+            tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao(),
+        )
         assertEquals(TripStatus.CLOSED, relaunchedRepository.getTrip(opened.clientUuid)?.status)
 
         // 5. Outbox still has the row.
@@ -254,7 +264,7 @@ class OutboxDrainerTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
 
         val opened = repository.openTrip(
             vehicleId = "vehicle-1",
@@ -302,7 +312,9 @@ class OutboxDrainerTest {
     fun `closeTrip with no live fix preserves the navigator's drop-off, never the start point`() = runTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
-        val repository = TripRepository(tripDao, outboxDao, FakeApiService(), FakeBlackoutSegmentDao())
+        val repository = TripRepository(
+            tripDao, outboxDao, FakeApiService(), FakeBlackoutSegmentDao(), FakeTracePointDao(),
+        )
 
         val opened = repository.openTrip(
             vehicleId = "vehicle-1",
@@ -364,7 +376,7 @@ class OutboxDrainerTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
 
         val opened = openTestTrip(repository, shiftId = "shift-1")
         closeTestTrip(repository, opened.clientUuid)
@@ -432,7 +444,7 @@ class OutboxDrainerTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
 
         // The poisoned row is the OLDEST, which is what made it so damaging: the batch is
         // oldest-first, so before the cap it sat at the head of the queue forever.
@@ -489,7 +501,7 @@ class OutboxDrainerTest {
         val tripDao = FakeTripDao()
         val outboxDao = InMemorySyncOutboxDao()
         val fakeServer = FakeApiService()
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
 
         val opened = openTestTrip(repository, shiftId = "s")
         closeTestTrip(repository, opened.clientUuid)
@@ -535,7 +547,7 @@ class OutboxDrainerTest {
         assertTrue("payload must carry client_uuid", queued!!.entityJson.contains("client_uuid"))
 
         // 2. Close two trips under that not-yet-real shift, still offline.
-        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao())
+        val repository = TripRepository(tripDao, outboxDao, fakeServer, FakeBlackoutSegmentDao(), FakeTracePointDao())
         val tripA = openTestTrip(repository, shiftId = started.id)
         closeTestTrip(repository, tripA.clientUuid)
         val tripB = openTestTrip(repository, shiftId = started.id)
@@ -743,6 +755,25 @@ private class FakeBlackoutSegmentDao : TripBlackoutSegmentDao {
         rows.values.filter { it.tripClientUuid == tripClientUuid }.sortedBy { it.startedAtIso }
     override suspend fun openSegmentFor(tripClientUuid: String): TripBlackoutSegmentEntity? =
         rows.values.firstOrNull { it.tripClientUuid == tripClientUuid && it.endedAtIso == null }
+}
+
+/** In-memory stand-in for Room's generated `TripTracePointDao` impl (G8, W4 §3) -- nothing in this
+ * file exercises trace-point behaviour directly (see `TripRepositoryTraceStorageTest` for that),
+ * this exists only so [TripRepository]'s constructor is satisfiable here. */
+private class FakeTracePointDao : TripTracePointDao {
+    private val rows = mutableListOf<TripTracePointEntity>()
+    override suspend fun insertAll(points: List<TripTracePointEntity>) {
+        rows.addAll(points)
+    }
+    override suspend fun forTrip(tripClientUuid: String): List<TripTracePointEntity> =
+        rows.filter { it.tripClientUuid == tripClientUuid }.sortedBy { it.seq }
+    override suspend fun maxSeq(tripClientUuid: String): Int? =
+        rows.filter { it.tripClientUuid == tripClientUuid }.maxOfOrNull { it.seq }
+    override suspend fun deleteForTrip(tripClientUuid: String) {
+        rows.removeAll { it.tripClientUuid == tripClientUuid }
+    }
+    override suspend fun countForTrip(tripClientUuid: String): Int =
+        rows.count { it.tripClientUuid == tripClientUuid }
 }
 
 /** In-memory stand-in for Room's generated `TripDao` impl. */

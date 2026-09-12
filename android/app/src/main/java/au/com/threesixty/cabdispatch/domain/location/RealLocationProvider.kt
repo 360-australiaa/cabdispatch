@@ -7,7 +7,10 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
 import au.com.threesixty.cabdispatch.domain.LocationFix
+import au.com.threesixty.cabdispatch.domain.MeterController
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.SpeedSource
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -35,9 +38,33 @@ import kotlinx.coroutines.launch
  * explicit no-GPS fallback for tests/previews and for what this class's own permission-denied
  * behaviour deliberately matches).
  *
- * ### Update rate
+ * ### Update rate and request priority (2026-09-12 optimisation plan, W4 task 2)
  * [TICK_INTERVAL_MS] (1s) matches the fare engine's own 1 Hz tick loop (spec B6: "Tick loop
- * (1 Hz, driven by fused GPS)") — no point sampling location faster than the engine reads it.
+ * (1 Hz, driven by fused GPS)") — no point sampling location faster than the engine reads it. That
+ * used to be the ONLY rate this class ever requested, for the entire process lifetime, the moment
+ * `ACCESS_FINE_LOCATION` was granted — including a tablet sitting logged off overnight. [resolveLocationRequestMode]
+ * now answers "should this class even be asking the location radio for fixes right now, and if
+ * so how precisely/often" from the vehicle's actual state:
+ *
+ * - **Hired or duress -> [LocationRequestMode.HIGH_ACCURACY]** — [Priority.PRIORITY_HIGH_ACCURACY]
+ *   at [TICK_INTERVAL_MS] (1s), byte-for-byte what this class always requested. This is the one
+ *   tier [FareEngineImpl] bills from, so it is deliberately unchanged — see [hiredOrDuress]'s own
+ *   doc for why this branch is checked FIRST, ahead of the on-shift check, so a fare in progress
+ *   can never be starved of 1 Hz fixes by a stale/wrong shift-state read.
+ * - **On shift, not hired -> [LocationRequestMode.BALANCED]** — [Priority.PRIORITY_BALANCED_POWER_ACCURACY]
+ *   at [BALANCED_INTERVAL_MS] (5s). Enough for the Live Map ambient dot
+ *   ([au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat] reads this same [locationFix]) —
+ *   nobody bills money off a driver cruising between ranks.
+ * - **Not on shift -> [LocationRequestMode.OFF]** — no request at all. This is the real fix: a
+ *   parked, logged-off tablet used to run the same 1 Hz high-accuracy GPS radio wakeup as a live
+ *   fare, for as long as the process stayed alive (which, on a kiosked field tablet, can be days).
+ *   [locationFix]/[speedKmh] read `null`/`0.0` while OFF, the identical observable shape as no
+ *   permission granted (see "Permission handling" below) — every consumer already handles that.
+ *
+ * [onShift]/[hiredOrDuress] are polled every [MODE_POLL_INTERVAL_MS] alongside the existing
+ * permission poll (folded into the same loop rather than a second one — see [supervisePermission]),
+ * short enough that escalating to [LocationRequestMode.HIGH_ACCURACY] the moment a fare opens does
+ * not visibly lag the fare engine's own 1 Hz tick.
  *
  * ### Filtering (deliberately simple — spec B6 calls for `kalman(fused_location)`, this is not
  * a Kalman filter)
@@ -77,7 +104,7 @@ import kotlinx.coroutines.launch
  * pass — grep for `ContextCompat.checkSelfPermission` and note every hit today only *checks*,
  * never *requests*; wiring an actual request prompt is squarely a "UI-consumer call site" and out
  * of this pass's scope per its own brief). What this class *does* own: [supervisePermission]
- * polls [hasPermission] every [PERMISSION_POLL_INTERVAL_MS] and starts/stops the underlying
+ * polls [hasPermission] every [MODE_POLL_INTERVAL_MS] and starts/stops the underlying
  * [FusedLocationProviderClient] subscription accordingly — so the moment some future screen's
  * permission-request flow results in a grant, this provider picks up location within one poll
  * interval with zero extra wiring on that screen's part (no explicit "tell the provider" call
@@ -89,6 +116,24 @@ import kotlinx.coroutines.launch
 class RealLocationProvider(
     context: Context,
     private val scope: CoroutineScope,
+    /** `true` while [SessionHolder.session] has an open shift — see "Update rate and request
+     * priority" above. A plain function (rather than reading [SessionHolder] directly in
+     * [supervisePermission]) purely so a test can drive it without touching the real process-wide
+     * session singleton; defaults to the real check. */
+    private val onShift: () -> Boolean = { SessionHolder.session.value?.shiftId != null },
+    /** `true` while there is a live meter accruing a fare OR a duress event is active — see
+     * "Update rate and request priority" above for why this OVERRIDES [onShift] rather than being
+     * gated by it (a trip cannot exist without a shift in the ordinary flow, but this class must
+     * never be the reason a fare loses 1 Hz fixes if that ever isn't true). Defaults to reading
+     * only the static [MeterController.instance] publication point (the "hired" half) — see
+     * [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.isHiredOrDuress]'s own doc for
+     * why a static read, not an injected [MeterController], is the right shape between two
+     * independent process-lifetime singletons.
+     * [au.com.threesixty.cabdispatch.data.AppContainer.speedSource] wires the real, combined
+     * "hired OR duress" lambda (OR-ing in [au.com.threesixty.cabdispatch.domain.DuressController.state]),
+     * so this default is only ever exercised by a test/preview construction that never sets it.
+     */
+    private val hiredOrDuress: () -> Boolean = { MeterController.instance?.activeClientUuid != null },
 ) : SpeedSource {
 
     private val appContext: Context = context.applicationContext
@@ -106,18 +151,27 @@ class RealLocationProvider(
     /** Last fix that passed [passesFilter] — the baseline the next fix is checked against. */
     private var lastAccepted: LocationFix? = null
 
-    /** The currently-running `requestLocationUpdates` collector, or `null` while ungranted/between
-     * retries. Only touched from [supervisorJob]'s own coroutine, so no extra synchronisation. */
+    /** The currently-running `requestLocationUpdates` collector, or `null` while ungranted/off-
+     * shift/between retries. Only touched from [supervisorJob]'s own coroutine, so no extra
+     * synchronisation. */
     private var updatesJob: Job? = null
+
+    /** Which [LocationRequestMode] [updatesJob] was actually started with — `null` while there is
+     * no running subscription. Compared against the freshly-resolved mode on every poll tick so a
+     * mode CHANGE (not just a permission change) restarts the subscription with the new
+     * priority/interval — see [supervisePermission]. */
+    private var runningMode: LocationRequestMode? = null
 
     private val supervisorJob: Job = scope.launch { supervisePermission() }
 
     /**
-     * Owns the whole permission-check → start/stop lifecycle. A plain poll loop rather than a
-     * `BroadcastReceiver`/callback on the permission grant, because there is no such callback for
-     * a plain domain class without an `Activity`/`Fragment` — see class doc. [PERMISSION_POLL_INTERVAL_MS]
-     * is intentionally short enough to feel immediate to a driver who just granted the permission,
-     * long enough not to matter as busy-work in the meantime.
+     * Owns the whole permission-check + request-mode → start/stop/restart lifecycle. A plain poll
+     * loop rather than a `BroadcastReceiver`/callback on the permission grant, because there is no
+     * such callback for a plain domain class without an `Activity`/`Fragment` — see class doc.
+     * [MODE_POLL_INTERVAL_MS] is intentionally short enough to feel immediate both to a driver who
+     * just granted the permission AND to a fare that just opened (see "Update rate and request
+     * priority" above — [LocationRequestMode.HIGH_ACCURACY] must not visibly lag [FareEngineImpl]
+     * starting to bill), long enough not to matter as busy-work in the meantime.
      */
     private suspend fun supervisePermission() {
         // scope.isActive, not a bare isActive — kotlinx.coroutines.isActive is an extension
@@ -127,18 +181,27 @@ class RealLocationProvider(
         // a 2026-08-03 reconciliation pass (see android/HANDOFF.md) while verifying a sibling
         // file's (LivePositionHeartbeat.kt) deliberate avoidance of this exact pitfall.
         while (scope.isActive) {
-            if (hasPermission()) {
-                if (updatesJob?.isActive != true) {
-                    updatesJob = scope.launch { rawLocationUpdates().collect(::onNewFix) }
-                }
+            val mode = if (hasPermission()) {
+                resolveLocationRequestMode(onShift = onShift(), hiredOrDuress = hiredOrDuress())
             } else {
-                updatesJob?.cancel()
-                updatesJob = null
-                lastAccepted = null
-                _locationFix.value = null
-                _speedKmh.value = 0.0
+                LocationRequestMode.OFF
             }
-            delay(PERMISSION_POLL_INTERVAL_MS)
+            if (mode == LocationRequestMode.OFF) {
+                if (runningMode != null) {
+                    updatesJob?.cancel()
+                    updatesJob = null
+                    runningMode = null
+                    lastAccepted = null
+                    _locationFix.value = null
+                    _speedKmh.value = 0.0
+                }
+            } else if (mode != runningMode || updatesJob?.isActive != true) {
+                updatesJob?.cancel()
+                runningMode = mode
+                BatteryStatsCounters.recordLocationRequest()
+                updatesJob = scope.launch { rawLocationUpdates(mode).collect(::onNewFix) }
+            }
+            delay(MODE_POLL_INTERVAL_MS)
         }
     }
 
@@ -147,16 +210,23 @@ class RealLocationProvider(
             PackageManager.PERMISSION_GRANTED
 
     /**
-     * Raw [FusedLocationProviderClient] updates as a cold [Flow]. Every call site
+     * Raw [FusedLocationProviderClient] updates as a cold [Flow], requested at [mode]'s own
+     * priority/interval (see "Update rate and request priority" above). Every call site
      * ([supervisePermission]) only launches this after [hasPermission] just returned `true`, so
      * the `@RequiresPermission` this Play Services API is annotated with is satisfied at runtime
      * even though the compiler can't see that across the `if` — hence the suppression, not a
      * blanket "trust me".
      */
     @SuppressLint("MissingPermission")
-    private fun rawLocationUpdates(): Flow<Location> = callbackFlow {
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, TICK_INTERVAL_MS)
-            .setMinUpdateIntervalMillis(TICK_INTERVAL_MS)
+    private fun rawLocationUpdates(mode: LocationRequestMode): Flow<Location> = callbackFlow {
+        val intervalMs = if (mode == LocationRequestMode.HIGH_ACCURACY) TICK_INTERVAL_MS else BALANCED_INTERVAL_MS
+        val priority = if (mode == LocationRequestMode.HIGH_ACCURACY) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        val request = LocationRequest.Builder(priority, intervalMs)
+            .setMinUpdateIntervalMillis(intervalMs)
             .build()
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
@@ -292,7 +362,14 @@ class RealLocationProvider(
 
     private companion object {
         const val TICK_INTERVAL_MS = 1000L
-        const val PERMISSION_POLL_INTERVAL_MS = 3000L
+
+        /** [LocationRequestMode.BALANCED]'s interval — see "Update rate and request priority"
+         * above. */
+        const val BALANCED_INTERVAL_MS = 5000L
+
+        /** How often [supervisePermission] re-checks permission AND request mode — see that
+         * method's own doc for why one shared poll now covers both. */
+        const val MODE_POLL_INTERVAL_MS = 1000L
         const val MAX_PLAUSIBLE_JUMP_KMH = 180.0
         const val ACCURACY_DEGRADATION_FACTOR = 3.0
         const val ACCURACY_GRACE_PERIOD_SECONDS = 5.0
@@ -305,4 +382,38 @@ class RealLocationProvider(
          * reported speed is clamped to exactly zero. See [stationaryClamp]. */
         const val STATIONARY_SPEED_MS = 1.4f
     }
+}
+
+/**
+ * Which class of [FusedLocationProviderClient] request should be active right now — see
+ * [RealLocationProvider]'s "Update rate and request priority" doc for the full rationale behind
+ * each tier.
+ */
+internal enum class LocationRequestMode {
+    /** Not on shift: no location request at all. */
+    OFF,
+
+    /** On shift, not hired/duress: [Priority.PRIORITY_BALANCED_POWER_ACCURACY]. */
+    BALANCED,
+
+    /** Hired or duress: [Priority.PRIORITY_HIGH_ACCURACY] at the fare engine's own 1 Hz — the
+     * pre-existing, unchanged behaviour. */
+    HIGH_ACCURACY,
+}
+
+/**
+ * Pure decision of [LocationRequestMode] from the vehicle's state — no Android, no Play Services,
+ * so it is directly unit-testable (see `RealLocationProviderModeTest`) without a `Context` or a
+ * `FusedLocationProviderClient` at all, the same "extract the fare-affecting decision into plain
+ * Kotlin" convention [LocationFilteringTest]'s own doc already explains for this file's filters.
+ *
+ * [hiredOrDuress] is checked FIRST and unconditionally wins over [onShift] — see
+ * [RealLocationProvider.hiredOrDuress]'s own constructor doc for why: a fare or a duress event
+ * must never be starved of high-accuracy fixes by a stale/wrong shift-state read, even though in
+ * the ordinary flow a trip cannot exist without a shift already being open.
+ */
+internal fun resolveLocationRequestMode(onShift: Boolean, hiredOrDuress: Boolean): LocationRequestMode = when {
+    hiredOrDuress -> LocationRequestMode.HIGH_ACCURACY
+    onShift -> LocationRequestMode.BALANCED
+    else -> LocationRequestMode.OFF
 }

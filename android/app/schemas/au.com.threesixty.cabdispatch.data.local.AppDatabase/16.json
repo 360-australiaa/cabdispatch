@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 16,
-    "identityHash": "e339d69ca697b362802e6a3f6e0fd724",
+    "identityHash": "2bc33999987bec877eca32deae703b7b",
     "entities": [
       {
         "tableName": "trips",
@@ -967,7 +967,7 @@
       },
       {
         "tableName": "trip_blackout_segments",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientUuid` TEXT NOT NULL, `tripClientUuid` TEXT NOT NULL, `startedAtIso` TEXT NOT NULL, `endedAtIso` TEXT, `entryLat` REAL NOT NULL, `entryLng` REAL NOT NULL, `exitLat` REAL, `exitLng` REAL, `entryWasMoving` INTEGER NOT NULL, `resolution` TEXT NOT NULL, `billedDistanceKm` TEXT NOT NULL, `corridorRoadId` TEXT, `estimatedDistanceKm` TEXT, `referenceDistanceKm` TEXT, `correctionKm` TEXT, `referenceSource` TEXT, `confidence` TEXT, `zuptCount` INTEGER, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`clientUuid`), FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`clientUuid` TEXT NOT NULL, `tripClientUuid` TEXT NOT NULL, `startedAtIso` TEXT NOT NULL, `endedAtIso` TEXT, `entryLat` REAL NOT NULL, `entryLng` REAL NOT NULL, `exitLat` REAL, `exitLng` REAL, `entryWasMoving` INTEGER NOT NULL, `resolution` TEXT NOT NULL, `billedDistanceKm` TEXT NOT NULL, `corridorRoadId` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`clientUuid`), FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "clientUuid",
@@ -1038,36 +1038,6 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "estimatedDistanceKm",
-            "columnName": "estimatedDistanceKm",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "referenceDistanceKm",
-            "columnName": "referenceDistanceKm",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "correctionKm",
-            "columnName": "correctionKm",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "referenceSource",
-            "columnName": "referenceSource",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "confidence",
-            "columnName": "confidence",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "zuptCount",
-            "columnName": "zuptCount",
-            "affinity": "INTEGER"
-          },
-          {
             "fieldPath": "createdAt",
             "columnName": "createdAt",
             "affinity": "INTEGER",
@@ -1110,11 +1080,84 @@
             ]
           }
         ]
+      },
+      {
+        "tableName": "trip_trace_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`tripClientUuid` TEXT NOT NULL, `seq` INTEGER NOT NULL, `lat` REAL NOT NULL, `lng` REAL NOT NULL, `speedKmh` REAL NOT NULL, `ts` TEXT NOT NULL, PRIMARY KEY(`tripClientUuid`, `seq`), FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "tripClientUuid",
+            "columnName": "tripClientUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lng",
+            "columnName": "lng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "speedKmh",
+            "columnName": "speedKmh",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ts",
+            "columnName": "ts",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "tripClientUuid",
+            "seq"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_trace_points_tripClientUuid",
+            "unique": false,
+            "columnNames": [
+              "tripClientUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_trace_points_tripClientUuid` ON `${TABLE_NAME}` (`tripClientUuid`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripClientUuid"
+            ],
+            "referencedColumns": [
+              "clientUuid"
+            ]
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e339d69ca697b362802e6a3f6e0fd724')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2bc33999987bec877eca32deae703b7b')"
     ]
   }
 }

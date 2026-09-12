@@ -12,8 +12,12 @@ import au.com.threesixty.cabdispatch.data.local.dao.TariffSigningKeyDao
 import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.dao.TrafficCameraDao
 import au.com.threesixty.cabdispatch.data.local.dao.TrafficHazardDao
+import android.content.ContentValues
+import android.database.sqlite.SQLiteDatabase
+import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
+import au.com.threesixty.cabdispatch.data.local.dao.TripTracePointDao
 import au.com.threesixty.cabdispatch.data.local.entity.AirportZoneEntity
 import au.com.threesixty.cabdispatch.data.local.entity.ShiftEntity
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
@@ -26,6 +30,9 @@ import au.com.threesixty.cabdispatch.data.local.entity.TrafficCameraEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TrafficHazardEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TripTracePointEntity
+import au.com.threesixty.cabdispatch.data.remote.TelemetryPointDto
+import kotlinx.serialization.builtins.ListSerializer
 
 /**
  * Offline-first local store (B7: "Full trips run offline; queue in Room;
@@ -87,6 +94,33 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
  * every earlier entity added to this database, neither table is ever read by the fare engine, so
  * there is no accompanying [TripEntity] column this time. Real `Migration` ([MIGRATION_13_14]).
  *
+ * Version bumped 14 -> 15 (GPS-blackout audit trail, W1, 2026-09-12) adding one new entity —
+ * [TripBlackoutSegmentEntity], see that class's own doc. Real `Migration` ([MIGRATION_14_15]).
+ *
+ * Version bumped 15 -> 16 (battery/network/storage efficiency pass, W4, 2026-09-12 optimisation
+ * plan §3) adding one new entity — [TripTracePointEntity], the append-only replacement for
+ * repeatedly decode-append-reencode-writing the whole [TripEntity.gpsTraceJson] blob on every
+ * tick (G8 — see that entity's own doc for the O(n^2) write-amplification problem this closes).
+ * No `TripEntity` column changes: `gpsTraceJson` itself is unchanged in shape and stays the
+ * source [au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto.gpsTrace] reads from, only
+ * WHEN it is written changes (materialised once at close, not every tick — see
+ * [au.com.threesixty.cabdispatch.data.repository.TripRepository.tick]'s doc). Real `Migration`
+ * ([MIGRATION_15_16]) that also backfills the new table from every existing trip's
+ * `gpsTraceJson`, so a trip already mid-flight when this upgrade lands does not lose its
+ * already-driven trace the moment the live reader stops treating `gpsTraceJson` as current.
+ *
+ * Version bumped 16 -> 17 (inertial dead-reckoning, W2, 2026-09-12 optimisation plan §1.3) adding
+ * six new nullable columns to [TripBlackoutSegmentEntity] (`estimatedDistanceKm`,
+ * `referenceDistanceKm`, `correctionKm`, `referenceSource`, `confidence`, `zuptCount`) — the
+ * INERTIAL/UNCALIBRATED audit trail for a blackout segment billed from the tablet's own
+ * gyroscope/accelerometer estimate. No new entity. Real `Migration` ([MIGRATION_16_17]), purely
+ * additive `ALTER TABLE ... ADD COLUMN`s — every row written under schema 16 or earlier (every
+ * resolution this migration predates: NONE/CORRIDOR/STATIONARY) reads back with these columns
+ * simply absent, exactly what they mean for a segment inertial billing never touched. Merged in
+ * after landing independently of, and at the same nominal "15 -> 16" version as, the trip-trace
+ * migration immediately above — the two were developed in parallel workstreams and integrated by
+ * renumbering this one to 16 -> 17 rather than by either replacing the other.
+ *
  * **This is the first bump to actually ship a real `Migration`** ([MIGRATION_8_9] below). Every
  * earlier "no-Migration shortcut" bump above assumed "this project has never shipped v1 (no
  * installed base to migrate)" — that assumption held only as long as every test device got a
@@ -124,8 +158,9 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TrafficCameraEntity::class,
         TrafficHazardEntity::class,
         TripBlackoutSegmentEntity::class,
+        TripTracePointEntity::class,
     ],
-    version = 16,
+    version = 17,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -137,6 +172,12 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
     // prove, and why it is still a real, executing test rather than a placeholder.
     exportSchema = true,
 )
+// One abstract accessor per DAO is mandatory Room boilerplate (see the "When adding another
+// entity/DAO" checklist in this class's own doc, step 4) -- it grows by exactly one function every
+// time this database gains a table, which is not the kind of function-count growth
+// TooManyFunctions exists to catch (unrelated behaviour crammed into one class), so a real fix
+// here would mean fewer DAOs, not fewer accessor methods.
+@Suppress("TooManyFunctions")
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tripDao(): TripDao
     abstract fun shiftDao(): ShiftDao
@@ -148,6 +189,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun trafficCameraDao(): TrafficCameraDao
     abstract fun trafficHazardDao(): TrafficHazardDao
     abstract fun tripBlackoutSegmentDao(): TripBlackoutSegmentDao
+    abstract fun tripTracePointDao(): TripTracePointDao
 }
 
 /**
@@ -199,6 +241,82 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
 }
 
 /**
+ * 15 -> 16: the append-only trip-trace-points table (W4, battery/network/storage efficiency pass,
+ * 2026-09-12 optimisation plan §3) — see [TripTracePointEntity]'s own doc for what it replaces
+ * and why.
+ *
+ * Unlike every earlier migration in this file, this one also moves DATA, not just schema: every
+ * trip already on disk carries its route history only in `trips.gpsTraceJson`, and
+ * [au.com.threesixty.cabdispatch.data.repository.TripRepository] stops treating that column as
+ * live the moment this version ships (see that class's `tick`/`closeTrip` doc) — so a trip that
+ * was mid-flight when the upgrade landed would silently lose everything driven so far if this
+ * migration only created the table and left it empty. The backfill below decodes each trip's
+ * existing blob (the exact [TelemetryPointDto] list shape [TripRepository] already
+ * encodes/decodes it as) and inserts one row per point, `seq` assigned by list position — the
+ * identical order the JSON array already encoded. Best-effort PER TRIP (`runCatching`): one
+ * trip with a corrupt/unparseable blob must not fail the whole migration for every other trip on
+ * the device, and a genuinely empty `"[]"` (the ordinary case for most closed/synced trips) simply
+ * inserts nothing.
+ *
+ * Verified against Room's own generated `createAllTables` per [MIGRATION_9_10]'s "How to check
+ * this SQL is right" note, matching column order/types straight off [TripTracePointEntity]'s own
+ * declaration.
+ */
+// The version pair below is this migration's own identity, not an arbitrary literal -- same
+// "self-documenting, not a stand-in for a named constant" reasoning as every other MIGRATION_x_y
+// in this file (e.g. MIGRATION_14_15's `Migration(14, 15)` immediately below).
+@Suppress("MagicNumber")
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `trip_trace_points` (
+                `tripClientUuid` TEXT NOT NULL,
+                `seq` INTEGER NOT NULL,
+                `lat` REAL NOT NULL,
+                `lng` REAL NOT NULL,
+                `speedKmh` REAL NOT NULL,
+                `ts` TEXT NOT NULL,
+                PRIMARY KEY(`tripClientUuid`, `seq`),
+                FOREIGN KEY(`tripClientUuid`) REFERENCES `trips`(`clientUuid`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_trip_trace_points_tripClientUuid` " +
+                "ON `trip_trace_points` (`tripClientUuid`)",
+        )
+        backfillTraceFromExistingBlobs(db)
+    }
+
+    /** See this object's own class doc for why this backfill exists and its failure posture. */
+    private fun backfillTraceFromExistingBlobs(db: SupportSQLiteDatabase) {
+        db.query("SELECT clientUuid, gpsTraceJson FROM trips").use { cursor ->
+            val clientUuidIdx = cursor.getColumnIndexOrThrow("clientUuid")
+            val traceIdx = cursor.getColumnIndexOrThrow("gpsTraceJson")
+            while (cursor.moveToNext()) {
+                val clientUuid = cursor.getString(clientUuidIdx)
+                val json = cursor.getString(traceIdx) ?: "[]"
+                val points = runCatching {
+                    cabDispatchJson.decodeFromString(ListSerializer(TelemetryPointDto.serializer()), json)
+                }.getOrDefault(emptyList())
+                points.forEachIndexed { seq, point ->
+                    val values = ContentValues().apply {
+                        put("tripClientUuid", clientUuid)
+                        put("seq", seq)
+                        put("lat", point.lat)
+                        put("lng", point.lng)
+                        put("speedKmh", point.speedKmh)
+                        put("ts", point.ts)
+                    }
+                    db.insert("trip_trace_points", SQLiteDatabase.CONFLICT_REPLACE, values)
+                }
+            }
+        }
+    }
+}
+
+/**
  * 14 -> 15: the GPS-blackout audit-trail table (W1, GPS blackout program, 2026-09-12) — see
  * [TripBlackoutSegmentEntity]'s own doc for what it records and why. A fresh table with a foreign
  * key onto `trips`, no data migration needed (nothing existed to migrate from).
@@ -239,18 +357,22 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
 }
 
 /**
- * 15 -> 16: W2's inertial-billing audit columns on `trip_blackout_segments` (INERTIAL/UNCALIBRATED
+ * 16 -> 17: W2's inertial-billing audit columns on `trip_blackout_segments` (INERTIAL/UNCALIBRATED
  * resolutions, GPS blackout program, 2026-09-12) — see [TripBlackoutSegmentEntity]'s own doc for
  * each column. Purely additive `ALTER TABLE ... ADD COLUMN`, all nullable with no default beyond
- * SQLite's own `NULL`, so every row written under schema 15 (every resolution this migration
- * predates: NONE/CORRIDOR/STATIONARY) reads back with these columns simply absent — exactly what
- * they mean for a segment inertial billing never touched.
+ * SQLite's own `NULL`, so every row written under schema 16 or earlier (every resolution this
+ * migration predates: NONE/CORRIDOR/STATIONARY) reads back with these columns simply absent —
+ * exactly what they mean for a segment inertial billing never touched.
+ *
+ * Originally written as `Migration(15, 16)` (this and W4's trip-trace-points migration were
+ * developed in parallel workstreams, each the only "next" migration in its own branch); renumbered
+ * to 16 -> 17 during integration once both landed on the same base — see [AppDatabase]'s own doc.
  */
-// MagicNumber: 15/16 are schema version identifiers (this migration's own name states them), not
+// MagicNumber: 16/17 are schema version identifiers (this migration's own name states them), not
 // a magic tuning constant -- same as every other MIGRATION_x_y val in this file, none of which
 // are flagged only because this is the first one added since the baseline was last regenerated.
 @Suppress("MagicNumber")
-val MIGRATION_15_16 = object : Migration(15, 16) {
+val MIGRATION_16_17 = object : Migration(16, 17) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `estimatedDistanceKm` TEXT")
         db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `referenceDistanceKm` TEXT")

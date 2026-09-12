@@ -38,7 +38,11 @@ import java.util.concurrent.TimeUnit
  * so the worker won't even be started by the OS while offline — but
  * [OutboxDrainer] itself also fails safe (see its class doc) if a request
  * still errors mid-flight (e.g. connectivity present but the API host
- * unreachable).
+ * unreachable). The two DIVERGE on `BATTERY_NOT_LOW` (W4 task 6, 2026-09-12 optimisation plan):
+ * [enqueuePeriodic]'s backstop also requires it (a background housekeeping wakeup, deferrable),
+ * [enqueueOneTime]'s reconnect-triggered request deliberately does not (user-initiated-equivalent
+ * — a trip is very possibly waiting to sync the moment connectivity returns, battery state or
+ * not) — see each function's own doc.
  */
 class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
@@ -97,7 +101,12 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         }
 
         override suspend fun markTripSynced(clientUuid: String, serverId: String) {
-            AppContainer.tripDao.markSynced(clientUuid, serverId)
+            // Routed through TripRepository (was a bare AppContainer.tripDao.markSynced call)
+            // since W4 §3, 2026-09-12 optimisation plan: this is the one point in the sync
+            // pipeline that KNOWS the server now has this trip's GPS trace (it just synced), so it
+            // is also the right point to drop the now-redundant trip_trace_points rows -- see
+            // TripRepository.markSyncedAndCleanupTrace's own doc.
+            AppContainer.tripRepository.markSyncedAndCleanupTrace(clientUuid, serverId)
         }
 
         override suspend fun deleteOutboxRow(id: Long) = AppContainer.syncOutboxDao.deleteById(id)
@@ -113,9 +122,19 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         const val UNIQUE_PERIODIC_NAME = "cabdispatch_sync_periodic"
         const val UNIQUE_ONE_TIME_NAME = "cabdispatch_sync_reconnect"
 
+        /**
+         * The periodic backstop now also requires [Constraints.Builder.setRequiresBatteryNotLow]
+         * (W4 task 6, 2026-09-12 optimisation plan) — this run is a 15-minute background
+         * housekeeping wakeup (outbox drain + the toll/airport/traffic/tariff refreshes
+         * [SyncWorker.doWork] rides alongside it), not anything a driver is waiting on right now;
+         * deferring it while the tablet is critically low on battery is free money, since the
+         * [enqueueOneTime] request below still fires unconstrained the moment connectivity
+         * actually returns regardless of battery state, so nothing here can strand a trip that
+         * genuinely needs to sync.
+         */
         fun enqueuePeriodic(workManager: WorkManager) {
             val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(networkConstraints())
+                .setConstraints(periodicConstraints())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
                 .build()
             // KEEP: only ever want one periodic backstop registered; re-calling
@@ -124,7 +143,17 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             workManager.enqueueUniquePeriodicWork(UNIQUE_PERIODIC_NAME, ExistingPeriodicWorkPolicy.KEEP, request)
         }
 
-        /** Called from [au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger] on reconnect. */
+        /**
+         * Called from [au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger] on reconnect.
+         *
+         * Deliberately CONNECTED-only, no [Constraints.Builder.setRequiresBatteryNotLow] (W4 task
+         * 6): this request exists specifically because connectivity JUST returned and a trip is
+         * very possibly sitting in the outbox waiting to sync — the user-initiated-equivalent case
+         * the plan calls out. A driver whose tablet battery is critically low still needs their
+         * completed trips to reach the server; deferring this one for a battery constraint would
+         * turn "low battery" into "also can't sync your last few fares", which is a strictly worse
+         * outcome than the small extra radio cost of letting it run.
+         */
         fun enqueueOneTime(workManager: WorkManager) {
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(networkConstraints())
@@ -135,7 +164,16 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
             workManager.enqueueUniqueWork(UNIQUE_ONE_TIME_NAME, ExistingWorkPolicy.REPLACE, request)
         }
 
-        private fun networkConstraints(): Constraints =
+        internal fun networkConstraints(): Constraints =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+        /** [networkConstraints] plus `BATTERY_NOT_LOW` — see [enqueuePeriodic]'s own doc for why
+         * only the periodic backstop, never the reconnect-triggered one-time request, carries
+         * this. */
+        internal fun periodicConstraints(): Constraints =
+            Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiresBatteryNotLow(true)
+                .build()
     }
 }

@@ -13,6 +13,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_12_13
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_13_14
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_14_15
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_15_16
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_16_17
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -27,9 +28,11 @@ import au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat
 import au.com.threesixty.cabdispatch.domain.DriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.domain.DuressRepository
+import au.com.threesixty.cabdispatch.domain.DuressUiState
 import au.com.threesixty.cabdispatch.domain.IdleLogoutSupervisor
 import au.com.threesixty.cabdispatch.domain.RemoteBackedDriverEngagementRepository
 import au.com.threesixty.cabdispatch.domain.JobsRepository
+import au.com.threesixty.cabdispatch.domain.ScreenStateMonitor
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat
 import au.com.threesixty.cabdispatch.domain.MessagesRepository
@@ -220,6 +223,15 @@ object AppContainer {
     lateinit var settingsPreferencesStore: SettingsPreferencesStore
         private set
 
+    // AppContainer is this project's manual service locator (see its own top-of-file doc) — every
+    // workstream that adds a process-lifetime singleton wires its one "start unconditionally"
+    // call in here, the same "must start unconditionally here" comment already threaded through
+    // this function for livePositionHeartbeat/deviceCommandHeartbeat/idleLogoutSupervisor
+    // documents for each prior addition. This function's real fix is W7's own item ("split
+    // AppContainer.kt into per-domain wiring files") -- shrinking it here, mid a different
+    // workstream's pass, risks exactly the churn multiple concurrent agents editing this shared
+    // file are trying to avoid.
+    @Suppress("LongMethod")
     fun init(context: Context) {
         appContext = context.applicationContext
 
@@ -266,7 +278,21 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+            // MIGRATION_15_16 (W4, trip-trace-points) and MIGRATION_16_17 (W2, inertial-billing
+            // audit columns) were each written as the next migration in their own parallel
+            // workstream, both nominally "15 -> 16" -- integration renumbered W2's to 16 -> 17
+            // rather than either replacing the other. See AppDatabase.kt's own doc.
+            .addMigrations(
+                MIGRATION_8_9,
+                MIGRATION_9_10,
+                MIGRATION_10_11,
+                MIGRATION_11_12,
+                MIGRATION_12_13,
+                MIGRATION_13_14,
+                MIGRATION_14_15,
+                MIGRATION_15_16,
+                MIGRATION_16_17,
+            )
             .build()
 
         // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
@@ -347,6 +373,8 @@ object AppContainer {
         // in the ordinary case (no open trip) — see MeterController.restoreOpenTripIfAny's doc.
         startupScope.launch { runCatching { meterController.restoreOpenTripIfAny() } }
 
+        startScreenStateMonitor()
+
         // Begins supervising session/shift state for the ambient position heartbeat (see
         // [livePositionHeartbeat]'s own doc) — must be started unconditionally here, not left to
         // whenever some screen happens to first read [livePositionHeartbeat], since (unlike every
@@ -367,6 +395,16 @@ object AppContainer {
         // [idleLogoutSupervisor]'s own doc. Same "must start unconditionally here" reasoning as
         // [livePositionHeartbeat]/[deviceCommandHeartbeat] immediately above.
         idleLogoutSupervisor.start()
+    }
+
+    /** W4 (2026-09-12 optimisation plan): registers the one shared SCREEN_ON/SCREEN_OFF receiver
+     * both [livePositionHeartbeat] (adaptive cadence, task 1) and [deviceCommandHeartbeat]
+     * (skip-when-idle backoff, task 4) read — see [ScreenStateMonitor]'s own doc for why one
+     * shared registration, not two. Called explicitly from [init] (rather than relying on it also
+     * being idempotently called from inside [LivePositionHeartbeat.start]) so neither heartbeat's
+     * correctness depends on the other having started first. */
+    private fun startScreenStateMonitor() {
+        ScreenStateMonitor.start(appContext)
     }
 
     /** Fire-and-forget process-lifetime scope for one-shot startup tasks that must kick off
@@ -529,8 +567,11 @@ object AppContainer {
     val trafficCameraDao by lazy { database.trafficCameraDao() }
     val trafficHazardDao by lazy { database.trafficHazardDao() }
     val tripBlackoutSegmentDao by lazy { database.tripBlackoutSegmentDao() }
+    val tripTracePointDao by lazy { database.tripTracePointDao() }
 
-    val tripRepository by lazy { TripRepository(tripDao, syncOutboxDao, apiService, tripBlackoutSegmentDao) }
+    val tripRepository by lazy {
+        TripRepository(tripDao, syncOutboxDao, apiService, tripBlackoutSegmentDao, tripTracePointDao)
+    }
 
     /** Local cache of the Ed25519 public key that verifies [tariffCache]'s signed tariffs — see
      * that class's doc and `security/TariffSignatureVerifier.kt`'s `Ed25519TariffSignatureVerifier`. */
@@ -918,7 +959,21 @@ object AppContainer {
      */
     val speedSource: SpeedSource by lazy {
         SwitchableSpeedSource(
-            real = RealLocationProvider(appContext, CoroutineScope(SupervisorJob() + Dispatchers.Default)),
+            real = RealLocationProvider(
+                appContext,
+                CoroutineScope(SupervisorJob() + Dispatchers.Default),
+                // W4 task 2 (2026-09-12 optimisation plan): the combined "hired OR duress" signal
+                // that escalates this provider to PRIORITY_HIGH_ACCURACY @ 1Hz — see
+                // RealLocationProvider's constructor doc for why this is a lambda (reading
+                // MeterController's static publication point, plus duressController.state here)
+                // rather than an injected MeterController/DuressController. Captured by reference,
+                // not evaluated now: by the time this actually runs, [duressController] is safe to
+                // access even though this block may run before that property is first touched.
+                hiredOrDuress = {
+                    MeterController.instance?.activeClientUuid != null ||
+                        duressController.state.value !is DuressUiState.Idle
+                },
+            ),
             simulator = gpsSimulator,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         )
@@ -959,10 +1014,24 @@ object AppContainer {
     // at close) and idempotent either way, never on every tick.
     val mapboxReverseGeocoding: MapboxReverseGeocoding by lazy { MapboxReverseGeocoding(okHttpClient) }
     val jobsRepository: JobsRepository by lazy {
-        RemoteBackedJobsRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
+        // W4 task 5 (2026-09-12 optimisation plan): connectivitySyncTrigger.isOnline is this
+        // app's one existing "is there real connectivity right now" signal — reused here rather
+        // than RealtimeSocket.connectWithReconnect standing up a second ConnectivityManager
+        // registration for the identical question.
+        RemoteBackedJobsRepository(
+            apiService,
+            realtimeSocket,
+            BuildConfig.API_BASE_URL,
+            connectivitySyncTrigger.isOnline,
+        )
     }
     val messagesRepository: MessagesRepository by lazy {
-        RemoteBackedMessagesRepository(apiService, realtimeSocket, BuildConfig.API_BASE_URL)
+        RemoteBackedMessagesRepository(
+            apiService,
+            realtimeSocket,
+            BuildConfig.API_BASE_URL,
+            connectivitySyncTrigger.isOnline,
+        )
     }
 
     // --- Duress (contextual overlays S28-S30, spec §8) ---
@@ -1003,7 +1072,16 @@ object AppContainer {
     // for it to react to [au.com.threesixty.cabdispatch.domain.SessionHolder.session] (shift
     // open/closed) for the rest of the process lifetime with zero wiring in any screen/ViewModel.
     val livePositionHeartbeat: LivePositionHeartbeat by lazy {
-        LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default), appContext)
+        LivePositionHeartbeat(
+            apiService,
+            speedSource,
+            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            appContext,
+            // W4 task 1 (2026-09-12 optimisation plan): real duress-active check for the
+            // HIRED_OR_DURESS cadence tier — see LivePositionHeartbeat's constructor doc for why
+            // this is a lambda over duressController.state rather than an injected DuressController.
+            duressActive = { duressController.state.value !is DuressUiState.Idle },
+        )
     }
 
     /**

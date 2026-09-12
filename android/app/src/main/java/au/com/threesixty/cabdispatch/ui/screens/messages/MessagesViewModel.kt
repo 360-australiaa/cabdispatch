@@ -7,13 +7,11 @@ import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.MessageDto
 import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.domain.SessionHolder
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -141,27 +139,22 @@ class MessagesViewModel : ViewModel() {
     }
 
     /**
-     * Subscribes to `WS /v1/messages/live` for real-time delivery and reconnects with a flat 3s
-     * backoff on any disconnect/failure — [au.com.threesixty.cabdispatch.data.remote.RealtimeSocket]
-     * itself does not retry, per its doc. Frame payloads are undocumented raw JSON (see that
-     * class's doc); decoded defensively below — a frame that fails to parse as a bare [MessageDto]
-     * falls back to a full [loadThread] refetch rather than dropping the update silently, since
-     * the exact envelope shape (e.g. a `{event, message}` wrapper) is unknown as of this pass.
+     * Subscribes to `WS /v1/messages/live` for real-time delivery. Reconnect-with-backoff used to
+     * be hand-rolled here (a flat 3s retry loop) — collapsed (W4 task 5, 2026-09-12 optimisation
+     * plan) onto [au.com.threesixty.cabdispatch.data.remote.RealtimeSocket.connectWithReconnect],
+     * which [messagesRepository.observeLive][au.com.threesixty.cabdispatch.domain.MessagesRepository.observeLive]
+     * now calls internally — see
+     * [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel.observeLive]'s
+     * identical doc for the shared shape. Frame payloads are undocumented raw JSON (see
+     * [au.com.threesixty.cabdispatch.data.remote.RealtimeSocket]'s doc); decoded defensively below
+     * — a frame that fails to parse as a bare [MessageDto] falls back to a full [loadThread]
+     * refetch rather than dropping the update silently, since the exact envelope shape (e.g. a
+     * `{event, message}` wrapper) is unknown as of this pass.
      */
     private fun observeLive(driverId: String) {
         viewModelScope.launch {
-            while (isActive) {
-                val token = AppContainer.accessToken
-                if (token == null) {
-                    delay(RECONNECT_DELAY_MS)
-                    continue
-                }
-                runCatching {
-                    messagesRepository.observeLive(driverId, token).collect { raw -> handleLiveFrame(raw) }
-                }
-                if (!isActive) break
-                delay(RECONNECT_DELAY_MS)
-            }
+            messagesRepository.observeLive(driverId) { AppContainer.accessToken }
+                .collect { raw -> handleLiveFrame(raw) }
         }
     }
 
@@ -253,8 +246,6 @@ class MessagesViewModel : ViewModel() {
         (current.filterNot { it.id == incoming.id } + incoming).sortedBy { it.sentAt }
 
     companion object {
-        private const val RECONNECT_DELAY_MS = 3000L
-
         /** Matches the backend's `app.services.messages.MESSAGE_TEMPLATES` "other" code exactly —
          * the sole template code this screen treats specially (shows the inline note field). */
         private const val OTHER_TEMPLATE_CODE = "other"

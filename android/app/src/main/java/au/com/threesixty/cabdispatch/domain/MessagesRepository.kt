@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.remote.MessageTemplateDto
 import au.com.threesixty.cabdispatch.data.remote.RealtimeSocket
 import au.com.threesixty.cabdispatch.data.remote.TemplateMessageCreateDto
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Messages (S13/S14) — dispatch<->driver threads, per spec TCT-DRIVER-APP-01.md §9. One thread
@@ -21,10 +22,17 @@ interface MessagesRepository {
     suspend fun listThread(driverId: String, skip: Int = 0, limit: Int = 50): Result<MessageListResponseDto>
     suspend fun markRead(messageId: String): Result<MessageDto>
 
-    /** Raw JSON text frames from `WS /v1/messages/live?driver_id=` — see [RealtimeSocket]'s doc
-     * for why this is untyped `String`. A `driver`-role caller may only subscribe to their own
-     * thread server-side. */
-    fun observeLive(driverId: String, accessToken: String): Flow<String>
+    /**
+     * Raw JSON text frames from `WS /v1/messages/live?driver_id=` — see [RealtimeSocket]'s doc for
+     * why this is untyped `String`. A `driver`-role caller may only subscribe to their own thread
+     * server-side.
+     *
+     * Auto-reconnecting (W4 task 5, 2026-09-12 optimisation plan) via
+     * [RealtimeSocket.connectWithReconnect] — see [JobsRepository.observeLiveOffers]'s identical
+     * doc for the shared reconnect-policy shape and why [tokenProvider] is a function, not one
+     * fixed token.
+     */
+    fun observeLive(driverId: String, tokenProvider: () -> String?): Flow<String>
 
     /** Canned quick-tap template menu — see [ApiService.listMessageTemplates]'s doc. Callers
      * should fetch once and cache (e.g. in a ViewModel's [kotlinx.coroutines.flow.StateFlow]),
@@ -42,6 +50,8 @@ class RemoteBackedMessagesRepository(
     private val apiService: ApiService,
     private val realtimeSocket: RealtimeSocket,
     private val baseHttpUrl: String,
+    /** See [RealtimeSocket.connectWithReconnect]'s `isOnline` doc. */
+    private val isOnline: StateFlow<Boolean>,
 ) : MessagesRepository {
 
     override suspend fun sendMessage(driverId: String?, body: String): Result<MessageDto> =
@@ -53,8 +63,11 @@ class RemoteBackedMessagesRepository(
     override suspend fun markRead(messageId: String): Result<MessageDto> =
         runCatching { apiService.markMessageRead(messageId) }
 
-    override fun observeLive(driverId: String, accessToken: String): Flow<String> =
-        realtimeSocket.connect(RealtimeSocket.messagesLiveUrl(baseHttpUrl, driverId, accessToken))
+    override fun observeLive(driverId: String, tokenProvider: () -> String?): Flow<String> =
+        realtimeSocket.connectWithReconnect(
+            urlProvider = { tokenProvider()?.let { RealtimeSocket.messagesLiveUrl(baseHttpUrl, driverId, it) } },
+            isOnline = isOnline,
+        )
 
     override suspend fun listTemplates(): Result<List<MessageTemplateDto>> =
         runCatching { apiService.listMessageTemplates() }
