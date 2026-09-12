@@ -328,14 +328,17 @@ class RoomMigrationTest {
         // method to a production DAO interface.
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            // MIGRATION_13_14/MIGRATION_14_15 added so this real Room open — which always
-            // targets AppDatabase's compiled CURRENT version (15 now, W1 GPS-blackout audit-trail
-            // table) — can complete every step up to it; runMigrationsAndValidate above
-            // deliberately still stops at 13 (the last version with an exported/asset-copied
-            // schema JSON this test hand-verifies against), so the raw file handed to this builder
-            // is genuinely at 13 and needs every later step, exactly mirroring AppContainer's own
-            // migrations list.
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+            // MIGRATION_13_14/MIGRATION_14_15/MIGRATION_15_16 added so this real Room open — which
+            // always targets AppDatabase's compiled CURRENT version (16 now, W2's inertial-billing
+            // audit columns on top of W1's GPS-blackout audit-trail table) — can complete every
+            // step up to it; runMigrationsAndValidate above deliberately still stops at 13 (the
+            // last version with an exported/asset-copied schema JSON this test hand-verifies
+            // against), so the raw file handed to this builder is genuinely at 13 and needs every
+            // later step, exactly mirroring AppContainer's own migrations list.
+            .addMigrations(
+                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+            )
             .build()
         try {
             val raw = db.openHelper.readableDatabase

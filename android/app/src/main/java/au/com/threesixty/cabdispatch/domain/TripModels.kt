@@ -367,6 +367,13 @@ fun BigDecimal.toMeterDisplayString(): String =
  *   that instant -- decides whether this blackout could ever resolve to CORRIDOR, or bills
  *   waiting time throughout as STATIONARY. See [au.com.threesixty.cabdispatch.data.local.entity
  *   .BlackoutResolution]'s own doc.
+ * @property estimatedSpeedKmh W2's live inertial speed estimate for THIS tick of the blackout, or
+ *   `null` whenever no [au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource]
+ *   is wired, or `BuildConfig.INERTIAL_BILLING_ENABLED` is off, or the estimator is not currently
+ *   usable (uncalibrated / confidence too low) -- the dial (W5) shows "estimated" only when this is
+ *   non-null, never fabricates a number the meter is not actually billing against.
+ * @property confidence [au.com.threesixty.cabdispatch.domain.location.inertial.InertialConfidence]
+ *   name, alongside [estimatedSpeedKmh] -- `null` under the same conditions.
  */
 data class ActiveBlackout(
     val segmentId: String,
@@ -374,6 +381,8 @@ data class ActiveBlackout(
     val entryLat: Double,
     val entryLng: Double,
     val entryWasMoving: Boolean,
+    val estimatedSpeedKmh: Double? = null,
+    val confidence: String? = null,
 )
 
 /**
@@ -390,6 +399,22 @@ data class ActiveBlackout(
  *   for NONE/STATIONARY.
  * @property corridorRoadId The toll-registry road this segment's corridor match resolved to, when
  *   [resolution] is CORRIDOR -- `null` otherwise.
+ * @property estimatedDistanceKm W2 task 6: the running total the inertial estimate billed
+ *   tick-by-tick through an INERTIAL segment, BEFORE [BlackoutReconciler]'s correction -- `null`
+ *   for every non-INERTIAL resolution (including UNCALIBRATED, where it holds what was actually
+ *   billed before the estimator fell back, kept for audit rather than nulled).
+ * @property referenceDistanceKm The road-path distance [BlackoutReconciler] matched this segment
+ *   against, when [referenceSource] is `"ROAD_PATH"` -- `null` otherwise (including the
+ *   CHORD_BOUNDED case, where there was no road path to name).
+ * @property correctionKm `billedDistanceKm - estimatedDistanceKm`, the signed delta applied via
+ *   `CalcFareEngine.reconcileBlackoutDistance` -- `null` for every non-INERTIAL resolution.
+ * @property referenceSource [BlackoutReconciler.ReferenceSource] name ("ROAD_PATH" or
+ *   "CHORD_BOUNDED") for an INERTIAL segment -- `null` otherwise.
+ * @property confidence The estimator's [au.com.threesixty.cabdispatch.domain.location.inertial
+ *   .InertialConfidence] name at the point the blackout resolved -- `null` for every non-INERTIAL
+ *   (and non-UNCALIBRATED) resolution.
+ * @property zuptCount How many zero-velocity updates fired during this segment -- task 4's "drift
+ *   killer" evidence, `null` when inertial billing never engaged for this segment.
  */
 data class ResolvedBlackout(
     val segmentId: String,
@@ -403,4 +428,10 @@ data class ResolvedBlackout(
     val resolution: String,
     val billedDistanceKm: BigDecimal,
     val corridorRoadId: String? = null,
+    val estimatedDistanceKm: BigDecimal? = null,
+    val referenceDistanceKm: BigDecimal? = null,
+    val correctionKm: BigDecimal? = null,
+    val referenceSource: String? = null,
+    val confidence: String? = null,
+    val zuptCount: Int? = null,
 )

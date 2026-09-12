@@ -389,6 +389,84 @@ class FareEngine {
         return state
     }
 
+    /**
+     * **Additive-only. Golden vectors must never move because of this method** — it exists purely
+     * for W2 (`docs/plans/2026-09-12-android-meter-optimisation-and-gps-blackout-plan.md`, task 6's
+     * "Reconcile at reacquisition"), is called from exactly one place
+     * ([au.com.threesixty.cabdispatch.domain.FareEngineImpl]'s blackout-resolution path, and only
+     * when `BuildConfig.INERTIAL_BILLING_ENABLED` billed an INERTIAL segment tick-by-tick through
+     * [tick] above), and no existing test constructs the inputs that would make this run.
+     *
+     * Adjusts [FareState.cumulativeDistanceKm] and [FareState.accruedDistanceCharge] by a signed
+     * `deltaKm` — positive to top up a trip that under-billed through a blackout (the reconciled
+     * road/chord distance came in higher than what the inertial estimate billed tick-by-tick),
+     * negative to refund the opposite. Applied "at the band rate in force": exactly [tick]'s own
+     * BAND_1/BAND_2 split logic (the [Tariff.distKmThreshold] boundary), so a correction that
+     * crosses the band boundary is itself split across both rates correctly, the same way an
+     * ordinary tick already is — this is NOT a flat single-rate adjustment.
+     *
+     * A positive delta walks the split from the current cumulative distance UPWARD (identical
+     * arithmetic to [tick]'s own distance-mode branch). A negative delta walks it DOWNWARD from the
+     * top band first (the newest kilometres billed are the first ones unwound) — the natural
+     * inverse, and the only order that guarantees [FareState.cumulativeDistanceKm] never goes
+     * negative for a correction bounded (by [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .BlackoutReconciler]'s own contract) to no larger in magnitude than what this exact blackout
+     * segment itself already billed.
+     *
+     * No-op on a zero delta, on a hiring that has already ended ([FareState.hired] false — nothing
+     * left to reconcile once the fare is closed), and never touches [FareState.lastMode] in a way
+     * that would misrepresent the CURRENT tick's real accrual mode (deliberately left unset here;
+     * [FareEngineImpl.tick] sets it from its own live billing decision immediately after calling
+     * this, so a stale "distance"/"waiting" label from a reconciliation call can never survive to
+     * be read).
+     */
+    // ReturnCount: two guard-clause early-outs (not hired / zero delta) plus the one real result --
+    // same accepted guard-clause style this file's own [tick] neighbour already uses elsewhere in
+    // this class, over a nested-if pyramid that would trade this finding for readability instead.
+    @Suppress("ReturnCount")
+    fun reconcileBlackoutDistance(state: FareState, deltaKm: Number): FareState {
+        if (!state.hired) return state
+        val delta = d(deltaKm)
+        if (delta.signum() == 0) return state
+
+        val threshold = state.tariff.distKmThreshold
+        if (delta.signum() > 0) {
+            var remaining = delta
+            var cum = state.cumulativeDistanceKm
+            var charge = BigDecimal.ZERO
+            if (cum < threshold) {
+                val portion1 = minOf(remaining, threshold - cum)
+                charge += portion1 * rate1(state)
+                remaining -= portion1
+                cum += portion1
+            }
+            if (remaining > BigDecimal.ZERO) {
+                charge += remaining * rate2(state)
+                cum += remaining
+            }
+            state.cumulativeDistanceKm = cum
+            state.accruedDistanceCharge += charge
+        } else {
+            var remaining = delta.abs()
+            var cum = state.cumulativeDistanceKm
+            var refund = BigDecimal.ZERO
+            if (cum > threshold) {
+                val portion2 = minOf(remaining, cum - threshold)
+                refund += portion2 * rate2(state)
+                remaining -= portion2
+                cum -= portion2
+            }
+            if (remaining > BigDecimal.ZERO) {
+                val portion1 = minOf(remaining, cum) // never unwind past zero
+                refund += portion1 * rate1(state)
+                cum -= portion1
+            }
+            state.cumulativeDistanceKm = cum
+            state.accruedDistanceCharge -= refund
+        }
+        return state
+    }
+
     /** Clamps a requested cleaning fee to the tariff's regulated cap — never
      * silently charges more than [Tariff.cleaningFeeCap] regardless of what a
      * caller passes in. */

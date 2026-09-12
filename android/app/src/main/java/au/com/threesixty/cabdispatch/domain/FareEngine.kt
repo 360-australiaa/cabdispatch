@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.domain
 
+import au.com.threesixty.cabdispatch.BuildConfig
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.fare.TollDetectionState
 import au.com.threesixty.cabdispatch.domain.fare.chargeDisplayName
@@ -10,6 +11,9 @@ import au.com.threesixty.cabdispatch.domain.fare.onFix
 import au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
+import au.com.threesixty.cabdispatch.domain.location.inertial.BlackoutReconciler
+import au.com.threesixty.cabdispatch.domain.location.inertial.InertialConfidence
+import au.com.threesixty.cabdispatch.domain.location.inertial.InertialBillingSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -391,6 +395,14 @@ interface FareEngine {
  * on the calc engine's types, so this is a delegation of MATH, not a type-level replacement — zero
  * changes needed to [HiredScreen]/[HiredViewModel]/[TripRepository] call sites).
  */
+// LongParameterList: nine constructor parameters, all but the first two DEFAULTED test/production
+// seams (nanoTimeSource, wallClockNow, tollRegistryProvider, airportZoneLookup,
+// knownCorridorDistanceLookup, inertialSpeedSource, inertialBillingEnabled) — see this codebase's
+// own established precedent for this exact trade-off (`MeterController`'s eight-parameter
+// constructor, `resumeTrip`'s seven), where a parameter-object refactor would rename the problem
+// rather than solve it: each one is a distinct, independently-defaulted seam, not a bundle of
+// related fields that belong in their own type.
+@Suppress("LongParameterList")
 class FareEngineImpl(
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
@@ -445,6 +457,30 @@ class FareEngineImpl(
      * nothing and gets the real clock, unchanged.
      */
     private val wallClockNow: () -> ZonedDateTime = { ZonedDateTime.now(NSW_FARE_ZONE) },
+    /**
+     * W2 (inertial dead-reckoning, 2026-09-12): the tablet's own gyroscope/accelerometer speed
+     * estimate for a GPS blackout — see `domain/location/inertial/InertialSpeedSource.kt`'s class
+     * doc for why this is a SEPARATE dependency from [speedSource], never spliced into it (doing so
+     * would defeat [tick]'s own `gpsLost` detection). `null` by default so every pre-existing call
+     * site (every test in this file, every preview) keeps compiling and behaving EXACTLY as before
+     * this workstream existed — a blackout with no inertial source wired bills exactly the W1 rule,
+     * unconditionally. Production wiring: [au.com.threesixty.cabdispatch.data.AppContainer]. Even
+     * when wired, [tick] only ever bills against it while
+     * `BuildConfig.INERTIAL_BILLING_ENABLED` is true (owner gate G3, default OFF) — see [tick]'s
+     * "Inertial billing" section.
+     */
+    private val inertialSpeedSource: InertialBillingSource? = null,
+    /**
+     * A seam over `BuildConfig.INERTIAL_BILLING_ENABLED` — same reasoning [nanoTimeSource]/
+     * [wallClockNow] are seams over their own real platform reads: `BuildConfig` fields are
+     * compile-time constants baked into the DEBUG test variant this whole suite runs under, so
+     * without this parameter [MeterAccuracyTest]'s INERTIAL-resolution vectors could never
+     * exercise the flag-on path at all — they would either be permanently unreachable or require a
+     * separate build variant just for one test class. Defaults to the REAL flag, so production and
+     * every pre-existing test keeps behaving exactly as `BuildConfig.INERTIAL_BILLING_ENABLED`
+     * itself dictates (off, today) unless a test deliberately overrides it.
+     */
+    private val inertialBillingEnabled: Boolean = BuildConfig.INERTIAL_BILLING_ENABLED,
 ) : FareEngine {
 
     private val _state = MutableStateFlow(FareState())
@@ -550,6 +586,31 @@ class FareEngineImpl(
     private var blackoutStartedAtIso: String? = null
 
     /**
+     * W2: the running total the inertial estimate has billed, tick-by-tick, for the CURRENT
+     * blackout — [BlackoutReconciler]'s `estimatedKm` input at reacquisition. Reset to zero
+     * alongside [blackoutEntryFix] at both ends of a blackout (see [tick]'s "Inertial billing"
+     * section and [resolveBlackout]).
+     */
+    private var blackoutInertialBilledKm: BigDecimal = BigDecimal.ZERO
+
+    /** Whether the inertial estimate was usable (calibrated, confident, billing-enabled) for at
+     * least one tick of the CURRENT blackout — [resolveBlackout] only attempts an INERTIAL/
+     * UNCALIBRATED resolution when this is true; otherwise the blackout resolves exactly as it
+     * always has (NONE/CORRIDOR/STATIONARY), byte-identical to pre-W2 behaviour. */
+    private var blackoutInertialEngaged: Boolean = false
+
+    /** Whether the inertial estimate, having engaged for this blackout, later became unusable
+     * (calibration lost or the estimator declared itself UNRELIABLE) before reacquisition — the
+     * [au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution.UNCALIBRATED] case:
+     * whatever was already billed stands, and no reconciliation is attempted against an estimate
+     * that stopped being trustworthy partway through. */
+    private var blackoutInertialInvalidatedMidway: Boolean = false
+
+    /** The estimator's confidence tier on the LAST tick inertial billing engaged for the current
+     * blackout — carried into [ResolvedBlackout.confidence] for the audit trail. */
+    private var blackoutLastConfidence: InertialConfidence? = null
+
+    /**
      * Fractional-second accumulators behind [FareState.movingSeconds]/[FareState.waitingSeconds].
      *
      * Those two are `Int` because [au.com.threesixty.cabdispatch.data.local.entity.TripEntity]
@@ -562,6 +623,32 @@ class FareEngineImpl(
      */
     private var movingSecondsAccum: Double = 0.0
     private var waitingSecondsAccum: Double = 0.0
+
+    /**
+     * Every per-trip tick accumulator starts clean. This class is process-scoped now (F4 -- see
+     * AppContainer.fareEngine), so an instance genuinely does outlive a trip and a second
+     * [startTrip] on the same object is the ordinary case, not a test-only one; leaving these
+     * carrying the previous trip's totals would bill the new passenger for the old one's time.
+     * Extracted out of [startTrip] purely to keep that already-dense function's own length within
+     * this codebase's complexity budget -- the reset logic itself is otherwise unchanged from
+     * where it used to sit inline.
+     */
+    private fun resetTickAccumulators() {
+        movingSecondsAccum = 0.0
+        waitingSecondsAccum = 0.0
+        lastTickFix = null
+        lastKnownSpeedKmh = 0.0
+        blackoutEntryFix = null
+        blackoutEntryWasMoving = false
+        blackoutSegmentId = null
+        blackoutStartedAtIso = null
+        blackoutInertialBilledKm = BigDecimal.ZERO
+        blackoutInertialEngaged = false
+        blackoutInertialInvalidatedMidway = false
+        blackoutLastConfidence = null
+        autoTollAlertSeq = 0L
+        tollDetectionState.reset()
+    }
 
     override fun startTrip(
         tariff: TariffDto,
@@ -589,20 +676,7 @@ class FareEngineImpl(
             negotiatedTotal = negotiatedTotal,
         )
         calcState = newCalcState
-        // Every per-trip tick accumulator starts clean. This class is process-scoped now (F4 --
-        // see AppContainer.fareEngine), so an instance genuinely does outlive a trip and a second
-        // startTrip() on the same object is the ordinary case, not a test-only one; leaving these
-        // carrying the previous trip's totals would bill the new passenger for the old one's time.
-        movingSecondsAccum = 0.0
-        waitingSecondsAccum = 0.0
-        lastTickFix = null
-        lastKnownSpeedKmh = 0.0
-        blackoutEntryFix = null
-        blackoutEntryWasMoving = false
-        blackoutSegmentId = null
-        blackoutStartedAtIso = null
-        autoTollAlertSeq = 0L
-        tollDetectionState.reset()
+        resetTickAccumulators()
 
         val peak = if (isPeak) domainTariff.peakCharge else BigDecimal.ZERO
 
@@ -789,6 +863,17 @@ class FareEngineImpl(
     private fun reseedBlackoutState(
         openSegment: au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity?,
     ) {
+        // W2: inertial tick-by-tick progress lives only in memory (this class's own fields), never
+        // Room -- a process death mid-INERTIAL-blackout loses it, same as it always would have for
+        // any other purely in-memory accrual. The restored blackout simply falls back to the W1
+        // rule (nothing more billed if moving, waiting if stationary) for whatever remains of it,
+        // and resolves CORRIDOR/STATIONARY/NONE as it always did before this workstream -- the
+        // conservative, honest choice over fabricating a continued inertial estimate this process
+        // never actually observed.
+        blackoutInertialBilledKm = BigDecimal.ZERO
+        blackoutInertialEngaged = false
+        blackoutInertialInvalidatedMidway = false
+        blackoutLastConfidence = null
         if (openSegment == null) {
             blackoutEntryFix = null
             blackoutEntryWasMoving = false
@@ -1037,12 +1122,49 @@ class FareEngineImpl(
 
         if (!gpsLost) lastKnownSpeedKmh = speedSource.speedKmh.value
 
+        // --- W2: inertial billing eligibility (2026-09-12, owner gate G3) --------------------
+        // Only ever consulted once this blackout already has an entry fix recorded -- i.e. not on
+        // the very tick a blackout is FIRST declared (that tick's own billing decision, immediately
+        // below, still falls back to the W1 rule; [inertialSpeedSource] is seeded for the NEXT tick
+        // onward, in the "known-corridor blackout catch-up" section a few lines down). A one-tick
+        // (about a second) delay before inertial billing can ever engage, traded deliberately for
+        // never having to reorder this method's existing, already-verified F1-F3 sequencing.
+        //
+        // [BuildConfig.INERTIAL_BILLING_ENABLED] gates ALL of it: off (the default, owner gate G3
+        // not yet cleared), this block is always false and every line below behaves byte-identical
+        // to pre-W2 code -- [inertialSpeedSource] may still be wired (for shadow-mode residual
+        // logging, [BuildConfig.INERTIAL_SHADOW_ENABLED]) without ever being billed against.
+        val inertialEstimate = if (gpsLost && blackoutEntryFix != null) inertialSpeedSource?.estimate?.value else null
+        val inertialUsable = inertialBillingEnabled &&
+            inertialEstimate != null &&
+            inertialEstimate.calibrationGood &&
+            !inertialEstimate.unreliable &&
+            inertialEstimate.confidence != InertialConfidence.LOW
+
         // The speed the accrual decision is actually made on. While GPS is lost we never claim
-        // motion: a vehicle we cannot see is either stationary (bill waiting) or unknown (bill
-        // nothing), and both of those are decided here, not by pretending to a speed.
+        // motion: a vehicle we cannot see is either stationary (bill waiting), estimated (W2's
+        // inertial source, when usable), or unknown (bill nothing) -- decided here, never by
+        // pretending to a speed no source actually reported.
         val wasStationaryWhenLost = lastKnownSpeedKmh < threshold
-        val accrueThisTick = !gpsLost || wasStationaryWhenLost
-        val billedSpeedKmh = if (gpsLost) 0.0 else lastKnownSpeedKmh
+        val accrueThisTick = !gpsLost || wasStationaryWhenLost || inertialUsable
+        val billedSpeedKmh = when {
+            !gpsLost -> lastKnownSpeedKmh
+            inertialUsable -> inertialEstimate.speedKmh
+            else -> 0.0
+        }
+
+        if (gpsLost) {
+            if (inertialUsable) {
+                blackoutInertialEngaged = true
+                blackoutLastConfidence = inertialEstimate.confidence
+            } else if (blackoutInertialEngaged) {
+                // Was usable earlier THIS blackout, is not now -- calibration lost or the
+                // estimator itself declared UNRELIABLE. Latches for the rest of the blackout (see
+                // [blackoutInertialInvalidatedMidway]'s own doc); a later tick happening to look
+                // usable again does not clear it -- the estimate already spent time untrusted.
+                blackoutInertialInvalidatedMidway = true
+            }
+        }
 
         // --- Known-corridor blackout catch-up (owner's decision, 2026-09-09) -----------------
         // See KnownCorridorDistanceLookup's / knownCorridorDistanceKm's own doc for the full
@@ -1079,14 +1201,33 @@ class FareEngineImpl(
                 // process death one tick later still has both halves of the story consistent.
                 blackoutSegmentId = UUID.randomUUID().toString()
                 blackoutStartedAtIso = Instant.now().toString()
+                blackoutInertialBilledKm = BigDecimal.ZERO
+                blackoutInertialEngaged = false
+                blackoutInertialInvalidatedMidway = false
+                blackoutLastConfidence = null
+                // W2 task 4's "Seed at blackout start" -- same entry fix/speed the corridor
+                // catch-up above already captured, one seed shared by both mechanisms.
+                inertialSpeedSource?.onBlackoutEntered(lastKnownSpeedKmh, previousFix?.heading, previousFix)
             }
             null
         } else if (blackoutEntryFix != null) {
-            resolveBlackout(cs, fix, threshold).also {
+            val inertialTally = InertialTally(
+                engaged = blackoutInertialEngaged,
+                invalidatedMidway = blackoutInertialInvalidatedMidway,
+                billedKm = blackoutInertialBilledKm,
+                confidence = blackoutLastConfidence,
+                zuptCount = inertialSpeedSource?.estimate?.value?.zuptCount,
+            )
+            resolveBlackout(cs, fix, threshold, inertialTally).also {
                 blackoutEntryFix = null
                 blackoutEntryWasMoving = false
                 blackoutSegmentId = null
                 blackoutStartedAtIso = null
+                blackoutInertialBilledKm = BigDecimal.ZERO
+                blackoutInertialEngaged = false
+                blackoutInertialInvalidatedMidway = false
+                blackoutLastConfidence = null
+                inertialSpeedSource?.onBlackoutExited()
             }
         } else {
             null
@@ -1095,6 +1236,10 @@ class FareEngineImpl(
         // --- F2: distance from real positions, not integrated speed --------------------------
         val speedCapKm = billedSpeedKmh * dtSeconds / SECONDS_PER_HOUR * MAX_DISTANCE_OVERSHOOT_FACTOR
         val distanceDeltaKm = when {
+            // W2: no real fix exists to haversine against during a blackout, so an inertially-
+            // billed tick integrates its own speed estimate -- the same "no new fix" fallback
+            // formula below, just also reachable while gpsLost is true.
+            gpsLost && inertialUsable -> (billedSpeedKmh * dtSeconds / SECONDS_PER_HOUR).coerceAtMost(speedCapKm)
             gpsLost -> 0.0
             // A genuinely new fix arrived since the last tick: charge the ground between them.
             previousFix != null && fix != null && fix !== previousFix ->
@@ -1111,6 +1256,10 @@ class FareEngineImpl(
                 distanceDeltaKm = BigDecimal.valueOf(distanceDeltaKm),
                 elapsedSeconds = BigDecimal.valueOf(dtSeconds),
             )
+            // W2 task 6: tracks what the inertial estimate itself billed, tick-by-tick, so
+            // [BlackoutReconciler] has a real `estimatedKm` to reconcile against at reacquisition --
+            // see [blackoutInertialBilledKm]'s own doc.
+            if (inertialUsable) blackoutInertialBilledKm += BigDecimal.valueOf(distanceDeltaKm)
         }
 
         // Auto-toll detection (see [detectTolls]'s own doc) -- runs on the SAME real GPS fix
@@ -1150,6 +1299,11 @@ class FareEngineImpl(
                         entryLat = entry.lat,
                         entryLng = entry.lng,
                         entryWasMoving = blackoutEntryWasMoving,
+                        // Only published while THIS tick is actually billing off it -- never a
+                        // stale figure from a tick or two ago once the estimate has stopped being
+                        // usable (see [inertialUsable]'s own doc for every reason that can happen).
+                        estimatedSpeedKmh = if (inertialUsable) inertialEstimate.speedKmh else null,
+                        confidence = if (inertialUsable) inertialEstimate.confidence.name else null,
                     )
                 }
             }
@@ -1199,22 +1353,34 @@ class FareEngineImpl(
     // and SimulatedRoutes.laneCoveTunnelBlackout for the same accepted pattern) rather than a
     // nested-if pyramid that would trade this finding for NestedBlockDepth instead.
     @Suppress("ReturnCount")
-    private fun resolveBlackout(cs: CalcFareState, fix: LocationFix?, threshold: Double): ResolvedBlackout? {
+    private fun resolveBlackout(
+        cs: CalcFareState,
+        fix: LocationFix?,
+        threshold: Double,
+        inertial: InertialTally,
+    ): ResolvedBlackout? {
         val entryFix = blackoutEntryFix ?: return null
         val segmentId = blackoutSegmentId ?: return null
         val startedAtIso = blackoutStartedAtIso ?: return null
         val exitFix = fix ?: return null
 
+        // W2 (2026-09-12): a segment inertial billing ever engaged for resolves through its own
+        // path -- see [resolveInertialBlackout]'s doc -- and skips the corridor catch-up below
+        // entirely (task 6: "the known-corridor catch-up is NOT additionally applied to an
+        // INERTIAL segment -- one resolution per segment"). `inertial.engaged` is false for every
+        // blackout `BuildConfig.INERTIAL_BILLING_ENABLED` never touched, which is every blackout
+        // before this workstream and every one today with the flag at its default (off) -- so this
+        // branch is unreachable, and behaviour below is byte-identical to pre-W2 code, until an
+        // owner explicitly flips that flag.
+        if (inertial.engaged) {
+            return resolveInertialBlackout(cs, entryFix, exitFix, segmentId, startedAtIso, inertial)
+        }
+
         var billedKm = BigDecimal.ZERO
         var corridorRoadId: String? = null
         var resolution = BlackoutResolution.STATIONARY
         if (blackoutEntryWasMoving) {
-            val knownKm = knownCorridorDistanceLookup.knownDistanceKm(
-                entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng,
-            )
-                ?: tollRegistry?.let { registry ->
-                    knownCorridorDistanceKm(registry, entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng)
-                }
+            val knownKm = lookupKnownCorridorKm(entryFix, exitFix)
             if (knownKm != null && knownKm.signum() > 0) {
                 calcEngine.tick(
                     cs,
@@ -1243,6 +1409,97 @@ class FareEngineImpl(
             corridorRoadId = corridorRoadId,
         )
     }
+
+    /**
+     * Same known-corridor lookup [resolveBlackout]'s own CORRIDOR path always used, extracted so
+     * [resolveInertialBlackout] can ask the identical question ("is there a mapped road between
+     * these two fixes") for its own reconciliation reference -- one lookup, two callers, never two
+     * independent notions of "known corridor" that could someday disagree.
+     */
+    private fun lookupKnownCorridorKm(entryFix: LocationFix, exitFix: LocationFix): BigDecimal? =
+        knownCorridorDistanceLookup.knownDistanceKm(entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng)
+            ?: tollRegistry?.let { registry ->
+                knownCorridorDistanceKm(registry, entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng)
+            }
+
+    /**
+     * Task 6's "Reconcile at reacquisition" -- the closing half of an INERTIAL (or, on a mid-
+     * blackout invalidation, UNCALIBRATED) segment. Never called unless [InertialTally.engaged],
+     * i.e. never unless `BuildConfig.INERTIAL_BILLING_ENABLED` billed at least one tick of this
+     * specific blackout off the tablet's own sensors.
+     *
+     * The UNCALIBRATED branch does NOT reconcile at all -- what was already billed, tick by tick
+     * through the ordinary [calcEngine.tick] accrual path, simply stands. Reconciling an estimate
+     * that has already proven itself untrustworthy this blackout (that is what invalidation means)
+     * against a road-path/chord reference would extend trust exactly where it was just withdrawn.
+     */
+    // LongParameterList: six parameters, each a distinct piece of the ONE blackout being resolved
+    // (state, both fixes, both id/timestamp identity fields, and the inertial tally snapshot) --
+    // bundling entryFix/exitFix/segmentId/startedAtIso into a synthetic type would only rename this
+    // function's actual job, matching [resolveBlackout]'s own sibling call and this file's
+    // established precedent for not forcing a parameter object on a genuinely cohesive parameter
+    // set.
+    @Suppress("LongParameterList")
+    private fun resolveInertialBlackout(
+        cs: CalcFareState,
+        entryFix: LocationFix,
+        exitFix: LocationFix,
+        segmentId: String,
+        startedAtIso: String,
+        inertial: InertialTally,
+    ): ResolvedBlackout {
+        val common = ResolvedBlackout(
+            segmentId = segmentId,
+            startedAtIso = startedAtIso,
+            endedAtIso = Instant.now().toString(),
+            entryLat = entryFix.lat,
+            entryLng = entryFix.lng,
+            entryWasMoving = blackoutEntryWasMoving,
+            exitLat = exitFix.lat,
+            exitLng = exitFix.lng,
+            resolution = BlackoutResolution.UNCALIBRATED.name,
+            billedDistanceKm = inertial.billedKm,
+            estimatedDistanceKm = inertial.billedKm,
+            confidence = inertial.confidence?.name,
+            zuptCount = inertial.zuptCount,
+        )
+        if (inertial.invalidatedMidway) return common
+
+        val chordKm = BigDecimal.valueOf(GeoMath.distanceKm(entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng))
+        val roadPathKm = lookupKnownCorridorKm(entryFix, exitFix)
+        val reconciliation = BlackoutReconciler.reconcile(
+            estimatedKm = inertial.billedKm,
+            chordKm = chordKm,
+            roadPathKm = roadPathKm,
+        )
+        if (reconciliation.correctionKm.signum() != 0) {
+            calcEngine.reconcileBlackoutDistance(cs, reconciliation.correctionKm)
+        }
+        val onRoadPath = reconciliation.referenceSource == BlackoutReconciler.ReferenceSource.ROAD_PATH
+        return common.copy(
+            resolution = BlackoutResolution.INERTIAL.name,
+            billedDistanceKm = reconciliation.billedKm,
+            corridorRoadId = if (onRoadPath) nearestGantryRoadId(entryFix, exitFix) else null,
+            referenceDistanceKm = reconciliation.referenceKm,
+            correctionKm = reconciliation.correctionKm,
+            referenceSource = reconciliation.referenceSource.name,
+        )
+    }
+
+    /**
+     * The inertial-billing tally for the blackout [resolveBlackout] is about to resolve, snapshot
+     * out of this class's own tracking fields at the exact instant reacquisition is detected (see
+     * [tick]'s own call site) -- a small parameter object rather than five loose parameters, both
+     * for readability and so [resolveBlackout]/[resolveInertialBlackout] cannot accidentally read
+     * one of these off `this` instead of the frozen snapshot the caller intended.
+     */
+    private data class InertialTally(
+        val engaged: Boolean,
+        val invalidatedMidway: Boolean,
+        val billedKm: BigDecimal,
+        val confidence: InertialConfidence?,
+        val zuptCount: Int?,
+    )
 
     /**
      * Cosmetic label only ("which road did this bill against") for a resolved CORRIDOR blackout

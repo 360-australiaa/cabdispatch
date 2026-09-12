@@ -125,7 +125,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
         TrafficHazardEntity::class,
         TripBlackoutSegmentEntity::class,
     ],
-    version = 15,
+    version = 16,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -235,6 +235,29 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
             "CREATE INDEX IF NOT EXISTS `index_trip_blackout_segments_tripClientUuid` " +
                 "ON `trip_blackout_segments` (`tripClientUuid`)",
         )
+    }
+}
+
+/**
+ * 15 -> 16: W2's inertial-billing audit columns on `trip_blackout_segments` (INERTIAL/UNCALIBRATED
+ * resolutions, GPS blackout program, 2026-09-12) — see [TripBlackoutSegmentEntity]'s own doc for
+ * each column. Purely additive `ALTER TABLE ... ADD COLUMN`, all nullable with no default beyond
+ * SQLite's own `NULL`, so every row written under schema 15 (every resolution this migration
+ * predates: NONE/CORRIDOR/STATIONARY) reads back with these columns simply absent — exactly what
+ * they mean for a segment inertial billing never touched.
+ */
+// MagicNumber: 15/16 are schema version identifiers (this migration's own name states them), not
+// a magic tuning constant -- same as every other MIGRATION_x_y val in this file, none of which
+// are flagged only because this is the first one added since the baseline was last regenerated.
+@Suppress("MagicNumber")
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `estimatedDistanceKm` TEXT")
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `referenceDistanceKm` TEXT")
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `correctionKm` TEXT")
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `referenceSource` TEXT")
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `confidence` TEXT")
+        db.execSQL("ALTER TABLE `trip_blackout_segments` ADD COLUMN `zuptCount` INTEGER")
     }
 }
 

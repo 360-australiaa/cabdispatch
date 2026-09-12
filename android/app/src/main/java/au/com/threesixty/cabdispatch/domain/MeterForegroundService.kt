@@ -210,7 +210,7 @@ class MeterForegroundService : Service() {
  * audit asked for — a thin observer that reads [state] and forwards driver actions — and can be
  * created and destroyed as often as navigation likes without the fare noticing.
  *
- * Seven constructor parameters -- one over this codebase's usual threshold, and a deliberate
+ * Eight constructor parameters -- over this codebase's usual threshold, and a deliberate
  * exception rather than a parameter-object refactor: this is a plain dependency-injection
  * constructor (no Hilt/KSP DI in this project, see AppContainer's own doc for why), and each
  * parameter is a distinct, necessary singleton this class genuinely uses -- bundling them into a
@@ -231,6 +231,14 @@ class MeterController(
      * mid-blackout (G6). */
     private val blackoutSegmentDao: TripBlackoutSegmentDao,
     val scope: CoroutineScope,
+    /**
+     * W2 (inertial dead-reckoning, 2026-09-12): started here on [startTrip]/
+     * [restoreOpenTripIfAny], stopped on [stopTrip] — task 2's "on only while a hiring is open".
+     * `null` by default so every pre-existing call site (every test in this file) keeps compiling
+     * and running with zero sensor cost, exactly as before this workstream existed. Production
+     * wiring: [au.com.threesixty.cabdispatch.data.AppContainer].
+     */
+    private val imuSampler: au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler? = null,
 ) {
 
     val state: StateFlow<FareState> = fareEngine.state
@@ -272,6 +280,7 @@ class MeterController(
             airportRankRequestedMaxi = tripContext.airportRankRequestedMaxi,
             negotiatedTotal = tripContext.negotiatedTotal?.let { runCatching { BigDecimal(it) }.getOrNull() },
         )
+        imuSampler?.start()
         beginPersisting(clientUuid)
         MeterForegroundService.start(appContext)
     }
@@ -311,6 +320,7 @@ class MeterController(
             openBlackoutSegment = openBlackoutSegment,
         )
         SessionHolder.markTripLive(open.clientUuid)
+        imuSampler?.start()
         beginPersisting(open.clientUuid)
         MeterForegroundService.start(appContext)
     }
@@ -329,6 +339,7 @@ class MeterController(
         persistJob?.cancel()
         persistJob = null
         activeClientUuid = null
+        imuSampler?.stop()
         MeterForegroundService.stop(appContext)
         return closed
     }
@@ -432,6 +443,15 @@ class MeterController(
                         resolution = resolved.resolution,
                         billedDistanceKm = resolved.billedDistanceKm.toPlainString(),
                         corridorRoadId = resolved.corridorRoadId,
+                        // W2 (inertial dead-reckoning, 2026-09-12) — null on every resolution that
+                        // predates this workstream (NONE/CORRIDOR/STATIONARY), populated only for
+                        // INERTIAL/UNCALIBRATED. See [ResolvedBlackout]'s own field docs.
+                        estimatedDistanceKm = resolved.estimatedDistanceKm?.toPlainString(),
+                        referenceDistanceKm = resolved.referenceDistanceKm?.toPlainString(),
+                        correctionKm = resolved.correctionKm?.toPlainString(),
+                        referenceSource = resolved.referenceSource,
+                        confidence = resolved.confidence,
+                        zuptCount = resolved.zuptCount,
                         createdAt = System.currentTimeMillis(),
                         updatedAt = System.currentTimeMillis(),
                     ),

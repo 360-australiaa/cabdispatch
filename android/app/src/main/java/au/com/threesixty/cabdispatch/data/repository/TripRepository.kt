@@ -6,6 +6,7 @@ import au.com.threesixty.cabdispatch.data.local.dao.TripBlackoutSegmentDao
 import au.com.threesixty.cabdispatch.data.local.dao.TripDao
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TripBlackoutSegmentEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
@@ -496,22 +497,7 @@ class TripRepository(
             // reflected in the trip's ordinary totals either way, and the unresolved local row
             // stays on-device as-is rather than being force-fit into a DTO shape that assumes a
             // resolution happened.
-            gpsBlackoutSegments = blackoutSegments.mapNotNull { seg ->
-                val endedAt = seg.endedAtIso ?: return@mapNotNull null
-                GpsBlackoutSegmentDto(
-                    clientUuid = seg.clientUuid,
-                    startedAt = seg.startedAtIso,
-                    endedAt = endedAt,
-                    entryLat = seg.entryLat,
-                    entryLng = seg.entryLng,
-                    exitLat = seg.exitLat ?: seg.entryLat,
-                    exitLng = seg.exitLng ?: seg.entryLng,
-                    entryWasMoving = seg.entryWasMoving,
-                    resolution = seg.resolution,
-                    billedDistanceKm = seg.billedDistanceKm,
-                    corridorRoadId = seg.corridorRoadId,
-                )
-            },
+            gpsBlackoutSegments = blackoutSegments.mapNotNull(::toBlackoutSegmentDtoOrNull),
             receiptRef = trip.receiptRef,
             deviceTotal = trip.deviceTotal,
             // See TripEntity.tip's doc — a tip is never folded into deviceTotal above (the
@@ -519,6 +505,33 @@ class TripRepository(
             // forward-compatible" convention this method already uses for voucherCode/
             // accountReference/splitPayments.
             tipAmount = trip.tip,
+        )
+    }
+
+    /** One [TripBlackoutSegmentEntity] row -> [GpsBlackoutSegmentDto], or `null` for a segment
+     * still open at close (see [toSyncItemDto]'s own comment on `gpsBlackoutSegments`) — extracted
+     * purely to keep [toSyncItemDto] itself within this codebase's complexity budget, not a
+     * separately reusable mapping. */
+    private fun toBlackoutSegmentDtoOrNull(seg: TripBlackoutSegmentEntity): GpsBlackoutSegmentDto? {
+        val endedAt = seg.endedAtIso ?: return null
+        return GpsBlackoutSegmentDto(
+            clientUuid = seg.clientUuid,
+            startedAt = seg.startedAtIso,
+            endedAt = endedAt,
+            entryLat = seg.entryLat,
+            entryLng = seg.entryLng,
+            exitLat = seg.exitLat ?: seg.entryLat,
+            exitLng = seg.exitLng ?: seg.entryLng,
+            entryWasMoving = seg.entryWasMoving,
+            resolution = seg.resolution,
+            billedDistanceKm = seg.billedDistanceKm,
+            corridorRoadId = seg.corridorRoadId,
+            estimatedDistanceKm = seg.estimatedDistanceKm,
+            referenceDistanceKm = seg.referenceDistanceKm,
+            correctionKm = seg.correctionKm,
+            referenceSource = seg.referenceSource,
+            confidence = seg.confidence,
+            zuptCount = seg.zuptCount,
         )
     }
 

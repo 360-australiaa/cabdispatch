@@ -242,6 +242,16 @@ data class GpsBlackoutSegmentDto(
     val resolution: String,
     @SerialName("billed_distance_km") val billedDistanceKm: String,
     @SerialName("corridor_road_id") val corridorRoadId: String? = null,
+    /** W2 (inertial dead-reckoning, 2026-09-12) — non-null only when [resolution] is INERTIAL or
+     * UNCALIBRATED; see [au.com.threesixty.cabdispatch.domain.ResolvedBlackout]'s own field docs
+     * for what each carries. `null` for every pre-existing resolution and every call site that
+     * predates this field. */
+    @SerialName("estimated_distance_km") val estimatedDistanceKm: String? = null,
+    @SerialName("reference_distance_km") val referenceDistanceKm: String? = null,
+    @SerialName("correction_km") val correctionKm: String? = null,
+    @SerialName("reference_source") val referenceSource: String? = null,
+    val confidence: String? = null,
+    @SerialName("zupt_count") val zuptCount: Int? = null,
 )
 
 @Serializable

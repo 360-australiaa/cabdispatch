@@ -69,6 +69,27 @@ data class TripBlackoutSegmentEntity(
     /** The toll-registry road this segment's corridor match resolved to, when [resolution] is
      * CORRIDOR — null otherwise. */
     val corridorRoadId: String? = null,
+    /** W2 (inertial dead-reckoning, 2026-09-12): the running total the inertial estimate billed
+     * tick-by-tick, before [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .BlackoutReconciler]'s correction. Null for every resolution this column predates
+     * (NONE/CORRIDOR/STATIONARY) and for a segment where inertial billing never engaged. Decimal-
+     * as-string, same convention as [billedDistanceKm]. */
+    val estimatedDistanceKm: String? = null,
+    /** The road-path distance the reconciler matched this segment against, when
+     * [referenceSource] is `"ROAD_PATH"` — null otherwise. */
+    val referenceDistanceKm: String? = null,
+    /** `billedDistanceKm - estimatedDistanceKm`, the signed correction applied at reacquisition.
+     * Null for every non-INERTIAL resolution. */
+    val correctionKm: String? = null,
+    /** `"ROAD_PATH"` or `"CHORD_BOUNDED"` — [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .BlackoutReconciler.ReferenceSource] name. Null for every non-INERTIAL resolution. */
+    val referenceSource: String? = null,
+    /** The estimator's confidence tier at the point this segment resolved — null unless inertial
+     * billing engaged for this segment (INERTIAL or UNCALIBRATED). */
+    val confidence: String? = null,
+    /** How many zero-velocity updates fired during this segment — null unless inertial billing
+     * engaged. */
+    val zuptCount: Int? = null,
     val createdAt: Long,
     val updatedAt: Long,
 )
@@ -90,4 +111,22 @@ enum class BlackoutResolution {
     /** The vehicle was already stationary (below the tariff's speed threshold) when signal was
      * lost — waiting time accrued throughout, as it would have with a live fix. */
     STATIONARY,
+
+    /** W2 (2026-09-12): billed tick-by-tick from the tablet's own calibrated inertial sensors for
+     * at least part of this segment, reconciled at reacquisition against a road-path match or a
+     * bounded straight-line chord — see [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .BlackoutReconciler]. Only ever reached when `BuildConfig.INERTIAL_BILLING_ENABLED` is on
+     * (owner gate G3); off by default, in which case this segment resolves exactly as it always
+     * has (NONE/CORRIDOR/STATIONARY). */
+    INERTIAL,
+
+    /** Inertial billing engaged for at least one tick of this segment, then the estimator itself
+     * invalidated (calibration lost — e.g. the tablet was disturbed in its mount — or the error
+     * budget exceeded [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .InertialSpeedEstimator]'s 120s UNRELIABLE bound) before reacquisition. Whatever was already
+     * billed stands (it went through the ordinary distance/waiting accrual path, tick by tick, the
+     * same as any other billing); no further reconciliation is attempted against a source this
+     * untrustworthy, and the fallback W1 rule (nothing more billed if moving, waiting if
+     * stationary) governs the rest of the segment. */
+    UNCALIBRATED,
 }

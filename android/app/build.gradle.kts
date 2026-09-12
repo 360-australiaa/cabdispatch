@@ -163,6 +163,17 @@ android {
         // (CabDispatchApp.kt), which is what the actual Maps SDK v11 API expects (not a manifest
         // meta-data entry, that was the older v9/v10 pattern).
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
+
+        // W2 (inertial dead-reckoning through a GPS blackout, 2026-09-12, owner gate G3): billing
+        // against the tablet's own gyroscope/accelerometer estimate stays OFF until the owner has
+        // reviewed >= 3 real drives' shadow-mode residual evidence (see
+        // `domain/location/inertial/InertialSpeedEstimator.kt`'s doc and the plan's W2 task 9/
+        // acceptance criteria) and flips this in a one-line PR citing that evidence. Shadow mode
+        // itself (the estimator running and logging residuals, never billing) stays ON by default
+        // so that evidence exists to review in the first place -- it costs nothing extra the
+        // estimator was not already going to spend once a hiring is open.
+        buildConfigField("boolean", "INERTIAL_BILLING_ENABLED", "false")
+        buildConfigField("boolean", "INERTIAL_SHADOW_ENABLED", "true")
     }
 
     // Android lint. Same baseline strategy as detekt above: `lint-baseline.xml` records the

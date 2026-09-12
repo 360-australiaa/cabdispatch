@@ -30,14 +30,27 @@ import java.math.BigDecimal
  * already uses. Toll CHARGING for the same road, if any, is [onFix]'s separate, unaffected concern —
  * a corridor match here never itself adds or changes a toll line.
  *
- * **Deliberately rejected alternatives** (both considered this session, both explicitly out): generic
- * dead-reckoning from the last known speed/heading (reopens exactly the F3 overbilling bug this
- * engine was fixed to close — a vehicle that slowed or stopped mid-tunnel would be billed as if it
- * kept going), and any device-sensor-based (accelerometer/gyroscope) distance estimate (same
- * fabricated-distance risk [MeterAccuracyTest]'s "no fabricated distance" tests exist to catch, just
- * moved from GPS-speed-integration to a different unreliable sensor). The only distance this file
- * will ever produce is one that sums real, already-known, already-published road geometry — never a
- * guess at what the vehicle itself did in between.
+ * **Deliberately rejected alternative:** naive dead-reckoning from the last known speed/heading held
+ * constant (reopens exactly the F3 overbilling bug this engine was fixed to close — a vehicle that
+ * slowed or stopped mid-tunnel would be billed as if it kept going). This file's OWN distance is,
+ * and remains, one that sums real, already-known, already-published road geometry — never a guess
+ * at what the vehicle itself did in between.
+ *
+ * **Superseded, in part, by the owner's 2026-09-12 decision (§1.3 of
+ * `docs/plans/2026-09-12-android-meter-optimisation-and-gps-blackout-plan.md`) — a device-sensor
+ * (accelerometer/gyroscope) speed estimate is no longer rejected outright.** What changed: the
+ * original concern above was a raw integrated ACCELEROMETER DISTANCE with no independent check on
+ * it — free-space dead reckoning, exactly as unconstrained (and exactly as prone to unbounded drift)
+ * as the naive speed/heading case this doc still rejects one paragraph up. W2's
+ * `domain/location/inertial/` package is not that: it estimates a single scalar (speed along a road
+ * already known to be there, never a free-space position — see that package's own `ImuTypes.kt`
+ * doc), requires a per-device calibration bar before it is trusted at all, and — critically — is
+ * NEVER billed on its own uncorroborated word. [au.com.threesixty.cabdispatch.domain.location
+ * .inertial.BlackoutReconciler] reconciles every INERTIAL-billed segment back against this exact
+ * function's own known-corridor distance when one matches (the road is still the truth whenever this
+ * file can name it), and against a bounded straight-line chord otherwise — so a corridor match found
+ * here still wins outright over the sensor estimate; the sensor only ever fills the gap where this
+ * function returns `null`.
  *
  * **The geometry, precisely.** The registry carries no stored ordering for a road's own gantries
  * (see [TollGantryEntity][au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity] — no

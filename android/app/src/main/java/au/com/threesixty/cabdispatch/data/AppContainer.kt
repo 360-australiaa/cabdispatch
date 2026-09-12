@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_11_12
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_12_13
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_13_14
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_14_15
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_15_16
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -265,7 +266,7 @@ object AppContainer {
             // MIGRATION_8_9: see AppDatabase.kt's doc — the first bump that ships a real
             // Migration, because a real field-test device carrying v8 data crashed hard without
             // one. Never add fallbackToDestructiveMigration here instead (financial trip data).
-            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
             .build()
 
         // Security finding X6. This was `Level.BODY` under `BuildConfig.DEBUG`, which on this
@@ -657,6 +658,33 @@ object AppContainer {
      * [duressController] each take one: the money path must not be able to be taken down by an
      * unrelated coroutine failing somewhere else in a shared scope.
      */
+    /**
+     * W2 (inertial dead-reckoning through a GPS blackout, 2026-09-12) — the tablet's own sensor
+     * plumbing. `imuSampler` costs nothing until `MeterController.startTrip`/`restoreOpenTripIfAny`
+     * call [au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler.start] (task 2: on
+     * only while a hiring is open); `inertialSpeedSource`'s own coroutine subscription is live from
+     * first touch, but idles doing nothing off an unstarted sampler's always-null `samples`, so
+     * constructing it eagerly here (rather than deferring construction too) costs nothing real.
+     * `vehicleFrameCalibrator` persists per-device via `SecurePrefs`, so a calibration learned on a
+     * previous shift survives this container's own lifetime.
+     */
+    val imuSampler: au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler by lazy {
+        au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler(appContext)
+    }
+
+    val vehicleFrameCalibrator: au.com.threesixty.cabdispatch.domain.location.inertial.VehicleFrameCalibrator by lazy {
+        au.com.threesixty.cabdispatch.domain.location.inertial.VehicleFrameCalibrator(appContext)
+    }
+
+    val inertialSpeedSource: au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource by lazy {
+        au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource(
+            imuSampler = imuSampler,
+            calibrator = vehicleFrameCalibrator,
+            real = speedSource,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+    }
+
     val fareEngine: FareEngine by lazy {
         FareEngineImpl(
             speedSource,
@@ -667,6 +695,11 @@ object AppContainer {
             // Airport pickup fee: the cached terminal-rank zones, answered from memory (see
             // AirportZoneCache's doc) — the engine never touches Room or the network for this.
             airportZoneLookup = airportZoneCache,
+            // W2: billing against this is gated behind BuildConfig.INERTIAL_BILLING_ENABLED
+            // (owner gate G3, default off) inside FareEngineImpl.tick itself -- wiring it here
+            // unconditionally just lets shadow mode (BuildConfig.INERTIAL_SHADOW_ENABLED) collect
+            // real residual evidence from day one, which is the evidence that gate needs to clear.
+            inertialSpeedSource = inertialSpeedSource,
         )
     }
 
@@ -694,6 +727,7 @@ object AppContainer {
             },
             blackoutSegmentDao = tripBlackoutSegmentDao,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            imuSampler = imuSampler,
         ).also { MeterController.publish(it) }
     }
 
