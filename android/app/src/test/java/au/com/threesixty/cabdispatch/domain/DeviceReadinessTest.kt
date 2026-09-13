@@ -47,6 +47,8 @@ class DeviceReadinessTest {
         tariffSigningKeyCached: Boolean? = true,
         vehicleClassDeclared: Boolean? = true,
         motionSensorsCalibrationQuality: String? = "GOOD",
+        deviceIntegrityCompromised: Boolean? = false,
+        debugBuild: Boolean = false,
     ) = DeviceReadiness.Inputs(
         deviceId = deviceId,
         deviceRejected = deviceRejected,
@@ -64,6 +66,8 @@ class DeviceReadinessTest {
         tariffSigningKeyCached = tariffSigningKeyCached,
         vehicleClassDeclared = vehicleClassDeclared,
         motionSensorsCalibrationQuality = motionSensorsCalibrationQuality,
+        deviceIntegrityCompromised = deviceIntegrityCompromised,
+        debugBuild = debugBuild,
     )
 
     private fun blockedChecks(inputs: DeviceReadiness.Inputs) =
@@ -169,6 +173,11 @@ class DeviceReadinessTest {
             mapTokenPresent = false,
             vehicleClassDeclared = false,
             motionSensorsCalibrationQuality = null,
+            // W8: on a DEBUG build a compromised-device finding is advisory, not blocking (see
+            // ReadinessCheck.DeviceIntegrity's doc) -- debugBuild = true is what keeps this row
+            // inside the "every advisory can fail" scenario this test is exercising.
+            deviceIntegrityCompromised = true,
+            debugBuild = true,
         )
 
         assertTrue(DeviceReadiness.blockingFailures(everythingAdvisoryFailing).isEmpty())
@@ -467,10 +476,13 @@ class DeviceReadinessTest {
     }
 
     @Test
-    fun `only registration and software are ever capable of blocking`() {
+    fun `only registration, software and device integrity are ever capable of blocking`() {
         // Pins the policy itself rather than one combination: if a future change marks another
-        // check BLOCKING, this fails and forces the decision to be made deliberately.
-        val blockingChecks = DeviceReadiness.evaluate(inputs())
+        // check BLOCKING, this fails and forces the decision to be made deliberately. W8 added
+        // DeviceIntegrity as the third -- on a RELEASE build (debugBuild = false, this helper's
+        // default) it is severity BLOCKING regardless of whether it currently passes; on a debug
+        // build it drops to advisory (see the next test).
+        val blockingChecks = DeviceReadiness.evaluate(inputs(debugBuild = false))
             .filter { it.severity == DeviceReadiness.Severity.BLOCKING }
             .map { it.check }
             .toSet()
@@ -479,8 +491,39 @@ class DeviceReadinessTest {
             setOf(
                 DeviceReadiness.ReadinessCheck.Registered,
                 DeviceReadiness.ReadinessCheck.UpToDate,
+                DeviceReadiness.ReadinessCheck.DeviceIntegrity,
             ),
             blockingChecks,
+        )
+    }
+
+    @Test
+    fun `device integrity drops to advisory on a debug build`() {
+        // The severity swing itself, isolated from every other check -- see
+        // ReadinessCheck.DeviceIntegrity's doc for why: a developer's own rooted test device is
+        // routine and must never block ordinary debug-build iteration.
+        val debugSeverity = DeviceReadiness.evaluate(inputs(debugBuild = true))
+            .single { it.check == DeviceReadiness.ReadinessCheck.DeviceIntegrity }
+            .severity
+        val releaseSeverity = DeviceReadiness.evaluate(inputs(debugBuild = false))
+            .single { it.check == DeviceReadiness.ReadinessCheck.DeviceIntegrity }
+            .severity
+
+        assertEquals(DeviceReadiness.Severity.ADVISORY, debugSeverity)
+        assertEquals(DeviceReadiness.Severity.BLOCKING, releaseSeverity)
+    }
+
+    @Test
+    fun `a compromised device blocks a release build but not a debug build`() {
+        val compromised = inputs(deviceIntegrityCompromised = true)
+
+        assertTrue(
+            DeviceReadiness.blockingFailures(compromised.copy(debugBuild = false))
+                .any { it.check == DeviceReadiness.ReadinessCheck.DeviceIntegrity },
+        )
+        assertTrue(
+            DeviceReadiness.blockingFailures(compromised.copy(debugBuild = true))
+                .none { it.check == DeviceReadiness.ReadinessCheck.DeviceIntegrity },
         )
     }
 }

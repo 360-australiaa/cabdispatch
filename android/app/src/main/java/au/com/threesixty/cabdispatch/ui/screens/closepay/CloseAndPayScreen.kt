@@ -43,6 +43,7 @@ import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 import au.com.threesixty.cabdispatch.ui.theme.RobotoMonoFamily
+import au.com.threesixty.cabdispatch.ui.theme.SecureScreen
 
 /**
  * S4 — Close & Pay, re-skinned onto the [CaptainPalette] purple design system (2026-08-29 pass).
@@ -76,6 +77,11 @@ fun CloseAndPayScreen(
     onDone: () -> Unit,
     viewModel: CloseAndPayViewModel = viewModel(),
 ) {
+    // W8 (release readiness): a card payment flow is exactly the kind of screen a recording/
+    // screenshot could leak — see SecureScreen's own doc for why this is scoped to this screen
+    // only, not the whole Activity.
+    SecureScreen()
+
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     // Rate Passenger hand-off (2026-09-04): CloseAndPayUiState.Done carries no fields of its own

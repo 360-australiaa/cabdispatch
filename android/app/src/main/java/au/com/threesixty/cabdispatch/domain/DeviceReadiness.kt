@@ -183,6 +183,23 @@ object DeviceReadiness {
          * explicitly turned billing on.
          */
         MotionSensors,
+
+        /**
+         * W8 (release readiness, master plan P2.4): [DeviceIntegrityCheck] found at least one
+         * well-established root/bootloader-unlock/development-build signal on this tablet.
+         *
+         * Severity is NOT fixed like every other row here — it is a function of [Inputs.debugBuild]
+         * (see [deviceIntegrity]): **advisory** on a debug build (a developer's own rooted test
+         * device is routine and must not be locked out of ordinary iteration), **blocking** on a
+         * release build (the one build type that ever reaches a real fleet tablet, where the
+         * consequence [DeviceIntegrityCheck]'s own doc describes — a compromised Keystore, a
+         * fabricated GPS fix — is a real regulated-meter integrity problem, not a developer
+         * convenience to route around). This mirrors this codebase's `hardware/` gateways' own
+         * `debugBuild`-injected-not-read-directly convention (`CardPaymentGateway`,
+         * `ReceiptPrinterGateway`), so the policy itself stays plain Kotlin and unit-testable over
+         * both severities without a real `BuildConfig`.
+         */
+        DeviceIntegrity,
     }
 
     /**
@@ -246,6 +263,15 @@ object DeviceReadiness {
          * `null` before anything has looked (treated the same as NONE for [motionSensors]'s own
          * purposes — see that function). */
         val motionSensorsCalibrationQuality: String? = null,
+        /** [DeviceIntegrityCheck.Result.compromised] — null before anything has looked. */
+        val deviceIntegrityCompromised: Boolean? = null,
+        /** [DeviceIntegrityCheck.Result.reasons] — empty when not compromised or not yet checked;
+         * named rather than counted so a technician (or the depot, on a flagged tablet) sees
+         * exactly which signal(s) fired. */
+        val deviceIntegrityReasons: List<String> = emptyList(),
+        /** `BuildConfig.DEBUG`, injected rather than read here — see [ReadinessCheck.DeviceIntegrity]
+         * for why this is the one row whose severity is a function of build type. */
+        val debugBuild: Boolean = false,
     )
 
     /**
@@ -288,6 +314,7 @@ object DeviceReadiness {
         vehicleClass(inputs),
         heartbeat(inputs),
         motionSensors(inputs),
+        deviceIntegrity(inputs),
     )
 
     /** The permissions still missing, worst first — for the screen's expandable sub-list and for
@@ -484,4 +511,21 @@ object DeviceReadiness {
             else -> "Not yet calibrated — completes automatically during ordinary driving"
         },
     )
+
+    private fun deviceIntegrity(inputs: Inputs): ReadinessResult {
+        val compromised = inputs.deviceIntegrityCompromised == true
+        return ReadinessResult(
+            check = ReadinessCheck.DeviceIntegrity,
+            passed = !compromised,
+            // See ReadinessCheck.DeviceIntegrity's doc: a developer's own rooted test device is
+            // routine on a debug build and must not stop them working; the same finding on the one
+            // build type that ever reaches a real fleet tablet is a genuine meter-integrity risk.
+            severity = if (inputs.debugBuild) Severity.ADVISORY else Severity.BLOCKING,
+            detail = when {
+                inputs.deviceIntegrityCompromised == null -> "Not checked"
+                !compromised -> "No root or development-build signals found"
+                else -> "Integrity check failed: " + inputs.deviceIntegrityReasons.joinToString("; ")
+            },
+        )
+    }
 }

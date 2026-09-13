@@ -55,12 +55,48 @@ runs. CI reads the same token from a repository secret.
      first: `uv run uvicorn app.main:app --port 8001` from `backend/` (see `shared/API_SUMMARY.md`).
    - **Physical device on the same LAN/VPN**: `10.0.2.2` doesn't resolve outside an emulator —
      change the debug `API_BASE_URL` to your host machine's LAN IP, e.g. `http://192.168.1.23:8001`.
-   - **Release build**: currently a placeholder (`https://api.cabdispatch.example.com`, grep
-     `app/build.gradle.kts` for the `TODO(sibling agent, release hardening)` next to it) — replace
-     with the real deployed backend URL before shipping a release build.
+   - **Release build**: see "Release build (signed APK)" below — a placeholder URL, or missing
+     signing keys, now REFUSES to build a release artifact at all (a real Gradle-time error naming
+     exactly what's missing), rather than silently shipping something wrong.
 5. Build: `Build > Make Project`, or run the `app` configuration on an emulator/device (API 29+).
    `assembleDebug`/`testDebugUnitTest` from the Gradle tool window work the same way once the
    wrapper exists.
+
+## Release build (signed APK)
+
+**W8 release readiness (2026-09-13). This whole section is the OWNER-only step** — the owner holds
+the real release keystore and its two passwords; nobody else's `local.properties` should ever have
+real values for the four `RELEASE_*` keys below. A worktree with no signing keys can still run
+every ordinary command (`testDebugUnitTest`, `lintDebug`, `detekt`, `assembleDebug`) — none of them
+touch this section's guards, which fire only on `assembleRelease`/`bundleRelease`/`packageRelease`.
+
+Add these keys to `android/local.properties` (gitignored — never commit real values here) or set
+them as environment variables on the build machine:
+
+| Key | What it is | Required for a release build? |
+|---|---|---|
+| `RELEASE_API_BASE_URL` | The real, deployed, **https://** backend URL. Pre-existing tripwire (Phase 0) — a release build refuses to proceed while this is still the built-in placeholder, or not `https://`. | Yes |
+| `RELEASE_STORE_FILE` | Absolute or `local.properties`-relative path to the real release `.jks`/`.keystore` file. | Yes |
+| `RELEASE_STORE_PASSWORD` | The keystore's own password. | Yes |
+| `RELEASE_KEY_ALIAS` | The alias of the signing key inside that keystore. | Yes |
+| `RELEASE_KEY_PASSWORD` | That key's own password (may be the same as the store password, depending on how the keystore was generated). | Yes |
+| `ALLOW_CLEARTEXT_HOST` | A single hostname/IP a **debug** build is allowed to reach over plain HTTP, on top of the emulator/localhost baseline — e.g. the pilot Ubuntu server's bare IP, until it is served over TLS. | No — leave unset/blank. **A release build FAILS if this is non-blank**, on purpose (see `app/src/main/res/xml/network_security_config.xml`'s own doc). |
+
+If any of the four `RELEASE_*` signing keys is missing, `./gradlew :app:assembleRelease` fails
+immediately with a Gradle error naming exactly which one(s) are absent — it does not produce an
+unsigned or wrongly-signed APK. See the "Release signing tripwire" block near the bottom of
+`app/build.gradle.kts` for the exact check, and the "Release hardening tripwire" block above it for
+the pre-existing URL check this one sits next to.
+
+None of this has been exercised with a real keystore from any wave-6 agent worktree — no device,
+no real keystore, no real backend TLS endpoint was ever available to do so, and generating a real
+keystore or fabricating placeholder credentials from a worktree would be actively dangerous (a
+device could end up running a build signed with a key the owner can never update again). What has
+been verified, live, from this worktree: `:app:assembleRelease` genuinely fails with the tripwire's
+own error message when the signing keys are absent, and `:app:assembleDebug` is completely
+unaffected either way. Once the owner supplies the four real values and a real device, `./gradlew
+:app:assembleRelease` — installs and reaches a hired fare on the tablet is the plan's own
+acceptance line (**OWNER G5**).
 
 ## Module layout
 

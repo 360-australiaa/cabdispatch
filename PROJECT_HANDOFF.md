@@ -367,6 +367,26 @@ real-time "pending" offers on the backend. Also fixed a real bug found while tes
 
 ## Android — see `android/HANDOFF.md` for the full checklist
 
+**2026-09-13 addition — Wave 6 (W0-W7) + W8 release readiness.** This whole section below predates
+wave 6 and is stale on the specifics (fare engine, GPS, navigation) — see `android/HANDOFF.md`'s
+2026-09-13 top entry for an accurate, code-grounded summary of what W0 through W7 actually shipped
+(GPS blackout closed end-to-end with a persisted per-segment audit trail, an inertial
+dead-reckoning speed source for tunnels running in shadow mode only pending owner sign-off,
+battery/network/storage efficiency work, Compose performance and blackout UI, deeper tests/CI, and
+a debt burn-down pass) and exactly which OWNER gates (device-dependent field verification) remain
+open on each. W8 (release readiness, this addition's author) closed the release-build MACHINERY:
+`versionCode`/`versionName` bumped to 12/0.7.0, a real `signingConfigs.release` wired from
+`local.properties` with a Gradle-time refusal to build without all four keys, a rebuilt
+`network_security_config.xml` that no longer hardcodes the production IP unconditionally (a real
+security finding, X5, now closed) in favour of an owner-controlled, release-blocked
+`ALLOW_CLEARTEXT_HOST` escape hatch, a root/bootloader-unlock integrity check on the readiness gate
+(advisory in debug, blocking in release), `FLAG_SECURE` on Close & Pay/Profile/the duress-arming
+overlay, and an OWASP MASVS-L1 self-check table in `android/HANDOFF.md`. **Still not possible from
+any wave-6 agent worktree, W8 included: a real keystore, a real device, or a real TLS backend
+endpoint — see `android/README.md`'s "Release build (signed APK)" section for exactly what the
+owner does next (four `local.properties` keys) to actually produce and install a signed release
+build.**
+
 Condensed summary (the linked file has file:line-grounded detail — don't duplicate-maintain this
 list here, update that file when gaps close):
 

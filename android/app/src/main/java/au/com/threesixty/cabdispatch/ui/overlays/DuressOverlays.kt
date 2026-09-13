@@ -39,6 +39,7 @@ import au.com.threesixty.cabdispatch.domain.DuressController
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.Deck
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.SecureScreen
 
 /**
  * Invisible 56dp triple-tap hit-target for the hidden duress gesture (spec §2: "active
@@ -97,6 +98,11 @@ fun HiddenDuressGestureZone(onTriggered: () -> Unit, modifier: Modifier = Modifi
  */
 @Composable
 fun DuressTriggeredOverlay(secondsRemaining: Int, onCancel: () -> Unit) {
+    // W8 (release readiness): the arming/confirmation panel itself is the sensitive moment here —
+    // see SecureScreen's own doc for why DuressActiveBanner (the ongoing stealth indicator) does
+    // NOT also call this.
+    SecureScreen()
+
     val pulse = rememberInfiniteTransition(label = "duress-pulse")
     val pulseAlpha by pulse.animateFloat(
         initialValue = 0.55f,

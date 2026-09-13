@@ -63,6 +63,7 @@ import au.com.threesixty.cabdispatch.ui.theme.GlassCard
 import au.com.threesixty.cabdispatch.ui.theme.HudStatusPill
 import au.com.threesixty.cabdispatch.ui.theme.HudTone
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
+import au.com.threesixty.cabdispatch.ui.theme.SecureScreen
 import au.com.threesixty.cabdispatch.ui.theme.Space
 import au.com.threesixty.cabdispatch.ui.theme.color
 import java.io.ByteArrayOutputStream
@@ -141,6 +142,10 @@ fun ProfileScreen(
     onFactoryReset: () -> Unit,
     viewModel: ProfileViewModel = viewModel(),
 ) {
+    // W8 (release readiness): driver PII (photo, compliance documents) — see SecureScreen's own
+    // doc for why this is scoped to this screen only, not the whole Activity.
+    SecureScreen()
+
     val session by SessionHolder.session.collectAsStateWithLifecycle()
     var activeTab by remember { mutableStateOf(ProfileTab.PROFILE) }
 

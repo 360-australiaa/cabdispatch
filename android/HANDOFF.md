@@ -1,6 +1,183 @@
 # Android meter — finish-it checklist (read this first)
 
 
+## 2026-09-13 (newest) -- Wave 6, W0-W7 + B-W1: GPS blackout closed end-to-end, inertial dead
+## reckoning shipped in shadow mode, battery/network/perf pass, and release readiness (W8, this
+## entry's own author)
+
+Everything below is on `wave6/w8-release`, built on the fully-merged integration of every wave-6
+workstream (`087a7b8`). Source: the plan at `docs/plans/2026-09-12-android-meter-optimisation-and-
+gps-blackout-plan.md` and `git log --oneline 7c17f3e..HEAD` in this worktree — every workstream's
+own commit message is the primary source for its entry below; W1 has no separately-titled commit in
+this trunk's history (its deliverables landed folded into the `7c17f3e` "W0" commit rather than
+under their own message — an artifact of how this trunk was assembled, not a gap in the work
+itself), so its entry below is verified against the live code instead of a commit message. **This
+is a summary of what SEVEN PRIOR AGENTS did, cross-checked against the code, not a claim that this
+W8 pass re-verified each one's field acceptance criteria** — every workstream below still carries
+its own OWNER gate exactly as it did when it landed.
+
+- **W0 · Green CI baseline** (`7c17f3e`). Toolchain refresh: AGP 8.5.2 → 8.13.2, Kotlin 2.0.21 →
+  2.3.21, Gradle 8.10.2 → 9.5.1 (the newest AGP that does not require the AGP 9 "built-in Kotlin"
+  migration). `lint-baseline.xml` deleted — every one of the original 48 baselined issues fixed in
+  place or suppressed with a comment; `lint { abortOnError = true; warningsAsErrors = true;
+  checkDependencies = true }` and Kotlin `allWarningsAsErrors = true` (`app/build.gradle.kts`).
+  Detekt baseline regenerated after confirming the "new" findings were pre-existing debt this pass
+  never touched. Two real bugs fixed along the way: `FareEngineImpl.resolveTimeClass`/
+  `resolveIsPeak` read `ZonedDateTime.now()` with no test seam (a test run landing inside the real
+  Peak Time Hiring window silently added the peak surcharge to six tests never testing peak at
+  all) — fixed with an injected `wallClockNow` seam, same shape as the existing `nanoTimeSource`;
+  and a Room 2.6.1→2.8.5 `MigrationTestHelper` incompatibility under Robolectric worked around.
+  Verified: 436 tests green (up from the stale branch's 258, 1 failing), lint and detekt clean, no
+  baseline files.
+- **W1 · GPS blackout — provable and complete** (G1-G7, N1). No separate commit message in this
+  trunk (see note above), but every deliverable is present and verified in the current code: the
+  simulator has real blackout profiles (`domain/location/SimulatedRoute.kt`'s
+  `laneCoveTunnelBlackout()` and `carParkBlackout()` — fixes genuinely stop for the blackout window,
+  not just drop to zero speed); `GpsQuality.STALE` exists and wins over accuracy-based tiers when a
+  fix's age exceeds `LocationFix.MAX_FIX_AGE_MS` (`domain/GpsQuality.kt`); `TripBlackoutSegmentEntity`
+  / `TripBlackoutSegmentDao` persist one row per blackout with a `resolution` of
+  `NONE|CORRIDOR|INERTIAL|UNCALIBRATED|STOPPED` (`data/local/entity/TripBlackoutSegmentEntity.kt`);
+  `TripStatus.STOPPED` exists end-to-end, including on the wire (`domain/TripModels.kt`); and
+  `SIMULATOR_REQUIRES_ADMIN_PIN = true` (G5/N1 closed — `ui/screens/settings/SettingsViewModel.kt`).
+  **Not independently re-verified by this W8 pass**: whether the plan's exact `RealLocationProvider`
+  `FixState`/`fixState: StateFlow<...>` API shape was implemented literally as sketched — the
+  observable behaviour (staleness detection, `GpsQuality.STALE`) is confirmed present via
+  `GpsQualityClassifier`, but this pass did not re-audit every W1 consumer (`LivePositionHeartbeat`,
+  `DuressController`, `TollDetector`) line-by-line for the fix-skipping behaviour the plan specifies.
+  **OWNER G1** (the on-device tunnel/car-park simulator run) was never done — no device access from
+  any wave-6 worktree.
+- **B-W1 · Backend GPS-blackout wire** (`f942062`). Accepts the device's own
+  `gps_blackout_segments` + `stopped_s` + a `TelemetryPoint.state` of `hired|stopped`, on a
+  deliberately SEPARATE `Trip.device_gps_blackout_segments` column (never merged with the server's
+  own independently-computed `Trip.gps_blackout_events`).
+  `reconcile_gps_blackout_segments` cross-references the two accounts and raises audit-trail-only
+  flags on disagreement (corridor distance beyond `max(250m, 10%)`, a segment missing on either
+  side, `stopped_s` off by more than 10s) — never auto-corrects, the device's own already-checked
+  billing stands. STOPPED never accrues distance/waiting in `apply_tick` or
+  `recompute_from_trace`. 11 new backend tests; full suite 1080 passed (2 pre-existing, unrelated
+  `test_request_logging.py` failures confirmed present before this change).
+- **W2 · Inertial dead-reckoning speed source** (`e71742b`, `0f9980a`). The soft-meter tunnel
+  estimator per the owner's 2026-09-12 decision (road-constrained, one scalar estimated — speed
+  along the road; no OBD-II, ever). New `domain/location/inertial/` package: `ImuSampler`
+  (SensorManager, `SENSOR_DELAY_GAME`, started/stopped on `openTrip`/`closeTrip` only),
+  `VehicleFrameCalibrator` (learns the vehicle's forward axis from GPS-observed speed changes,
+  persists per-device, invalidates on a sustained gravity-vector shift = tablet out of its mount),
+  `InertialSpeedEstimator` (ZUPT drift-killer, bounds, an error budget that degrades to
+  `UNRELIABLE` after 120s), `BlackoutReconciler`. Billing integration is a new, purely **additive**
+  `CalcFareEngine.reconcileBlackoutDistance` method — golden vectors provably untouched (new method,
+  new tests, no existing call site touched). **`BuildConfig.INERTIAL_BILLING_ENABLED` defaults
+  `false` (owner gate G3) — shadow mode only (`INERTIAL_SHADOW_ENABLED = true`) until real
+  shadow-mode residual evidence from ≥ 3 real drives justifies flipping it.** Diagnostics panel +
+  a `DeviceReadiness.MotionSensors` advisory row shipped in a follow-up commit (task 8). Explicitly
+  deferred by this workstream itself: a real `RoadPathSource` abstraction (W3's job, not yet landed
+  when W2 was written), and the real Sydney drive IMU fixtures the tests need — **owner-only, needs
+  a physical tablet, never done from any worktree.**
+- **W3 · Road-geometry constraint sources** (`2d58452`). `domain/location/roadpath/`:
+  `CorridorRoadPath` (refactored `KnownCorridor`'s gantry-chain walk into a reusable, byte-identical
+  `gantryChainPath`), `NavRouteRoadPath`, `StyleRoadPath`, `CompositeRoadPath` (nav route → corridor
+  → style, first match wins). **`StyleRoadPath` is explicitly flagged `UNVERIFIED ON DEVICE`** — no
+  tablet/emulator/Mapbox credential to confirm the custom Studio style actually exposes a road
+  source-layer offline; degrades safely to `null` rather than crashing, and the workstream's own PR
+  flags the Mapbox Studio side (add the standard `mapbox-streets-v8` road layer, or confirm it
+  already exists) as an **owner action**, not something this pass could resolve. `AppContainer`
+  wires `navRoute = null` (no process-scoped route source to read from) — also named as a gap, not
+  silently worked around. 502 tests, lint/detekt clean.
+- **W4 · Battery, network and storage efficiency** (`77277d1`). Adaptive `LivePositionHeartbeat`
+  cadence (hired/duress 5s, on-shift moving 10s, on-shift stationary 30s, screen-off-stationary
+  120s, plus immediate publish on a material change) via a new, pure, unit-tested
+  `resolveHeartbeatCadence`. `RealLocationProvider` location-request priority now also a pure,
+  tested function of shift/hired state (off-shift = no request at all). `gpsTraceJson`'s O(n²)
+  rewrite-the-whole-blob-every-tick replaced with an append-only `trip_trace_points` table,
+  materialised once at close (wire DTO shape unchanged). One shared `ReconnectPolicy` (exponential
+  backoff, jitter) replacing 32 independent reconnect sites. A debug-only `BatteryStatsPanel`
+  reports the counters the acceptance test reads. 477 tests at the time, lint/detekt clean, no
+  changes under `domain/FareEngine.kt`/`domain/fare/`. **Explicitly not verified from this
+  worktree, and said so in its own commit message: the actual on-device Battery Historian /
+  `dumpsys batterystats` before/after measurement — OWNER G4, no device access.**
+- **W5 · Compose performance and UI correctness** (`b1d7a80`). Blackout UI: the GPS LOST pill now
+  reads `FareState.blackout` for "waiting only" vs "no charge yet" wording, a "FARE RESUMED"
+  transient banner. Every `.collectAsState()` in `ui/` moved to `.collectAsStateWithLifecycle()`; a
+  Compose stability configuration file added so `MeterDial`/`MeterPaneLayout` report zero unstable
+  parameters. `ControlsDrawer`/`TripDetailsCard` narrowed to exactly the `FareState` fields they
+  render, so they stop recomposing on ticks that don't move them. One real bug fixed: two
+  `EngagementTiles.kt` dialogs rendered at system density inside their own window, visibly
+  out-of-proportion with the rest of the 1280×800 canvas — fixed by re-providing the scaled
+  `LocalDensity` inside each dialog. `androidx.profileinstaller` + a new `:baselineprofile` module
+  added, but **no `baseline-prof.txt` was actually generated — that needs a connected
+  device/emulator this worktree never had, named explicitly as an OWNER gate in the same commit.**
+  StrictMode (debug, log-only) + LeakCanary (`debugImplementation`) added. 437 tests, golden
+  vectors unchanged at 31/31. **Also not done from this worktree: the on-tablet TalkBack check, the
+  Perfetto trace, and the release APK build itself (OWNER G2).**
+- **W6 · Tests and CI depth** (`f4ab9cd`). Four new exact-cent blackout golden vectors (moving/
+  corridor, stationary, unmatched-moving, back-to-back), asserted with plain `assertEquals` against
+  a `BigDecimal`, no epsilon. Restart/process-death race fixed: a reacquisition fix on the very
+  first tick after a restore now still resolves the restored blackout correctly. Room migration
+  test extended to the full 8→15 chain in one call, plus a no-data-loss check. **Explicitly
+  skipped, and said so in its own commit message: task 1 (tariff-signing tests —
+  `TariffSignatureVerifier`/`TariffCanonicalPayload`/`TariffCache` still have zero tests, and
+  `TariffSignatureVerifier.kt`'s `TODO(#w7-rsa-verifier-prod-key)` is a real, still-open item, just
+  now tracked with a ticket slug rather than a bare TODO), the instrumented-on-real-emulator half of
+  task 2 (only the JVM/Robolectric chain was extended, not a real API 29/34 emulator run in CI —
+  no emulator access from this worktree), and task 5 (screenshot tests — skipped over an
+  AGP/Paparazzi compatibility concern the commit message details).** 449 tests at the time,
+  lint/detekt clean.
+- **W7 · Cleanup and debt burn-down** (`48d5a75`, `8c60577`, `63a6b1b`, `5972f30`, `86bc65f`,
+  `c18b6a3`, `ac55780`). All 9 real `!!` sites in `app/src/main` removed (early return + logged
+  reason, or a typed error); all 8 catch-all `catch (e: Exception)` sites narrowed to the exceptions
+  their call sites actually throw, or kept broad with a documented justification and `Log.w`. Every
+  live TODO tagged with a ticket-style slug (`TODO(#w7-...)`, not a real tracker — no issue tracker
+  is connected here); several stale/inaccurate comments fixed outright rather than tagged. **A real,
+  still-open latent bug was found and documented, not silently patched: `OutboxDrainer.drainShifts`
+  decodes every drained SHIFT row as `ShiftStartDto`, so a shift-close payload
+  (`ShiftSyncPayload`) would dead-letter on its first drain attempt — tracked as
+  `TODO(#w7-shift-close-outbox-drain)`, not fixed in this pass (it touches the shared outbox drain
+  path other workstreams rely on).** `PlotZoneScreen.kt`/`ZoneStatisticsScreen.kt` turned out to
+  be live (renamed, still-referenced tab content), not dead code — the stale doc comment claiming
+  otherwise was fixed instead of deleting live screens. `auto_tolled_roads` now syncs to the server
+  as dispute evidence (T5/N4) — **Android-side only; the backend has no matching field yet, so it
+  round-trips as an ignored extra JSON field until a backend follow-up adds real persistence — not
+  this Android-only workstream's scope.** Three connectivity checks collapsed onto one
+  `NetworkStatus` flow; the two stray haversine implementations outside `GeoMath`/
+  `TollDetector.tollHaversineM` collapsed onto `GeoMath.distanceKm` (the toll-detection one is
+  byte-identical to the backend's own formula, untouched, as required). `CloseAndPayScreen.kt`
+  (1,629 → 244/479/765/284 across four files) and `SettingsScreen.kt` (1,437 → 8 files, each ≤ 350
+  lines) split along their own natural seams — pure file-boundary moves, no logic changed. 556
+  tests green at the end of W7, the number quoted at the top of this doc's own worktree.
+- **W8 · Release readiness (this entry's author)** — see the rest of this file
+  (`android/HANDOFF.md`'s own MASVS table below) and `docs/PROJECT_HANDOFF.md` for what shipped:
+  versioning, a real `signingConfigs.release` + Gradle-time tripwire, a rebuilt
+  `network_security_config.xml` (finding X5 closed), `DeviceIntegrityCheck` (root/bootloader-unlock
+  detection), and `FLAG_SECURE` on Close & Pay / Profile / the duress-arming overlay.
+
+### OWASP MASVS v2 (L1) self-check — W8, 2026-09-13
+
+Every citation below points at real code in this checkout, not an aspiration. Where a control is
+not genuinely met, this says so plainly rather than citing something adjacent to look covered.
+
+| MASVS category | What this app does | Where | Genuinely met? |
+|---|---|---|---|
+| **STORAGE** (sensitive data at rest) | Bearer/refresh tokens, the device secret and the offline PIN hash are stored in `EncryptedSharedPreferences` backed by an Android Keystore `AES256_GCM` key, migrated one-time off the plaintext files they used to live in. | `domain/SecurePrefs.kt:112-115` (key + store creation), `domain/TokenStore.kt:33,45` | **Yes**, with the honest limit `SecurePrefs.kt`'s own doc already states: this protects nothing once the device is rooted — see the RESILIENCE row below, which is this pass's answer to that. |
+| **CRYPTO** (cryptographic operations) | Tariffs are Ed25519-signed server-side and verified on-device via BouncyCastle (`java.security` only gained platform Ed25519 support on API 33+, and minSdk here is 29). A tariff that fails verification is never cached. | `security/TariffSignatureVerifier.kt:179` (`Ed25519TariffSignatureVerifier`), `:184-193` (`verify`) | **Yes** for the one thing this app actually signs (tariffs). **Gap, said plainly**: `TariffSignatureVerifier.kt`'s own `TODO(#w7-rsa-verifier-prod-key)` (W7) and zero unit tests on `TariffCanonicalPayload`/`TariffSignatureVerifier`/`TariffCache` (W6, explicitly skipped) mean this control is implemented but not regression-tested. |
+| **AUTH** (authentication & session management) | Driver login is server-verified PIN-based (`POST /v1/auth/driver-login`), not a client-side secret; a separate admin PIN gates the GPS simulator and other diagnostics behind a server-verified code. | `domain/DriverAuthRepository.kt:109` (`login`), `ui/screens/adminpin/AdminPinGateScreen.kt` | **Partially.** Login/session tokens are real and server-checked. **Gap**: no session inactivity timeout beyond the access token's own server-side expiry, and no biometric/device-credential re-auth gate on top of the PIN for a sensitive action (e.g. re-entering Close & Pay after the tablet has been idle) — not built in this pass. |
+| **NETWORK** (network communication) | Cleartext traffic is blocked by default (API 28+ platform behaviour) and, as of this pass, permitted ONLY to the emulator alias and localhost — the previous unconditional exception for the real production IP (finding X5) is removed. A single, owner-controlled, release-blocked escape hatch (`ALLOW_CLEARTEXT_HOST`) exists for the pre-TLS pilot deployment. | `app/src/main/res/xml/network_security_config.xml` (this pass), `AndroidManifest.xml:92` (wiring), `app/build.gradle.kts`'s `allowCleartextHost` val and its two `afterEvaluate` guards | **Machinery yes, production state no** — the honest gap: the real backend (`docs/DEPLOY_UBUNTU.md`) is not yet served over TLS at all, so a real fleet tablet still needs `ALLOW_CLEARTEXT_HOST` set on a debug build today, and cannot ship a release build against it until that changes — an **OWNER decision on timing** (plan §6 item 5), not a code gap this pass could close. |
+| **PLATFORM INTERACTION** (permissions, IPC, UI redress) | Every runtime permission is declared for a real, named purpose (no blanket "just in case" grants) — see `AndroidManifest.xml`'s own per-permission comments. The one exported content provider (`FileProvider`, for the OTA self-update install prompt) is `exported="false"` and only ever grants a Uri it explicitly creates. Screen-recording/screenshot capture is blocked (`FLAG_SECURE`) on the three screens that could leak something sensitive (card payment, driver PII, duress-arming), scoped to exactly those screens' lifetime, never the whole app. | `AndroidManifest.xml:1-82` (permissions), `:156-163` (`FileProvider`), `ui/theme/SecureScreen.kt` (this pass) | **Yes.** |
+| **CODE QUALITY / BUILD CONFIGURATION** | `lint`: `abortOnError`/`warningsAsErrors`/`checkDependencies` all on, **zero baseline file** (every issue fixed or suppressed in place with a justification comment) since W0. Kotlin `allWarningsAsErrors`. Detekt runs with a baseline that only grandfathers pre-existing, reviewed debt — new findings fail the build. Release builds are minified (R8, default mode) and cannot be built at all without real, present signing credentials (this pass's own tripwire). | `app/build.gradle.kts:310-312` (lint), `:405` (`allWarningsAsErrors`), `:336` (`isMinifyEnabled` release), `app/detekt-baseline.xml` | **Partially.** **Gap, said plainly**: `android.enableR8.fullMode` and `isShrinkResources` are NOT set anywhere in this build (W5's own commit message names this as untouched, "per instruction," rather than done) — release builds run R8 in its default, not full, mode, and do not shrink unused resources. |
+| **RESILIENCE** (anti-tampering, anti-reversing) | A genuine root/bootloader-unlock/development-build integrity check runs on the readiness gate: AOSP test-keys signature, a known root-manager app installed, a root shell binary on the filesystem, or ADB enabled on a non-`user` OS build. Advisory on a debug build (a developer's own rooted test device is routine); **blocking on a release build** — the one build type that ever reaches a real fleet tablet. | `domain/DeviceIntegrityCheck.kt` (this pass), wired into `domain/DeviceReadiness.kt`'s `ReadinessCheck.DeviceIntegrity` and `ui/screens/readiness/DeviceReadinessViewModel.kt` | **Partially, and this is the category most worth reading honestly.** This is four well-established, low-false-positive signals (see the class's own doc for exactly what each detects and its known bypass), not a commercial RASP SDK or Play Integrity API attestation — a determined attacker with root can defeat any client-side check by controlling the process doing the checking. There is no code obfuscation beyond R8's default (non-full) mode, no anti-debugging beyond the one ADB signal folded into `DeviceIntegrityCheck`, and no server-side attestation (Play Integrity API) anywhere in this app. |
+
+**What this table is NOT**: a claim of MASVS certification, a claim that L2 (defense-in-depth /
+resilience-against-a-motivated-attacker) controls are met, or a substitute for an actual
+third-party security review. It is a same-day, code-grounded snapshot for whoever picks this
+project up next.
+
+**What is still genuinely open across the whole wave-6 program, in one place:** every OWNER gate
+named above (G1 tunnel run, G2 visual/TalkBack/Perfetto/release-APK-on-tablet, G3 shadow-mode
+evidence then a real tunnel drive with billing on, G4 battery historian) is **still open** — none
+of W1 through W8 had device access to close any of them, this pass included. Tariff-signing has
+zero tests. `OutboxDrainer.drainShifts` mis-decodes shift-close payloads (tracked, not fixed).
+`StyleRoadPath`'s offline road-layer assumption is unverified against the real Mapbox Studio style.
+`RemoteBackedShiftRepository` still never writes a `ShiftEntity` row (pre-existing, not touched by
+wave 6). See each workstream's bullet above for the rest.
+
 ## 2026-09-08 (newest) -- Wave-1 A1: the fare-engine blockers are closed
 
 Thirteen findings from `docs/audits/2026-09-08-android-architecture-audit.md` §2.1-§2.3, four of
