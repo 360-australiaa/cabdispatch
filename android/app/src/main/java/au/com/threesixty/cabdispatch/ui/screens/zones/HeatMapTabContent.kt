@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -353,8 +354,22 @@ private fun SelectedZoneCard(zone: ZoneDto, stats: ZoneStatsDto?, modifier: Modi
     val multiplier = stats?.let(SurgeModel::multiplier) ?: 1.0
     GlassCard(modifier = modifier.width(280.dp), cornerRadiusDp = 14, glow = if (stats != null) SurgeModel.color(multiplier) else null) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("${zone.number} · ${zone.name}", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${zone.number} · ${zone.name}",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = CaptainPalette.textPrimary,
+                    // Real bug: this card is a FIXED 280dp width, and a real operator-entered zone
+                    // name has no length guarantee -- unbounded, a long one pushes the "✕" dismiss
+                    // control past the card's own edge instead of just this label wrapping. Same
+                    // weight+maxLines+ellipsis guard PlotZoneScreen.kt's ZoneCard already applies to
+                    // the identical zone.name field.
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
                 Text(
                     "✕",
                     color = CaptainPalette.textMuted,
