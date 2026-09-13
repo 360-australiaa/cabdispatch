@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -410,6 +411,14 @@ internal fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: Clos
                             fontWeight = FontWeight.Medium,
                             fontSize = 32.sp,
                             color = CaptainPalette.textPrimary,
+                            // Real bug, found in audit: setVoucherCode() has no length cap (unlike
+                            // every money keypad on this screen, which caps at 5-7 digits), and
+                            // this Text had no maxLines/overflow inside a fixed height(80.dp)
+                            // GlassCard that DOES clip (see GlassCard's own .clip(shape)) -- a
+                            // driver who taps RegoStyleKeyGrid enough times wraps onto a second
+                            // line that is cut off mid-glyph instead of scrolling or ellipsizing.
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(start = 24.dp),
                         )
                     }
@@ -511,6 +520,15 @@ private fun LabeledEntryScreen(
                         fontWeight = FontWeight.Medium,
                         fontSize = 30.sp,
                         color = CaptainPalette.textPrimary,
+                        // Real bug, found in audit: setDocketNumber()/setAccountReference() have
+                        // no length cap (unlike every money keypad on this screen, which caps at
+                        // 5-7 digits), and this Text had no maxLines/overflow inside a fixed
+                        // height(80.dp) GlassCard that DOES clip (see GlassCard's own
+                        // .clip(shape)) -- a driver who taps the key grid enough times wraps onto
+                        // a second line that is cut off mid-glyph instead of scrolling or
+                        // ellipsizing. Same fix as VoucherEntryScreen's identical-shaped field.
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 24.dp),
                     )
                 }
