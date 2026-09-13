@@ -8,6 +8,7 @@ import au.com.threesixty.cabdispatch.data.remote.MapboxOfflineRegion
 import au.com.threesixty.cabdispatch.domain.AppUpdateState
 import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
 import au.com.threesixty.cabdispatch.BuildConfig
+import au.com.threesixty.cabdispatch.domain.DeviceIntegrityCheck
 import au.com.threesixty.cabdispatch.domain.LockTaskMode
 import au.com.threesixty.cabdispatch.domain.RuntimePermissions
 import au.com.threesixty.cabdispatch.domain.DeviceReadiness
@@ -88,6 +89,9 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
         val kiosk: DeviceReadiness.KioskState? = null,
         val mapTokenPresent: Boolean? = null,
         val vehicleClassDeclared: Boolean? = null,
+        /** W8 (release readiness): [DeviceIntegrityCheck.evaluate] read once per [refreshDeviceState]
+         * call, same cadence as every other OS-answerable probe here. */
+        val deviceIntegrity: DeviceIntegrityCheck.Result? = null,
     )
 
     private val probes = MutableStateFlow(Probes())
@@ -136,6 +140,9 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                     tariffSigningKeyCached = p.tariffSigningKeyCached,
                     vehicleClassDeclared = p.vehicleClassDeclared,
                     motionSensorsCalibrationQuality = calibration?.quality?.name,
+                    deviceIntegrityCompromised = p.deviceIntegrity?.compromised,
+                    deviceIntegrityReasons = p.deviceIntegrity?.reasons ?: emptyList(),
+                    debugBuild = BuildConfig.DEBUG,
                 )
                 Triple(DeviceReadiness.evaluate(inputs), DeviceReadiness.blockingFailures(inputs), update)
             }.collect { (results, blocking, update) ->
@@ -192,6 +199,10 @@ class DeviceReadinessViewModel(application: Application) : AndroidViewModel(appl
                 mapTokenPresent = BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank(),
                 vehicleClassDeclared = AppContainer.maxiVehicleStore.isDeclared(),
                 kiosk = kioskMode?.let { mode -> kioskState(mode, depotWantsKiosk) } ?: it.kiosk,
+                // W8: PackageManager/Settings.Global/filesystem reads, same "cheap enough to redo
+                // on every resume" cost class as RuntimePermissions.snapshot above -- no network,
+                // no coroutine needed.
+                deviceIntegrity = DeviceIntegrityCheck.evaluate(context),
             )
         }
     }

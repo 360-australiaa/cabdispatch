@@ -584,6 +584,8 @@ private fun DeviceReadiness.ReadinessCheck.label(): String = when (this) {
     DeviceReadiness.ReadinessCheck.Heartbeat -> "Depot heartbeat"
     // W2 (inertial dead-reckoning, 2026-09-12) -- see that check's own doc for why it is advisory.
     DeviceReadiness.ReadinessCheck.MotionSensors -> "Motion sensors"
+    // W8 (release readiness) -- see that check's own doc for why severity depends on build type.
+    DeviceReadiness.ReadinessCheck.DeviceIntegrity -> "Device integrity"
 }
 
 /**

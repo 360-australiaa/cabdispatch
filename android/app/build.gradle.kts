@@ -84,6 +84,96 @@ val releaseApiBaseUrl: String = localProperties.getProperty("RELEASE_API_BASE_UR
     ?: System.getenv("RELEASE_API_BASE_URL")
     ?: releaseApiBaseUrlPlaceholder
 
+// -- Release signing (W8 release readiness, 2026-09-12 optimisation plan) --------------------
+// The four values that unlock the REAL release keystore. Same local.properties/env pattern as
+// mapboxAccessToken/apiBaseUrlOverride/releaseApiBaseUrl above -- but unlike those, there is no
+// safe fallback for any of these: an unsigned or wrongly-signed APK is not a degraded build, it is
+// one that cannot be installed as an update over a real fleet's existing install, or (worse, if
+// some other key were used) one a compromised build pipeline could substitute for the real thing.
+// This is deliberately an OWNER-only step: only the owner holds the real keystore file and its two
+// passwords, and none of the four is ever meant to exist in this repository, in this worktree, or
+// on any machine but the owner's own signing environment / CI secret store. The `afterEvaluate`
+// guard at the bottom of this file refuses to build a release artifact while any of the four is
+// missing -- see that block for why, and android/README.md's release-build section for exactly
+// what the owner sets and where.
+val releaseStoreFile: String? = localProperties.getProperty("RELEASE_STORE_FILE")
+    ?: System.getenv("RELEASE_STORE_FILE")
+val releaseStorePassword: String? = localProperties.getProperty("RELEASE_STORE_PASSWORD")
+    ?: System.getenv("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias: String? = localProperties.getProperty("RELEASE_KEY_ALIAS")
+    ?: System.getenv("RELEASE_KEY_ALIAS")
+val releaseKeyPassword: String? = localProperties.getProperty("RELEASE_KEY_PASSWORD")
+    ?: System.getenv("RELEASE_KEY_PASSWORD")
+
+// -- Network security: the ALLOW_CLEARTEXT_HOST escape hatch (W8, finding X5) -----------------
+// The ONE owner-controlled, TEMPORARY cleartext exception for a real device talking to a real
+// backend that is not yet served over TLS -- e.g. the pilot Ubuntu server's bare IP, until
+// docs/DEPLOY_UBUNTU.md's "Adding HTTPS later" step actually happens (the 2026-09-12 optimisation
+// plan's owner-decisions section deliberately does not guess when that will be -- that date is an
+// OWNER decision, not something this pass invents). Read from local.properties, same pattern as
+// every other machine-specific value above. Empty by default -- the safe, common case, and the
+// only value a release build may ever have (see the `afterEvaluate` guard at the bottom of this
+// file, and app/src/main/res/xml/network_security_config.xml's own doc for how this value reaches
+// -- and is structurally barred from reaching -- a built APK).
+val allowCleartextHost: String = localProperties.getProperty("ALLOW_CLEARTEXT_HOST", "")
+    .ifBlank { System.getenv("ALLOW_CLEARTEXT_HOST") ?: "" }
+
+// Generates the debug-only network_security_config.xml override carrying allowCleartextHost (see
+// that val's own doc). A plain build-time template write, not a real resource-generation plugin --
+// there is no Android/Gradle API to parameterise a network-security-config XML resource directly,
+// so this is the standard escape hatch: write the file into `build/generated/...` (never into
+// `src/`) and register that directory as an extra resource source dir on the "debug" build type
+// only (below, inside the `android { sourceSets }` block).
+val generatedDebugNetworkSecurityConfigDir = layout.buildDirectory.dir("generated/networkSecurityConfig/debug/res")
+val generateDebugNetworkSecurityConfig = tasks.register("generateDebugNetworkSecurityConfig") {
+    // Not `@CacheableTask`/declared-inputs-tracked on purpose -- this is a few milliseconds of
+    // string-templating, not worth Gradle's up-to-date ceremony, and a developer who just edited
+    // ALLOW_CLEARTEXT_HOST in local.properties must see it take effect on the very next build
+    // regardless of what an inputs snapshot thinks changed (local.properties is not a Gradle input
+    // file this task declares, so an up-to-date check would otherwise miss that edit entirely).
+    outputs.dir(generatedDebugNetworkSecurityConfigDir)
+    doLast {
+        val xmlDir = generatedDebugNetworkSecurityConfigDir.get().asFile.resolve("xml")
+        xmlDir.mkdirs()
+        // Indentation below must match the template's own "<domain includeSubdomains=..." lines
+        // exactly (20 spaces) -- trimIndent() computes ITS common margin from the raw literal
+        // source below, including this interpolated value, so a mismatched indent here throws off
+        // trimIndent()'s calculation for every other line in the file, not just this one.
+        val extraDomainLine = if (allowCleartextHost.isNotBlank()) {
+            "\n                    <domain includeSubdomains=\"false\">$allowCleartextHost</domain>"
+        } else {
+            ""
+        }
+        xmlDir.resolve("network_security_config.xml").writeText(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!--
+              GENERATED at build time by :app's generateDebugNetworkSecurityConfig Gradle task,
+              do not edit by hand, do not commit (it lives under build/, already gitignored).
+              Overrides app/src/main/res/xml/network_security_config.xml for DEBUG builds ONLY,
+              adding the one ALLOW_CLEARTEXT_HOST from local.properties when the owner has set one
+              (see app/build.gradle.kts's allowCleartextHost val). Empty when unset, in which
+              case this file is byte identical to the baseline three-host config.
+            -->
+            <network-security-config>
+                <domain-config cleartextTrafficPermitted="true">
+                    <domain includeSubdomains="false">10.0.2.2</domain>
+                    <domain includeSubdomains="false">localhost</domain>
+                    <domain includeSubdomains="false">127.0.0.1</domain>$extraDomainLine
+                </domain-config>
+            </network-security-config>
+            """.trimIndent(),
+        )
+    }
+}
+// `preBuild` runs before every other task in this module for every variant -- wiring the generator
+// there (rather than guessing which of AGP's several resource-related tasks read this source
+// directory, several of which turned out to, not only the resource-merge task) guarantees the
+// override file exists before anything looks for it, at the cost of the generator also running
+// (harmlessly -- it is a debug-only directory a release build never reads) ahead of a release
+// build too.
+tasks.named("preBuild").configure { dependsOn(generateDebugNetworkSecurityConfig) }
+
 // Room schema export destination (A9 toolchain upgrade -- see AppDatabase.kt's `exportSchema`
 // doc for why this was off before and what turning it on now does and does not cover). KSP's
 // `room.schemaLocation` arg, not the old kapt `javaCompileOptions.annotationProcessorOptions`
@@ -150,13 +240,24 @@ android {
         // trip auto-flagged on sync against the server's recomputation, so this build should
         // reach every tablet in the fleet.
         //
+        // 12 / 0.7.0 (2026-09-13, W8 release readiness -- last workstream of the 2026-09-12
+        // optimisation plan): release-build MACHINERY, not a fare/UI change -- a real
+        // signingConfigs.release wired from local.properties (never committed, owner-only) with a
+        // Gradle-time refusal to build without all four keys; a rebuilt network_security_config.xml
+        // that no longer hardcodes the production IP unconditionally (finding X5) and instead
+        // permits cleartext only to the emulator/localhost plus one owner-controlled,
+        // release-blocked ALLOW_CLEARTEXT_HOST escape hatch; a root/bootloader-unlock integrity
+        // check (advisory in debug, blocking in release) on the readiness gate; and FLAG_SECURE on
+        // Close & Pay, Profile and the duress-arming overlay. See android/HANDOFF.md's changelog
+        // entry for this version for the full W0-W7 summary and exactly what remains an OWNER gate.
+        //
         // 4 / 0.4.0 (2026-09-07): automatic NSW toll detection with the corrected per-toll-point
         // registry, the card-surcharge absorption ruling, and the GPS simulator. versionCode is
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 11
-        versionName = "0.6.2"
+        versionCode = 12
+        versionName = "0.7.0"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
@@ -211,12 +312,29 @@ android {
         warningsAsErrors = true
     }
 
+    // Release signing (W8 release readiness). storeFile is only set when a path was actually
+    // supplied -- `file(null)` throws at configuration time, and leaving it unset here is exactly
+    // what lets the `afterEvaluate` guard below be the one place that reports a missing signing
+    // property, with one clear message naming which one, rather than a bare Gradle/AGP stack trace
+    // for whichever configuration-time null happens to be dereferenced first.
+    signingConfigs {
+        create("release") {
+            if (!releaseStoreFile.isNullOrBlank()) {
+                storeFile = file(releaseStoreFile)
+            }
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
         }
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // The deployed backend URL for release builds. This is deliberately NOT committed:
             // set RELEASE_API_BASE_URL in local.properties (gitignored) or in the environment on
@@ -261,6 +379,17 @@ android {
         unitTests {
             isIncludeAndroidResources = true
         }
+    }
+
+    // ALLOW_CLEARTEXT_HOST (see above): the debug build type's OWN resource source set. AGP
+    // resolves a resource of the same name/type in a build-type-specific source set as a full
+    // replacement of main's version for THAT build type only -- so a release build can never pick
+    // up the generated file below no matter what, structurally, independent of and in addition to
+    // the Gradle-time `afterEvaluate` refusal-to-build guard at the bottom of this file. Debug
+    // builds get this override; release always resolves the static, three-host-only
+    // app/src/main/res/xml/network_security_config.xml.
+    sourceSets.getByName("debug") {
+        res.srcDir(generatedDebugNetworkSecurityConfigDir)
     }
 }
 
@@ -515,6 +644,86 @@ afterEvaluate {
                     "Refusing to build a release artifact: RELEASE_API_BASE_URL must be https. " +
                         "A release build must not ship plaintext HTTP -- tokens, the device " +
                         "secret, duress audio and GPS all travel over it.",
+                )
+            }
+        }
+    }
+}
+
+// -- Release signing tripwire (W8 release readiness, 2026-09-12 optimisation plan) -----------
+// Same shape as the API-URL guard above, same reason: an `afterEvaluate` + `doFirst` on the
+// release artifact tasks specifically, so this never fires on `:app:testDebugUnitTest`/
+// `:app:lintDebug`/`:app:assembleDebug` -- a machine with no reason to hold the real release
+// keystore must still be able to run every ordinary build and CI check.
+//
+// This is a PRESENCE check only (are the four properties set at all), not a validity check (a
+// wrong password or a corrupt keystore file still fails, just later, inside AGP's own real signing
+// step, with AGP's own error) -- see app/build.gradle.kts's `releaseStoreFile`/etc. vals above for
+// why there is deliberately no safe fallback for any of the four to check against instead.
+//
+// To build a real release: set RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and
+// RELEASE_KEY_PASSWORD in local.properties (gitignored) or as environment variables on the build
+// machine, pointing at the real release keystore only the owner holds. See android/README.md's
+// release-build section.
+afterEvaluate {
+    val releaseSigningTasks = tasks.matching { task ->
+        val name = task.name
+        (name.startsWith("assemble") || name.startsWith("bundle") || name.startsWith("package")) &&
+            name.contains("Release")
+    }
+    val releaseSigningProperties = linkedMapOf(
+        "RELEASE_STORE_FILE" to releaseStoreFile,
+        "RELEASE_STORE_PASSWORD" to releaseStorePassword,
+        "RELEASE_KEY_ALIAS" to releaseKeyAlias,
+        "RELEASE_KEY_PASSWORD" to releaseKeyPassword,
+    )
+    releaseSigningTasks.configureEach {
+        doFirst {
+            val missing = releaseSigningProperties.filterValues { it.isNullOrBlank() }.keys
+            if (missing.isNotEmpty()) {
+                throw GradleException(
+                    "Refusing to build a release artifact: missing release signing " +
+                        (if (missing.size == 1) "property" else "properties") + " " +
+                        missing.joinToString(", ") +
+                        ". Set all four of RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, " +
+                        "RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD in local.properties " +
+                        "(gitignored) or in the environment, pointing at the real release " +
+                        "keystore -- this is an OWNER-only step, nobody else holds it. See " +
+                        "android/README.md's release-build section and the signing-config " +
+                        "notes in app/build.gradle.kts.",
+                )
+            }
+        }
+    }
+}
+
+// -- Cleartext-escape-hatch tripwire (W8 release readiness, finding X5) -----------------------
+// ALLOW_CLEARTEXT_HOST is a debug-only convenience (see app/src/main/res/xml/
+// network_security_config.xml and the `allowCleartextHost` val above) that already cannot reach a
+// release artifact structurally, because the generated override resource is registered on the
+// "debug" build type's own source set, never "release"/"main". This guard is the second, explicit
+// reason: a release build must FAIL, loudly, if the owner forgot to blank the property out of
+// local.properties before cutting a release, rather than silently building a release that (thanks
+// to the structural guard) merely ignores the value -- "the flag had no effect" is not the same
+// promise as "the build refused to proceed while the flag was still set", and only the latter
+// catches the mistake at the moment it is made instead of trusting the structural guard to have
+// been implemented correctly forever.
+afterEvaluate {
+    val releaseCleartextTasks = tasks.matching { task ->
+        val name = task.name
+        (name.startsWith("assemble") || name.startsWith("bundle") || name.startsWith("package")) &&
+            name.contains("Release")
+    }
+    releaseCleartextTasks.configureEach {
+        doFirst {
+            if (allowCleartextHost.isNotBlank()) {
+                throw GradleException(
+                    "Refusing to build a release artifact: ALLOW_CLEARTEXT_HOST is set to " +
+                        "'$allowCleartextHost' in local.properties (or the environment). This " +
+                        "debug-only cleartext escape hatch must never reach a release build -- " +
+                        "blank it out (or unset the environment variable) before building a " +
+                        "release artifact. See app/src/main/res/xml/network_security_config.xml " +
+                        "and the notes above app/build.gradle.kts's `allowCleartextHost` val.",
                 )
             }
         }

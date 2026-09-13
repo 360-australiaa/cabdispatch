@@ -329,6 +329,7 @@
     <ID>FunctionNaming:ReceiptOptions.kt$@Composable internal fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
     <ID>FunctionNaming:ReceiptOptions.kt$@Composable private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:ReceiptOptions.kt$@Composable private fun ReceiptMono(text: String, bold: Boolean = false, size: Int = 13, color: Color = Color(0xFF23252B))</ID>
+    <ID>FunctionNaming:SecureScreen.kt$@Composable fun SecureScreen()</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable fun SettingsScreen( navController: NavHostController, onRerunSetup: () -&gt; Unit, onFactoryReset: () -&gt; Unit, viewModel: SettingsViewModel = viewModel(), )</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun MainSettingsContent( state: SettingsUiState, viewModel: SettingsViewModel, tab: SettingsTab, onSelectTab: (SettingsTab) -&gt; Unit, onBack: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPairMeter: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, onRerunSetup: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SettingsTabRail(selected: SettingsTab, onSelect: (SettingsTab) -&gt; Unit, modifier: Modifier = Modifier)</ID>

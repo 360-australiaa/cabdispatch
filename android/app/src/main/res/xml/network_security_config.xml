@@ -1,22 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  TEMPORARY, scoped exception permitting plain-HTTP (cleartext) traffic to
-  the pilot Ubuntu server, by IP only. Android has blocked cleartext traffic
-  by default since API 28: with no entry here, every plain http:// request
-  is rejected before it ever leaves the device
-  (java.net.UnknownServiceException: CLEARTEXT communication ... not
-  permitted), confirmed live against the real app (2026-08).
+  W8 (release readiness, 2026-09-12/13 optimisation plan, finding X5). This is the BASELINE
+  cleartext policy, shipped in every build, debug and release alike: plain-HTTP (cleartext) traffic
+  is permitted ONLY to
+    - 10.0.2.2   the Android emulator's fixed alias for the host machine's own localhost
+    - localhost / 127.0.0.1   the tablet talking to a server running on itself
 
-  This is deliberately narrow: only this one literal IP is allowed, nothing
-  else. It exists only because the pilot deployment has no domain/TLS yet
-  (see docs/DEPLOY_UBUNTU.md's "Adding HTTPS later" section): once the
-  backend is served over https://, DELETE this file and the
-  android:networkSecurityConfig reference in AndroidManifest.xml entirely.
-  Do not add more domains/IPs here as a shortcut; fix TLS at the server
-  instead.
+  Android has blocked cleartext traffic by default since API 28: with no matching domain-config
+  entry, every plain http:// request is rejected before it ever leaves the device
+  (java.net.UnknownServiceException: CLEARTEXT communication ... not permitted).
+
+  UNTIL THIS PASS, this same file hardcoded the real production server's bare IP address
+  (72.61.107.107) in this exact spot, with NO build-type gating at all, so every build, including
+  a hypothetical release build, shipped a standing cleartext exception straight to the production
+  backend (tokens, the device secret, duress audio and GPS all travelling in the clear). That was
+  finding X5, and it is closed here: the production IP is never named in this file, in any build
+  type, again.
+
+  A real device on the LAN talking to a real, not yet TLS, backend, the pilot Ubuntu server's own
+  bare IP being the concrete case, needs a DIFFERENT, narrower, explicitly OWNER-controlled
+  mechanism, not a second hardcoded entry here: see app/build.gradle.kts's allowCleartextHost val
+  and its generateDebugNetworkSecurityConfig task. That mechanism:
+    - reads ALLOW_CLEARTEXT_HOST from local.properties (or the environment), empty by default;
+    - when set, generates a DEBUG-ONLY override of this exact resource (same package, same name)
+      carrying the baseline three hosts above PLUS that one extra domain. Android resource
+      resolution gives a build-type-specific source set ("debug") full priority over "main" for the
+      same resource, so a release build can never pick this up no matter what;
+    - AND, belt and braces, app/build.gradle.kts's own afterEvaluate guard refuses to build a
+      release artifact at all while ALLOW_CLEARTEXT_HOST is non-blank, so forgetting to clear it
+      before cutting a release fails loudly instead of silently being ignored.
+
+  Once the backend is served over https:// (docs/DEPLOY_UBUNTU.md's "Adding HTTPS later" section,
+  an OWNER decision on timing, not this pass's to make), ALLOW_CLEARTEXT_HOST stops being needed at
+  all; this baseline file (emulator + localhost only) should stay exactly as it is even then, those
+  two entries are permanent developer conveniences, not a production exception.
+
+  Do not add more domains/IPs to this file as a shortcut. Fix TLS at the server instead.
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">72.61.107.107</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
     </domain-config>
 </network-security-config>
