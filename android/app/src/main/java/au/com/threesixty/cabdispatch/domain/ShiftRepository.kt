@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.domain
 
+import android.util.Log
 import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.ShiftConflictDetail
@@ -86,6 +87,12 @@ class OutboxBackedShiftRepository(
     private val outbox: ShiftOutboxPort,
     private val now: () -> Long = { System.currentTimeMillis() },
     private val newUuid: () -> String = { UUID.randomUUID().toString() },
+    // N3 (2026-09-13): the offline synthetic ShiftDto below used to hard-code `tenantId = ""`.
+    // [DevicePairingStore] has no `tenantId` accessor -- the only tenant identifier it persists
+    // is [DevicePairingStore.getTenantSlug], captured at pairing time -- so that is what this
+    // reads. A lambda (not the store itself) keeps this class constructible on a plain JVM in
+    // tests without an Android `Context`, matching [ShiftOutboxPort]'s own reason for existing.
+    private val pairedTenantSlug: () -> String? = { null },
 ) : ShiftRepository {
 
     /** Narrow seam onto the outbox DAO, so this class is testable on a plain JVM without Room —
@@ -137,7 +144,13 @@ class OutboxBackedShiftRepository(
             return Result.success(shift)
         }
 
-        val error = result.exceptionOrNull()!!
+        // `result` is guaranteed to be a failure here (the success branch above always returns),
+        // but `exceptionOrNull()` is still nullable by signature -- fail loudly and safely rather
+        // than assert it away, in case that invariant is ever broken by a future edit here.
+        val error = result.exceptionOrNull() ?: run {
+            Log.e(TAG, "startShift: Result reported failure but carried no exception; treating as IOException so the shift stays queued offline")
+            IOException("startShift failed with no captured exception")
+        }
         if (error !is IOException) {
             // The server answered and said no. Retrying will get the same answer, so don't leave a
             // row behind to burn its attempts and dead-letter — report the refusal to the driver.
@@ -155,7 +168,7 @@ class OutboxBackedShiftRepository(
         return Result.success(
             ShiftDto(
                 id = localShiftId(clientUuid),
-                tenantId = "",
+                tenantId = pairedTenantSlug().orEmpty(),
                 driverId = driverId,
                 vehicleId = vehicleId,
                 startAt = startedAt,
@@ -174,6 +187,8 @@ class OutboxBackedShiftRepository(
     }
 
     companion object {
+        private const val TAG = "ShiftRepository"
+
         /** Marks a shift id the server has not issued. See the class doc. */
         const val LOCAL_SHIFT_ID_PREFIX = "local:"
 

@@ -69,11 +69,14 @@ import au.com.threesixty.cabdispatch.ui.wheel.content.rememberOfferCountdown
  * [CaptainPalette.success] fill, 96dp tall, with a real [Icons.Rounded.CheckCircle] glyph rather
  * than plain text — clearly distinct from Decline's smaller outline treatment.
  *
- * Honesty notes carried forward from the previous version of this file: the "TO PICKUP / ETA /
- * TYPE / ZONE" stat tiles have no real data source ([JobDto] carries no distance/ETA/type/zone
- * fields, and live GPS distance remains a TODO — see the identical note in
- * AvailableTripsWheelContent.kt), so only the tiles this app can back with real fields render:
- * fare estimate and requested-time.
+ * Honesty notes, corrected in the W7 triage pass (2026-09-13) — the claim this doc comment used to
+ * carry ("[JobDto] carries no distance/ETA/type/zone fields") is stale: [JobDto.distanceKm] is a
+ * real, always-present, server-computed straight-line distance (see that field's own doc). This
+ * screen still renders only fare estimate and requested-time, though, because [JobDto.jobType] and
+ * [JobDto.etaMin] stay permanently `null` by deliberate backend design (no real per-job
+ * classification or routing/live-traffic service exists to back them — see [JobDto]'s own doc),
+ * and there is no zone field at all. So "TYPE"/"ZONE"/"ETA" tiles would have nothing honest to
+ * show; only the fields this app can back with real data render.
  */
 @Composable
 fun AvailableTripOfferScreen(

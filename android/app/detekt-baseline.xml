@@ -9,32 +9,36 @@
     <ID>CyclomaticComplexMethod:CaptainNavRail.kt$@Composable internal fun CaptainNavRail( pane: CaptainPane, hasActiveTrip: Boolean, dispatchOfferCount: Int, onSelectPane: (CaptainPane) -&gt; Unit, onOpenVouchers: () -&gt; Unit, onOpenProfile: () -&gt; Unit, onOpenSettings: () -&gt; Unit, onLogOff: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:CaptainNavRail.kt$@Composable private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boolean, locked: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>CyclomaticComplexMethod:CaptainWidgets.kt$@Composable fun CaptainButton( text: String, modifier: Modifier = Modifier, widthDp: Int? = null, heightDp: Int = 64, fontSize: androidx.compose.ui.unit.TextUnit = 20.sp, outline: Boolean = false, enabled: Boolean = true, onClick: () -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:CloseAndPayScreen.kt$@Composable private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
-    <ID>CyclomaticComplexMethod:CloseAndPayScreen.kt$@Composable private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>CyclomaticComplexMethod:CloseAndPayScreen.kt$@Composable private fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:CloseAndPayViewModel.kt$CloseAndPayViewModel$private fun buildReceipt(trip: TripEntity, state: CloseAndPayUiState.ReadyToClose): Receipt</ID>
     <ID>CyclomaticComplexMethod:DeckHomeScreen.kt$@Composable fun DeckHomeScreen( navController: NavHostController, viewModel: WheelDashboardViewModel = viewModel(), dispatchViewModel: AvailableTripsWheelViewModel = viewModel(), // Phase A shell-integration (2026-09-03): [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED]'s // composable passes `true` here so a driver landing on this backstack entry via any of this // app's several "trip just started/accepted" hand-offs (Start Meter, Set Price, a dispatch // offer accepted from either the Dispatch wheel-content pane or the separate job-offer detail // screen) sees the Meter pane immediately — matching this file's own "one shell, swap embedded // content per rail item" pattern instead of Hired staying a separate full-screen takeover (see // this file's class doc, "Meter joins the shared shell"). Every existing // `navController.navigate(CabDispatchRoutes.HIRED)` call site keeps compiling and working // unchanged — none of them needed to change for this, since the route string itself didn't // move, only what it renders. startOnMeter: Boolean = false, )</ID>
     <ID>CyclomaticComplexMethod:DeviceReadinessScreen.kt$@Composable fun DeviceReadinessScreen( onReady: () -&gt; Unit, viewModel: DeviceReadinessViewModel = viewModel(), )</ID>
     <ID>CyclomaticComplexMethod:DuressController.kt$DuressController$private suspend fun runLifecycle(vehicleId: String?, driverId: String?)</ID>
     <ID>CyclomaticComplexMethod:FareEngine.kt$FareEngineImpl$@Suppress("SENSELESS_COMPARISON") private fun tick()</ID>
+    <ID>CyclomaticComplexMethod:FareSummaryCard.kt$@Composable internal fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:HeatMapTabContent.kt$@Composable // Suppressed, not fixed per the lint's own suggestion: Mapbox's lint text says its // plugin-lifecycle makes manual onStart/onStop/onDestroy forwarding unnecessary because the // MapView "leverages androidx.lifecycle to make [itself] a lifecycle aware component" -- but that // automatic hookup only fires FUTURE lifecycle transitions relative to when the MapView attaches // to a ViewTreeLifecycleOwner. This MapView is created inside a Compose `AndroidView` factory, // after the host Activity has already reached STARTED -- so the automatic ON_START this lint // assumes already happened, and this MapView would never receive it. Confirmed as a real, // user-visible regression on the pilot tablet, 2026-09-08: a black canvas with the scale bar and // logo drawn but no tiles or zones, exactly this failure mode. The explicit mapView.onStart() call // plus this DisposableEffect's manual ON_START/ON_STOP forwarding are the fix, verified on-device, // and stay exactly as they are. // Also suppresses OPT_IN_USAGE: Mapbox's MapboxMap.cameraForCoordinates below is marked a // delicate API (its own generic warning text is "make sure you fully read and understand // the documentation" -- not a deprecation with a replacement API). It is used here exactly // as documented, to fit the camera to a bounding box of real zone coordinates, and its // result is read once and applied to the camera, never assumed stable across calls. @Suppress("Lifecycle", "OPT_IN_USAGE") fun HeatMapTabContent( plotViewModel: PlotZoneViewModel = viewModel(), statsViewModel: ZoneStatisticsViewModel = viewModel(), )</ID>
     <ID>CyclomaticComplexMethod:HiredScreen.kt$@Composable internal fun RowScope.MeterPaneLayout( fareState: FareState, isPaused: Boolean, tripContext: TripContext?, persistedTrace: List&lt;TelemetryPointDto&gt;, liveTrace: List&lt;MapPoint&gt;, liveFix: LocationFix?, navState: MeterNavUiState, hasDestination: Boolean, speechEnabled: Boolean, onEndFare: () -&gt; Unit, onTogglePause: () -&gt; Unit, onOpenNavigation: (NavigationTarget) -&gt; Unit, onToggleVoice: () -&gt; Unit, onRetryRoute: () -&gt; Unit, onChangeDestination: () -&gt; Unit, onClearDestination: () -&gt; Unit, onOpenControls: () -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:Hud.kt$@Composable fun GlowingSpeedometer( speedKmh: Float, modifier: Modifier = Modifier, maxKmh: Float = 120f, strokeWidthDp: Int = 14, sweepDeg: Float = 270f, startDeg: Float = 135f, showLabels: Boolean = true, motion: Boolean = false, /** The tariff's own waiting/distance line, marked on the dial and used to band the animation. * Defaults to the Fares Order urban figure for previews. */ thresholdKmh: Double = SpeedBand.DEFAULT_THRESHOLD_KMH, /** The band to render. Pass the one the caller already computed with [rememberSpeedBand] so the * ring and the caller's own readout cannot disagree; null computes it here, which is what the * previews want. */ band: SpeedBand? = null, content: @Composable BoxScope.() -&gt; Unit = {}, )</ID>
-    <ID>CyclomaticComplexMethod:KnownCorridor.kt$fun knownCorridorDistanceKm( registry: TollRegistrySnapshot, entryLat: Double, entryLng: Double, exitLat: Double, exitLng: Double, ): BigDecimal?</ID>
     <ID>CyclomaticComplexMethod:MeterBackdropMap.kt$@Composable // Suppressed, not fixed per the lint's own suggestion: Mapbox's lint text says its // plugin-lifecycle makes manual onStart/onStop/onDestroy forwarding unnecessary because the // MapView "leverages androidx.lifecycle to make [itself] a lifecycle aware component" -- but that // automatic hookup only fires FUTURE lifecycle transitions relative to when the MapView attaches // to a ViewTreeLifecycleOwner. This MapView is created inside a Compose `AndroidView` factory, // after the host Activity has already reached STARTED -- so the automatic ON_START this lint // assumes already happened, and this MapView would never receive it. Confirmed as a real, // user-visible regression on the pilot tablet, 2026-09-08: a black canvas with the scale bar and // logo drawn but no tiles or zones, exactly this failure mode. The explicit mapView.onStart() call // plus this DisposableEffect's manual ON_START/ON_STOP forwarding are the fix, verified on-device, // and stay exactly as they are. @Suppress("Lifecycle") internal fun MeterBackdropMap( startLat: Double?, startLng: Double?, persistedTrace: List&lt;TelemetryPointDto&gt;, liveTrace: List&lt;MapPoint&gt;, liveFix: LocationFix?, modifier: Modifier = Modifier, destLat: Double? = null, destLng: Double? = null, plannedRoute: List&lt;MapPoint&gt; = emptyList(), dimAlpha: Float = 0.62f, )</ID>
     <ID>CyclomaticComplexMethod:MeterBackdropMap.kt$private fun glyphPathFor(category: String, d: Int, r: Float): android.graphics.Path</ID>
     <ID>CyclomaticComplexMethod:MeterDial.kt$@Composable internal fun MeterDial( fareState: FareState, isPaused: Boolean, onEndFare: () -&gt; Unit, onTogglePause: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:NavigatorPane.kt$internal fun maneuverIcon(maneuverType: String?, modifier: String?): ImageVector?</ID>
+    <ID>CyclomaticComplexMethod:OutboxDrainer.kt$OutboxDrainer$private suspend fun drainShifts(rows: List&lt;SyncOutboxEntity&gt;): Tally</ID>
+    <ID>CyclomaticComplexMethod:OutboxDrainer.kt$OutboxDrainer$private suspend fun drainTrips(rows: List&lt;SyncOutboxEntity&gt;): Tally</ID>
+    <ID>CyclomaticComplexMethod:PaymentMethodSheet.kt$@Composable internal fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
     <ID>CyclomaticComplexMethod:PermissionsChecklistScreen.kt$@Composable fun PermissionsChecklistScreen(navController: NavHostController, next: String? = null)</ID>
     <ID>CyclomaticComplexMethod:ProfileScreen.kt$@Composable private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel)</ID>
+    <ID>CyclomaticComplexMethod:ReceiptOptions.kt$@Composable internal fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
     <ID>CyclomaticComplexMethod:ShiftStatsBar.kt$@Composable internal fun NextBreakTile( remaining: Duration?, session: DriverSession?, isAvailable: Boolean, fatigueAlertCount: Int?, latestFatigueKind: String?, onTakeBreak: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>CyclomaticComplexMethod:TollDetector.kt$fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, ): TollDetectionResult</ID>
     <ID>CyclomaticComplexMethod:TollDetector.kt$private fun chargePerPointRoad( state: TollDetectionState, road: TollRoadRef, hits: List&lt;TollGantryRef&gt;, changed: MutableMap&lt;String, BigDecimal&gt;, newlyUnpriced: MutableSet&lt;String&gt;, )</ID>
     <ID>CyclomaticComplexMethod:TripDetailScreen.kt$@Composable private fun FareCard(state: TripDetailUiState.Loaded)</ID>
     <ID>EmptyFunctionBlock:MeterBackdropMap.kt$&lt;no name provided&gt;${}</ID>
     <ID>EmptyIfBlock:SettingsViewModel.kt$SettingsViewModel${ }</ID>
-    <ID>ForbiddenComment:NswPublicHolidays.kt$NswPublicHolidays$// --- 2027 (calculated from standard rules — TODO: verify against the gazette) ---</ID>
-    <ID>ForbiddenComment:TariffSignatureVerifier.kt$RsaTariffSignatureVerifier.Companion$* *** PLACEHOLDER KEY — REPLACE BEFORE SHIPPING *** * * X.509 SubjectPublicKeyInfo, Base64-encoded, for a throwaway * 2048-bit RSA keypair generated purely so this class exercises real * verification logic against real DER bytes (so it isn't untestable * dead code) — see the class doc's "verified against a real keypair" * note. It does NOT correspond to any backend signing key. * * TODO: reconcile with backend/tariff-signing agent — swap this for * the tenant's actual production public key, and strongly consider * moving it out of source into a signed remote-config value instead * of a compiled-in constant, since a hardcoded key can't be rotated * without an app release.</ID>
+    <ID>FunctionNaming:AboutTabContent.kt$@Composable internal fun AboutTabContent( state: SettingsUiState, onOpenPairMeter: () -&gt; Unit, onRerunSetup: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:AboutTabContent.kt$@Composable private fun AppVersionTile(state: SettingsUiState, modifier: Modifier)</ID>
+    <ID>FunctionNaming:AboutTabContent.kt$@Composable private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -&gt; Unit, modifier: Modifier)</ID>
+    <ID>FunctionNaming:AboutTabContent.kt$@Composable private fun LocateTile(state: SettingsUiState, modifier: Modifier)</ID>
+    <ID>FunctionNaming:AboutTabContent.kt$@Composable private fun RerunSetupTile(onRerunSetup: () -&gt; Unit, modifier: Modifier)</ID>
     <ID>FunctionNaming:AdminPinGateScreen.kt$@Composable fun AdminPinGateScreen( subtitle: String, errorMessage: String?, verifying: Boolean, onCancel: () -&gt; Unit, onVerify: (String) -&gt; Unit, )</ID>
     <ID>FunctionNaming:AirportQueueTabContent.kt$@Composable fun AirportQueueTabContent( plotViewModel: PlotZoneViewModel = viewModel(), statsViewModel: ZoneStatisticsViewModel = viewModel(), )</ID>
     <ID>FunctionNaming:AirportQueueTabContent.kt$@Composable private fun AirportZoneCard(zone: ZoneDto, stats: ZoneStatsDto?)</ID>
@@ -78,35 +82,10 @@
     <ID>FunctionNaming:CaptainWidgets.kt$@Composable private fun CaptainKey(label: String, modifier: Modifier = Modifier, accent: Boolean = false, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:CaptainWidgets.kt$@OptIn(ExperimentalFoundationApi::class) @Composable fun SosControl( onTrigger: () -&gt; Unit, modifier: Modifier = Modifier, label: String = "SOS", holdLabel: String = "HOLD", sizeDp: Int = 72, /** Lays the [holdLabel] out to the RIGHT of the badge instead of beneath it (A3). The stacked * caption added ~18dp of height, which the compacted 72dp home header cannot spend. */ inlineHoldLabel: Boolean = false, )</ID>
     <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable fun CloseAndPayScreen( navController: NavHostController, onDone: () -&gt; Unit, viewModel: CloseAndPayViewModel = viewModel(), )</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun AccountEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun BreakdownRow(label: String, value: String)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun BreakdownSubRow(text: String)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
     <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CenterMessage(text: String, isError: Boolean = false)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: () -&gt; Unit, onConfirm: (BigDecimal) -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CloseAndPayPreviewSample()</ID>
     <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun ClosingStatusStrip()</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun CustomTipDialog(onDismiss: () -&gt; Unit, onConfirm: (BigDecimal) -&gt; Unit)</ID>
     <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun DefaultRatesNotice()</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun DocketEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun LabeledEntryScreen( title: String, totalLine: String, value: String, onValueChar: (String) -&gt; Unit, onBackspace: () -&gt; Unit, onClear: () -&gt; Unit, canConfirm: Boolean, inFlight: Boolean, error: String?, confirmLabel: String, onConfirm: () -&gt; Unit, onBack: () -&gt; Unit, useAlphaGrid: Boolean = false, )</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun PayCard( icon: ImageVector, label: String, accent: Color, subtitle: String? = null, enabled: Boolean = true, selected: Boolean = false, onClick: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun ReadyToCloseFlow(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, navController: NavHostController)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun ReceiptMono(text: String, bold: Boolean = false, size: Int = 13, color: Color = Color(0xFF23252B))</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun TipEntryRow(currentTip: BigDecimal, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun TipPresetDialog( currentTip: BigDecimal, onDismiss: () -&gt; Unit, onSelectPreset: (BigDecimal) -&gt; Unit, onCustom: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun TipPresetTile(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Composable private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCloseAndPaySample()</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true) @Composable private fun PreviewCloseAndPaySampleLight()</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Suppress("DEPRECATION") @Composable private fun MethodPickerScreen( state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onSelect: (PaymentMethodOption, PaymentSubScreen) -&gt; Unit, onBackToMeter: () -&gt; Unit, onDispute: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:CloseAndPayScreen.kt$@Suppress("DEPRECATION") @Composable private fun RegoStyleKeyGrid(onKey: (String) -&gt; Unit, onBackspace: () -&gt; Unit)</ID>
     <ID>FunctionNaming:ControlsDrawer.kt$@Composable internal fun ControlsDrawer( fareInfo: ControlsDrawerFareInfo, tripContext: TripContext?, /** The charging tariff for a resumed fare, when [tripContext] is gone -- see HiredScreen. */ tariffFallback: TariffDto? = null, startAtIso: String?, hasDestination: Boolean, breakdownExpanded: Boolean, onToggleBreakdown: () -&gt; Unit, actions: MeterActions, onDismiss: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:ControlsDrawer.kt$@Composable internal fun ControlsHandle(onClick: () -&gt; Unit, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:DeckHomeScreen.kt$@Composable fun DeckHomeScreen( navController: NavHostController, viewModel: WheelDashboardViewModel = viewModel(), dispatchViewModel: AvailableTripsWheelViewModel = viewModel(), // Phase A shell-integration (2026-09-03): [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED]'s // composable passes `true` here so a driver landing on this backstack entry via any of this // app's several "trip just started/accepted" hand-offs (Start Meter, Set Price, a dispatch // offer accepted from either the Dispatch wheel-content pane or the separate job-offer detail // screen) sees the Meter pane immediately — matching this file's own "one shell, swap embedded // content per rail item" pattern instead of Hired staying a separate full-screen takeover (see // this file's class doc, "Meter joins the shared shell"). Every existing // `navController.navigate(CabDispatchRoutes.HIRED)` call site keeps compiling and working // unchanged — none of them needed to change for this, since the route string itself didn't // move, only what it renders. startOnMeter: Boolean = false, )</ID>
@@ -116,6 +95,9 @@
     <ID>FunctionNaming:DeviceReadinessScreen.kt$@Composable private fun PermissionsPanel( missing: List&lt;DeviceReadiness.MeterPermission&gt;, onGrant: (DeviceReadiness.MeterPermission) -&gt; Unit, )</ID>
     <ID>FunctionNaming:DeviceReadinessScreen.kt$@Composable private fun ReadinessRow(result: DeviceReadiness.ReadinessResult)</ID>
     <ID>FunctionNaming:DeviceReadinessScreen.kt$@Composable private fun UpdatePanel(updateState: AppUpdateState, onAction: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DisplayTabContent.kt$@Composable internal fun DisplayTabContent( state: SettingsUiState, onSetShowMap: (Boolean) -&gt; Unit, onSetThemeMode: (ThemeMode) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:DisplayTabContent.kt$@Composable private fun ThemeModeSegment(mode: ThemeMode, selected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:DisplayTabContent.kt$@Composable private fun ThemeSettingRow(themeMode: ThemeMode, onSelect: (ThemeMode) -&gt; Unit)</ID>
     <ID>FunctionNaming:DuressOverlays.kt$@Composable fun DuressActiveBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:DuressOverlays.kt$@Composable fun DuressTriggeredOverlay(secondsRemaining: Int, onCancel: () -&gt; Unit)</ID>
     <ID>FunctionNaming:DuressOverlays.kt$@Composable fun HiddenDuressGestureZone(onTriggered: () -&gt; Unit, modifier: Modifier = Modifier)</ID>
@@ -154,11 +136,24 @@
     <ID>FunctionNaming:FareBreakdownCard.kt$@Composable private fun BreakdownRow(label: String, value: String, dotColor: Color)</ID>
     <ID>FunctionNaming:FareBreakdownCard.kt$@Composable private fun ColorDot(color: Color, size: Dp)</ID>
     <ID>FunctionNaming:FareBreakdownCard.kt$@Composable private fun TimelineRow(dotColor: Color, title: String, address: String, time: String, connector: Boolean)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable internal fun CleaningFeeDialog(cap: BigDecimal, initial: BigDecimal, onDismiss: () -&gt; Unit, onConfirm: (BigDecimal) -&gt; Unit)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable internal fun CustomTipDialog(onDismiss: () -&gt; Unit, onConfirm: (BigDecimal) -&gt; Unit)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable internal fun TipPresetDialog( currentTip: BigDecimal, onDismiss: () -&gt; Unit, onSelectPreset: (BigDecimal) -&gt; Unit, onCustom: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable internal fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable private fun BreakdownRow(label: String, value: String)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable private fun BreakdownSubRow(text: String)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable private fun CleaningFeeEntryRow(currentFee: BigDecimal, cap: BigDecimal, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable private fun TipEntryRow(currentTip: BigDecimal, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FareSummaryCard.kt$@Composable private fun TipPresetTile(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun DeviceUnpairedBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun ForceUpdatePendingBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun KioskLockedBanner(pinConfirmed: Boolean, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable fun OfflineBanner(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:FleetCommandOverlays.kt$@Composable private fun UpdateActionChip(label: String, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:GeneralTabContent.kt$@Composable internal fun GeneralTabContent( state: SettingsUiState, onSetAutoAccept: (Boolean) -&gt; Unit, onDownloadOfflineMaps: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPaymentMethodsTab: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:GeneralTabContent.kt$@Composable private fun GpsTile(state: SettingsUiState, modifier: Modifier)</ID>
+    <ID>FunctionNaming:GeneralTabContent.kt$@Composable private fun NetworkTile(state: SettingsUiState, modifier: Modifier)</ID>
+    <ID>FunctionNaming:GeneralTabContent.kt$@Composable private fun OfflineMapsTile(state: SettingsUiState, onDownload: () -&gt; Unit, modifier: Modifier)</ID>
     <ID>FunctionNaming:GpsSimulatorPanel.kt$@Composable fun GpsSimulatorPanel(modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:GpsSimulatorPanel.kt$@Composable private fun RouteRow(route: SimulatedRoute, onStart: () -&gt; Unit)</ID>
     <ID>FunctionNaming:GpsSimulatorPanel.kt$@Composable private fun SimulatorButton(text: String, danger: Boolean, onClick: () -&gt; Unit)</ID>
@@ -277,6 +272,29 @@
     <ID>FunctionNaming:OfflineSyncScreen.kt$@Composable private fun FailedSyncSection( rows: List&lt;FailedSyncRow&gt;, onRetry: (Long) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:OfflineSyncScreen.kt$@Composable private fun SyncButton(text: String, icon: ImageVector, onClick: () -&gt; Unit, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:OfflineSyncScreen.kt$@Composable private fun SyncStatusCard(card: SyncCard, modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:PairMeterContent.kt$@Composable internal fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable internal fun AccountEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable internal fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable internal fun DocketEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable internal fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable internal fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable private fun CloseAndPayPreviewSample()</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable private fun LabeledEntryScreen( title: String, totalLine: String, value: String, onValueChar: (String) -&gt; Unit, onBackspace: () -&gt; Unit, onClear: () -&gt; Unit, canConfirm: Boolean, inFlight: Boolean, error: String?, confirmLabel: String, onConfirm: () -&gt; Unit, onBack: () -&gt; Unit, useAlphaGrid: Boolean = false, )</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable private fun PayCard( icon: ImageVector, label: String, accent: Color, subtitle: String? = null, enabled: Boolean = true, selected: Boolean = false, onClick: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Composable private fun SplitLegRow(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCloseAndPaySample()</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true) @Composable private fun PreviewCloseAndPaySampleLight()</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Suppress("DEPRECATION") @Composable internal fun MethodPickerScreen( state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onSelect: (PaymentMethodOption, PaymentSubScreen) -&gt; Unit, onBackToMeter: () -&gt; Unit, onDispute: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:PaymentMethodSheet.kt$@Suppress("DEPRECATION") @Composable private fun RegoStyleKeyGrid(onKey: (String) -&gt; Unit, onBackspace: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable internal fun PaymentMethodsTabContent( state: SettingsUiState, onSetAllowCash: (Boolean) -&gt; Unit, onSetMaxiVehicle: (Boolean) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun FareScheduleBody( state: SettingsUiState, onSetMaxiVehicle: (Boolean) -&gt; Unit, header: @Composable ColumnScope.() -&gt; Unit = {}, )</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun FareScheduleNote(text: String)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun FareScheduleRow(label: String, value: String)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun FareScheduleSectionTitle(text: String)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun MaxiCabFaresSection(maxiMultiplier: String)</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun SydneyAirportFixedFareSection()</ID>
+    <ID>FunctionNaming:PaymentMethodsTabContent.kt$@Composable private fun TaxiFareHotlineNotice()</ID>
     <ID>FunctionNaming:PermissionsChecklistScreen.kt$@Composable fun PermissionsChecklistScreen(navController: NavHostController, next: String? = null)</ID>
     <ID>FunctionNaming:PermissionsChecklistScreen.kt$@Composable private fun PermCardView(card: PermCard, modifier: Modifier = Modifier, onClick: () -&gt; Unit = {})</ID>
     <ID>FunctionNaming:PlotZoneScreen.kt$@Composable fun PlotZoneTabContent( viewModel: PlotZoneViewModel = viewModel(), statsViewModel: ZoneStatisticsViewModel = viewModel(), )</ID>
@@ -288,6 +306,7 @@
     <ID>FunctionNaming:PricingPaneContent.kt$@Composable private fun Divider()</ID>
     <ID>FunctionNaming:PricingPaneContent.kt$@Composable private fun FareStructureCard(tariff: TariffDto, airportAccessFee: String?)</ID>
     <ID>FunctionNaming:PricingPaneContent.kt$@Composable private fun PricingRow(label: String, value: String)</ID>
+    <ID>FunctionNaming:PrinterTabContent.kt$@Composable internal fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewModel)</ID>
     <ID>FunctionNaming:ProfileScreen.kt$@Composable fun ProfileScreen( navController: NavHostController, onFactoryReset: () -&gt; Unit, viewModel: ProfileViewModel = viewModel(), )</ID>
     <ID>FunctionNaming:ProfileScreen.kt$@Composable private fun ComplianceCard(label: String, satisfied: Boolean?, modifier: Modifier = Modifier)</ID>
     <ID>FunctionNaming:ProfileScreen.kt$@Composable private fun ComplianceColumn( viewModel: ProfileViewModel, expiryItems: List&lt;ComplianceExpiryItemDto&gt;, modifier: Modifier = Modifier, )</ID>
@@ -307,39 +326,19 @@
     <ID>FunctionNaming:RatePassengerScreen.kt$@Composable private fun ReadyToRateCard(state: RatePassengerUiState.ReadyToRate, vm: RatePassengerViewModel, onSkip: () -&gt; Unit)</ID>
     <ID>FunctionNaming:RatePassengerScreen.kt$@Composable private fun StarRow(stars: Int, onStarClick: ((Int) -&gt; Unit)?)</ID>
     <ID>FunctionNaming:RatePassengerScreen.kt$@Composable private fun SubmittedCard(rating: TripRatingDto, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:ReceiptOptions.kt$@Composable internal fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
+    <ID>FunctionNaming:ReceiptOptions.kt$@Composable private fun ReceiptActionButton(icon: ImageVector, label: String, busy: Boolean, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:ReceiptOptions.kt$@Composable private fun ReceiptMono(text: String, bold: Boolean = false, size: Int = 13, color: Color = Color(0xFF23252B))</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable fun SettingsScreen( navController: NavHostController, onRerunSetup: () -&gt; Unit, onFactoryReset: () -&gt; Unit, viewModel: SettingsViewModel = viewModel(), )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun AboutTabContent( state: SettingsUiState, onOpenPairMeter: () -&gt; Unit, onRerunSetup: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ActionTile( icon: ImageVector, label: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, danger: Boolean = false, enabled: Boolean = true, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun AdditionalChargesSection(pslAmount: String, cleaningFeeCap: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun AppVersionTile(state: SettingsUiState, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ComingSoonBadge()</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ComingSoonTabContent(title: String, message: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun DiagTile( icon: ImageVector, name: String, sub: String, tone: DiagTone, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun DisplayTabContent( state: SettingsUiState, onSetShowMap: (Boolean) -&gt; Unit, onSetThemeMode: (ThemeMode) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun FareScheduleBody( state: SettingsUiState, onSetMaxiVehicle: (Boolean) -&gt; Unit, header: @Composable ColumnScope.() -&gt; Unit = {}, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun FareScheduleNote(text: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun FareScheduleRow(label: String, value: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun FareScheduleSectionTitle(text: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun GeneralTabContent( state: SettingsUiState, onSetAutoAccept: (Boolean) -&gt; Unit, onDownloadOfflineMaps: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPaymentMethodsTab: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun GpsTile(state: SettingsUiState, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun HeartbeatTile(state: SettingsUiState, onOpenPairMeter: () -&gt; Unit, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun LocateTile(state: SettingsUiState, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun LockedSettingRow(label: String, value: String)</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun MainSettingsContent( state: SettingsUiState, viewModel: SettingsViewModel, tab: SettingsTab, onSelectTab: (SettingsTab) -&gt; Unit, onBack: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPairMeter: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, onRerunSetup: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun MaxiCabFaresSection(maxiMultiplier: String)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun NetworkTile(state: SettingsUiState, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun OfflineMapsTile(state: SettingsUiState, onDownload: () -&gt; Unit, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun PaymentMethodsTabContent( state: SettingsUiState, onSetAllowCash: (Boolean) -&gt; Unit, onSetMaxiVehicle: (Boolean) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewModel)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun RerunSetupTile(onRerunSetup: () -&gt; Unit, modifier: Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SectionLabel(text: String)</ID>
     <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SettingsTabRail(selected: SettingsTab, onSelect: (SettingsTab) -&gt; Unit, modifier: Modifier = Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun SydneyAirportFixedFareSection()</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun TaxiFareHotlineNotice()</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ThemeModeSegment(mode: ThemeMode, selected: Boolean, onClick: () -&gt; Unit, modifier: Modifier = Modifier)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ThemeSettingRow(themeMode: ThemeMode, onSelect: (ThemeMode) -&gt; Unit)</ID>
-    <ID>FunctionNaming:SettingsScreen.kt$@Composable private fun ToggleSettingRow(label: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -&gt; Unit)</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun ActionTile( icon: ImageVector, label: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, danger: Boolean = false, enabled: Boolean = true, )</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun ComingSoonBadge()</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun ComingSoonTabContent(title: String, message: String)</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun DiagTile( icon: ImageVector, name: String, sub: String, tone: DiagTone, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, )</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun LockedSettingRow(label: String, value: String)</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun SectionLabel(text: String)</ID>
+    <ID>FunctionNaming:SettingsSharedAtoms.kt$@Composable internal fun ToggleSettingRow(label: String, description: String, checked: Boolean, onCheckedChange: (Boolean) -&gt; Unit)</ID>
     <ID>FunctionNaming:ShiftReportScreen.kt$@Composable fun ShiftReportScreen( navController: NavHostController, onDone: () -&gt; Unit, viewModel: ShiftReportViewModel = viewModel(), )</ID>
     <ID>FunctionNaming:ShiftReportScreen.kt$@Composable private fun ReportTile(icon: ImageVector, value: String, label: String, modifier: Modifier = Modifier, valueColor: Color = CaptainPalette.textPrimary)</ID>
     <ID>FunctionNaming:ShiftReportScreen.kt$@Composable private fun ShiftReportContent(state: ShiftReportUiState, vm: ShiftReportViewModel, navController: NavHostController)</ID>
@@ -423,12 +422,6 @@
     <ID>LongMethod:CaptainHeader.kt$@Composable internal fun CaptainHeader( state: WheelDashboardUiState, verified: Boolean?, hasActiveTrip: Boolean, /** "Make Model" from the real VehicleDto, or null -- see HomeExtras.vehicleMakeModel. */ vehicleMakeModel: String? = null, onShowDriverId: () -&gt; Unit, onOpenProfile: () -&gt; Unit, onToggleAvailability: () -&gt; Unit, onSos: () -&gt; Unit, )</ID>
     <ID>LongMethod:CaptainNavRail.kt$@Composable private fun RailTile(item: RailItem, selected: Boolean, badge: Int?, live: Boolean, locked: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>LongMethod:CaptainWidgets.kt$@Composable fun TwoPaneShell( title: String, onBack: () -&gt; Unit, tabs: List&lt;String&gt;, selectedIndex: Int, onSelectTab: (Int) -&gt; Unit, content: @Composable () -&gt; Unit, )</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Composable private fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Composable private fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Composable private fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Composable private fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Composable private fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
-    <ID>LongMethod:CloseAndPayScreen.kt$@Suppress("DEPRECATION") @Composable private fun MethodPickerScreen( state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onSelect: (PaymentMethodOption, PaymentSubScreen) -&gt; Unit, onBackToMeter: () -&gt; Unit, onDispute: () -&gt; Unit, )</ID>
     <ID>LongMethod:CloseAndPayViewModel.kt$CloseAndPayViewModel$private fun buildReceipt(trip: TripEntity, state: CloseAndPayUiState.ReadyToClose): Receipt</ID>
     <ID>LongMethod:ControlsDrawer.kt$@Composable internal fun ControlsDrawer( fareInfo: ControlsDrawerFareInfo, tripContext: TripContext?, /** The charging tariff for a resumed fare, when [tripContext] is gone -- see HiredScreen. */ tariffFallback: TariffDto? = null, startAtIso: String?, hasDestination: Boolean, breakdownExpanded: Boolean, onToggleBreakdown: () -&gt; Unit, actions: MeterActions, onDismiss: () -&gt; Unit, )</ID>
     <ID>LongMethod:DeckHomeScreen.kt$@Composable fun DeckHomeScreen( navController: NavHostController, viewModel: WheelDashboardViewModel = viewModel(), dispatchViewModel: AvailableTripsWheelViewModel = viewModel(), // Phase A shell-integration (2026-09-03): [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED]'s // composable passes `true` here so a driver landing on this backstack entry via any of this // app's several "trip just started/accepted" hand-offs (Start Meter, Set Price, a dispatch // offer accepted from either the Dispatch wheel-content pane or the separate job-offer detail // screen) sees the Meter pane immediately — matching this file's own "one shell, swap embedded // content per rail item" pattern instead of Hired staying a separate full-screen takeover (see // this file's class doc, "Meter joins the shared shell"). Every existing // `navController.navigate(CabDispatchRoutes.HIRED)` call site keeps compiling and working // unchanged — none of them needed to change for this, since the route string itself didn't // move, only what it renders. startOnMeter: Boolean = false, )</ID>
@@ -439,6 +432,7 @@
     <ID>LongMethod:EarningsWheelContent.kt$@Suppress("DEPRECATION") @Composable private fun EarningsTrendChart(trend: List&lt;DailyEarnings&gt;, modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:FareEngine.kt$FareEngine$fun close( state: FareState, paymentMethod: String = "cash", surchargePct: BigDecimal? = null, cleaningFee: BigDecimal = BigDecimal.ZERO, includePsl: Boolean = false, ): FareBreakdown</ID>
     <ID>LongMethod:FareEngine.kt$FareEngineImpl$@Suppress("SENSELESS_COMPARISON") private fun tick()</ID>
+    <ID>LongMethod:FareSummaryCard.kt$@Composable internal fun TotalCol( state: CloseAndPayUiState.ReadyToClose, onReportSoiling: () -&gt; Unit, onAddTip: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:FleetCommandOverlays.kt$@Composable fun ForceUpdatePendingBanner(modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:FleetCommandOverlays.kt$@Composable fun OfflineBanner(modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:GpsSimulatorPanel.kt$@Composable fun GpsSimulatorPanel(modifier: Modifier = Modifier)</ID>
@@ -467,16 +461,21 @@
     <ID>LongMethod:NavigatorPane.kt$@Composable internal fun NavBottomBar( navState: MeterNavUiState, onChange: () -&gt; Unit, onClear: () -&gt; Unit, onRetryRoute: () -&gt; Unit, onOpenNavigation: () -&gt; Unit, speechEnabled: Boolean, onToggleVoice: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:OfflineSyncScreen.kt$@Composable fun OfflineSyncScreen( navController: NavHostController, viewModel: OfflineSyncViewModel = viewModel(), )</ID>
     <ID>LongMethod:OutboxDrainerTest.kt$OutboxDrainerTest$@Test // Real compile bug fixed 2026-08-29 (found while chasing an unrelated FareEngine fix, then // fixed since it blocked this whole test source set from compiling): a backtick-quoted Kotlin // identifier still has to be a legal JVM name underneath, and `;` is one of the characters the // JVM spec forbids in a method name (it's a descriptor separator) — javac/kotlinc accept the // source but the class file is invalid. Commas read just as clearly and compile. fun `open, tick x5, close offline, survives restart, drains on reconnect, resend is idempotent`()</ID>
+    <ID>LongMethod:PairMeterContent.kt$@Composable internal fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>LongMethod:PaymentMethodSheet.kt$@Composable internal fun CashCalculatorScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>LongMethod:PaymentMethodSheet.kt$@Composable internal fun SplitFareEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>LongMethod:PaymentMethodSheet.kt$@Composable internal fun VoucherEntryScreen(state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onBack: () -&gt; Unit)</ID>
+    <ID>LongMethod:PaymentMethodSheet.kt$@Suppress("DEPRECATION") @Composable internal fun MethodPickerScreen( state: CloseAndPayUiState.ReadyToClose, vm: CloseAndPayViewModel, onSelect: (PaymentMethodOption, PaymentSubScreen) -&gt; Unit, onBackToMeter: () -&gt; Unit, onDispute: () -&gt; Unit, )</ID>
+    <ID>LongMethod:PaymentMethodsTabContent.kt$@Composable private fun FareScheduleBody( state: SettingsUiState, onSetMaxiVehicle: (Boolean) -&gt; Unit, header: @Composable ColumnScope.() -&gt; Unit = {}, )</ID>
     <ID>LongMethod:PermissionsChecklistScreen.kt$@Composable fun PermissionsChecklistScreen(navController: NavHostController, next: String? = null)</ID>
     <ID>LongMethod:PlotZoneScreen.kt$@Composable fun PlotZoneTabContent( viewModel: PlotZoneViewModel = viewModel(), statsViewModel: ZoneStatisticsViewModel = viewModel(), )</ID>
     <ID>LongMethod:PlotZoneScreen.kt$@Composable private fun ZoneCard( zone: ZoneDto, stats: ZoneStatsDto?, plotted: Boolean, busy: Boolean, onPlot: () -&gt; Unit, onUnplot: () -&gt; Unit, )</ID>
     <ID>LongMethod:ProfileScreen.kt$@Composable private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel)</ID>
+    <ID>LongMethod:ReceiptOptions.kt$@Composable internal fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
     <ID>LongMethod:RoomMigrationTest.kt$RoomMigrationTest$@Test fun migrate8To13_preservesDataAndEndsAtTheRealSchema()</ID>
     <ID>LongMethod:RoomMigrationTest.kt$RoomMigrationTest$private fun createV8Tables(db: androidx.sqlite.db.SupportSQLiteDatabase)</ID>
     <ID>LongMethod:SettingsScreen.kt$@Composable fun SettingsScreen( navController: NavHostController, onRerunSetup: () -&gt; Unit, onFactoryReset: () -&gt; Unit, viewModel: SettingsViewModel = viewModel(), )</ID>
-    <ID>LongMethod:SettingsScreen.kt$@Composable private fun FareScheduleBody( state: SettingsUiState, onSetMaxiVehicle: (Boolean) -&gt; Unit, header: @Composable ColumnScope.() -&gt; Unit = {}, )</ID>
     <ID>LongMethod:SettingsScreen.kt$@Composable private fun MainSettingsContent( state: SettingsUiState, viewModel: SettingsViewModel, tab: SettingsTab, onSelectTab: (SettingsTab) -&gt; Unit, onBack: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPairMeter: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, onRerunSetup: () -&gt; Unit, )</ID>
-    <ID>LongMethod:SettingsScreen.kt$@Composable private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -&gt; Unit)</ID>
     <ID>LongMethod:ShiftReportScreen.kt$@Composable private fun ShiftReportContent(state: ShiftReportUiState, vm: ShiftReportViewModel, navController: NavHostController)</ID>
     <ID>LongMethod:ShiftStartScreen.kt$@Composable fun ShiftStartScreen(navController: NavHostController)</ID>
     <ID>LongMethod:ShiftStatsBar.kt$@Composable internal fun NextBreakTile( remaining: Duration?, session: DriverSession?, isAvailable: Boolean, fatigueAlertCount: Int?, latestFatigueKind: String?, onTakeBreak: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
@@ -499,17 +498,13 @@
     <ID>LongParameterList:CaptainWidgets.kt$( onTrigger: () -&gt; Unit, modifier: Modifier = Modifier, label: String = "SOS", holdLabel: String = "HOLD", sizeDp: Int = 72, /** Lays the [holdLabel] out to the RIGHT of the badge instead of beneath it (A3). The stacked * caption added ~18dp of height, which the compacted 72dp home header cannot spend. */ inlineHoldLabel: Boolean = false, )</ID>
     <ID>LongParameterList:CaptainWidgets.kt$( text: String, modifier: Modifier = Modifier, widthDp: Int? = null, heightDp: Int = 64, fontSize: androidx.compose.ui.unit.TextUnit = 20.sp, outline: Boolean = false, enabled: Boolean = true, onClick: () -&gt; Unit, )</ID>
     <ID>LongParameterList:CaptainWidgets.kt$( title: String, onBack: () -&gt; Unit, tabs: List&lt;String&gt;, selectedIndex: Int, onSelectTab: (Int) -&gt; Unit, content: @Composable () -&gt; Unit, )</ID>
-    <ID>LongParameterList:CloseAndPayScreen.kt$( icon: ImageVector, label: String, accent: Color, subtitle: String? = null, enabled: Boolean = true, selected: Boolean = false, onClick: () -&gt; Unit, )</ID>
-    <ID>LongParameterList:CloseAndPayScreen.kt$( title: String, totalLine: String, value: String, onValueChar: (String) -&gt; Unit, onBackspace: () -&gt; Unit, onClear: () -&gt; Unit, canConfirm: Boolean, inFlight: Boolean, error: String?, confirmLabel: String, onConfirm: () -&gt; Unit, onBack: () -&gt; Unit, useAlphaGrid: Boolean = false, )</ID>
-    <ID>LongParameterList:CloseAndPayScreen.kt$(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -&gt; Unit)</ID>
     <ID>LongParameterList:CloseAndPayViewModel.kt$CloseAndPayViewModel$( trip: TripEntity, tariff: Tariff, method: PaymentMethodOption, surchargePct: BigDecimal, cleaningFee: BigDecimal, includePsl: Boolean, )</ID>
     <ID>LongParameterList:ControlsDrawer.kt$( fareInfo: ControlsDrawerFareInfo, tripContext: TripContext?, /** The charging tariff for a resumed fare, when [tripContext] is gone -- see HiredScreen. */ tariffFallback: TariffDto? = null, startAtIso: String?, hasDestination: Boolean, breakdownExpanded: Boolean, onToggleBreakdown: () -&gt; Unit, actions: MeterActions, onDismiss: () -&gt; Unit, )</ID>
     <ID>LongParameterList:DeviceReadinessScreen.kt$( code: String, pairing: Boolean, error: String?, onCodeChange: (String) -&gt; Unit, onScan: () -&gt; Unit, onSubmit: () -&gt; Unit, )</ID>
-    <ID>LongParameterList:DeviceReadinessTest.kt$DeviceReadinessTest$( deviceId: String? = "device-1", deviceRejected: Boolean = false, forceUpdatePending: Boolean = false, updateAvailable: Boolean = false, heartbeatSucceeding: Boolean? = true, offlineMapsPresent: Boolean? = true, signedTariffCached: Boolean? = true, locationPermissionGranted: Boolean? = true, hasLocationFix: Boolean? = true, permissions: Map&lt;DeviceReadiness.MeterPermission, Boolean&gt; = DeviceReadiness.MeterPermission.entries.associateWith { true }, batteryOptimisationExempt: Boolean? = true, kiosk: DeviceReadiness.KioskState? = DeviceReadiness.KioskState.Pinned, mapTokenPresent: Boolean? = true, tariffSigningKeyCached: Boolean? = true, vehicleClassDeclared: Boolean? = true, )</ID>
     <ID>LongParameterList:FareBreakdownCard.kt$( title: String, breakdown: FareBreakdown, timeClass: TimeClass, nightMultiplierLabel: String?, expanded: Boolean, onToggle: () -&gt; Unit, /** * "Set Price" fix (product-reported, 2026-09) — non-null only for a fixed-fare trip * ([FareState.negotiatedTotal], threaded straight through). When set, the dial's ACTIVE FARE * figure is this amount plus tolls/PSL/extras (see [FareState.total]'s doc), NOT the sum of the * "Base fare"/"Distance"/"Time" rows below — those three keep showing the real metered accrual * for reference/compliance evidence (the meter genuinely keeps running, per the product * requirement), so without this parameter the card's itemisation would silently stop summing * to what the dial shows, with no explanation. The extra row this adds is the fix. */ negotiatedTotal: BigDecimal? = null, )</ID>
     <ID>LongParameterList:FareEngine.kt$FareEngine$( tariff: TariffDto, startLat: Double, startLng: Double, isMaxiVehicle: Boolean = false, passengerCount: Int = 1, wheelchairHiring: Boolean = false, airportRankRequestedMaxi: Boolean = false, negotiatedTotal: BigDecimal? = null, )</ID>
-    <ID>LongParameterList:FareEngine.kt$FareEngineImpl$( private val speedSource: SpeedSource, private val scope: CoroutineScope, /** See [TollRegistryProvider]'s own doc. Defaulted to [TollRegistryProvider.EMPTY] so every * pre-existing call site (this file's own tests included) keeps compiling/behaving exactly as * before — no toll auto-detection, manual [addToll] chips only, same as today. */ private val tollRegistryProvider: TollRegistryProvider = TollRegistryProvider.EMPTY, /** * The monotonic clock [tick] measures its own elapsed time against, and the clock * [LocationFix.receivedAtNanos] ages are computed on. Defaulted to the real * [System.nanoTime], so every pre-existing call site keeps behaving exactly as in production. * * A seam rather than a direct `System.nanoTime()` call for one reason: this class's tests run * on `kotlinx.coroutines.test`'s **virtual** time, where `advanceTimeBy(1000)` moves the * scheduler a second forward without a nanosecond of real time passing. A [tick] that read the * real clock would measure `dt ~= 0` under every such test and quietly assert nothing about * the very accrual F1 is about. Tests pass `{ testScheduler.currentTime * 1_000_000L }` and * get a clock that advances exactly as much as the coroutine machinery believes it did. */ private val nanoTimeSource: () -&gt; Long = { System.nanoTime() }, /** * Where the airport pickup fee is decided from — see [AirportZoneLookup]'s own doc. Defaulted * to [AirportZoneLookup.UNSYNCED] ("no zone has ever been cached") so every pre-existing call * site keeps charging exactly as before this seam existed: the compiled * [JurisdictionConfig] precinct circle. Production passes * [au.com.threesixty.cabdispatch.sync.AirportZoneCache]. */ private val airportZoneLookup: AirportZoneLookup = AirportZoneLookup.UNSYNCED, /** * See [KnownCorridorDistanceLookup]'s own doc. Defaulted to [KnownCorridorDistanceLookup.NONE] * so every pre-existing call site (this file's own tests included) keeps compiling and behaving * exactly as before — an unexplained GPS blackout still accrues nothing. A test that wants * known-corridor matching passes [KnownCorridorDistanceLookup.of] with a fixture registry; real * production traffic gets it for free from [tollRegistry] (see [tick]'s "known-corridor" * section) with no separate wiring needed here. */ private val knownCorridorDistanceLookup: KnownCorridorDistanceLookup = KnownCorridorDistanceLookup.NONE, /** * The wall clock [resolveTimeClass]/[resolveIsPeak] read the current Sydney instant from, at * the single moment a trip commences (both are read once in [openTrip]/[restoreOpenTrip], per * the Fares Order's own "fixed at commencement" rule — see [TimeClass]'s doc — never re-read * mid-trip). Defaulted to the real [ZonedDateTime.now] against [NSW_FARE_ZONE], so every * pre-existing call site keeps behaving exactly as in production. * * A seam for the same reason [nanoTimeSource] is one, and a real, not hypothetical, bug it * fixes (W0, 2026-09-12): every test in this file that opens a trip without pinning this * clock is at the mercy of whatever the real Sydney instant happens to be when the test suite * runs — a run landing inside the real Peak Time Hiring window (10pm-6am Fri/Sat/pre-holiday) * silently added the peak surcharge to trips six tests expected to be plain DAY fares, * exactly the flakiness the program plan's P0.2 ("pin every peak/night/holiday test to * explicit Sydney instants") calls out. Tests now pass a fixed instant; production passes * nothing and gets the real clock, unchanged. */ private val wallClockNow: () -&gt; ZonedDateTime = { ZonedDateTime.now(NSW_FARE_ZONE) }, )</ID>
     <ID>LongParameterList:FareEngine.kt$FareState$( val tariff: Tariff, var timeClass: TimeClass = TimeClass.DAY, var isPeak: Boolean = false, // urban-only peak hiring charge flag, fixed at commencement /** Vehicle has 5+ seats excluding the driver — one of four inputs to * [maxiRateApplied], see that property's doc. Renamed from the old raw * `maxi: Boolean` (which used to directly gate the 150% multiplier on its * own) so a vehicle simply being maxi-capable is no longer, by itself, * enough to charge the maxi rate. */ var isMaxiVehicle: Boolean = false, /** Number of passengers carried, including any in a wheelchair. Defaults * to 1 (the ordinary single-passenger case) so every existing call site * that never set this keeps behaving exactly as before (maxi never * eligible unless explicitly set up otherwise). */ var passengerCount: Int = 1, /** True when the hiring is for a passenger travelling in a wheelchair — * per the Fares Order, this carve-out means the maxi rate is NOT charged * even if the vehicle is a maxi and carries 5+ people (a wheelchair * hiring is charged at the ordinary rate, full stop). */ var wheelchairHiring: Boolean = false, /** True only when the hirer specifically requested a maxi taxi at a * Sydney Airport rank — the one scenario where the maxi rate applies * independent of [passengerCount]. */ var airportRankRequestedMaxi: Boolean = false, var hired: Boolean = true, var cumulativeDistanceKm: BigDecimal = BigDecimal.ZERO, var accruedDistanceCharge: BigDecimal = BigDecimal.ZERO, var accruedWaitingCharge: BigDecimal = BigDecimal.ZERO, var lastMode: String? = null, // "distance" | "waiting" — introspection only var tolls: BigDecimal = BigDecimal.ZERO, var extras: BigDecimal = BigDecimal.ZERO, // Sydney Airport Fixed Fare Trial: when set, close() returns exactly this // amount (60/80) plus ONLY surcharge/cleaning fee — no PSL, tolls, or peak. var fixedFare: BigDecimal? = null, /** * "Set Price" / negotiated-fare total agreed with the passenger before * the trip (Act s79(3): a driver must never demand more than the agreed * amount). When non-null, [FareEngine.close] charges EXACTLY this amount * — full stop, all-inclusive (2026-09 product requirement: "fixed price * means, all toll fees everything included ... driver will straight * charge $50 or $60 or whatever they decide") — instead of the accrued * flagFall+peak+distance+waiting total, and tolls/PSL/extras are no * longer added on top of it either; see that method's doc. The meter * still accrues [accruedDistanceCharge]/[accruedWaitingCharge]/[tolls] * normally so the "what the meter would have charged" reference, and the * toll/levy figures still owed for remittance/audit, stay available; it * is simply not what gets billed. */ var negotiatedTotal: BigDecimal? = null, )</ID>
+    <ID>LongParameterList:GeneralTabContent.kt$( state: SettingsUiState, onSetAutoAccept: (Boolean) -&gt; Unit, onDownloadOfflineMaps: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPaymentMethodsTab: () -&gt; Unit, )</ID>
     <ID>LongParameterList:HiredScreen.kt$( fareState: FareState, isPaused: Boolean, tripContext: TripContext?, persistedTrace: List&lt;TelemetryPointDto&gt;, liveTrace: List&lt;MapPoint&gt;, liveFix: LocationFix?, navState: MeterNavUiState, hasDestination: Boolean, speechEnabled: Boolean, onEndFare: () -&gt; Unit, onTogglePause: () -&gt; Unit, onOpenNavigation: (NavigationTarget) -&gt; Unit, onToggleVoice: () -&gt; Unit, onRetryRoute: () -&gt; Unit, onChangeDestination: () -&gt; Unit, onClearDestination: () -&gt; Unit, onOpenControls: () -&gt; Unit, )</ID>
     <ID>LongParameterList:HiredScreen.kt$MeterActions$( val isPaused: Boolean, val negotiatedTotal: String?, val tollsTotal: BigDecimal, val tollCount: Int, val onSetPrice: () -&gt; Unit, val onAddToll: () -&gt; Unit, val onTogglePause: () -&gt; Unit, val onMore: () -&gt; Unit, )</ID>
     <ID>LongParameterList:HomeScreenPreviews.kt$( id: String, origin: String, dest: String, low: String, high: String, distanceKm: String, )</ID>
@@ -535,11 +530,13 @@
     <ID>LongParameterList:MeterCard.kt$( state: WheelDashboardUiState, meterPhase: MeterStartPhase, // Real bug fixed (2026-09-02): the SET PRICE tile's subtitle used to be an unconditional // hardcoded "Fixed Fare · ACTIVE" literal regardless of actual state. `negotiatedTotal` is // `SessionHolder.pendingTrip.value?.negotiatedTotal`, collected by the caller — non-null only // when the driver actually used the Set Price flow for the trip about to start. negotiatedTotal: String?, onStartMeter: () -&gt; Unit, onCancelStart: () -&gt; Unit, onSetPrice: () -&gt; Unit, onVouchers: () -&gt; Unit, modifier: Modifier = Modifier, // A fare is OPEN in Room right now (DeckHomeScreen's real observeActiveTrip read). Seen on // the tablet, 2026-09-08: after the process was killed mid-fare the app came back on the // dashboard with this card reading OFF / START METER while the header said HIRED and the // rail said FARE RUNNING. Two of three surfaces told the truth; the one with the biggest // button did not, and that button would have started a second fare on top of the first. hasActiveTrip: Boolean = false, onResumeMeter: () -&gt; Unit = {}, )</ID>
     <ID>LongParameterList:MeterDial.kt$( icon: ImageVector, label: String, value: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, accentColor: Color = CaptainPalette.hudAccent, active: Boolean = false, )</ID>
     <ID>LongParameterList:NavigatorPane.kt$( navState: MeterNavUiState, onChange: () -&gt; Unit, onClear: () -&gt; Unit, onRetryRoute: () -&gt; Unit, onOpenNavigation: () -&gt; Unit, speechEnabled: Boolean, onToggleVoice: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>LongParameterList:PaymentMethodSheet.kt$( icon: ImageVector, label: String, accent: Color, subtitle: String? = null, enabled: Boolean = true, selected: Boolean = false, onClick: () -&gt; Unit, )</ID>
+    <ID>LongParameterList:PaymentMethodSheet.kt$( title: String, totalLine: String, value: String, onValueChar: (String) -&gt; Unit, onBackspace: () -&gt; Unit, onClear: () -&gt; Unit, canConfirm: Boolean, inFlight: Boolean, error: String?, confirmLabel: String, onConfirm: () -&gt; Unit, onBack: () -&gt; Unit, useAlphaGrid: Boolean = false, )</ID>
+    <ID>LongParameterList:PaymentMethodSheet.kt$(icon: ImageVector, label: String, amountText: String, selected: Boolean, highlight: Boolean = false, onClick: () -&gt; Unit)</ID>
     <ID>LongParameterList:PlotZoneScreen.kt$( zone: ZoneDto, stats: ZoneStatsDto?, plotted: Boolean, busy: Boolean, onPlot: () -&gt; Unit, onUnplot: () -&gt; Unit, )</ID>
-    <ID>LongParameterList:SettingsScreen.kt$( icon: ImageVector, label: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, danger: Boolean = false, enabled: Boolean = true, )</ID>
-    <ID>LongParameterList:SettingsScreen.kt$( icon: ImageVector, name: String, sub: String, tone: DiagTone, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, )</ID>
-    <ID>LongParameterList:SettingsScreen.kt$( state: SettingsUiState, onSetAutoAccept: (Boolean) -&gt; Unit, onDownloadOfflineMaps: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPaymentMethodsTab: () -&gt; Unit, )</ID>
     <ID>LongParameterList:SettingsScreen.kt$( state: SettingsUiState, viewModel: SettingsViewModel, tab: SettingsTab, onSelectTab: (SettingsTab) -&gt; Unit, onBack: () -&gt; Unit, onFactoryResetClick: () -&gt; Unit, onOpenPermissions: () -&gt; Unit, onOpenOfflineSync: () -&gt; Unit, onOpenPairMeter: () -&gt; Unit, onUnlockSimulatorClick: () -&gt; Unit, onRerunSetup: () -&gt; Unit, )</ID>
+    <ID>LongParameterList:SettingsSharedAtoms.kt$( icon: ImageVector, label: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, danger: Boolean = false, enabled: Boolean = true, )</ID>
+    <ID>LongParameterList:SettingsSharedAtoms.kt$( icon: ImageVector, name: String, sub: String, tone: DiagTone, modifier: Modifier = Modifier, onClick: (() -&gt; Unit)? = null, )</ID>
     <ID>LongParameterList:ShiftStatsBar.kt$( remaining: Duration?, session: DriverSession?, isAvailable: Boolean, fatigueAlertCount: Int?, latestFatigueKind: String?, onTakeBreak: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongParameterList:TollDetector.kt$( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, )</ID>
     <ID>LongParameterList:TripRepository.kt$TripRepository$( clientUuid: String, endLat: Double?, endLng: Double?, deviceTotal: String, paymentMethod: String? = null, surchargePct: String? = null, cleaningFee: String = "0", includePsl: Boolean = false, receiptRef: String? = null, /** Only meaningful when [paymentMethod] resolves to `"voucher"` — see [TripEntity.voucherCode]. */ voucherCode: String? = null, /** Only meaningful when [paymentMethod] resolves to `"account"` — see [TripEntity.accountReference]. */ accountReference: String? = null, /** Only meaningful when [paymentMethod] resolves to `"split_fare"` — see [TripEntity.splitPaymentsJson]. * JSON-encoded onto that column as-is; see [TripSyncItemDto]'s own doc for the known gap around this * not yet reaching the server via [toSyncItemDto]/`POST /v1/trips/sync`. */ splitPayments: List&lt;SplitPaymentEntryDto&gt;? = null, /** Driver tip (Close &amp; Pay "tips" pass) — see [TripEntity.tip]'s doc. `null` = no tip * recorded for this close. */ tip: String? = null, )</ID>
@@ -550,11 +547,8 @@
     <ID>LongParameterList:TripsWheelContent.kt$( uuid: String, startAt: String, status: String, total: String, pickup: String?, dropoff: String?, distanceM: Int, movingS: Int, payment: String = "card", )</ID>
     <ID>LongParameterList:UpcomingHazardAdvisor.kt$( hazards: List&lt;TrafficHazard&gt;, lat: Double, lng: Double, headingDeg: Double?, lookaheadM: Double = HAZARD_LOOKAHEAD_M, bearingToleranceDeg: Double = HAZARD_LOOKAHEAD_BEARING_TOLERANCE_DEG, )</ID>
     <ID>LongParameterList:UpcomingTollAdvisor.kt$( registry: TollRegistrySnapshot, lat: Double, lng: Double, headingDeg: Double?, lookaheadM: Double = TOLL_LOOKAHEAD_M, bearingToleranceDeg: Double = TOLL_LOOKAHEAD_BEARING_TOLERANCE_DEG, )</ID>
-    <ID>LoopWithTooManyJumpStatements:AvailableTripsWheelViewModel.kt$AvailableTripsWheelViewModel$while</ID>
     <ID>LoopWithTooManyJumpStatements:DuressController.kt$DuressController$for</ID>
     <ID>LoopWithTooManyJumpStatements:KnownCorridor.kt$for</ID>
-    <ID>LoopWithTooManyJumpStatements:LivePositionHeartbeat.kt$LivePositionHeartbeat$while</ID>
-    <ID>LoopWithTooManyJumpStatements:MessagesViewModel.kt$MessagesViewModel$while</ID>
     <ID>LoopWithTooManyJumpStatements:OutboxDrainer.kt$OutboxDrainer$for</ID>
     <ID>LoopWithTooManyJumpStatements:TollDetector.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:UpcomingHazardAdvisor.kt$for</ID>
@@ -676,17 +670,9 @@
     <ID>MagicNumber:CardPaymentGateway.kt$SimulatedCardPaymentGateway$1500</ID>
     <ID>MagicNumber:CardPaymentGateway.kt$SimulatedCardPaymentGateway$300</ID>
     <ID>MagicNumber:CardPaymentGateway.kt$SimulatedCardPaymentGateway$500</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0.4f</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0xFF1C7C3E</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0xFF23252B</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0xFF9A968A</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0xFFB3261E</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$0xFFF7F5EE</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$1.4f</ID>
     <ID>MagicNumber:CloseAndPayScreen.kt$16</ID>
     <ID>MagicNumber:CloseAndPayScreen.kt$180</ID>
     <ID>MagicNumber:CloseAndPayScreen.kt$260</ID>
-    <ID>MagicNumber:CloseAndPayScreen.kt$7</ID>
     <ID>MagicNumber:CloseAndPayViewModel.kt$CloseAndPayViewModel$8</ID>
     <ID>MagicNumber:DeckChrome.kt$1_000</ID>
     <ID>MagicNumber:DeckHomeScreen.kt$140</ID>
@@ -789,6 +775,7 @@
     <ID>MagicNumber:FareEngine.kt$FareState$5</ID>
     <ID>MagicNumber:FareEngine.kt$Tariff$12</ID>
     <ID>MagicNumber:FareEngine.kt$Tariff$26</ID>
+    <ID>MagicNumber:FareSummaryCard.kt$1.4f</ID>
     <ID>MagicNumber:GpsQuality.kt$GpsQualityClassifier$10f</ID>
     <ID>MagicNumber:GpsQuality.kt$GpsQualityClassifier$30f</ID>
     <ID>MagicNumber:GpsSimulator.kt$GpsSimulator$1000.0</ID>
@@ -844,7 +831,6 @@
     <ID>MagicNumber:Hud.kt$900</ID>
     <ID>MagicNumber:JurisdictionConfig.kt$1000.0</ID>
     <ID>MagicNumber:KnownCorridor.kt$1000.0</ID>
-    <ID>MagicNumber:LivePositionHeartbeat.kt$LivePositionHeartbeat$100</ID>
     <ID>MagicNumber:LogOffScreen.kt$0.95f</ID>
     <ID>MagicNumber:LogOffScreen.kt$0xC705070C</ID>
     <ID>MagicNumber:LogOffScreen.kt$120</ID>
@@ -941,6 +927,7 @@
     <ID>MagicNumber:MeterDial.kt$700</ID>
     <ID>MagicNumber:MeterForegroundService.kt$MeterController$3</ID>
     <ID>MagicNumber:NavProgress.kt$NavProgress$1000</ID>
+    <ID>MagicNumber:NavProgress.kt$NavProgress$1000.0</ID>
     <ID>MagicNumber:NavProgress.kt$NavProgress$150.0</ID>
     <ID>MagicNumber:NavProgress.kt$NavProgress$50.0</ID>
     <ID>MagicNumber:NavigatorPane.kt$1000</ID>
@@ -967,6 +954,10 @@
     <ID>MagicNumber:OfflineSyncScreen.kt$0.95f</ID>
     <ID>MagicNumber:OfflineSyncScreen.kt$120</ID>
     <ID>MagicNumber:OfflineSyncScreen.kt$8</ID>
+    <ID>MagicNumber:PaymentMethodSheet.kt$0.4f</ID>
+    <ID>MagicNumber:PaymentMethodSheet.kt$7</ID>
+    <ID>MagicNumber:PaymentMethodsTabContent.kt$1.5</ID>
+    <ID>MagicNumber:PaymentMethodsTabContent.kt$100</ID>
     <ID>MagicNumber:PlotZoneScreen.kt$0.4f</ID>
     <ID>MagicNumber:PlotZoneScreen.kt$3</ID>
     <ID>MagicNumber:PricingPaneContent.kt$1.5</ID>
@@ -975,13 +966,16 @@
     <ID>MagicNumber:RatePassengerScreen.kt$5</ID>
     <ID>MagicNumber:RealLocationProvider.kt$RealLocationProvider$1000.0</ID>
     <ID>MagicNumber:RealLocationProvider.kt$RealLocationProvider$3600.0</ID>
+    <ID>MagicNumber:ReceiptOptions.kt$0xFF1C7C3E</ID>
+    <ID>MagicNumber:ReceiptOptions.kt$0xFF23252B</ID>
+    <ID>MagicNumber:ReceiptOptions.kt$0xFF9A968A</ID>
+    <ID>MagicNumber:ReceiptOptions.kt$0xFFB3261E</ID>
+    <ID>MagicNumber:ReceiptOptions.kt$0xFFF7F5EE</ID>
     <ID>MagicNumber:ReceiptPrinterGateway.kt$SimulatedReceiptPrinterGateway$300</ID>
     <ID>MagicNumber:ReceiptPrinterGateway.kt$SimulatedReceiptPrinterGateway$400</ID>
     <ID>MagicNumber:ReceiptPrinterGateway.kt$SimulatedReceiptPrinterGateway$800</ID>
-    <ID>MagicNumber:SettingsScreen.kt$0.4f</ID>
-    <ID>MagicNumber:SettingsScreen.kt$0.55f</ID>
-    <ID>MagicNumber:SettingsScreen.kt$1.5</ID>
-    <ID>MagicNumber:SettingsScreen.kt$100</ID>
+    <ID>MagicNumber:SettingsSharedAtoms.kt$0.4f</ID>
+    <ID>MagicNumber:SettingsSharedAtoms.kt$0.55f</ID>
     <ID>MagicNumber:SettingsViewModel.kt$SettingsViewModel$404</ID>
     <ID>MagicNumber:ShiftDurationLimit.kt$ShiftDurationLimit$3_600_000L</ID>
     <ID>MagicNumber:ShiftReportScreen.kt$8</ID>
@@ -995,6 +989,7 @@
     <ID>MagicNumber:ShiftWheelContent.kt$0.95f</ID>
     <ID>MagicNumber:ShiftWheelContent.kt$120</ID>
     <ID>MagicNumber:ShiftWheelContent.kt$60.0</ID>
+    <ID>MagicNumber:SimulatedRoute.kt$1000.0</ID>
     <ID>MagicNumber:SimulatedRoute.kt$360.0</ID>
     <ID>MagicNumber:SimulatedRoute.kt$SimulatedRoute$3.6</ID>
     <ID>MagicNumber:SimulatedRoute.kt$SimulatedRoutes$0.0036</ID>
@@ -1151,6 +1146,9 @@
     <ID>MatchingDeclarationName:TripsWheelContent.kt$TripsPaneVariant</ID>
     <ID>MatchingDeclarationName:UpcomingHazardAdvisor.kt$UpcomingHazard</ID>
     <ID>MatchingDeclarationName:UpcomingTollAdvisor.kt$UpcomingToll</ID>
+    <ID>MaxLineLength:AboutTabContent.kt$DiagTile(icon = Icons.Rounded.Inventory2, name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)</ID>
+    <ID>MaxLineLength:AboutTabContent.kt$DiagTile(icon = Icons.Rounded.LocationOn, name = "Locate request", sub = row.first, tone = row.second, modifier = modifier)</ID>
+    <ID>MaxLineLength:AboutTabContent.kt$DiagTile(icon = Icons.Rounded.MonitorHeart, name = "Device heartbeat", sub = sub, tone = tone, onClick = onClick, modifier = modifier)</ID>
     <ID>MaxLineLength:AdminPinGateScreen.kt$*</ID>
     <ID>MaxLineLength:AdminPinGateScreen.kt$CircularProgressIndicator(modifier = Modifier.size(24.dp), color = CaptainPalette.accent, strokeWidth = 2.dp)</ID>
     <ID>MaxLineLength:AdminPinGateScreen.kt$Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(32.dp))</ID>
@@ -1166,8 +1164,7 @@
     <ID>MaxLineLength:ApiService.kt$ApiService$*</ID>
     <ID>MaxLineLength:ApiService.kt$ApiService$/**</ID>
     <ID>MaxLineLength:AppContainer.kt$AppContainer$*</ID>
-    <ID>MaxLineLength:AppContainer.kt$AppContainer$.</ID>
-    <ID>MaxLineLength:AppContainer.kt$AppContainer$LivePositionHeartbeat(apiService, speedSource, CoroutineScope(SupervisorJob() + Dispatchers.Default), appContext)</ID>
+    <ID>MaxLineLength:AppContainer.kt$AppContainer$OutboxBackedShiftRepository(apiService, shiftOutboxPort, pairedTenantSlug = { devicePairingStore.getTenantSlug() })</ID>
     <ID>MaxLineLength:AppDatabase.kt$*</ID>
     <ID>MaxLineLength:AppUpdateChecker.kt$AppUpdateChecker$*</ID>
     <ID>MaxLineLength:AvailableTripOfferScreen.kt$CaptainChip(label = "EST. FARE", value = "$${pending.job.fareEstimateLow}–${pending.job.fareEstimateHigh}")</ID>
@@ -1220,58 +1217,14 @@
     <ID>MaxLineLength:CaptainWidgets.kt$Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.Medium, fontSize = 20.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(start = 8.dp))</ID>
     <ID>MaxLineLength:CaptainWidgets.kt$fun</ID>
     <ID>MaxLineLength:CaptainWidgets.kt$val initials = driverName?.split(" ")?.mapNotNull { it.firstOrNull()?.uppercase() }?.take(2)?.joinToString("") ?: "—"</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$"Agreed (Set Price) trip — the levy, any tolls, and a card surcharge (if applicable) above are already included in the agreed amount, not charged on top. Only a cleaning fee adds to the total."</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$"Up to ${cap.money()} — the Point to Point Transport (Fares) Order 2026 sets this as the legal maximum cleaning fee."</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$CaptainButton(text = "Remove cleaning fee", outline = true, modifier = Modifier.fillMaxWidth()) { onConfirm(BigDecimal.ZERO) }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$CaptainButton(text = "Remove tip", outline = true, modifier = Modifier.fillMaxWidth()) { onSelectPreset(BigDecimal.ZERO) }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$CaptainKeypad(onDigit = { d -&gt; onValueChar(d.toString()) }, onBackspace = onBackspace, onClear = onClear)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$GlassCard</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Icon(Icons.Rounded.Backspace, contentDescription = "Backspace", tint = CaptainPalette.danger, modifier = Modifier.size(20.dp))</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(22.dp))</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$PayCard(icon = Icons.Rounded.ConfirmationNumber, label = "Voucher", accent = CaptainPalette.warning, subtitle = "CabCharge / TTSS / docket", onClick = {})</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$PayCard(icon = Icons.Rounded.CreditCard, label = "Card", accent = CaptainPalette.accent, subtitle = "Tap, insert or swipe", onClick = {})</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$PayCard(icon = Icons.Rounded.Payments, label = "Cash", accent = CaptainPalette.success, subtitle = "Exact change or tender + calculate", selected = true, onClick = {})</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen</ID>
+    <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen$internal enum</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen.ACCOUNT_ENTRY -&gt; AccountEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen.CABCHARGE_ENTRY -&gt; DocketEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen.CASH_CALCULATOR -&gt; CashCalculatorScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen.SPLIT_FARE_ENTRY -&gt; SplitFareEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$PaymentSubScreen.VOUCHER_ENTRY -&gt; VoucherEntryScreen(state, vm) { subScreen = PaymentSubScreen.METHOD_PICKER }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$ReceiptActionButton</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$RollingMoneyText(amount = state.breakdown.grandTotal.money(), fontSize = 44.sp, color = CaptainPalette.success)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Amount tendered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Change due ${it.money()}", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = CaptainPalette.success)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Close &amp; Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Custom tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Includes \$5.00 tip", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Passenger copy", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Report vehicle soiling", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("VOUCHER CODE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Voucher payment", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text("Will be capped to ${cap.money()} — that's the legal maximum.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.warning)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(it, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 12.dp))</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$Text(text, fontFamily = InterFamily, fontSize = 18.sp, color = if (isError) CaptainPalette.danger else CaptainPalette.textSecondary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(text, fontFamily = RobotoMonoFamily, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, fontSize = size.sp, color = color)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$Text(value, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$if (currentTip.signum() &gt; 0) "Current tip: ${currentTip.money()}" else "Collected on top of the fare — never part of the metered total or GST."</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$if (editing == 'A') { legACents = ""; vm.setSplitLegAAmount("") } else { legBCents = ""; vm.setSplitLegBAmount("") }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$onBackspace = { cents = cents.dropLast(1); vm.setCashTendered(if (cents.isEmpty()) "" else BigDecimal(cents).movePointLeft(2).toPlainString()) }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$onDigit = { d -&gt; if (cents.length &lt; 7) { cents += d; vm.setCashTendered(BigDecimal(cents).movePointLeft(2).toPlainString()) } }</ID>
     <ID>MaxLineLength:CloseAndPayScreen.kt$private</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.totalDue)</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$vm.setSplitLegAAmount(if (legACents.isEmpty()) "" else BigDecimal(legACents).movePointLeft(2).toPlainString())</ID>
-    <ID>MaxLineLength:CloseAndPayScreen.kt$vm.setSplitLegBAmount(if (legBCents.isEmpty()) "" else BigDecimal(legBCents).movePointLeft(2).toPlainString())</ID>
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$*</ID>
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$/**</ID>
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$/** Driver taps "Mark as paid" once the passenger has completed a payment-link payment (async/out-of-band — see [au.com.threesixty.cabdispatch.hardware.payments.CardPaymentGateway.createPaymentLink] doc). */</ID>
@@ -1286,6 +1239,7 @@
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$val count = runCatching { AppContainer.apiService.listVouchers(redeemed = false, limit = 1).total }.getOrNull()</ID>
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$val label = if (isAbsorbedFare) "Non-cash surcharge — absorbed, not charged" else "Non-cash payment surcharge"</ID>
     <ID>MaxLineLength:CloseAndPayViewModel.kt$CloseAndPayViewModel$val label = if (isAbsorbedFare) "Point to Point Transport Levy — included, not charged" else "Point to Point Transport Levy"</ID>
+    <ID>MaxLineLength:ConnectivitySyncTrigger.kt$ConnectivitySyncTrigger$*</ID>
     <ID>MaxLineLength:ControlsDrawer.kt$Icon(Icons.Rounded.MoreHoriz, contentDescription = "Open controls", tint = CaptainPalette.textSecondary, modifier = Modifier.size(18.dp))</ID>
     <ID>MaxLineLength:ControlsDrawer.kt$Text("Controls", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:DeckHomeScreen.kt$CaptainPane$internal enum</ID>
@@ -1308,6 +1262,7 @@
     <ID>MaxLineLength:DeviceReadinessScreen.kt$CaptainButton(text = it, modifier = Modifier.width(320.dp), heightDp = 60, fontSize = 17.sp, onClick = onAction)</ID>
     <ID>MaxLineLength:DeviceReadinessViewModel.kt$DeviceReadinessViewModel$_uiState.update { it.copy(pairCode = code.take(au.com.threesixty.cabdispatch.ui.theme.PAIR_CODE_LENGTH)) }</ID>
     <ID>MaxLineLength:DeviceReadinessViewModel.kt$DeviceReadinessViewModel$is MapboxOfflineRegion.DownloadState.InProgress -&gt; "Downloading map tiles… ${state.progressPercent}%"</ID>
+    <ID>MaxLineLength:DisplayTabContent.kt$Text("Theme", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:DriverAuthRepositoryTest.kt$DriverAuthRepositoryTest.Companion$"""{"id":"driver-1","tenant_id":"tenant-1","role":"driver","name":"Test Driver","email":"d@example.com","status":"active"}"""</ID>
     <ID>MaxLineLength:DriverEngagementDtos.kt$*</ID>
     <ID>MaxLineLength:DriverEngagementDtosTest.kt$DriverEngagementDtosTest.Companion$const val ANNOUNCEMENTS_JSON = """{"items":[{"id":"0e9d8182-d1f7-4969-bcb6-fe3e63a5500e","tenant_id":"e350db3e-0341-40db-bcc0-9402d821deda","title":"Airport rank change","body":"Use the new holding bay entrance from Monday.","kind":"info","starts_at":"2026-09-04T02:53:00.046356","ends_at":null,"active":true,"created_at":"2026-09-04T04:53:00","updated_at":"2026-09-04T04:53:00"}]}"""</ID>
@@ -1369,8 +1324,22 @@
     <ID>MaxLineLength:FareEngineImplAutoTollTest.kt$FareEngineImplAutoTollTest$val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())</ID>
     <ID>MaxLineLength:FareEngineImplRunningDisplayTest.kt$FareEngineImplRunningDisplayTest$val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())</ID>
     <ID>MaxLineLength:FareEngineImplRunningDisplayTest.kt$FareEngineImplRunningDisplayTest$val engine = FareEngineImpl(speedSource, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$"Agreed (Set Price) trip — the levy, any tolls, and a card surcharge (if applicable) above are already included in the agreed amount, not charged on top. Only a cleaning fee adds to the total."</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$"Up to ${cap.money()} — the Point to Point Transport (Fares) Order 2026 sets this as the legal maximum cleaning fee."</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$CaptainButton(text = "Remove cleaning fee", outline = true, modifier = Modifier.fillMaxWidth()) { onConfirm(BigDecimal.ZERO) }</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$CaptainButton(text = "Remove tip", outline = true, modifier = Modifier.fillMaxWidth()) { onSelectPreset(BigDecimal.ZERO) }</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("Add a tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("Close &amp; Pay", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("Custom tip", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("Report vehicle soiling", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text("Will be capped to ${cap.money()} — that's the legal maximum.", fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.warning)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$Text(value, fontFamily = RobotoMonoFamily, fontWeight = FontWeight.Medium, fontSize = 16.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$if (currentTip.signum() &gt; 0) "Current tip: ${currentTip.money()}" else "Collected on top of the fare — never part of the metered total or GST."</ID>
+    <ID>MaxLineLength:FareSummaryCard.kt$internal</ID>
     <ID>MaxLineLength:FareTimeClassZoneTest.kt$FareTimeClassZoneTest$resolveTimeClassFor(instant.withZoneSameInstant(zone).withZoneSameInstant(NSW_FARE_ZONE), AreaClass.URBAN)</ID>
     <ID>MaxLineLength:FleetCommandOverlays.kt$if (pinConfirmed) it else it.border(1.dp, accent.copy(alpha = 0.8f), RoundedCornerShape(Deck.R_SM.dp))</ID>
+    <ID>MaxLineLength:GeneralTabContent.kt$ActionTile(Icons.Rounded.SwapVert, "OFFLINE &amp; SYNC", onClick = onOpenOfflineSync, modifier = Modifier.weight(1f))</ID>
     <ID>MaxLineLength:GpsSimulator.kt$GpsSimulator.Companion$*</ID>
     <ID>MaxLineLength:HeatMapTabContent.kt$"${stats.vacantVehicles} vacant · ${stats.busyVehicles} busy · ${stats.plottedVehicles} plotted"</ID>
     <ID>MaxLineLength:HeatMapTabContent.kt$"No zones within 200 km of this vehicle — showing your position. Check the zone coordinates in the dashboard."</ID>
@@ -1466,9 +1435,9 @@
     <ID>MaxLineLength:LiveDispatchCard.kt$Text(distanceLabel, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = CaptainPalette.textSecondary)</ID>
     <ID>MaxLineLength:LiveDispatchCard.kt$Text(originLocality, fontFamily = InterFamily, fontSize = 13.sp, color = CaptainPalette.textSecondary, maxLines = 1, modifier = Modifier.padding(top = 2.dp))</ID>
     <ID>MaxLineLength:LiveDispatchCard.kt$Text(originStreet, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary, maxLines = 1)</ID>
+    <ID>MaxLineLength:LiveDispatchCard.kt$currentFix != null -&gt; "%.1f km away".format(Locale.ENGLISH, GeoMath.distanceKm(currentFix.lat, currentFix.lng, job.originLat, job.originLng))</ID>
     <ID>MaxLineLength:LiveDispatchCard.kt$dispatchState.cards.isEmpty()</ID>
     <ID>MaxLineLength:LiveDispatchCard.kt$dispatchState.loading &amp;&amp; dispatchState.cards.isEmpty()</ID>
-    <ID>MaxLineLength:LiveDispatchCard.kt$fix != null -&gt; "%.1f km away".format(Locale.ENGLISH, GeoMath.distanceKm(fix!!.lat, fix!!.lng, job.originLat, job.originLng))</ID>
     <ID>MaxLineLength:LogOffScreen.kt$Text(text, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.onAccent)</ID>
     <ID>MaxLineLength:LogOffScreen.kt$append("\n${state.unsyncedTripsCount} trip(s) still pending sync — they upload automatically on reconnect")</ID>
     <ID>MaxLineLength:LoginVehicleBindScreen.kt$"Describe the defect. This sends a real message to dispatch — it does not tick any checklist item."</ID>
@@ -1511,9 +1480,6 @@
     <ID>MaxLineLength:MessageThreadScreen.kt$state.messages.isEmpty() -&gt; CenteredThreadMessage("No messages yet — dispatch will reach you here.")</ID>
     <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest$assertTrue("the detector must not add a second charge for a road already entered by hand", state.autoTollsApplied.isEmpty())</ID>
     <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest$val engine = FareEngineImpl(gps, backgroundScope, nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock())</ID>
-    <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest.Companion$au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-A", road.id, TUNNEL_ENTRY_LAT, TUNNEL_ENTRY_LNG)</ID>
-    <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest.Companion$au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-B", road.id, TUNNEL_MID_LAT, TUNNEL_MID_LNG)</ID>
-    <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest.Companion$au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("TUNNEL-C", road.id, TUNNEL_EXIT_LAT, TUNNEL_EXIT_LNG)</ID>
     <ID>MaxLineLength:MeterAccuracyTest.kt$MeterAccuracyTest.Companion$au.com.threesixty.cabdispatch.domain.fare.TollGantryRef("m5g1", road.id, M5_GANTRY_LAT, M5_GANTRY_LNG)</ID>
     <ID>MaxLineLength:MeterBackdropMap.kt$*</ID>
     <ID>MaxLineLength:MeterBackdropMap.kt$LaunchedEffect(upcomingHazardAhead) { if (upcomingHazardAhead != null) displayedUpcomingHazard = upcomingHazardAhead }</ID>
@@ -1585,7 +1551,6 @@
     <ID>MaxLineLength:NavigatorPane.kt$Icon(Icons.Rounded.Search, contentDescription = null, tint = CaptainPalette.hudAccent, modifier = Modifier.size(18.dp))</ID>
     <ID>MaxLineLength:NavigatorPane.kt$Icon(icon, contentDescription = "Next turn", tint = CaptainPalette.hudAccent, modifier = Modifier.size(28.dp))</ID>
     <ID>MaxLineLength:NavigatorPane.kt$NavStopLine(icon = Icons.Rounded.Place, tone = CaptainPalette.success, address = navState.pickupAddress ?: "—")</ID>
-    <ID>MaxLineLength:NavigatorPane.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 8.sp, letterSpacing = 1.sp, color = CaptainPalette.textMuted)</ID>
     <ID>MaxLineLength:NavigatorPane.kt$Text(result.placeName, fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)</ID>
     <ID>MaxLineLength:NavigatorPane.kt$Text(result.shortName, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)</ID>
     <ID>MaxLineLength:NavigatorPane.kt$Text(value, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary, modifier = Modifier.padding(top = 1.dp))</ID>
@@ -1607,6 +1572,7 @@
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeApiService$override suspend fun trafficHazards(bbox: String?, activeOnly: Boolean, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.TrafficHazardPageDto</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeApiService$override suspend fun uploadDuressSnapshot(eventId: String, file: MultipartBody.Part, capturedAt: String?): DuressSnapshotDto</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeApiService$override suspend fun verifyAdminPin(deviceId: String, body: VerifyAdminPinRequestDto): VerifyAdminPinResponseDto</ID>
+    <ID>MaxLineLength:OutboxDrainerTest.kt$FakeApiService$throw HttpException(Response.error&lt;Any&gt;(422, "unprocessable".toResponseBody("application/json".toMediaTypeOrNull())))</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeTripDao$it.status != openStatus &amp;&amp; it.createdAt &gt;= sinceEpochMillis &amp;&amp; (beforeEpochMillis == null || it.createdAt &lt; beforeEpochMillis)</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeTripDao$override</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$FakeTripDao$rows[clientUuid]?.let { rows[clientUuid] = it.copy(serverId = serverId, status = status, updatedAt = updatedAt) }</ID>
@@ -1619,6 +1585,45 @@
     <ID>MaxLineLength:OutboxDrainerTest.kt$OutboxDrainerTest$assertTrue("resending an already-synced client_uuid must be reported as duplicate", resendResponse.results.single().duplicate)</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$OutboxDrainerTest$newPoints = listOf(TelemetryPointDto(lat = -33.87 - i * 0.001, lng = 151.21, speedKmh = 30.0, ts = "2026-07-31T10:0$i:00Z"))</ID>
     <ID>MaxLineLength:OutboxDrainerTest.kt$OutboxDrainerTest.&lt;no name provided&gt;$override suspend fun markTripSynced(clientUuid: String, serverId: String)</ID>
+    <ID>MaxLineLength:PairMeterContent.kt$GlassCard</ID>
+    <ID>MaxLineLength:PairMeterContent.kt$Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(24.dp))</ID>
+    <ID>MaxLineLength:PairMeterContent.kt$Text(pairState.message, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.warning)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$CaptainKeypad(onDigit = { d -&gt; onValueChar(d.toString()) }, onBackspace = onBackspace, onClear = onClear)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$GlassCard</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Icon(Icons.Rounded.Backspace, contentDescription = "Backspace", tint = CaptainPalette.danger, modifier = Modifier.size(20.dp))</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$PayCard(icon = Icons.Rounded.ConfirmationNumber, label = "Voucher", accent = CaptainPalette.warning, subtitle = "CabCharge / TTSS / docket", onClick = {})</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$PayCard(icon = Icons.Rounded.CreditCard, label = "Card", accent = CaptainPalette.accent, subtitle = "Tap, insert or swipe", onClick = {})</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$PayCard(icon = Icons.Rounded.Payments, label = "Cash", accent = CaptainPalette.success, subtitle = "Exact change or tender + calculate", selected = true, onClick = {})</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$RollingMoneyText(amount = state.breakdown.grandTotal.money(), fontSize = 44.sp, color = CaptainPalette.success)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("Amount tendered", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("Change due ${it.money()}", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = CaptainPalette.success)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("Includes \$5.00 tip", fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = CaptainPalette.textMuted)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("Split fare", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("TOTAL DUE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("VOUCHER CODE", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text("Voucher payment", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text(it, fontFamily = InterFamily, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = CaptainPalette.textMuted)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$Text(title, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 34.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$if (editing == 'A') { legACents = ""; vm.setSplitLegAAmount("") } else { legBCents = ""; vm.setSplitLegBAmount("") }</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$internal</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$onBackspace = { cents = cents.dropLast(1); vm.setCashTendered(if (cents.isEmpty()) "" else BigDecimal(cents).movePointLeft(2).toPlainString()) }</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$onDigit = { d -&gt; if (cents.length &lt; 7) { cents += d; vm.setCashTendered(BigDecimal(cents).movePointLeft(2).toPlainString()) } }</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$private</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$state.paymentError?.let { Text(it, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.danger) }</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.breakdown.grandTotal)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$text = if (state.paymentInFlight) "Processing…" else closeButtonLabel(state.paymentMethod, state.totalDue)</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$vm.setSplitLegAAmount(if (legACents.isEmpty()) "" else BigDecimal(legACents).movePointLeft(2).toPlainString())</ID>
+    <ID>MaxLineLength:PaymentMethodSheet.kt$vm.setSplitLegBAmount(if (legBCents.isEmpty()) "" else BigDecimal(legBCents).movePointLeft(2).toPlainString())</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:PaymentMethodsTabContent.kt$description</ID>
     <ID>MaxLineLength:PermissionsChecklistScreen.kt$!runtimeGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) -&gt; requestBackgroundLocation()</ID>
     <ID>MaxLineLength:PermissionsChecklistScreen.kt$CaptainButton</ID>
     <ID>MaxLineLength:PermissionsChecklistScreen.kt$PermCard(Icons.Rounded.Notifications, "Notifications", granted = true, statusText = "Granted at install on this Android version", kind = PermKind.INFO)</ID>
@@ -1644,6 +1649,7 @@
     <ID>MaxLineLength:PricingPaneContent.kt$Text(label, fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:PricingPaneContent.kt$Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:PricingPaneContent.kt$if (tariff.peakCharge.nonZeroOrNull() != null) PricingRow("Peak time hiring charge", "$${tariff.peakCharge.money()}")</ID>
+    <ID>MaxLineLength:PrinterTabContent.kt$Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)</ID>
     <ID>MaxLineLength:ProfileScreen.kt$*</ID>
     <ID>MaxLineLength:ProfileScreen.kt$.</ID>
     <ID>MaxLineLength:ProfileScreen.kt$CircularProgressIndicator(modifier = Modifier.size(28.dp), color = CaptainPalette.accent, strokeWidth = 2.dp)</ID>
@@ -1677,31 +1683,22 @@
     <ID>MaxLineLength:RatePassengerScreen.kt$placeholder = { Text("Add a comment (optional)", fontFamily = InterFamily, fontSize = 15.sp, color = CaptainPalette.textMuted) }</ID>
     <ID>MaxLineLength:RatingValidationTest.kt$RatingValidationTest.Companion$const val RATING_READ_JSON = """{"id":"r1","tenant_id":"tenant-1","trip_id":"trip-42","driver_id":"driver-9","stars":5,"comment":"Great trip!","created_at":"2026-09-04T04:53:00"}"""</ID>
     <ID>MaxLineLength:RatingValidationTest.kt$RatingValidationTest.Companion$const val RATING_READ_NO_COMMENT_JSON = """{"id":"r2","tenant_id":"tenant-1","trip_id":"trip-43","driver_id":"driver-9","stars":3,"comment":null,"created_at":"2026-09-04T04:53:00"}"""</ID>
-    <ID>MaxLineLength:RoomMigrationTest.kt$RoomMigrationTest$.</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$GlassCard</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$Icon(icon, contentDescription = null, tint = CaptainPalette.textSecondary, modifier = Modifier.size(22.dp))</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$ReceiptActionButton</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$Text("Passenger copy", fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 26.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = CaptainPalette.textSecondary, modifier = Modifier.padding(start = 12.dp))</ID>
+    <ID>MaxLineLength:ReceiptOptions.kt$Text(text, fontFamily = RobotoMonoFamily, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, fontSize = size.sp, color = color)</ID>
     <ID>MaxLineLength:RoomMigrationTest.kt$RoomMigrationTest.&lt;no name provided&gt;$override</ID>
     <ID>MaxLineLength:SettingsScreen.kt$.</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$ActionTile(Icons.Rounded.SwapVert, "OFFLINE &amp; SYNC", onClick = onOpenOfflineSync, modifier = Modifier.weight(1f))</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$DiagTile(icon = Icons.Rounded.Inventory2, name = "App version", sub = "v${state.appVersion} · $label", tone = tone, modifier = modifier)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$DiagTile(icon = Icons.Rounded.LocationOn, name = "Locate request", sub = row.first, tone = row.second, modifier = modifier)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$DiagTile(icon = Icons.Rounded.MonitorHeart, name = "Device heartbeat", sub = sub, tone = tone, onClick = onClick, modifier = modifier)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$FareScheduleRow("Holiday distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.holidayRate2}/km")</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$FareScheduleRow("Holiday distance rate, first ${tariff.distKmThreshold}km", "${tariff.holidayRate1}/km")</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$FareScheduleRow("Night distance rate, beyond ${tariff.distKmThreshold}km", "${tariff.nightRate2}/km")</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$FareScheduleRow("Night distance rate, first ${tariff.distKmThreshold}km", "${tariff.nightRate1}/km")</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$GlassCard</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$HudStatusPill(label = "Status", value = sub, tone = hudTone, pulsing = false, modifier = Modifier.fillMaxWidth())</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = CaptainPalette.success, modifier = Modifier.size(24.dp))</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(36.dp))</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text("Theme", fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text(pairState.message, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.warning)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text(tariff.name, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = CaptainPalette.textPrimary)</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$Text(value, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$android.widget.Toast.makeText(context, "$label isn't available yet", android.widget.Toast.LENGTH_SHORT).show()</ID>
-    <ID>MaxLineLength:SettingsScreen.kt$description</ID>
     <ID>MaxLineLength:SettingsScreen.kt$message</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$HudStatusPill(label = "Status", value = sub, tone = hudTone, pulsing = false, modifier = Modifier.fillMaxWidth())</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(20.dp))</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$Icon(Icons.Rounded.Lock, contentDescription = null, tint = CaptainPalette.textMuted, modifier = Modifier.size(36.dp))</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = CaptainPalette.textPrimary)</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$Text(value, fontFamily = InterFamily, fontSize = 14.sp, color = CaptainPalette.textMuted, modifier = Modifier.padding(top = 2.dp))</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$android.widget.Toast.makeText(context, "$label isn't available yet", android.widget.Toast.LENGTH_SHORT).show()</ID>
+    <ID>MaxLineLength:SettingsSharedAtoms.kt$internal</ID>
     <ID>MaxLineLength:SettingsViewModel.kt$SettingsViewModel$it.copy(offlineMapDownload = OfflineMapDownloadState.Failed("No Mapbox token configured on this device"))</ID>
     <ID>MaxLineLength:ShiftDao.kt$ShiftDao$@Query("UPDATE shifts SET status = :status, serverId = :serverId, updatedAt = :updatedAt WHERE clientUuid = :clientUuid")</ID>
     <ID>MaxLineLength:ShiftReportScreen.kt$ReportTile(Icons.Rounded.AttachMoney, state.cashTotal.asMoney(), "CASH TAKEN", valueColor = CaptainPalette.success, modifier = Modifier.weight(1f))</ID>
@@ -1713,6 +1710,7 @@
     <ID>MaxLineLength:ShiftReportScreen.kt$Text("No active shift.", fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textSecondary)</ID>
     <ID>MaxLineLength:ShiftReportScreen.kt$Text(label, fontFamily = InterFamily, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = CaptainPalette.textMuted)</ID>
     <ID>MaxLineLength:ShiftReportScreen.kt$private</ID>
+    <ID>MaxLineLength:ShiftRepository.kt$OutboxBackedShiftRepository$Log.e(TAG, "startShift: Result reported failure but carried no exception; treating as IOException so the shift stays queued offline")</ID>
     <ID>MaxLineLength:ShiftStartScreen.kt$"${ShiftDurationLimit.SHIFT_DURATION_LIMIT_HOURS.toInt()}h 00m — countdown shows on the status strip"</ID>
     <ID>MaxLineLength:ShiftStartScreen.kt$ConfirmRow("TARIFF", "No signed tariff cached yet — fetched before the first fare", valueColor = CaptainPalette.warning)</ID>
     <ID>MaxLineLength:ShiftStartScreen.kt$Icon(Icons.Rounded.DirectionsCar, contentDescription = null, tint = CaptainPalette.accent, modifier = Modifier.size(30.dp))</ID>
@@ -1785,6 +1783,7 @@
     <ID>MaxLineLength:TripDetailScreen.kt$private</ID>
     <ID>MaxLineLength:TripDetailScreen.kt$val scale by animateFloatAsState(if (pressed &amp;&amp; enabled) 0.95f else 1f, animationSpec = tween(120), label = "danger-btn-press")</ID>
     <ID>MaxLineLength:TripDisplayFormat.kt$/** Formats a [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.startAt]-style ISO-8601 instant string as a local "9:14 AM" clock time. Falls back to the raw string if parsing fails (defensive against a malformed cached row, never crashes the pane). */</ID>
+    <ID>MaxLineLength:TripEntity.kt$TripEntity$*</ID>
     <ID>MaxLineLength:TripEntity.kt$TripEntity$/** [TripStatus]: OPEN while HIRED, CLOSED once fare is finalized on-device, SYNCED once the server has confirmed it. */</ID>
     <ID>MaxLineLength:TripRepository.kt$TripRepository$"updatePassengerCount() called on a trip that isn't open (status=${existing.status}, clientUuid=$clientUuid)"</ID>
     <ID>MaxLineLength:TripRepository.kt$TripRepository$airportAccessFeeJson = airportAccessFee?.let { cabDispatchJson.encodeToString(it) } ?: existing.airportAccessFeeJson</ID>
@@ -1855,7 +1854,6 @@
     <ID>ReturnCount:HiredViewModel.kt$HiredViewModel$private fun lastKnownFix(): Triple&lt;Double, Double, Float?&gt;?</ID>
     <ID>ReturnCount:Hud.kt$HudRoll$fun direction(from: Char?, to: Char): RollDirection</ID>
     <ID>ReturnCount:JurisdictionConfig.kt$fun JurisdictionConfig.isInsideAirportPrecinct(lat: Double, lng: Double): Boolean</ID>
-    <ID>ReturnCount:KnownCorridor.kt$internal fun greedyChainDistanceM( gantries: List&lt;TollGantryRef&gt;, start: TollGantryRef, end: TollGantryRef, ): Double?</ID>
     <ID>ReturnCount:LoginVehicleBindViewModel.kt$LoginVehicleBindViewModel$@Suppress("HardwareIds") fun startShift(onShiftStarted: () -&gt; Unit, forceHandover: Boolean = false)</ID>
     <ID>ReturnCount:MapboxDirections.kt$MapboxDirections$internal fun parseRoute(body: String): DirectionsRoute?</ID>
     <ID>ReturnCount:MapboxReverseGeocoding.kt$internal fun parseReverseGeocodePlaceName(body: String): String?</ID>
@@ -1896,18 +1894,12 @@
     <ID>ReturnCount:WheelDashboardViewModel.kt$WheelDashboardViewModel$fun startMeter( negotiatedTotal: String? = null, /** See [TripContext.passengerCount]'s doc. Defaulted `1` so every existing caller (Set * Price, or a Start Meter tap made before this pass's UI existed) keeps behaving exactly * as before. */ passengerCount: Int = 1, /** See [TripContext.isMaxiVehicle]'s doc — driver self-declaration, not fleet data. * Defaulted `false`. */ isMaxiVehicle: Boolean = false, /** See [TripContext.wheelchairHiring]'s doc. Defaulted `false`. */ wheelchairHiring: Boolean = false, /** See [TripContext.airportRankRequestedMaxi]'s doc. Defaulted `false`. */ airportRankRequestedMaxi: Boolean = false, ): Boolean</ID>
     <ID>SwallowedException:FareEngineTest.kt$FareEngineTest$e: FaresOrderViolation</ID>
     <ID>SwallowedException:TariffCache.kt$TariffCache$e: FaresOrderViolation</ID>
-    <ID>SwallowedException:TariffSignatureVerifier.kt$Ed25519TariffSignatureVerifier$e: Exception</ID>
-    <ID>SwallowedException:TariffSignatureVerifier.kt$RsaTariffSignatureVerifier$e: Exception</ID>
     <ID>ThrowsCount:TariffCache.kt$TariffCache$private suspend fun verifySignatureOrThrow(dto: TariffDto)</ID>
-    <ID>TooGenericExceptionCaught:OutboxDrainer.kt$OutboxDrainer$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SecurePrefs.kt$SecurePrefs$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:TariffSignatureVerifier.kt$Ed25519TariffSignatureVerifier$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:TariffSignatureVerifier.kt$RsaTariffSignatureVerifier$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:RealtimeSocket.kt$RealtimeSocket$e: Exception</ID>
     <ID>TooManyFunctions:ApiService.kt$ApiService</ID>
     <ID>TooManyFunctions:AvailableTripsWheelContent.kt$au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelContent.kt</ID>
     <ID>TooManyFunctions:CaptainHeader.kt$au.com.threesixty.cabdispatch.ui.screens.dashboard.CaptainHeader.kt</ID>
     <ID>TooManyFunctions:CaptainWidgets.kt$au.com.threesixty.cabdispatch.ui.theme.CaptainWidgets.kt</ID>
-    <ID>TooManyFunctions:CloseAndPayScreen.kt$au.com.threesixty.cabdispatch.ui.screens.closepay.CloseAndPayScreen.kt</ID>
     <ID>TooManyFunctions:CloseAndPayViewModel.kt$CloseAndPayViewModel : ViewModel</ID>
     <ID>TooManyFunctions:DeviceReadiness.kt$DeviceReadiness</ID>
     <ID>TooManyFunctions:DeviceReadinessViewModel.kt$DeviceReadinessViewModel : AndroidViewModel</ID>
@@ -1924,8 +1916,8 @@
     <ID>TooManyFunctions:MeterForegroundService.kt$MeterController</ID>
     <ID>TooManyFunctions:MeterNavViewModel.kt$MeterNavViewModel : AndroidViewModel</ID>
     <ID>TooManyFunctions:NavigatorPane.kt$au.com.threesixty.cabdispatch.ui.screens.hired.NavigatorPane.kt</ID>
+    <ID>TooManyFunctions:PaymentMethodSheet.kt$au.com.threesixty.cabdispatch.ui.screens.closepay.PaymentMethodSheet.kt</ID>
     <ID>TooManyFunctions:ProfileScreen.kt$au.com.threesixty.cabdispatch.ui.screens.profile.ProfileScreen.kt</ID>
-    <ID>TooManyFunctions:SettingsScreen.kt$au.com.threesixty.cabdispatch.ui.screens.settings.SettingsScreen.kt</ID>
     <ID>TooManyFunctions:SettingsViewModel.kt$SettingsViewModel : AndroidViewModel</ID>
     <ID>TooManyFunctions:ShiftStatsBar.kt$au.com.threesixty.cabdispatch.ui.screens.dashboard.ShiftStatsBar.kt</ID>
     <ID>TooManyFunctions:SyncOutboxDao.kt$SyncOutboxDao</ID>
@@ -1942,8 +1934,6 @@
     <ID>UnusedPrivateMember:CaptainHeader.kt$@Preview(name = "Header — hired", widthDp = 1280, heightDp = 96, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCaptainHeaderHired()</ID>
     <ID>UnusedPrivateMember:CaptainHeader.kt$@Preview(name = "Header — off duty", widthDp = 1280, heightDp = 96, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCaptainHeaderOffDuty()</ID>
     <ID>UnusedPrivateMember:CaptainNavRail.kt$@Preview(name = "Rail — dispatch selected, 3 offers, meter live", widthDp = 160, heightDp = 760, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCaptainNavRail()</ID>
-    <ID>UnusedPrivateMember:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCloseAndPaySample()</ID>
-    <ID>UnusedPrivateMember:CloseAndPayScreen.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true) @Composable private fun PreviewCloseAndPaySampleLight()</ID>
     <ID>UnusedPrivateMember:EarningsWheelContent.kt$@Preview(widthDp = 1040, heightDp = 560, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewEarningsOverview()</ID>
     <ID>UnusedPrivateMember:EngagementTiles.kt$@Preview(widthDp = 340, heightDp = 760, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewEngagementTilesLoadingErrorEmpty()</ID>
     <ID>UnusedPrivateMember:EngagementTiles.kt$@Preview(widthDp = 340, heightDp = 980, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewEngagementTilesLoaded()</ID>
@@ -1967,6 +1957,8 @@
     <ID>UnusedPrivateMember:MeterDialPreviews.kt$@Preview(name = "Meter dial — MAXI", widthDp = 1280, heightDp = 800, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewMeterDialMaxi()</ID>
     <ID>UnusedPrivateMember:MeterDialPreviews.kt$@Preview(name = "Meter dial — PAUSED", widthDp = 1280, heightDp = 800, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewMeterDialPaused()</ID>
     <ID>UnusedPrivateMember:MeterDialPreviews.kt$@Preview(name = "Meter dial — RUNNING", widthDp = 1280, heightDp = 800, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewMeterDialRunning()</ID>
+    <ID>UnusedPrivateMember:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — dark", widthDp = 900, heightDp = 420, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewCloseAndPaySample()</ID>
+    <ID>UnusedPrivateMember:PaymentMethodSheet.kt$@Preview(name = "Close &amp; Pay — light", widthDp = 900, heightDp = 420, backgroundColor = 0xFFF4F3F8, showBackground = true) @Composable private fun PreviewCloseAndPaySampleLight()</ID>
     <ID>UnusedPrivateMember:ShiftStatsBar.kt$@Preview(name = "Bottom bar (dark)", widthDp = 1280, heightDp = 144, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewShiftStatsBar()</ID>
     <ID>UnusedPrivateMember:ShiftStatsBar.kt$@Preview(name = "Bottom bar (light)", widthDp = 1280, heightDp = 144, backgroundColor = 0xFFF4F3F8, showBackground = true) @Composable private fun PreviewShiftStatsBarLight()</ID>
     <ID>UnusedPrivateMember:TripsWheelContent.kt$@Preview(widthDp = 1000, heightDp = 620, backgroundColor = 0xFF0B0B10, showBackground = true) @Composable private fun PreviewTripHistory()</ID>
@@ -1976,7 +1968,6 @@
     <ID>UnusedPrivateProperty:DuressController.kt$DuressController$attempt</ID>
     <ID>UnusedPrivateProperty:SettingsViewModel.kt$SettingsViewModel.Companion$/** See [respondToLocateRequest]'s doc on why this is a fixed placeholder rather than a * real availability status. */ private const val LOCATE_RESPONSE_STATUS = "unknown"</ID>
     <ID>UseCheckOrError:EmailReceiptGateway.kt$ApiEmailReceiptGateway$throw IllegalStateException( "Server has no email provider configured — nothing was sent to $emailAddress.", )</ID>
-    <ID>UseCheckOrError:OutboxDrainerTest.kt$FakeApiService$throw IllegalStateException("422 unprocessable")</ID>
     <ID>UseCheckOrError:SmsReceiptGateway.kt$ApiSmsReceiptGateway$throw IllegalStateException( "Server has no SMS provider configured — nothing was sent to $phoneNumber.", )</ID>
     <ID>VariableNaming:EngagementTiles.kt$val when_ = Fmt.relativeTime(item.startsAt)</ID>
     <ID>VariableNaming:EngagementTiles.kt$val when_ = Fmt.relativeTime(line.createdAt)</ID>

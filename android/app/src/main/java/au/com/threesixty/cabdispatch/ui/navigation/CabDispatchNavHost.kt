@@ -199,8 +199,18 @@ fun CabDispatchNavHost(
         composable(CabDispatchRoutes.RATE_PASSENGER) {
             RatePassengerScreen(
                 onDone = {
+                    // N6 (2026-09-13): was `popUpTo(CabDispatchRoutes.IDLE) { inclusive = true }`,
+                    // which only clears the stack back to the nearest prior IDLE entry — anything
+                    // further back (LOGIN_VEHICLE_BIND, DEVICE_READINESS, SPLASH, a stale shift
+                    // that ended between then and now) stayed reachable via system Back from the
+                    // fresh IDLE this pushes. A completed trip's rating screen is exactly the kind
+                    // of terminal step every other end-of-flow `onDone` in this file already
+                    // treats as a full reset point (see SHIFT_REPORT's and SETTINGS' own
+                    // `popUpTo(0)` calls above/below) — `popUpTo(0)` clears the entire back stack
+                    // down to the graph root, same as those, so Back from the fresh IDLE can't
+                    // return to anything from before this trip.
                     navController.navigate(CabDispatchRoutes.IDLE) {
-                        popUpTo(CabDispatchRoutes.IDLE) { inclusive = true }
+                        popUpTo(0)
                     }
                 },
             )

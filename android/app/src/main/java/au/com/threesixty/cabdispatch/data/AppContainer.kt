@@ -119,6 +119,20 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
  * missing [init] call fails loudly at first use rather than silently
  * constructing a DB/client without the real application [Context].
  *
+ * W7 audit note (2026-09-13) on why these stay `lateinit var` rather than becoming `by lazy`:
+ * `object AppContainer` has no constructor, so constructor injection is not an option for any
+ * field here — [Context] only exists once Android calls [au.com.threesixty.cabdispatch.CabDispatchApp.onCreate].
+ * `by lazy` was considered and rejected: several of these fields have a strict *initialisation
+ * order* between each other inside [init] (e.g. [tokenStore] must exist before [accessToken]/
+ * [refreshToken] are restored from it; [sessionStore] must `attachStore()` before anything reads
+ * [SessionHolder.session]) that a set of independent `by lazy { }` blocks, each first-touched in
+ * whatever order screens happen to read them, would not preserve — a lazy chain here would trade
+ * one class of bug (an easy-to-diagnose crash on a skipped [init] call) for a much harder one
+ * (silent wrong-order initialisation that only manifests as a stale token or lost session,
+ * intermittently, depending on which screen happens to touch AppContainer first). [init] is the
+ * onCreate-style initialiser these fields wait for; each one below either repeats this note or
+ * points back to it.
+ *
  * --- How a sibling agent registers a new repository or DAO here ---
  * 1. DAO: add `abstract fun fooDao(): FooDao` to [AppDatabase], then expose it
  *    as `val fooDao: FooDao by lazy { database.fooDao() }` below.
@@ -132,16 +146,19 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
  */
 object AppContainer {
 
+    /** Initialised in [init] (needs the real application [Context] for Room's builder) — see the
+     * class doc's "why lateinit, not by lazy" note above. */
     lateinit var database: AppDatabase
         private set
 
+    /** Initialised in [init], after [okHttpClient] — see the class doc's "why lateinit" note. */
     lateinit var apiService: ApiService
         private set
 
     /** Shared OkHttp client [apiService]'s Retrofit instance is built on — also reused by
      * [realtimeSocket] so the jobs/messages WS connections share the same connection pool,
      * dispatcher, and logging interceptor as every HTTP call, rather than spinning up a second
-     * client. */
+     * client. Initialised in [init] — see the class doc's "why lateinit" note. */
     lateinit var okHttpClient: OkHttpClient
         private set
 
@@ -150,6 +167,11 @@ object AppContainer {
      * (a process restart silently losing all auth) this and the write-through setters below close.
      * `private set`, same convention as [devicePairingStore]: callers read/write
      * [accessToken]/[refreshToken] directly, never this store.
+     *
+     * Initialised first thing in [init], deliberately before [accessToken]/[refreshToken] are
+     * restored a few lines later in that same function — those setters' `::tokenStore.isInitialized`
+     * guard depends on this field being set (or not) at exactly that point, which is the ordering
+     * constraint the class doc's "why lateinit" note is about.
      */
     lateinit var tokenStore: TokenStore
         private set
@@ -186,7 +208,10 @@ object AppContainer {
             if (::tokenStore.isInitialized) tokenStore.setRefreshToken(value)
         }
 
-    /** Held for the process lifetime — see [ConnectivitySyncTrigger] doc. */
+    /** Held for the process lifetime — see [ConnectivitySyncTrigger] doc. Constructed in [init]
+     * once [database]/[apiService] exist; not `by lazy` for the same ordering reason as the class
+     * doc note above — this must be *started* unconditionally at [init] time, not merely
+     * constructed on whatever screen happens to touch it first. */
     lateinit var connectivitySyncTrigger: ConnectivitySyncTrigger
         private set
 
@@ -198,28 +223,35 @@ object AppContainer {
     lateinit var appContext: Context
         private set
 
+    /** Initialised in [init], immediately after [appContext] — [SessionHolder.deviceId] is
+     * restored from it on the very next line, so this cannot be deferred behind a `by lazy` that
+     * might run after that restore already needed it. */
     lateinit var devicePairingStore: DevicePairingStore
 
     /** Whether a technician has ever completed first-install setup on this tablet — see
-     * [CommissioningStore]. Chooses which framing the readiness screen takes. */
+     * [CommissioningStore]. Chooses which framing the readiness screen takes. Initialised in
+     * [init] alongside [devicePairingStore]. */
     lateinit var commissioningStore: CommissioningStore
         private set
 
     /** See [SessionStore]'s own doc — durable half of [SessionHolder]'s driver identity/vehicle
      * binding/shift id, restored in [init] below so a process restart resumes mid-shift instead of
-     * bouncing to the login screen. */
+     * bouncing to the login screen. [init]'s own comments spell out the exact ordering constraint
+     * (`attachStore()` before any read of [SessionHolder.session]) that rules out `by lazy` here. */
     lateinit var sessionStore: SessionStore
         private set
 
     /** See [MaxiVehicleStore]'s own doc — a local, honestly-labelled driver self-declaration
      * ("this vehicle has 5+ seats"), not real fleet-registry data. Read by the Home dashboard's
      * Start Meter card (to prefill/edit the declaration) and Settings → Fare schedule (to view/
-     * edit it directly), Point to Point Transport (Fares) Order 2026 UI-wiring pass. */
+     * edit it directly), Point to Point Transport (Fares) Order 2026 UI-wiring pass. Initialised
+     * in [init]. */
     lateinit var maxiVehicleStore: MaxiVehicleStore
         private set
 
     /** See [SettingsPreferencesStore]'s own doc — Auto Accept Jobs / Show Map in Background /
-     * Allow Cash, the three real preference rows added in the Settings two-pane pass. */
+     * Allow Cash, the three real preference rows added in the Settings two-pane pass. Initialised
+     * in [init]. */
     lateinit var settingsPreferencesStore: SettingsPreferencesStore
         private set
 
@@ -919,7 +951,9 @@ object AppContainer {
      * network failure — see [OutboxBackedShiftRepository] for finding S3 and what it replaces.
      */
     val shiftRepository: ShiftRepository by lazy {
-        OutboxBackedShiftRepository(apiService, shiftOutboxPort)
+        // N3 (2026-09-13): the offline synthetic shift used to hard-code `tenantId = ""`; it now
+        // carries the tenant this device is actually paired to.
+        OutboxBackedShiftRepository(apiService, shiftOutboxPort, pairedTenantSlug = { devicePairingStore.getTenantSlug() })
     }
 
     /** Adapts [syncOutboxDao] to the narrow port [OutboxBackedShiftRepository] takes, so that class

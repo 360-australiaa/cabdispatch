@@ -65,8 +65,9 @@ data class TollPreset(
 /**
  * Fixed preset list per spec B5 S3: "toll add buttons (M5, Harbour southbound,
  * airport toll presets)". Amounts are illustrative placeholders (round
- * cash-equivalent figures) — TODO(fleet-config sibling agent): source live
- * figures from tenant tariff/toll config server-side rather than hardcoding.
+ * cash-equivalent figures) —
+ * TODO(#w7-toll-preset-live-figures): source live figures from tenant tariff/toll config
+ * server-side rather than hardcoding.
  */
 object TollPresets {
     // registryRoadId values are the NSW registry's own natural keys (backend's

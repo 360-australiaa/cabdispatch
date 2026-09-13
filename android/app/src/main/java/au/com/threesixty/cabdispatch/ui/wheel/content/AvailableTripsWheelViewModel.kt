@@ -209,13 +209,17 @@ class AvailableTripsWheelViewModel : ViewModel() {
 
     /**
      * Hands the accepted job off to S3 (Hired/meter) the same way
-     * [au.com.threesixty.cabdispatch.ui.screens.idle.IdleViewModel.startHire] hands off a
-     * driver-initiated hire: populate [SessionHolder.pendingTrip], then flip [AvailableTripsUiState.navigateToHired]
-     * so the composable navigates. Uses the job's own pickup coordinates
-     * ([JobDto.originLat]/[JobDto.originLng]) for [TripContext.startLat]/[TripContext.startLng] —
-     * an improvement over IdleViewModel's TODO(location sibling agent) 0.0/0.0 stub, since a
-     * dispatched job actually carries a real pickup fix already, no GPS needed for this field
-     * specifically.
+     * [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel]'s
+     * driver-initiated "Start Meter" path hands off a hire: populate [SessionHolder.pendingTrip],
+     * then flip [AvailableTripsUiState.navigateToHired] so the composable navigates. (W7 triage,
+     * 2026-09-13: this doc used to reference an `IdleViewModel.startHire` — that class no longer
+     * exists, its driver-initiated-hire responsibility having moved to
+     * [au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel], which reads a
+     * real GPS fix off [AppContainer.speedSource][au.com.threesixty.cabdispatch.data.AppContainer.speedSource]
+     * rather than any 0.0/0.0 stub — that concern is resolved.) Uses the job's own pickup
+     * coordinates ([JobDto.originLat]/[JobDto.originLng]) for
+     * [TripContext.startLat]/[TripContext.startLng] here instead, since a dispatched job actually
+     * carries a real pickup fix already — no GPS read needed for this field specifically.
      *
      * Verified (reconciliation pass): the composable navigates to
      * [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED] (S3) directly, which

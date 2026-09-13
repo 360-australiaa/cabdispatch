@@ -187,10 +187,14 @@ internal fun DispatchOfferRow(card: AvailableTripCard, busy: Boolean, onAccept: 
     // back to this app's own live-GPS straight-line distance (no ETA fabricated locally), then to
     // the offer's relative-request-time text if even a GPS fix isn't available yet.
     val fix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
+    // Captured into a local val rather than smart-cast on the `by` delegate: each read of `fix`
+    // re-invokes the State getter, so a null-check and a `!!` two reads later could in principle
+    // observe different values if the flow emitted in between.
+    val currentFix = fix
     val distanceLabel = when {
         job.distanceKm != null && job.etaMin != null ->
             "${job.distanceKm} km · ${job.etaMin} min (approx.)"
-        fix != null -> "%.1f km away".format(Locale.ENGLISH, GeoMath.distanceKm(fix!!.lat, fix!!.lng, job.originLat, job.originLng))
+        currentFix != null -> "%.1f km away".format(Locale.ENGLISH, GeoMath.distanceKm(currentFix.lat, currentFix.lng, job.originLat, job.originLng))
         else -> formatOfferRelativeTime(card.offer.offeredAt)
     }
     // Real job_type badge (2026-08-29 contract) — "NEW OFFER" is the honest fallback for a job

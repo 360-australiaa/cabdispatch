@@ -87,7 +87,8 @@ class AvailableTripOfferViewModel : ViewModel() {
      * [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsWheelViewModel.beginHiredHandoff]
      * — see that method's doc for the full rationale, including why
      * [TripContext.startLat]/[TripContext.startLng] use the job's own pickup fix rather than a
-     * live GPS read, and the TODO on verifying the final nav route with the integration agent. */
+     * live GPS read. The nav-route question that doc used to flag as an open TODO is resolved —
+     * see its own "Verified (reconciliation pass)" note. */
     private fun beginHiredHandoff(pending: PendingJobOffer) {
         val session = SessionHolder.session.value
         if (session == null) {

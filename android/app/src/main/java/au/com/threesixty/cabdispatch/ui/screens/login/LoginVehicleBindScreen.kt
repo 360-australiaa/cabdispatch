@@ -46,6 +46,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.util.Log
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -399,8 +400,14 @@ private fun MfaStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindV
 @Composable
 private fun VehicleBindStep(state: LoginVehicleBindUiState, viewModel: LoginVehicleBindViewModel) {
     // Real QR scan needs an Activity to host its scan UI — this app is single-activity (see
-    // MainActivity's own doc), so LocalContext.current always is one here.
-    val activity = LocalActivity.current!!
+    // MainActivity's own doc), so LocalActivity.current always is one here. Guarded rather than
+    // asserted: if that invariant is ever broken (e.g. this composable reused inside a non-Activity
+    // host), skip rendering the QR/scan UI and log it instead of crashing the whole screen.
+    val activity = LocalActivity.current
+    if (activity == null) {
+        Log.e("VehicleBindStep", "LocalActivity.current is null; cannot host the QR scanner")
+        return
+    }
     // Top inset from CaptainChromeMetrics (real bug, found live 2026-09-09): same fix as
     // InspectionStep below in this same file — this Column used a bare 64.dp instead of
     // MfaStep's topOverlayInset-based padding a few steps earlier in this same flow, so LOCK

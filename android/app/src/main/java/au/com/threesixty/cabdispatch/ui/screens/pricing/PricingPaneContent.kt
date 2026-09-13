@@ -118,9 +118,18 @@ fun PricingPaneContent(modifier: Modifier = Modifier) {
                 fontSize = 16.sp,
                 color = CaptainPalette.textSecondary,
             )
-            else -> Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                FareStructureCard(tariff!!, airportAccessFee)
-                DistanceTiersCard(tariff!!)
+            else -> {
+                // Capture into a local val: `tariff` is a mutable-state property, and re-reading
+                // it via `!!` a second time below is exactly the kind of "smart cast defeated"
+                // pattern that risks reading two different values if the state changes between
+                // the two reads.
+                val currentTariff = tariff
+                if (currentTariff != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                        FareStructureCard(currentTariff, airportAccessFee)
+                        DistanceTiersCard(currentTariff)
+                    }
+                }
             }
         }
     }

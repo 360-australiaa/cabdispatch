@@ -36,7 +36,7 @@ fun String.asLocalTime(): String = runCatching {
  * string — [au.com.threesixty.cabdispatch.data.local.entity.TripEntity] only
  * persists start/end lat/lng, not reverse-geocoded addresses (no geocoding
  * gateway exists in this module yet).
- * TODO(future agent): swap for a real "Origin → Destination" string once a
+ * TODO(#w7-trip-route-geocoding): swap for a real "Origin → Destination" string once a
  * geocoding/reverse-geocoding gateway is wired up.
  */
 fun String.asTripTypeLabel(): String = when (this) {

@@ -44,9 +44,13 @@ import kotlinx.coroutines.delay
 /**
  * 01 · Splash — reskinned onto the [CaptainPalette] purple design system (2026-08-29 pass). Visual
  * layer only: the dwell timer, terms/session gate, and navigation are unchanged from the previous
- * versions of this file (see [postAuthDestination] and [TermsAcceptance] for the branch logic —
- * [au.com.threesixty.cabdispatch.domain.SessionHolder] is still in-memory-only, so a cold start
- * always lands on sign-in; that pre-existing TODO is unrelated to this reskin).
+ * versions of this file (see [postAuthDestination] and [TermsAcceptance] for the branch logic).
+ * Corrected, W7 triage 2026-09-13: this doc used to say
+ * [au.com.threesixty.cabdispatch.domain.SessionHolder] "is still in-memory-only, so a cold start
+ * always lands on sign-in" — stale since the 2026-09-04 session-persistence pass (see
+ * [au.com.threesixty.cabdispatch.domain.Session]'s class doc): [postAuthDestination] can and does
+ * land a returning driver past sign-in on a cold start once [SessionHolder] is restored by
+ * [au.com.threesixty.cabdispatch.data.AppContainer.init].
  *
  * Layout unchanged from the previous Command Deck port: 120dp brand tile (radius 30) · Inter
  * Bold 40 wordmark · 18sp subtitle · 360×6 progress track with an animated bar (it sweeps rather

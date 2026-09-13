@@ -272,8 +272,11 @@ private fun CheckVoucherPanel(lookup: (String) -> VoucherDto?, listLoaded: Boole
                 checked = match
                 notFound = match == null
             }
+            // Local val instead of a smart-cast-then-`!!` on the `checked` mutable-state var: the
+            // condition and the use below must see the same snapshot.
+            val checkedResult = checked
             when {
-                checked != null -> CheckedVoucherResult(checked!!)
+                checkedResult != null -> CheckedVoucherResult(checkedResult)
                 notFound -> Text(
                     "No voucher found with that code.",
                     fontFamily = InterFamily,

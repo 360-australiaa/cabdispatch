@@ -346,6 +346,23 @@ data class TripSyncItemDto(
      * Empty for every trip with no GPS blackout (the overwhelming majority), and for every
      * pre-existing call site that never named this field. */
     @SerialName("gps_blackout_segments") val gpsBlackoutSegments: List<GpsBlackoutSegmentDto> = emptyList(),
+    /**
+     * T5/N4 (2026-09-13 decision, recorded in
+     * [au.com.threesixty.cabdispatch.data.local.entity.TripEntity.autoTolledRoadsJson]'s own doc):
+     * the per-road automatic-toll-detection audit trail, decoded from that same field -- toll-road
+     * id -> charged amount (decimal-as-string), mirroring the shape of the backend's own
+     * `Trip.auto_tolled_roads` column. Sent as dispute evidence (a driver or passenger disputing a
+     * tolls figure can be shown exactly which roads it came from), never itself a billing input --
+     * same non-billing status as [gpsBlackoutSegments] above.
+     *
+     * Additive and backend-optional, same convention as [voucherCode]/[accountReference]/
+     * [splitPayments]'s own doc on this class: safe to send a field the backend does not yet
+     * declare (extra JSON fields are ordinarily ignored server-side), forward-compatible for
+     * whenever `backend/app/schemas/trips.py`'s `TripSyncItem` grows a matching field -- that
+     * backend-side change is NOT made by this pass (out of this workstream's scope; the Android
+     * side alone cannot make the server persist it).
+     */
+    @SerialName("auto_tolled_roads") val autoTolledRoads: Map<String, String> = emptyMap(),
     @SerialName("receipt_ref") val receiptRef: String? = null,
     /** The total the offline device computed on-vehicle. */
     @SerialName("device_total") val deviceTotal: String,

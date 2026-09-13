@@ -1,15 +1,13 @@
 package au.com.threesixty.cabdispatch.ui.screens.offlinesync
 
 import android.app.Application
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.data.local.entity.OutboxEntityType
 import au.com.threesixty.cabdispatch.data.remote.TariffDto
+import au.com.threesixty.cabdispatch.domain.NetworkStatus
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
 import au.com.threesixty.cabdispatch.sync.SyncWorker
 import kotlinx.coroutines.delay
@@ -62,8 +60,10 @@ data class FailedSyncRow(
  * - **Force sync now**: [SyncWorker.enqueueOneTime] — the exact same one-time work request
  *   [au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger] already fires automatically the
  *   instant connectivity returns; this button just lets a driver ask for it manually too.
- * - **Network status**: the same `ConnectivityManager` capability check
- *   [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.pollNetwork] already uses.
+ * - **Network status**: [au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger.networkStatus]
+ *   — the one shared, event-driven connectivity signal every such reader now collects (W7
+ *   consolidation, 2026-09-13 — see [au.com.threesixty.cabdispatch.domain.NetworkStatus]'s doc),
+ *   rather than this screen's own `ConnectivityManager` poll.
  *
  * Deliberately does NOT show a "driver login cache" or "duress SMS fallback" row the Figma mock
  * includes — neither concept exists anywhere in this codebase (no login-cache-expiry tracking, no
@@ -77,7 +77,17 @@ class OfflineSyncViewModel(application: Application) : AndroidViewModel(applicat
     val uiState: StateFlow<OfflineSyncUiState> = _uiState.asStateFlow()
 
     init {
-        pollNetwork()
+        // W7 connectivity consolidation (2026-09-13): used to be a one-shot ConnectivityManager
+        // read here plus another after every forceSyncNow(); now a live collect of the one shared
+        // signal ConnectivitySyncTrigger already maintains (see that class's and
+        // au.com.threesixty.cabdispatch.domain.NetworkStatus's own doc), so this row stays correct
+        // the instant connectivity changes rather than only at the two moments this screen used to
+        // remember to re-check it.
+        viewModelScope.launch {
+            AppContainer.connectivitySyncTrigger.networkStatus.collect { status ->
+                _uiState.update { it.copy(isOffline = status == NetworkStatus.OFFLINE) }
+            }
+        }
         viewModelScope.launch {
             AppContainer.syncOutboxDao.observeOutboxSize().collect { count ->
                 _uiState.update { it.copy(pendingOutboxCount = count) }
@@ -118,14 +128,6 @@ class OfflineSyncViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun pollNetwork() {
-        val context = getApplication<Application>()
-        val connectivityManager = ContextCompat.getSystemService(context, ConnectivityManager::class.java)
-        val caps = connectivityManager?.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        val online = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-        _uiState.update { it.copy(isOffline = !online) }
-    }
-
     private fun loadCachedTariff() {
         viewModelScope.launch {
             val region = RegionResolver.resolve(AppContainer.speedSource.locationFix.value)
@@ -149,7 +151,6 @@ class OfflineSyncViewModel(application: Application) : AndroidViewModel(applicat
             delay(SYNC_ACK_MS)
             _uiState.update { it.copy(syncTriggeredJustNow = false) }
         }
-        pollNetwork()
     }
 
     companion object {

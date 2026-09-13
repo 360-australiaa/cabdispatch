@@ -20,10 +20,11 @@ import java.time.LocalDate
  * available weekday" convention) rather than transcribed from an official 2027 gazette, since one
  * does not yet exist this far out.
  *
- * TODO(risk flag): verify every 2027 date against the real NSW public holidays gazette once it is
- * published — these are a best-effort calculation from the standard rules, not an official
- * source, and the government has occasionally varied from the mechanical rule for a specific year
- * (e.g. shifting a clashing holiday to a different weekday than the "next Monday" default).
+ * TODO(#w7-nsw-2027-gazette): verify every 2027 date against the real NSW public holidays gazette
+ * once it is published — these are a best-effort calculation from the standard rules, not an
+ * official source, and the government has occasionally varied from the mechanical rule for a
+ * specific year (e.g. shifting a clashing holiday to a different weekday than the "next Monday"
+ * default).
  */
 object NswPublicHolidays {
     val DATES: Set<LocalDate> = setOf(
@@ -41,7 +42,8 @@ object NswPublicHolidays {
         LocalDate.of(2026, 12, 26), // Boxing Day (Sat)
         LocalDate.of(2026, 12, 28), // Boxing Day holiday (Boxing Day falls on a Saturday)
 
-        // --- 2027 (calculated from standard rules — TODO: verify against the gazette) ---
+        // --- 2027 (calculated from standard rules — TODO(#w7-nsw-2027-gazette): verify against
+        // the gazette; see this object's class doc) ---
         LocalDate.of(2027, 1, 1), // New Year's Day (Fri)
         LocalDate.of(2027, 1, 26), // Australia Day (Tue)
         LocalDate.of(2027, 3, 26), // Good Friday

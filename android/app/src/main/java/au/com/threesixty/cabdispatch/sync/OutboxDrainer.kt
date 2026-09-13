@@ -8,7 +8,10 @@ import au.com.threesixty.cabdispatch.data.remote.ShiftStartDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto
 import au.com.threesixty.cabdispatch.data.remote.TripSyncResponseDto
 import au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
+import retrofit2.HttpException
+import java.io.IOException
 
 /**
  * Pure drain logic, factored out of [SyncWorker] so it is unit-testable on
@@ -97,9 +100,30 @@ class OutboxDrainer(
                 continue
             }
 
+            // W7 catch-narrowing pass (2026-09-13): no `Log.w` here on purpose, unlike most other
+            // narrowed catches in this codebase -- this class's own doc says it is "factored out
+            // of SyncWorker so it is unit-testable on a plain JVM", and `OutboxDrainerTest`
+            // exercises every one of these branches directly on that plain JVM with no Android
+            // framework present, where `android.util.Log` throws ("not mocked") rather than
+            // no-op'ing. `recordFailure` below already captures `e.message` onto the row (visible
+            // to the driver's own sync-status UI), so the cause is not silently lost -- it is
+            // just not additionally written to logcat from this particular class.
             val shift: ShiftDto = try {
                 ports.sendShiftStart(payload)
-            } catch (e: Exception) {
+            } catch (e: IOException) {
+                // Network failure -- exactly what the retry/backoff below exists for.
+                if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
+                continue
+            } catch (e: HttpException) {
+                // Server answered with an error status (4xx/5xx) -- also retried; a permanent
+                // rejection (e.g. a validation error that will never succeed) still ages out to
+                // dead-letter via recordFailure's own attempt cap, same as before.
+                if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
+                continue
+            } catch (e: SerializationException) {
+                // A response body that doesn't decode as ShiftDto -- a server/client contract
+                // mismatch, not a transient fault, but still handled through the same
+                // retry/dead-letter path rather than crashing the whole drain pass over one row.
                 if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
                 continue
             }
@@ -125,9 +149,22 @@ class OutboxDrainer(
 
         if (decoded.isEmpty()) return Tally(sent = 0, failed = 0, deadLettered = deadLettered)
 
+        // See the "no Log.w here" note above drainShifts's own try/catch -- same reason.
         val response = try {
             ports.sendTrips(decoded.map { it.second })
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            var failed = 0
+            for ((row, _) in decoded) {
+                if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
+            }
+            return Tally(sent = 0, failed = failed, deadLettered = deadLettered)
+        } catch (e: HttpException) {
+            var failed = 0
+            for ((row, _) in decoded) {
+                if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
+            }
+            return Tally(sent = 0, failed = failed, deadLettered = deadLettered)
+        } catch (e: SerializationException) {
             var failed = 0
             for ((row, _) in decoded) {
                 if (recordFailure(row, e.message ?: e::class.java.simpleName)) deadLettered++ else failed++
