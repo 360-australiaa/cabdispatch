@@ -164,10 +164,19 @@ interface ApiService {
      * distinct from `valid=false` (PIN set, wrong value) — callers must check
      * [VerifyAdminPinResponseDto.configured] explicitly, per shared/API_SUMMARY.md.
      */
+    // Bug found in live on-device testing (2026-09-13): the backend's own role gate on this route
+    // (see its docstring's "ROLE GATE" / "DEVICE-SECRET PATH" notes) was hardened to refuse a plain
+    // driver bearer token -- exactly what a signed-in tablet holds -- and added an X-Device-Secret
+    // path as the replacement so a tablet can still verify a PIN authenticated as itself. This
+    // Retrofit method never grew the matching parameter, so every caller (attemptFactoryReset,
+    // attemptUnlockSimulator) could only ever send the driver token, which now always 403s. Every
+    // sibling device-scoped endpoint in this file (deviceHeartbeat, deviceLocateResponse, ...)
+    // already takes this same optional header -- this one was simply missed.
     @POST("/v1/fleet/devices/{deviceId}/verify-admin-pin")
     suspend fun verifyAdminPin(
         @Path("deviceId") deviceId: String,
         @Body body: VerifyAdminPinRequestDto,
+        @Header("X-Device-Secret") deviceSecret: String? = null,
     ): VerifyAdminPinResponseDto
 
     // ---- Live positions (MDM "locate" response — S6's heartbeat above reads

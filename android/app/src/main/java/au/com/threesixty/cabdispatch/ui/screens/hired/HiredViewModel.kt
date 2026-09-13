@@ -138,6 +138,20 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
             // class's doc for why hoisting the accrual without its persistence would have been
             // worse than hoisting neither.
             openTripInRoom(tripContext)
+        } else {
+            // Restore path (this is [isRestoredFare] above's exact condition, re-checked rather
+            // than reused because that val is computed before meter.startTrip() could have run —
+            // see its own doc). Bug found in live on-device testing (2026-09-13): a fresh trip
+            // marks itself live via SessionHolder.markTripLive() inside openTripInRoom() just
+            // above, but a RESTORED one never went through that function at all, so
+            // SessionHolder.liveTripClientUuid stayed null for the rest of this process's life —
+            // even though the meter is genuinely running again. Every consumer that asks "is a
+            // trip live right now" via that flag (GpsSimulator's finished-route auto-release
+            // guard is the one that surfaced this) reads a false "no" for a trip a driver is
+            // still actively in. Re-affirming it here, from the one signal the restore path does
+            // populate (MeterController.activeClientUuid), closes that gap for all of them at
+            // once rather than patching each caller separately.
+            AppContainer.meterController.activeClientUuid?.let { SessionHolder.markTripLive(it) }
         }
 
         fareState

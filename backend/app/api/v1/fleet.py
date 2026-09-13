@@ -82,6 +82,7 @@ _require_owner = require_role("owner")
 async def get_optional_admin(
     payload: dict | None = Depends(get_optional_token_payload),
     session: AsyncSession = Depends(get_session),
+    x_device_secret: str | None = Header(default=None, alias="X-Device-Secret"),
 ) -> User | None:
     """`_require_admin` where "no Authorization header at all" is a valid answer
     instead of a 401 — for the one route in this file that accepts an
@@ -92,8 +93,25 @@ async def get_optional_admin(
     rather than being downgraded to "anonymous". Only the total absence of a
     token becomes expressible, and the route itself must then find another
     credential or refuse.
+
+    Bug found in live on-device testing (2026-09-13): that reasoning silently
+    assumed a bearer token only ever arrives WITHOUT a device secret alongside
+    it. In fact the Android app's HTTP client attaches the signed-in driver's
+    bearer token to every request, this one included, regardless of whether the
+    call site also sends X-Device-Secret — so a real tablet calling
+    verify-admin-pin while a driver is signed in (the only way it is ever
+    called in practice: a technician unlocking the GPS simulator or a factory
+    reset on a tablet a driver already uses) carried BOTH credentials, and this
+    dependency 403'd the driver-role bearer token before the route body's own
+    `if x_device_secret:` branch — the intended, correct path — ever ran. The
+    device-secret path was consequently unreachable from any real device.
+    A device secret on the same request means the caller is a tablet
+    authenticating as itself; defer entirely to that (return None, exactly
+    like the no-token case) and let the route's own `authenticate_device` call
+    decide, rather than pre-emptively rejecting on an incidental bearer token
+    the route was never going to use anyway.
     """
-    if payload is None:
+    if payload is None or x_device_secret:
         return None
 
     user_id = payload.get("sub")

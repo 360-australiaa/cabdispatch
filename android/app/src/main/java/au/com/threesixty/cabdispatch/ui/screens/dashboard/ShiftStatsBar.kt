@@ -57,7 +57,9 @@ import au.com.threesixty.cabdispatch.ui.theme.PulsingDot
 import java.math.RoundingMode
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -419,8 +421,21 @@ private fun formatDurationHmm(d: Duration): String {
     return "$sign$h:${m.toString().padStart(2, '0')}"
 }
 
+// Bug found in live on-device testing (2026-09-13, against a local sqlite dev backend): SQLAlchemy's
+// DateTime(timezone=True) is a no-op on SQLite (unlike the real Postgres backend this app ships
+// against), so a dev/offline backend can hand back a bare ISO string with no 'Z'/offset at all, e.g.
+// "2026-09-13T14:49:35.603845". Instant.parse and OffsetDateTime.parse both reject that outright, so
+// this used to return null -- and the two callers above then showed the elapsed-time tile as "—" and
+// (worse) formatClockTime's own null fallback put that raw, unformatted ISO string straight on
+// screen ("Started 2026-09-13T14:49:35.603845"), a driver-facing string leak. A third, last-resort
+// parse as a naive LocalDateTime treats it as UTC -- the same assumption the backend's own
+// `datetime.utcnow()`-style storage already makes -- so a stray naive timestamp degrades to a
+// slightly-off elapsed time instead of a raw string on the dashboard.
 private fun parseInstantOrOffset(iso: String): Instant? =
-    runCatching { Instant.parse(iso) }.recoverCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+    runCatching { Instant.parse(iso) }
+        .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
+        .getOrNull()
 
 @Preview(name = "Bottom bar (dark)", widthDp = 1280, heightDp = 144, backgroundColor = 0xFF0B0B10, showBackground = true)
 @Composable

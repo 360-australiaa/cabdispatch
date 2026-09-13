@@ -1030,7 +1030,11 @@ private class FakeApiService : ApiService {
     // ApiService.kt's real declarations, not guessed. ---
     override suspend fun driverLogin(body: DriverLoginRequestDto): DriverLoginResponseDto = notUsed()
     override suspend fun mfaLogin(body: MfaLoginRequestDto): TokenResponseDto = notUsed()
-    override suspend fun verifyAdminPin(deviceId: String, body: VerifyAdminPinRequestDto): VerifyAdminPinResponseDto = notUsed()
+    override suspend fun verifyAdminPin(
+        deviceId: String,
+        body: VerifyAdminPinRequestDto,
+        deviceSecret: String?,
+    ): VerifyAdminPinResponseDto = notUsed()
     override suspend fun setDriverAvailability(body: DriverAvailabilityUpdateDto): DriverAvailabilityDto = notUsed()
     override suspend fun createJob(body: JobCreateDto): JobDto = notUsed()
     override suspend fun listJobs(status: String?, skip: Int, limit: Int): JobListResponseDto = notUsed()

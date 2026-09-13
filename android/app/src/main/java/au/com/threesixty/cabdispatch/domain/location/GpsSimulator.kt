@@ -1,6 +1,7 @@
 package au.com.threesixty.cabdispatch.domain.location
 
 import au.com.threesixty.cabdispatch.domain.LocationFix
+import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.SpeedSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -119,7 +120,10 @@ class GpsSimulator(private val scope: CoroutineScope) {
                     if (!_finished.value) {
                         _finished.value = true
                         finishedAtMillis = System.currentTimeMillis()
-                    } else if (System.currentTimeMillis() - (finishedAtMillis ?: 0L) >= FINISHED_GRACE_MS) {
+                    } else if (
+                        System.currentTimeMillis() - (finishedAtMillis ?: 0L) >= FINISHED_GRACE_MS &&
+                        SessionHolder.liveTripClientUuid.value == null
+                    ) {
                         // RELEASE THE METER (tablet, 2026-09-08). A finished route used to park the
                         // vehicle forever: still "active", still the source the meter reads, still
                         // 0 km/h -- with real GPS ignored and the red banner up -- until a human
@@ -128,6 +132,24 @@ class GpsSimulator(private val scope: CoroutineScope) {
                         // check needs a still ring at the end); parking indefinitely is a trap.
                         // After the grace the simulator stops itself and the switch hands the
                         // meter back to the real provider.
+                        //
+                        // Bug found in live on-device testing (2026-09-13): the grace timer alone
+                        // does not know whether the CURRENT trip -- the one that opened under this
+                        // very simulation and is correctly flagged `simulated` -- is still running.
+                        // The ordinary case is exactly that: nobody taps End Fare within 20 seconds
+                        // of the simulated route's last waypoint. That driver's live position was
+                        // silently swapped to whatever the real fused-location provider reports --
+                        // on a tablet with no real satellite fix and only network-based location,
+                        // that can be a fix thousands of kilometres from the simulated route,
+                        // self-reported to the backend and fed straight into the still-running
+                        // fare/toll pipeline as though it were the next genuine sample. The
+                        // `simulated` flag on the trip survives (it is stamped once, at open), but
+                        // the live distance/toll numbers produced after the swap do not deserve it.
+                        // Gating the release on SessionHolder.liveTripClientUuid keeps the parked
+                        // fix held (re-checked every tick, so release still follows within one tick
+                        // of End Fare) for as long as a trip this process opened is still live --
+                        // the same "park, do not vanish" reasoning above, just extended to cover the
+                        // trip's whole lifetime instead of stopping at one fixed grace window.
                         stop()
                         return@launch
                     }

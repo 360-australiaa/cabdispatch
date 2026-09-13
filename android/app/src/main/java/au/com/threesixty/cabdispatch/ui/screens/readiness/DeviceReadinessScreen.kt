@@ -257,6 +257,12 @@ fun DeviceReadinessScreen(
                     code = state.pairCode,
                     pairing = state.pairing,
                     error = state.pairError,
+                    // Bug found in on-device testing (2026-09-13): auto-focus is right for the
+                    // plain driver gate (nothing else on the screen to do) but wrong here in
+                    // commissioning -- it pops the keyboard over the technician's own checklist
+                    // and the Fix/Close buttons the instant this screen appears, before they have
+                    // even read it.
+                    autoFocus = !state.commissioning,
                     onCodeChange = viewModel::onPairCodeChange,
                     onScan = { (context as? Activity)?.let(viewModel::scanPairingQr) },
                     onSubmit = viewModel::submitPairCode,
@@ -608,6 +614,7 @@ private fun PairPanel(
     onCodeChange: (String) -> Unit,
     onScan: () -> Unit,
     onSubmit: () -> Unit,
+    autoFocus: Boolean = true,
 ) {
     Column(
         modifier = Modifier
@@ -627,8 +634,12 @@ private fun PairPanel(
         Spacer(Modifier.height(8.dp))
         val focusRequester = remember { FocusRequester() }
         // Focused on arrival so the tablet's own keyboard comes straight up -- a driver on a gate
-        // they cannot leave should not have to work out that the field is tappable first.
-        LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+        // they cannot leave should not have to work out that the field is tappable first. Only
+        // when autoFocus is true, though -- see that parameter's own doc for the commissioning
+        // case this must NOT fire for.
+        if (autoFocus) {
+            LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+        }
         TextField(
             value = code,
             // Filtered here rather than by hiding keys: pairing codes exclude 0/1/O/I server-side

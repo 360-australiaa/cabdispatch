@@ -441,7 +441,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(factoryResetError = null, factoryResetInProgress = true) }
         viewModelScope.launch {
             val verifyPinResult = runCatching {
-                AppContainer.apiService.verifyAdminPin(deviceId, VerifyAdminPinRequestDto(pin = pin))
+                AppContainer.apiService.verifyAdminPin(
+                    deviceId,
+                    VerifyAdminPinRequestDto(pin = pin),
+                    deviceSecret = AppContainer.devicePairingStore.getDeviceSecret(),
+                )
             }
             verifyPinResult.fold(
                 onSuccess = { response ->
@@ -539,7 +543,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(simulatorPinError = null, simulatorPinVerifying = true) }
         viewModelScope.launch {
             runCatching {
-                AppContainer.apiService.verifyAdminPin(deviceId, VerifyAdminPinRequestDto(pin = pin))
+                AppContainer.apiService.verifyAdminPin(
+                    deviceId,
+                    VerifyAdminPinRequestDto(pin = pin),
+                    deviceSecret = AppContainer.devicePairingStore.getDeviceSecret(),
+                )
             }.fold(
                 onSuccess = { response ->
                     when {
