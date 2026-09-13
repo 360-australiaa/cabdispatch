@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -291,6 +292,13 @@ private fun TimelineRow(dotColor: Color, title: String, address: String, time: S
                 fontSize = 12.sp,
                 color = CaptainPalette.textPrimary,
                 maxLines = 2,
+                // Real, unpredictable-length backend/driver address text (real bug, found in
+                // audit): maxLines alone defaults to TextOverflow.Clip, which cuts a long real
+                // pickup/drop-off address off mid-glyph with no ellipsis. Every other bounded
+                // address/label row in this app (NavStopLine, SuggestionRow,
+                // MapDestinationSearchBar, MeterActionTile, etc.) pairs maxLines with
+                // overflow = TextOverflow.Ellipsis; this row was the outlier.
+                overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Start,
                 modifier = Modifier.padding(top = 2.dp),
             )

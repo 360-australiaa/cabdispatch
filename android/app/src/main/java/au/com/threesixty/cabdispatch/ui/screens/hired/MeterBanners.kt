@@ -231,10 +231,24 @@ private fun AutoTollRow(entry: AutoTollEntry, onRemove: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
-            Text(entry.roadName, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = CaptainPalette.textPrimary)
+        // weight(1f) + maxLines/ellipsis on the road name (real bug, found in audit): this Column
+        // used to have no weight, so a long real gantry/road name (e.g. a WestConnex-style
+        // multi-part name) had room to grow across the whole row and push the Remove button past
+        // the row's own clipped bounds -- the same "unweighted Text beside a fixed sibling
+        // control" shape this file's own UnpricedTollRow (below) already guards against.
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                entry.roadName,
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = CaptainPalette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text("Auto-detected · ${entry.amount.toMoneyString()}", fontFamily = InterFamily, fontSize = 12.sp, color = CaptainPalette.textSecondary)
         }
+        Spacer(Modifier.width(8.dp))
         CaptainButton(text = "Remove", outline = true, widthDp = 100, heightDp = 40, fontSize = 13.sp, onClick = onRemove)
     }
 }
