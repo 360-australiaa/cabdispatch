@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -104,7 +105,7 @@ fun ShiftStartScreen(navController: NavHostController) {
                     )
                 }
             }
-            Spacer(Modifier.padding(top = 28.dp))
+            Spacer(Modifier.height(28.dp))
             Row(modifier = Modifier.width(700.dp)) {
                 CaptainButton(text = "Back", outline = true, modifier = Modifier.width(220.dp)) {
                     navController.popBackStack()
@@ -138,6 +139,13 @@ private fun ConfirmRow(
             color = CaptainPalette.textMuted,
             modifier = Modifier.width(120.dp),
         )
-        Text(value, fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = valueColor)
+        Text(
+            value,
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
+            color = valueColor,
+            modifier = Modifier.weight(1f),
+        )
     }
 }

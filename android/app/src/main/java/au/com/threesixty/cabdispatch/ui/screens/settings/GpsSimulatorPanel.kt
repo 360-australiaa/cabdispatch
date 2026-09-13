@@ -115,7 +115,7 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
         if (active && !finished) {
             val label = running?.name ?: "route"
             Text(
-                if (finished) "Arrived — $label finished, vehicle stopped." else "Driving $label…",
+                "Driving $label…",
                 fontFamily = InterFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
@@ -128,6 +128,22 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
                 onClick = { simulator.stop() },
             )
         } else {
+            // The note this branch is meant to carry for a just-finished run (see the class doc:
+            // "shows the route list again (with a note)"). This used to be unreachable dead code --
+            // it lived in a Text() gated by finished inside the sibling branch above, which
+            // requires active && !finished just to be entered, so finished could never be true
+            // there. The tester-facing symptom was silence: a route would finish and the screen
+            // would just show the plain route list with no acknowledgement it had ended.
+            if (finished) {
+                Text(
+                    "Arrived — ${running?.name ?: "route"} finished, vehicle stopped.",
+                    fontFamily = InterFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CaptainPalette.danger,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
             // Count + scroll hint. Reported from the tablet: "I can't see other toll routes, like
             // tunnels, Westlink". They were all there -- 13 of them -- but each row was tall
             // enough that only the first three cleared the fold, and the About tab's scroll gave
