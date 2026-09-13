@@ -640,6 +640,14 @@ class TripRepository(
             // stays on-device as-is rather than being force-fit into a DTO shape that assumes a
             // resolution happened.
             gpsBlackoutSegments = blackoutSegments.mapNotNull(::toBlackoutSegmentDtoOrNull),
+            // T5/N4 (2026-09-13 decision -- see TripEntity.autoTolledRoadsJson's own doc and
+            // TripSyncItemDto.autoTolledRoads' doc): sync the per-road toll audit trail as dispute
+            // evidence. Best-effort decode, same "never block a sync over evidence" reasoning as
+            // blackoutSegments above -- a malformed/legacy-shape row degrades to "no evidence sent"
+            // rather than failing the whole trip sync.
+            autoTolledRoads = runCatching {
+                cabDispatchJson.decodeFromString<Map<String, String>>(trip.autoTolledRoadsJson)
+            }.getOrDefault(emptyMap()),
             receiptRef = trip.receiptRef,
             deviceTotal = trip.deviceTotal,
             // See TripEntity.tip's doc — a tip is never folded into deviceTotal above (the

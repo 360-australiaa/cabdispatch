@@ -187,14 +187,29 @@ data class TripEntity(
      * Local audit trail for the automatic NSW toll-road detector (see
      * [au.com.threesixty.cabdispatch.domain.fare.onFix]) — JSON-encoded
      * `Map<String, String>` (toll-road id -> current charged amount, decimal-as-string), mirroring
-     * the SHAPE of the backend's own `Trip.auto_tolled_roads` (which this trip's sync payload never
-     * populates itself — see [tolls]'s own doc: the server runs no toll detection on the
-     * `POST /v1/trips/sync` path this app actually uses, so that server-side column stays empty for
-     * every trip closed through this app; [tolls] is the one figure that DOES reach the server,
-     * verbatim, already including every amount recorded here). Local-only, same "not part of
-     * [au.com.threesixty.cabdispatch.data.remote.TripSyncItemDto]" status as [pickupAddress]/
-     * [dropoffAddress] above — read by the Close & Pay / History views on this device so a driver
-     * can see which real roads their auto-detected tolls came from, never sent over the wire.
+     * the SHAPE of the backend's own `Trip.auto_tolled_roads` column. [tolls] is the one figure
+     * that reaches the server as a billed total, verbatim, already including every amount recorded
+     * here; this field is the per-road breakdown behind that total.
+     *
+     * ### T5/N4 decision (2026-09-13, W7 cleanup pass): YES, sync this as dispute evidence
+     * Previously local-only ("never sent over the wire"). The plan's own recommendation
+     * (`docs/plans/2026-09-12-android-meter-optimisation-and-gps-blackout-plan.md` §1.4 T5) is
+     * yes — a driver or passenger disputing a `tolls` total can be shown exactly which real roads
+     * it came from, the same dispute-evidence reasoning already applied to GPS-blackout segments
+     * (see [gpsBlackoutSegments][au.com.threesixty.cabdispatch.data.remote.dto.GpsBlackoutSegmentDto]'s
+     * doc). Implemented Android-side, additively: this field now also decodes into
+     * [au.com.threesixty.cabdispatch.data.remote.dto.TripSyncItemDto.autoTolledRoads] and is sent
+     * on every `POST /v1/trips/sync` call ([au.com.threesixty.cabdispatch.data.repository.TripRepository.toSyncItemDto]).
+     * The backend's `TripSyncItem` schema does not yet declare a matching field as of this pass —
+     * out of this Android-only workstream's scope to add — so the value round-trips as an extra,
+     * currently-ignored JSON field until a backend change (`backend/app/schemas/trips.py`,
+     * `backend/app/models/trips.py`) adds real persistence for it. That backend-side follow-up is
+     * a NEEDED next step for this evidence to actually reach the dashboard; sending it now is
+     * forward-compatible and harmless in the meantime (extra fields are ordinarily ignored
+     * server-side), same convention this DTO already uses for `voucherCode`/`accountReference`/
+     * `splitPayments`.
+     *
+     * Still also read locally by the Close & Pay / History views on this device (unchanged).
      * Defaults to `"{}"` so every pre-9->10-migration row decodes as "no auto-tolls recorded" rather
      * than crashing a decode.
      */
@@ -203,8 +218,11 @@ data class TripEntity(
     /**
      * Local audit trail of real toll roads crossed this trip that the registry could not
      * auto-price (`zone_flat`/unpriced — see [au.com.threesixty.cabdispatch.domain.UnpricedTollRoad]'s
-     * doc) — JSON-encoded `List<String>` of toll-road ids. Same local-only, never-synced status as
-     * [autoTolledRoadsJson] above.
+     * doc) — JSON-encoded `List<String>` of toll-road ids. Local-only, never synced — unlike
+     * [autoTolledRoadsJson] above (T5/N4, see that field's own doc), the plan does not name this
+     * one for sync, and it carries no charged amount to show as evidence (a list of ids the
+     * registry couldn't price is a pricing-completeness signal for this device, not dispute
+     * evidence for a billed figure) — left local-only on that basis, not an oversight.
      */
     val unpricedTollRoadIdsJson: String = "[]",
 
