@@ -3,10 +3,7 @@ package au.com.threesixty.cabdispatch.ui.screens.hired
 import au.com.threesixty.cabdispatch.data.remote.DirectionsRoute
 import au.com.threesixty.cabdispatch.data.remote.RoutePoint
 import au.com.threesixty.cabdispatch.data.remote.RouteStep
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
+import au.com.threesixty.cabdispatch.domain.location.GeoMath
 
 /**
  * The navigator's arithmetic, with no Android or coroutine dependencies so every rule is unit
@@ -52,16 +49,16 @@ object NavProgress {
     /** Minimum gap between two automatic reroute requests, so a flaky fix can't spam the API. */
     const val REROUTE_MIN_INTERVAL_MS = 20_000L
 
-    private const val EARTH_RADIUS_M = 6_371_000.0
-
-    /** Great-circle distance in metres. */
-    fun haversineM(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-        val dLat = Math.toRadians(lat2 - lat1)
-        val dLng = Math.toRadians(lng2 - lng1)
-        val a = sin(dLat / 2) * sin(dLat / 2) +
-            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2) * sin(dLng / 2)
-        return 2 * EARTH_RADIUS_M * atan2(sqrt(a), sqrt(1 - a))
-    }
+    /**
+     * Great-circle distance in metres. W7 haversine consolidation (2026-09-13): this used to carry
+     * its own copy of the formula (a slightly different Earth radius, 6,371,000.0 m, than
+     * [GeoMath]'s 6,371,008.8 m — an ~9 m difference at this navigation-guidance scale, never a
+     * fare-affecting one) — now delegates to the one designated home for this maths. See
+     * [GeoMath]'s own doc; [au.com.threesixty.cabdispatch.domain.fare.TollDetector.tollHaversineM]
+     * is the one haversine that must stay byte-identical to the backend's and is NOT touched here.
+     */
+    fun haversineM(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double =
+        GeoMath.distanceKm(lat1, lng1, lat2, lng2) * 1000.0
 
     /**
      * Distance from the fix to the nearest vertex of the route polyline, or

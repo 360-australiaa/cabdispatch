@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import au.com.threesixty.cabdispatch.domain.GpsQuality
+import au.com.threesixty.cabdispatch.domain.NetworkStatus
 import au.com.threesixty.cabdispatch.domain.ThemeMode
 import androidx.navigation.NavHostController
 import au.com.threesixty.cabdispatch.domain.fare.AIRPORT_FIXED_FARE_MAXI

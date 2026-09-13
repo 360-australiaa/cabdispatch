@@ -5,8 +5,6 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,6 +20,7 @@ import au.com.threesixty.cabdispatch.domain.GpsQuality
 import au.com.threesixty.cabdispatch.domain.GpsQualityClassifier
 import au.com.threesixty.cabdispatch.domain.DevicePairingRepository
 import au.com.threesixty.cabdispatch.domain.LocateOutcome
+import au.com.threesixty.cabdispatch.domain.NetworkStatus
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ThemeMode
 import au.com.threesixty.cabdispatch.domain.location.RegionResolver
@@ -40,7 +39,10 @@ import kotlinx.coroutines.withContext
 // GpsQuality moved to au.com.threesixty.cabdispatch.domain.GpsQuality (2026-09-02, Home-dashboard
 // redesign pass) so au.com.threesixty.cabdispatch.ui.screens.dashboard.WheelDashboardViewModel can
 // share the exact same accuracy tiers instead of duplicating them — see that file's own doc.
-enum class NetworkStatus { OFFLINE, CELLULAR, WIFI, OTHER }
+// NetworkStatus moved to au.com.threesixty.cabdispatch.domain.NetworkStatus (W7 connectivity
+// consolidation, 2026-09-13) — see that file's doc for why: this screen's own poll of it is now
+// just a read of au.com.threesixty.cabdispatch.sync.ConnectivitySyncTrigger's shared, event-driven
+// signal instead of an independent ConnectivityManager query.
 /**
  * [UNREGISTERED] is deliberately distinct from [UNKNOWN_OFFLINE]. Found on the pilot tablet,
  * 2026-09-07: the heartbeat had been failing with a flat "offline or server unreachable" while
@@ -309,17 +311,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     // --- Network status ---
+    // W7 connectivity consolidation (2026-09-13): used to run its own ConnectivityManager
+    // activeNetwork/NetworkCapabilities read on every GPS_NETWORK_POLL_INTERVAL_MS tick, the same
+    // check ConnectivitySyncTrigger and OfflineSyncViewModel each ran independently too -- now just
+    // reads the one shared, event-driven signal. Still called from the timer loop below (rather
+    // than switched to its own collector) since that loop already owns this screen's GPS poll
+    // cadence and a StateFlow read here is cheap -- no behaviour change, one less independent
+    // ConnectivityManager query.
     private fun pollNetwork() {
-        val context = getApplication<Application>()
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val caps = connectivityManager?.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        val status = when {
-            caps == null -> NetworkStatus.OFFLINE
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkStatus.WIFI
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkStatus.CELLULAR
-            else -> NetworkStatus.OTHER
-        }
-        _uiState.update { it.copy(networkStatus = status) }
+        _uiState.update { it.copy(networkStatus = AppContainer.connectivitySyncTrigger.networkStatus.value) }
     }
 
     // --- App version / force update / MDM "locate" ---

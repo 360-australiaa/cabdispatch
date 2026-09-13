@@ -7,6 +7,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.work.WorkManager
 import au.com.threesixty.cabdispatch.data.AppContainer
+import au.com.threesixty.cabdispatch.domain.NetworkStatus
+import au.com.threesixty.cabdispatch.domain.classifyNetworkStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,17 +32,24 @@ import kotlinx.coroutines.flow.asStateFlow
  * ### [isOnline] (offline-indicator pass, 2026-09-05)
  * Also the single live "is there real internet connectivity right now" signal for the whole app —
  * [au.com.threesixty.cabdispatch.ui.overlays.OfflineBanner] reads it, rather than standing up a
- * second `ConnectivityManager` detector. It is the exact same check
+ * second `ConnectivityManager` detector. Before the W7 connectivity consolidation (2026-09-13),
  * [au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel.pollNetwork] and
- * [au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncViewModel.pollNetwork] already
- * poll for (`activeNetwork` + [NetworkCapabilities.NET_CAPABILITY_INTERNET]) — used here to seed
- * the initial value and on every [android.net.ConnectivityManager.NetworkCallback.onLost] (a lost
+ * [au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncViewModel.pollNetwork] each ran
+ * this exact same `activeNetwork` + [NetworkCapabilities.NET_CAPABILITY_INTERNET] check
+ * independently; both now collect [networkStatus] below instead. Used here to seed the initial
+ * value and on every [android.net.ConnectivityManager.NetworkCallback.onLost] (a lost
  * network doesn't necessarily mean *no* network: another internet-capable one may still be up),
  * layered under the SAME [networkCallback]/[NetworkRequest] registration this class already
  * performs for the sync trigger above, not a parallel registration. [count] tracks how many
  * currently-registered networks satisfy the request so a second concurrent connection (e.g. Wi-Fi
  * up while cellular is still dropping out) doesn't flip [isOnline] false on the first one's
  * [onLost].
+ *
+ * ### [networkStatus] (W7 connectivity consolidation, 2026-09-13)
+ * The richer transport-classified sibling of [isOnline] — see [au.com.threesixty.cabdispatch.domain.NetworkStatus]'s
+ * own doc. Maintained on the exact same [networkCallback] events as [isOnline], so both ViewModels
+ * that used to poll `ConnectivityManager` for this ([au.com.threesixty.cabdispatch.ui.screens.settings.SettingsViewModel],
+ * [au.com.threesixty.cabdispatch.ui.screens.offlinesync.OfflineSyncViewModel]) now just collect it.
  */
 class ConnectivitySyncTrigger(context: Context) {
 
@@ -59,10 +68,14 @@ class ConnectivitySyncTrigger(context: Context) {
     private val _isOnline = MutableStateFlow(readCurrentConnectivitySnapshot())
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
+    private val _networkStatus = MutableStateFlow(classifyNetworkStatus(currentCapabilities()))
+    val networkStatus: StateFlow<NetworkStatus> = _networkStatus.asStateFlow()
+
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             satisfyingNetworkCount++
             _isOnline.value = true
+            _networkStatus.value = classifyNetworkStatus(currentCapabilities())
             SyncWorker.enqueueOneTime(WorkManager.getInstance(appContext))
             // T2 (architecture audit 2026-09-08, §2.3): the toll registry used to be refreshed
             // exactly once, fire-and-forget, at process start — so a tablet that booted with no
@@ -95,6 +108,7 @@ class ConnectivitySyncTrigger(context: Context) {
             // rather than trusting the local counter alone, since callback ordering across two
             // networks flapping at once isn't guaranteed.
             _isOnline.value = satisfyingNetworkCount > 0 || readCurrentConnectivitySnapshot()
+            _networkStatus.value = classifyNetworkStatus(currentCapabilities())
         }
     }
 
@@ -109,11 +123,13 @@ class ConnectivitySyncTrigger(context: Context) {
         connectivityManager.registerNetworkCallback(request, networkCallback)
     }
 
-    /** Same one-shot snapshot check [SettingsViewModel.pollNetwork]/[OfflineSyncViewModel.pollNetwork]
-     * already poll with — used only to seed [isOnline] before the first callback fires and as an
-     * [onLost] tie-breaker (see [networkCallback]'s doc), never on a hot path. */
-    private fun readCurrentConnectivitySnapshot(): Boolean {
-        val caps = connectivityManager.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
-        return caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-    }
+    /** The platform's current view of the active network's capabilities, or `null` if there is
+     * none — the one raw `ConnectivityManager` read this whole class is built on. Used to seed
+     * both [isOnline]/[networkStatus] before the first callback fires and as [onLost]'s
+     * tie-breaker (see [networkCallback]'s doc), never on a hot path. */
+    private fun currentCapabilities(): NetworkCapabilities? =
+        connectivityManager.activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
+
+    private fun readCurrentConnectivitySnapshot(): Boolean =
+        currentCapabilities()?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
 }

@@ -2,11 +2,9 @@ package au.com.threesixty.cabdispatch.domain.location
 
 import au.com.threesixty.cabdispatch.domain.fare.TollGantryRef
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
-import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
  * A route the GPS simulator drives — an ordered list of real-world waypoints, plus the speed to
@@ -186,16 +184,14 @@ data class RoutePosition(
     val finished: Boolean,
 )
 
-private const val EARTH_RADIUS_M = 6_371_008.8
-
-internal fun haversineM(a: LatLng, b: LatLng): Double {
-    val dLat = Math.toRadians(b.lat - a.lat)
-    val dLng = Math.toRadians(b.lng - a.lng)
-    val lat1 = Math.toRadians(a.lat)
-    val lat2 = Math.toRadians(b.lat)
-    val h = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLng / 2) * sin(dLng / 2)
-    return 2 * EARTH_RADIUS_M * asin(sqrt(h.coerceIn(0.0, 1.0)))
-}
+// W7 haversine consolidation (2026-09-13): this used to carry its own copy of the same
+// great-circle formula [GeoMath.distanceKm] implements, with the same Earth-radius constant
+// (6,371,008.8 m == 6371.0088 km) -- two independently-typed copies of one another with nothing
+// keeping them in step. [GeoMath] is the one designated home for this (see its own doc for why
+// it's a byte-for-byte mirror of the backend's haversine); the only actual haversine this
+// consolidation must NOT touch is [au.com.threesixty.cabdispatch.domain.fare.TollDetector.tollHaversineM],
+// which stays byte-identical to the backend's toll-geofence formula by explicit requirement.
+internal fun haversineM(a: LatLng, b: LatLng): Double = GeoMath.distanceKm(a.lat, a.lng, b.lat, b.lng) * 1000.0
 
 internal fun bearingDegrees(from: LatLng, to: LatLng): Double {
     val lat1 = Math.toRadians(from.lat)
