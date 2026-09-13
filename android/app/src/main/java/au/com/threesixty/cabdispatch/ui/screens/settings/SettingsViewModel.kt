@@ -113,26 +113,20 @@ private fun LocateOutcome.toScreenState(): LocateResponseState = when (this) {
 }
 
 /**
- * TEMPORARY (owner decision, 2026-09-08): the GPS simulator is open to every user, no admin PIN.
+ * RESOLVED (G5/N1, 2026-09-12): was TEMPORARY per an 2026-09-08 owner decision — *"simulation of
+ * gps should be unlock temporary for all users, later we will completely remove it, dont strict
+ * with admin pin"* — deliberately ungating the simulator while every tablet was a field-test unit
+ * under the owner's own eye. That trade is now closed: every tablet in this program carries the
+ * two real blackout simulator routes (`laneCoveTunnelBlackout`, `carParkBlackout`) to prove the
+ * meter's own blackout billing, which makes the old "field-test unit" exemption moot — these ARE
+ * the runs a real fleet's own testing needs too. The PIN path was already intact and untouched;
+ * only this constant moved back to `true`.
  *
- * Asked for verbatim — *"simulation of gps should be unlock temporary for all users, later we will
- * completely remove it, dont strict with admin pin"* — so this is deliberate, not an oversight.
- *
- * What it costs, stated once so the trade is on the record: the panel drives synthetic speed and
- * position into the same `SpeedSource` the fare engine bills from. Ungated, any driver can make the
- * meter run distance on a stationary vehicle and produce a fare for a trip that never happened.
- * That is a metering-integrity risk, not a cosmetic one, and it is why the gate existed. It is
- * acceptable while every tablet is a field-test unit under the owner's own eye; it must not ship to
- * a real fleet.
- *
- * Flip this to `true` to restore the PIN gate — the whole PIN path is intact and untouched — or
- * delete the simulator outright, which is the stated end state. One line either way, on purpose.
+ * What ungating would still cost, kept on the record in case this is ever revisited: the panel
+ * drives synthetic speed and position into the same `SpeedSource` the fare engine bills from.
+ * Ungated, any driver can make the meter run distance on a stationary vehicle and produce a fare
+ * for a trip that never happened — a metering-integrity risk, not a cosmetic one.
  */
-// Flipped 2026-09-12 (GPS blackout program, W1, N1/G5): every tablet now used in this program is
-// carrying the two new real blackout simulator routes (laneCoveTunnelBlackout, carParkBlackout)
-// specifically to prove the meter's own blackout billing, which makes the gate's own "field-test
-// unit under the owner's own eye" exemption moot -- these ARE the runs a real fleet's own testing
-// would need too. The PIN path stays exactly as it was; only this constant moved.
 const val SIMULATOR_REQUIRES_ADMIN_PIN = true
 
 /** Whether the simulator panel starts visible. Inverse of [SIMULATOR_REQUIRES_ADMIN_PIN]. */
@@ -271,12 +265,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     // --- GPS quality ---
-    // TODO(location/fare-engine sibling agent): once a real fused/Kalman-
-    // filtered location source lands for the fare engine (see
-    // au.com.threesixty.cabdispatch.domain.StubSpeedSource's TODO), consider
-    // reading its last fix here too for consistency, instead of a separate
-    // raw LocationManager read — for a diagnostics indicator, though, a
-    // direct last-known-fix + accuracy read is perfectly adequate on its own.
+    // TODO(#w7-pollgps-source-consistency): a real fused location source (RealLocationProvider)
+    // plus, since W2, a real inertial dead-reckoning source for GPS blackouts
+    // (domain/location/inertial/InertialSpeedSource.kt) both now exist for the fare engine.
+    // Consider reading the same AppContainer.speedSource.locationFix here too for consistency,
+    // instead of a separate raw LocationManager read — for a diagnostics indicator, though, a
+    // direct last-known-fix + accuracy read is perfectly adequate on its own, so this is a
+    // "nice to have" rather than a bug.
     private fun pollGps() {
         val context = getApplication<Application>()
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==

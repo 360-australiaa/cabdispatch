@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import au.com.threesixty.cabdispatch.MainActivity
 import au.com.threesixty.cabdispatch.R
@@ -85,18 +86,24 @@ class MeterForegroundService : Service() {
      * meter back in place from the OPEN Room row before this runs.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundCompat(buildNotification(MeterController.instance?.state?.value))
+        // Read the controller once into a local val: two separate `MeterController.instance`
+        // reads (one for `.state`, one for `.scope`) could theoretically observe the singleton
+        // being torn down in between, which is exactly the race a `!!` on the second read would
+        // crash on. A single snapshot makes the null-check and the use of it consistent.
+        val controller = MeterController.instance
+        startForegroundCompat(buildNotification(controller?.state?.value))
         notificationJob?.cancel()
-        val state = MeterController.instance?.state
-        if (state != null) {
-            notificationJob = state
+        if (controller != null) {
+            notificationJob = controller.state
                 .onEach { fareState ->
                     // A running fare updates roughly once a second. Re-posting the same
                     // notification id simply replaces its content in place -- no sound, no
                     // re-alerting (setOnlyAlertOnce below), no notification-shade churn.
                     notificationManager().notify(NOTIFICATION_ID, buildNotification(fareState))
                 }
-                .launchIn(MeterController.instance!!.scope)
+                .launchIn(controller.scope)
+        } else {
+            Log.w(TAG, "onStartCommand: MeterController.instance is null; notification will not live-update")
         }
         return START_STICKY
     }
@@ -171,6 +178,7 @@ class MeterForegroundService : Service() {
     }
 
     companion object {
+        private const val TAG = "MeterForegroundService"
         private const val CHANNEL_ID = "meter_running"
         private const val NOTIFICATION_ID = 4201
 

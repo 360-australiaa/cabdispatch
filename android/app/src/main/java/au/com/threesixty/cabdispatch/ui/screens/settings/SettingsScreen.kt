@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.ui.screens.settings
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1306,7 +1307,14 @@ private fun formatMaxiPercent(multiplier: String): String {
  */
 @Composable
 private fun PairMeterContent(state: SettingsUiState, viewModel: SettingsViewModel, onBack: () -> Unit) {
-    val activity = LocalActivity.current!!
+    // This pane is only ever reached from within MainActivity's single-activity nav host, so
+    // LocalActivity.current is always present here in practice -- guarded rather than asserted so
+    // a future reuse of this composable outside that host degrades to "no scanner" instead of a crash.
+    val activity = LocalActivity.current
+    if (activity == null) {
+        Log.e("PairMeterContent", "LocalActivity.current is null; cannot host the QR scanner")
+        return
+    }
     var code by remember { mutableStateOf("") }
     val pairState = state.pairMeter
 

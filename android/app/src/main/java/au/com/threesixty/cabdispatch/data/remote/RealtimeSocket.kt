@@ -1,5 +1,6 @@
 package au.com.threesixty.cabdispatch.data.remote
 
+import android.util.Log
 import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
@@ -127,14 +128,25 @@ class RealtimeSocket(private val okHttpClient: OkHttpClient) {
                 }
             } catch (cancellation: kotlinx.coroutines.CancellationException) {
                 throw cancellation
-            } catch (ignored: Exception) {
-                // Connection failure -- fall through to the backoff delay below and retry.
+            } catch (e: Exception) {
+                // Deliberately broad (W7 audit, 2026-09-13): this loop's entire purpose is to
+                // survive and retry every way a socket connection can fail -- `okhttp3`'s
+                // `WebSocketListener.onFailure` hands back a bare `Throwable`/`IOException` for
+                // network faults, `connect`'s own `awaitClose`/`callbackFlow` machinery can
+                // surface `IllegalStateException` on a channel already closed, and a malformed
+                // frame can throw a serialization exception from a downstream collector chained
+                // onto this flow. Narrowing this catch would mean adding a new exception type here
+                // every time OkHttp or a caller changes what it throws, which is exactly the kind
+                // of coupling a "keep retrying, no matter what broke" loop should not have.
+                // CancellationException is re-thrown above so this never masks real cancellation.
+                Log.w(TAG, "reconnect loop: connection attempt failed, backing off and retrying", e)
             }
             if (isActive) delay(policy.nextDelayMillis())
         }
     }
 
     companion object {
+        private const val TAG = "RealtimeSocket"
         private const val NORMAL_CLOSURE_CODE = 1000
 
         /**

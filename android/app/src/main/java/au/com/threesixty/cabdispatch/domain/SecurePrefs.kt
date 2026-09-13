@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.io.IOException
+import java.security.GeneralSecurityException
 
 /**
  * Opens the app's durable credential stores as `EncryptedSharedPreferences`, migrating off the
@@ -91,10 +93,17 @@ object SecurePrefs {
     private fun openEncrypted(context: Context, name: String): SharedPreferences =
         try {
             build(context, name)
-        } catch (e: Exception) {
+        } catch (e: GeneralSecurityException) {
             // See "When the Keystore is unusable" above. Nothing here is recoverable by retrying
-            // as-is, so drop the undecryptable state and rebuild once.
-            Log.w(TAG, "Encrypted prefs '$name' unreadable; discarding and recreating", e)
+            // as-is, so drop the undecryptable state and rebuild once. GeneralSecurityException is
+            // what a corrupted/reset Keystore key surfaces as (MasterKey.Builder.build() and
+            // EncryptedSharedPreferences.create() both declare it); IOException below is the other
+            // declared failure (reading/writing the backing prefs file itself).
+            Log.w(TAG, "Encrypted prefs '$name' unreadable (keystore); discarding and recreating", e)
+            context.deleteSharedPreferences(name)
+            build(context, name)
+        } catch (e: IOException) {
+            Log.w(TAG, "Encrypted prefs '$name' unreadable (I/O); discarding and recreating", e)
             context.deleteSharedPreferences(name)
             build(context, name)
         }

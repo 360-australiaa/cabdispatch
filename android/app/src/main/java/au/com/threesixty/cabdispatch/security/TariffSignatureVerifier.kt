@@ -1,6 +1,8 @@
 package au.com.threesixty.cabdispatch.security
 
 import android.util.Base64
+import android.util.Log
+import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.Signature
@@ -69,9 +71,17 @@ class RsaTariffSignatureVerifier(
     override fun verify(payloadJson: String, signatureBase64: String): Boolean = try {
         val signatureBytes = Base64.decode(signatureBase64, Base64.DEFAULT)
         verifyBytes(payloadJson.toByteArray(Charsets.UTF_8), signatureBytes)
-    } catch (e: Exception) {
-        // Any parsing/format/crypto failure is treated as "not verified" —
-        // fail closed, never fail open on a malformed signature.
+    } catch (e: IllegalArgumentException) {
+        // Malformed Base64 (Base64.decode's own documented failure). Any parsing/format/crypto
+        // failure is treated as "not verified" — fail closed, never fail open on a malformed
+        // signature — but the cause is still worth a log line: a run of these on a real tenant's
+        // devices would mean the backend is sending a signature this decoder can't read.
+        Log.w(TAG, "RSA tariff signature verify: malformed input", e)
+        false
+    } catch (e: GeneralSecurityException) {
+        // Signature.initVerify/verify's declared failures (InvalidKeyException,
+        // SignatureException) — a wrong/corrupt key or a signature that doesn't even parse as one.
+        Log.w(TAG, "RSA tariff signature verify: crypto failure", e)
         false
     }
 
@@ -88,7 +98,13 @@ class RsaTariffSignatureVerifier(
         } else {
             null
         }
-    } catch (e: Exception) {
+    } catch (e: IllegalArgumentException) {
+        // Covers both the `require` above (wrong part count) and malformed Base64 in either
+        // decode call.
+        Log.w(TAG, "RSA tariff JWS verify: malformed input", e)
+        null
+    } catch (e: GeneralSecurityException) {
+        Log.w(TAG, "RSA tariff JWS verify: crypto failure", e)
         null
     }
 
@@ -109,6 +125,8 @@ class RsaTariffSignatureVerifier(
     }
 
     companion object {
+        private const val TAG = "RsaTariffSigVerifier"
+
         /**
          * *** PLACEHOLDER KEY — REPLACE BEFORE SHIPPING ***
          *
@@ -118,11 +136,14 @@ class RsaTariffSignatureVerifier(
          * dead code) — see the class doc's "verified against a real keypair"
          * note. It does NOT correspond to any backend signing key.
          *
-         * TODO: reconcile with backend/tariff-signing agent — swap this for
-         * the tenant's actual production public key, and strongly consider
-         * moving it out of source into a signed remote-config value instead
-         * of a compiled-in constant, since a hardcoded key can't be rotated
-         * without an app release.
+         * TODO(#w7-rsa-verifier-prod-key): this class is no longer the default binding (see the
+         * class doc — [Ed25519TariffSignatureVerifier] is what [AppContainer] actually constructs,
+         * against the backend's real Ed25519 signing key), so this placeholder is now exercised
+         * only by [RsaTariffSignatureVerifier]'s own unit tests, not by anything reachable in the
+         * app. Left open in case this class is ever revived as a real binding: swap this for the
+         * tenant's actual production RSA public key and consider moving it out of source into a
+         * signed remote-config value instead of a compiled-in constant, since a hardcoded key
+         * can't be rotated without an app release.
          */
         const val TENANT_TARIFF_PUBLIC_KEY_B64 =
             "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwb3qHsGzhe+EGwF6zL8r" +
@@ -163,7 +184,11 @@ class Ed25519TariffSignatureVerifier(publicKeyBase64: String) : TariffSignatureV
     override fun verify(payloadJson: String, signatureBase64: String): Boolean = try {
         val signatureBytes = Base64.decode(signatureBase64, Base64.DEFAULT)
         verifyBytes(payloadJson.toByteArray(Charsets.UTF_8), signatureBytes)
-    } catch (e: Exception) {
+    } catch (e: IllegalArgumentException) {
+        Log.w(TAG, "Ed25519 tariff signature verify: malformed input", e)
+        false
+    } catch (e: GeneralSecurityException) {
+        Log.w(TAG, "Ed25519 tariff signature verify: crypto failure", e)
         false
     }
 
@@ -180,7 +205,11 @@ class Ed25519TariffSignatureVerifier(publicKeyBase64: String) : TariffSignatureV
         } else {
             null
         }
-    } catch (e: Exception) {
+    } catch (e: IllegalArgumentException) {
+        Log.w(TAG, "Ed25519 tariff JWS verify: malformed input", e)
+        null
+    } catch (e: GeneralSecurityException) {
+        Log.w(TAG, "Ed25519 tariff JWS verify: crypto failure", e)
         null
     }
 
@@ -201,5 +230,9 @@ class Ed25519TariffSignatureVerifier(publicKeyBase64: String) : TariffSignatureV
         val keyBytes = Base64.decode(base64, Base64.DEFAULT)
         val spec = X509EncodedKeySpec(keyBytes)
         return KeyFactory.getInstance("Ed25519", provider).generatePublic(spec)
+    }
+
+    private companion object {
+        const val TAG = "Ed25519TariffSigVerifier"
     }
 }

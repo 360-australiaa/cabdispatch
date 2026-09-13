@@ -27,7 +27,7 @@ data class ShiftStartDto(
      * non-blocking cross-check against that device's paired vehicle (`fleet.Device.vehicle_id`) —
      * see [ShiftDto.deviceMismatchWarning]. Never blocks or alters the shift. Defaulted null so
      * this DTO still encodes fine for callers (offline-fallback path in
-     * [au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository]) that never read one. */
+     * [au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository]) that never read one. */
     @SerialName("device_android_id") val deviceAndroidId: String? = null,
 
     /**

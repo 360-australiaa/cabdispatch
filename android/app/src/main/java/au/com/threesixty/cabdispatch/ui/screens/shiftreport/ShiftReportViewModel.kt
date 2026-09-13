@@ -48,9 +48,11 @@ data class ShiftReportUiState(
  * submit"). Sourced entirely from local Room aggregates over
  * [TripEntity] rows for the active shift — works fully offline, per spec B7.
  *
- * TODO(S1/session sibling agent):
- * [au.com.threesixty.cabdispatch.domain.RemoteBackedShiftRepository] (used by
- * S1 to open a shift) currently only calls the live `POST /v1/shifts/start`
+ * TODO(#w7-shift-open-room-first): (class name corrected, W7 triage 2026-09-13 —
+ * this used to say `RemoteBackedShiftRepository`, which no longer exists; the shift-start
+ * repository is now [au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository])
+ * [au.com.threesixty.cabdispatch.domain.OutboxBackedShiftRepository] (used by
+ * S1 to open a shift) still only calls the live `POST /v1/shifts/start`
  * endpoint and never writes a [ShiftEntity] row — so
  * [au.com.threesixty.cabdispatch.data.local.dao.ShiftDao.observeActiveShift]
  * is unusable today (always empty). This screen therefore drives entirely
@@ -63,12 +65,19 @@ data class ShiftReportUiState(
  * this to observe `ShiftDao.observeActiveShift()` directly, the way S4 does
  * for trips.
  *
- * TODO(sync-engine sibling agent): [au.com.threesixty.cabdispatch.sync.OutboxDrainer]
- * currently only drains `entityType == OutboxEntityType.TRIP` rows — the
- * [OutboxEntityType.SHIFT] row [submitShift] queues below will sit
- * unprocessed in the outbox until the drainer is extended to handle it too.
- * Queuing it now (rather than not at all) means no data is lost once that
- * lands; it'll just be picked up retroactively.
+ * TODO(#w7-shift-close-outbox-drain): updated, W7 triage 2026-09-13 — the claim this used to
+ * make ("[OutboxDrainer] currently only drains `entityType == TRIP` rows") is now stale:
+ * [au.com.threesixty.cabdispatch.sync.OutboxDrainer.drainShifts] was added for the shift-*start*
+ * flow ([OutboxBackedShiftRepository]) and does now drain `entityType == OutboxEntityType.SHIFT`
+ * rows — but it unconditionally decodes them as `ShiftStartDto`. The [OutboxEntityType.SHIFT] row
+ * [submitShift] queues below is a *shift-close* payload (`ShiftSyncPayload`, a different shape),
+ * so it will fail to decode as `ShiftStartDto` and be dead-lettered on the very next drain pass
+ * instead of sitting harmlessly unprocessed as this comment used to promise. This needs a real
+ * fix in [au.com.threesixty.cabdispatch.sync.OutboxDrainer] (discriminate shift-open vs
+ * shift-close rows, e.g. by payload shape or a sub-type column, and post shift-close through its
+ * own endpoint) before shift totals/PSL reconciliation can be trusted to sync — flagged here
+ * rather than patched in this pass since it touches the shared outbox drain path multiple
+ * workstreams rely on.
  */
 class ShiftReportViewModel : ViewModel() {
 

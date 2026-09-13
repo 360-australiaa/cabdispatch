@@ -293,8 +293,11 @@ private fun JobOfferCard(
     val window = remember(card.offer.offeredAt, card.offer.expiresAt) {
         offerWindowSeconds(card.offer.offeredAt, card.offer.expiresAt)
     }
-    val remainingFraction = if (window != null && secondsLeft != null) {
-        (secondsLeft!!.toFloat() / window.toFloat()).coerceIn(0f, 1f)
+    // Local val instead of re-reading `secondsLeft` (a `by` delegate over a StateFlow-derived
+    // state) a second time via `!!` — the null-check and the use must see the same snapshot.
+    val secondsLeftNow = secondsLeft
+    val remainingFraction = if (window != null && secondsLeftNow != null) {
+        (secondsLeftNow.toFloat() / window.toFloat()).coerceIn(0f, 1f)
     } else {
         null
     }

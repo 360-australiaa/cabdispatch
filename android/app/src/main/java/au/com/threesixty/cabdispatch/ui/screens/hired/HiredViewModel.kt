@@ -389,9 +389,11 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         speechAnnouncer.shutdown()
         alertTone.shutdown()
-        // Unconditional clear: this VM instance is nav-scoped (recreated per trip, per this
-        // file's existing TODO on [fareEngine]) and normal navigation always tears the old
-        // instance down before a new one is created, so there is no real window where a newer
+        // Unconditional clear: this VM instance is nav-scoped (recreated per trip — see this
+        // class's own doc above on why the fare *engine* itself is process-scoped via
+        // [AppContainer.meterController] while this ViewModel is not) and normal navigation
+        // always tears the old instance down before a new one is created, so there is no real
+        // window where a newer
         // instance's [lastKnownFix] is live when this fires. If that assumption ever breaks
         // (e.g. two HiredViewModel instances briefly coexisting across a nav transition), the
         // failure mode is GPS relay silently stopping for an in-flight duress event until the

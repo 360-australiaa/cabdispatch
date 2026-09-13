@@ -24,11 +24,12 @@ interface TripStatsRepository {
 }
 
 /**
- * TODO(sync-engine sibling agent): replace with a real Room DAO aggregate
- * query once TripEntity/TripDao land — see
- * [au.com.threesixty.cabdispatch.data.local.AppDatabase]'s doc comment for
- * the registration steps. Stub returns a fixed zeroed flow so S2 renders
- * without crashing before that lands.
+ * W7 triage (2026-09-13): the TODO that used to sit here ("replace with a real Room DAO aggregate
+ * query once TripEntity/TripDao land") is stale — TripEntity/TripDao have long since landed, but
+ * the real fix that shipped instead was [RemoteTripStatsRepository] below, reading
+ * `GET /v1/trips/earnings/today` rather than a local aggregate (see that class's own doc for why
+ * a Room aggregate was never actually needed). Stub returns a fixed zeroed flow so a caller that
+ * intentionally binds it (tests/previews only — see below) renders without a network dependency.
  *
  * No longer the default binding — see [RemoteTripStatsRepository] below and
  * [AppContainer.tripStatsRepository]'s own doc. Kept (not deleted) as an explicit zeroed

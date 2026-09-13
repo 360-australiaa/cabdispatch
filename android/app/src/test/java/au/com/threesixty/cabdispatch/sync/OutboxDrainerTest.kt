@@ -88,12 +88,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.decodeFromString
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 import java.io.IOException
 
 /**
@@ -862,8 +866,14 @@ private class FakeApiService : ApiService {
         if (!networkUp) throw IOException("simulated offline")
         // Reachable, but refusing. Distinct from `networkUp = false` on purpose: S1 is about the
         // row the server ANSWERS about and rejects identically every time, which is what made
-        // unbounded retry so useless.
-        if (rejectAllTrips) throw IllegalStateException("422 unprocessable")
+        // unbounded retry so useless. A real Retrofit call throws `HttpException` for a non-2xx
+        // response (never a bare `IllegalStateException`, which this fake used to throw here
+        // before the W7 catch-narrowing pass -- OutboxDrainer.drainTrips now only catches the
+        // exception types a real `sendTrips` call can actually throw, so this fake must throw one
+        // of those to keep exercising the same "permanent rejection" scenario).
+        if (rejectAllTrips) {
+            throw HttpException(Response.error<Any>(422, "unprocessable".toResponseBody("application/json".toMediaTypeOrNull())))
+        }
         callLog += "syncTrips"
         callCount++
         tripPayloadLog += body

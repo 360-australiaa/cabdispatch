@@ -32,15 +32,22 @@ import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 /**
  * Nav rail `ZONES` pane (`squishy-herding-iverson.md` Phase F) — a real tabbed Heat Map / Zone
  * List / Surge Areas / Airport Queue screen. Before this pass, the rail's ZONES item opened a
- * two-button launcher ("Plot into a zone" / "Zone statistics") that navigated away to the two
- * standalone routes below; this pane folds their real content in as tabs instead, matching the
- * mockup's layout. [PlotZoneScreen]/[PlotZoneViewModel] and [ZoneStatisticsScreen]/
- * [ZoneStatisticsViewModel] are UNCHANGED and still reachable at their own standalone routes
- * (`CabDispatchRoutes.PLOT_ZONE`/`ZONE_STATISTICS`) — nothing currently live navigates to them
- * (those routes were only ever reached from this pane's old launcher buttons, plus dead legacy
- * dashboard code already unreferenced by `CabDispatchNavHost`), but a working screen is left in
- * place rather than deleted. Each tab below reuses those same ViewModels/composables rather than
- * re-implementing them — see each tab file's own doc.
+ * two-button launcher ("Plot into a zone" / "Zone statistics") that navigated away to two
+ * standalone screens/routes; this pane folds their real content in as tabs instead, matching the
+ * mockup's layout.
+ *
+ * Corrected, W7 dead-code audit (2026-09-13): this doc used to claim `PlotZoneScreen`/
+ * `ZoneStatisticsScreen` were unchanged standalone screens left in place at their own dead routes
+ * (`CabDispatchRoutes.PLOT_ZONE`/`ZONE_STATISTICS`, which no longer exist in
+ * `CabDispatchNavHost`/`CabDispatchRoutes` at all). That is stale: `PlotZoneScreen.kt` and
+ * `ZoneStatisticsScreen.kt` no longer define screen-shaped composables named that — they were
+ * repurposed, in place, into this exact tabbed pane's content
+ * ([PlotZoneScreen.kt][PlotZoneTabContent] → the ZONE_LIST tab below,
+ * [ZoneStatisticsScreen.kt][SurgeAreasTabContent] → the SURGE_AREAS tab, and
+ * [ZoneStatisticsScreen.kt][LastUpdatedChip] → [HeatMapTabContent]'s chip). Both files are live
+ * production code under their original (now slightly misleading) file names, not dead code to be
+ * deleted — each tab below reuses their composables/ViewModels rather than re-implementing them,
+ * see each tab file's own doc.
  *
  * **Surge multiplier**: computed client-side from real zone-stats data, never a fabricated field —
  * see [SurgeModel]'s doc for the exact formula and the design decision behind it.
