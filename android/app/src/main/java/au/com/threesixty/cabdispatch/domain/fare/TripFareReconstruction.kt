@@ -25,7 +25,7 @@ import java.math.RoundingMode
  * counters reproduces exactly what [FareEngine.tick] would have accumulated
  * live, tick-by-tick.
  *
- * TODO(#w7-fare-state-reconstruction): if a future TripRepository change persists the
+ * TODO(integration agent): if a future TripRepository change persists the
  * running FareState (or its two accrued totals) directly on TripEntity
  * instead of only distanceM/waitingS, prefer reading those fields over this
  * reconstruction — it exists only because they aren't there today.
