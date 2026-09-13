@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -167,6 +169,17 @@ internal fun CaptainHeader(
                 letterSpacing = 1.5.sp,
                 color = CaptainPalette.textPrimary,
                 maxLines = 1,
+                // Real bug: this Row is full-width with only two Modifier.weight(1f) Spacers either
+                // side of the centre availability pill to absorb slack -- Compose measures each of
+                // this Row's other (non-weighted) children against the Row's own full width, not the
+                // space actually left over, so an overlong string here has room to grow until it
+                // starts pushing the GPS/network/battery strip, the SOS control and the clock off
+                // the visible header rather than wrapping or clipping itself. operatorName is a
+                // fixed compile-time constant today (see TenantBranding's own doc) but is documented
+                // there as becoming a real tenant-editable field; bounding it now means that future
+                // change can't silently reintroduce this.
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 160.dp),
             )
             Column(
                 modifier = Modifier
@@ -182,6 +195,12 @@ internal fun CaptainHeader(
                         style = Type.h2,
                         color = CaptainPalette.textPrimary,
                         maxLines = 1,
+                        // Real bug: a real driver's full name has no length guarantee, and -- same
+                        // reasoning as the operator wordmark just above -- an unbounded Text here can
+                        // grow enough to push the SOS control and the clock off the visible header
+                        // instead of truncating itself. See this composable's SOS-safety note above.
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 220.dp),
                     )
                     // VERIFIED as a solid purple pill beside the name, as the reference draws it.
                     // Same real backend field and honesty rule as before: null/false (loading, or
@@ -220,6 +239,11 @@ internal fun CaptainHeader(
                     style = Type.mono,
                     color = CaptainPalette.textSecondary,
                     maxLines = 1,
+                    // Real bug: vehicleMakeModel is real backend data with no length guarantee (see
+                    // HomeExtras.vehicleMakeModel's own doc) -- same SOS-pushed-off-header risk as
+                    // the driver name above.
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 260.dp),
                 )
             }
             Spacer(Modifier.weight(1f))

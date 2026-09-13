@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -319,6 +320,14 @@ private fun AddressCard(
             fontWeight = FontWeight.Bold,
             fontSize = 28.sp,
             color = CaptainPalette.textPrimary,
+            // Real bug: a real pickup/destination address has no length guarantee, and this sits
+            // in a fixed 180dp-tall card (see AddressCard's own Column.height above) that clips its
+            // content -- an unbounded Text here would run a long real address straight off the
+            // bottom of the card with no ellipsis, mid-glyph. Same maxLines/overflow guard the
+            // sibling AddressCard in AvailableTripsWheelContent.kt already applies for the identical
+            // pickup/destination case.
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
