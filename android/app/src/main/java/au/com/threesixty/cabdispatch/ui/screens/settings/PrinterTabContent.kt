@@ -66,7 +66,15 @@ internal fun PrinterTabContent(state: SettingsUiState, viewModel: SettingsViewMo
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(device.name, fontFamily = InterFamily, fontSize = 16.sp, color = CaptainPalette.textPrimary)
+                        Text(
+                            device.name,
+                            fontFamily = InterFamily,
+                            fontSize = 16.sp,
+                            color = CaptainPalette.textPrimary,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(end = 12.dp),
+                        )
                         CaptainButton(
                             text = "PAIR",
                             heightDp = 56,

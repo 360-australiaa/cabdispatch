@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,7 +90,7 @@ fun TermsDisclaimerScreen(onAccept: () -> Unit) {
                 color = CaptainPalette.textSecondary,
                 modifier = Modifier.width(380.dp),
             )
-            Spacer(Modifier.padding(top = 16.dp))
+            Spacer(Modifier.height(16.dp))
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
@@ -128,7 +129,7 @@ fun TermsDisclaimerScreen(onAccept: () -> Unit) {
                     lineHeight = 26.sp,
                     color = CaptainPalette.textSecondary,
                 )
-                Spacer(Modifier.padding(top = 16.dp))
+                Spacer(Modifier.height(16.dp))
                 Text(
                     DISCLAIMER_PARA_2,
                     fontFamily = InterFamily,

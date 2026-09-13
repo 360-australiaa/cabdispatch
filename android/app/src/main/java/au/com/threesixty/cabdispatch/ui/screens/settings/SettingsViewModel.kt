@@ -349,13 +349,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         },
                     )
                 }
-                // HANDOFF.md: "MDM 'locate' command" — previously locate_requested was a
-                // backend-only flag nothing on the device acted on. Wired here, the one place this
-                // screen already reads it back. device.rebootRequested is deliberately NOT acted
-                // on (see DeviceDto's doc / backend HONESTY NOTE) — real OS reboot needs
-                // device-owner permissions this app doesn't hold, so it stays a backend-only queue.
-                if (device.locateRequested) {
-                }
+                // HANDOFF.md: "MDM 'locate' command" -- previously locate_requested was a
+                // backend-only flag nothing on the device acted on. The real answer now lives in
+                // DeviceCommandHeartbeat's own recurring loop (respondToLocateRequest there), not
+                // here -- this one-shot heartbeat call must not act on device.locateRequested a
+                // second time, or a single outstanding request would be answered twice (once
+                // here, once by that loop). This screen's own locateResponse state already comes
+                // from the shared collector above (see LocateOutcome.toScreenState's doc) --
+                // there used to be an empty if (device.locateRequested) block here that read the
+                // field and did nothing with it, while claiming, wrongly, to be the place this is
+                // wired; removed rather than left as dead code that misdescribes where this is
+                // actually handled. device.rebootRequested is deliberately NOT acted on (see
+                // DeviceDto's doc / backend HONESTY NOTE) -- real OS reboot needs device-owner
+                // permissions this app doesn't hold, so it stays a backend-only queue.
             }.onFailure { error ->
                 // 404 means the server has no such device -- not that it is unreachable. See
                 // ForceUpdateStatus.UNREGISTERED.
@@ -654,9 +660,5 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         private const val GPS_NETWORK_POLL_INTERVAL_MS = 4000L
-
-        /** See [respondToLocateRequest]'s doc on why this is a fixed placeholder rather than a
-         * real availability status. */
-        private const val LOCATE_RESPONSE_STATUS = "unknown"
     }
 }
