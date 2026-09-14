@@ -93,6 +93,11 @@ fun InertialDiagnosticsPanel(modifier: Modifier = Modifier) {
                 }
             },
         )
+        Spacer(Modifier.height(8.dp))
+        // Technician escape hatch (2026-09-14 bench finding: a persisted axis learned from bogus
+        // events drove the dial the wrong way through a whole tunnel). Drops the learned frame AND
+        // its persisted copy; the heading seed takes over on the next moving fix.
+        ResetCalibrationButton(onReset = { AppContainer.vehicleFrameCalibrator.invalidate() })
         AppContainer.imuTraceRecorder.lastRecordingFile?.let { file ->
             Spacer(Modifier.height(8.dp))
             Text(
@@ -150,6 +155,29 @@ private fun RecordTraceButton(recording: Boolean, onToggle: () -> Unit) {
             fontWeight = FontWeight.Bold,
             fontSize = 13.sp,
             color = if (recording) CaptainPalette.danger else CaptainPalette.textPrimary,
+        )
+    }
+}
+
+// FunctionNaming: see InertialDiagnosticsPanel's own suppress comment above.
+@Suppress("FunctionNaming")
+@Composable
+private fun ResetCalibrationButton(onReset: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(CaptainPalette.raised)
+            .clickable(onClick = onReset)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            "RESET MOTION CALIBRATION",
+            fontFamily = InterFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = CaptainPalette.textPrimary,
         )
     }
 }

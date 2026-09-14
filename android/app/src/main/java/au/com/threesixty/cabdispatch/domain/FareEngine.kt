@@ -657,6 +657,7 @@ class FareEngineImpl(
         waitingSecondsAccum = 0.0
         lastTickFix = null
         lastKnownSpeedKmh = 0.0
+        releaseInertialBlackoutIfOpen()
         blackoutEntryFix = null
         blackoutEntryWasMoving = false
         blackoutSegmentId = null
@@ -1020,9 +1021,31 @@ class FareEngineImpl(
 
     override fun close(): FareState {
         tickJob?.cancel()
+        releaseInertialBlackoutIfOpen()
         _state.value = _state.value.copy(status = TripStatus.CLOSED)
         return _state.value
     }
+
+    /**
+     * Bench finding, Karachi tablet, 2026-09-14: a fare closed while a blackout was still open
+     * (the meter ended inside a tunnel / car park, or the simulator was stopped and the fix went
+     * stale) left [inertialSpeedSource] believing the blackout never ended -- its shadow-mode
+     * reseeding (speed from live GPS, forward axis from the live heading) stayed switched off for
+     * the rest of the process, so the About-tab diagnostics read "Not yet calibrated" and the
+     * residual evidence froze. The engine's own blackout fields were reset by [startTrip] without
+     * the source ever hearing about it. Every path that drops an open blackout without resolving
+     * it now releases the source too; [InertialSpeedSource.onBlackoutExited] is idempotent, so a
+     * blackout that WAS resolved through [tick] is unaffected by the second call.
+     */
+    private fun releaseInertialBlackoutIfOpen() {
+        if (!inertialBlackoutOpen) return
+        inertialBlackoutOpen = false
+        inertialSpeedSource?.onBlackoutExited()
+    }
+
+    /** True between [tick]'s `onBlackoutEntered` and whichever path next releases the source
+     * (resolution in [tick], [close], or [startTrip]'s reset) -- see [releaseInertialBlackoutIfOpen]. */
+    private var inertialBlackoutOpen = false
 
     /**
      * Starts (or restarts, after [resume]) the accrual loop.
@@ -1247,6 +1270,7 @@ class FareEngineImpl(
                 // W2 task 4's "Seed at blackout start" -- same entry fix/speed the corridor
                 // catch-up above already captured, one seed shared by both mechanisms.
                 inertialSpeedSource?.onBlackoutEntered(lastKnownSpeedKmh, previousFix?.heading, previousFix)
+                inertialBlackoutOpen = true
             }
             null
         } else if (blackoutEntryFix != null) {
@@ -1274,7 +1298,7 @@ class FareEngineImpl(
                 blackoutInertialEngaged = false
                 blackoutInertialInvalidatedMidway = false
                 blackoutLastConfidence = null
-                inertialSpeedSource?.onBlackoutExited()
+                releaseInertialBlackoutIfOpen()
             }
         } else {
             null

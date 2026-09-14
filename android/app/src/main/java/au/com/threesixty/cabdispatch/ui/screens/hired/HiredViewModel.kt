@@ -16,6 +16,8 @@ import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ToneGeneratorAlertTone
 import au.com.threesixty.cabdispatch.domain.SpeechPriority
+import au.com.threesixty.cabdispatch.domain.SpeedCameraType
+import au.com.threesixty.cabdispatch.domain.fare.upcomingSpeedCamera
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
 import au.com.threesixty.cabdispatch.domain.TripContext
@@ -65,7 +67,8 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * step 3) so it doesn't replay on every recomposition or if this screen
      * is ever re-entered without a fresh trip hand-off.
      */
-    val isNewTripStart: Boolean = SessionHolder.pendingTrip.value != null
+    val isNewTripStart: Boolean =
+        SessionHolder.pendingTrip.value != null && AppContainer.meterController.activeClientUuid == null
 
     /**
      * One-shot consume gate for the "METER STARTED" banner [isNewTripStart] gates — real bug,
@@ -152,6 +155,11 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      * for why it deliberately does NOT honour [speechEnabled] the way the spoken alert below does. */
     private val alertTone: AlertTone = ToneGeneratorAlertTone()
     private var lastAnnouncedDollar = -1
+    private var lastAnnouncedSpeedCameraId: Int? = null
+
+    private companion object {
+        const val SPEED_CAMERA_MIN_MOVING_KMH = 5.0
+    }
 
     // --- Room persistence (integration pass) ---
     //
@@ -175,7 +183,14 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
         AppContainer.duressController.locationProvider = ::lastKnownFix
 
         val tripContext = SessionHolder.pendingTrip.value
-        if (tripContext != null) {
+        // Bench finding, Karachi tablet, 2026-09-14: the BACK key on a running fare popped this
+        // screen (allowed since A4), and the next METER tap built a new HiredViewModel that found
+        // SessionHolder.pendingTrip still set from the ORIGINAL start and ran startTrip() again --
+        // the live fare reset to the flagfall (7.8 km of tunnel distance gone from the dial), and a
+        // second OPEN TripEntity row was opened beside the still-open original, which the
+        // dashboard later surfaced as an "orphaned fare" straight into Close & Pay. A meter that is
+        // already running is a RE-ENTRY, never a new start, whatever pendingTrip still holds.
+        if (tripContext != null && AppContainer.meterController.activeClientUuid == null) {
             // Opens the Room row and starts the process-scoped meter against it. The
             // `fareState.onEach { ... }` Room-persistence subscription that used to be launched here on
             // viewModelScope has moved into MeterController along with the engine — see that
@@ -234,6 +249,40 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             .launchIn(viewModelScope)
+
+        watchSpeedCameras()
+    }
+
+    /**
+     * "Speed camera ahead" (owner request, 2026-09-14): one beep + one spoken line per camera as
+     * the vehicle comes within [au.com.threesixty.cabdispatch.domain.fare.SPEED_CAMERA_LOOKAHEAD_M]
+     * of it on the current heading -- the same bundled list and pure advisor the map chip in
+     * MeterBackdropMap draws from, so what is heard and what is shown can never disagree. Keyed on
+     * the camera id so a chip flickering at the 700 m edge never re-alerts; a NEW camera ahead
+     * alerts even if the previous one is still (just) in range.
+     */
+    private fun watchSpeedCameras() {
+        viewModelScope.launch {
+            val cameras = runCatching { AppContainer.speedCameraRegistry.cameras() }.getOrDefault(emptyList())
+            if (cameras.isEmpty()) return@launch
+            AppContainer.speedSource.locationFix
+                .map { fix ->
+                    // Same standstill rule as the map chip: no bearing of travel while parked.
+                    val heading = fix?.heading?.takeIf { fix.speedKmh >= SPEED_CAMERA_MIN_MOVING_KMH }
+                    fix?.let { upcomingSpeedCamera(cameras, it.lat, it.lng, heading) }
+                }
+                .distinctUntilChanged { old, new -> old?.id == new?.id }
+                .collect { ahead ->
+                    if (ahead == null || ahead.id == lastAnnouncedSpeedCameraId) return@collect
+                    lastAnnouncedSpeedCameraId = ahead.id
+                    alertTone.tollDetected()
+                    if (_speechEnabled.value) {
+                        val redLight = ahead.type == SpeedCameraType.RED_LIGHT_SPEED
+                        val kind = if (redLight) "Red light speed camera" else "Speed camera"
+                        speechAnnouncer.announce("$kind ahead, ${ahead.name}", SpeechPriority.TOLL_ALERT)
+                    }
+                }
+        }
     }
 
     private fun openTripInRoom(tripContext: TripContext) {
@@ -394,6 +443,9 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             SessionHolder.clearLiveTrip()
+            // The hand-off context has done its job; a later METER tap with no meter running must
+            // never find it and open a phantom fare from it (see init's re-entry guard).
+            SessionHolder.clearPendingTrip()
             onClosed()
         }
     }

@@ -626,6 +626,9 @@ object AppContainer {
      * decorative markers; unlike every cache above, never by the fare engine. */
     val trafficCache by lazy { TrafficCache(trafficCameraDao, trafficHazardDao, apiService) }
 
+    /** Bundled NSW speed-camera list -- see [SpeedCameraRegistry]. */
+    val speedCameraRegistry by lazy { SpeedCameraRegistry(appContext) }
+
     /**
      * Fire-and-forget toll-registry refresh — T2 (architecture audit 2026-09-08, §2.3).
      *
@@ -767,7 +770,12 @@ object AppContainer {
      * previous shift survives this container's own lifetime.
      */
     val imuSampler: au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler by lazy {
-        au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler(appContext)
+        au.com.threesixty.cabdispatch.domain.location.inertial.ImuSampler(appContext).also { sampler ->
+            // Bench-test wiring: synthetic accelerometer/gyro while (and only while) the GPS
+            // simulator drives a route -- see SimulatedImu's own doc for why this can never touch a
+            // real fare.
+            sampler.synthetic = au.com.threesixty.cabdispatch.domain.location.inertial.SimulatedImu(gpsSimulator)
+        }
     }
 
     val vehicleFrameCalibrator: au.com.threesixty.cabdispatch.domain.location.inertial.VehicleFrameCalibrator by lazy {

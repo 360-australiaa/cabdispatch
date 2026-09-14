@@ -89,13 +89,37 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
     // ReturnCount: guard-clause style, same accepted pattern as trackConfirmingWindow above.
     @Suppress("ReturnCount")
     fun seedFromHeading(sample: ImuSample, headingDeg: Double): Boolean {
-        val current = _calibration.value
-        if (current != null && current.quality == CalibrationQuality.GOOD) return false
         val forward = HeadingSeed.forwardAxisInTabletFrame(sample.rotationVector, headingDeg) ?: return false
+        val current = _calibration.value
+        if (current != null && current.quality == CalibrationQuality.GOOD) {
+            // Bench finding, Karachi tablet, 2026-09-14: a GOOD, persisted axis that had been
+            // learned from bogus confirming events (screen taps landing during simulated speed
+            // changes -- "18 of 4" events, all agreeing with each other, none with the road)
+            // integrated the tunnel deceleration with the sign flipped: the dial climbed to the
+            // 110 km/h cap while the car was slowing to 54. The seed is physics (platform
+            // orientation + a real GPS bearing); a learned axis that keeps pointing the wrong way
+            // relative to it is wrong, however self-consistent it was. Sustained disagreement
+            // -- not a single noisy fix -- discards it, and the seed takes over.
+            if (angleBetweenDeg(forward, current.forwardTablet) > MAX_SEED_DISAGREEMENT_DEG) {
+                seedDisagreements += 1
+                if (seedDisagreements >= SEED_DISAGREEMENTS_TO_INVALIDATE) {
+                    invalidate()
+                    seededForward = forward
+                    recomputeCalibration()
+                    seedDisagreements = 0
+                    return true
+                }
+            } else {
+                seedDisagreements = 0
+            }
+            return false
+        }
         seededForward = forward
         recomputeCalibration()
         return true
     }
+
+    private var seedDisagreements = 0
 
     fun onGpsSpeedSample(speedKmh: Double, nowNanos: Long) {
         val prevSpeed = lastGpsSpeedKmh
@@ -152,6 +176,12 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
 
         val sign = if (pendingSpeedChange >= 0) 1.0 else -1.0 // GPS speed rising ⇒ this IS forward
         val unit = doubleArrayOf(sign * horizontal[0] / mag, sign * horizontal[1] / mag, sign * horizontal[2] / mag)
+        // Same 2026-09-14 finding as seedFromHeading's GOOD branch, applied at the source: while a
+        // heading seed exists, a confirming event pointing more than MAX_SEED_DISAGREEMENT_DEG away
+        // from it is not evidence of the vehicle's forward axis (a tap on the screen, a phone
+        // dropped on the mount, a passenger's knee) and never enters the average.
+        val seed = seededForward
+        if (seed != null && angleBetweenDeg(unit, seed) > MAX_SEED_DISAGREEMENT_DEG) return
         confirmingDirections += unit
         recomputeCalibration()
     }
@@ -293,6 +323,15 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
          * frozen tunnel speed -- the 15deg spread test is what actually guards quality, and it
          * is unchanged. */
         const val MIN_CALIBRATION_EVENTS = 4
+
+        /** How far a confirming event, or a persisted learned axis, may point away from the
+         * physics-derived heading seed before it is treated as noise (event) or wrong (axis). Wide
+         * enough for mount tilt and a noisy bearing, well short of the 180° a sign flip is. */
+        const val MAX_SEED_DISAGREEMENT_DEG = 60.0
+
+        /** Consecutive seeds (2 s apart while moving -- see InertialSpeedSource) that must disagree
+         * with a GOOD axis before it is discarded: ~10 s of steady driving, never one bad fix. */
+        const val SEED_DISAGREEMENTS_TO_INVALIDATE = 5
         const val MAX_ANGULAR_SPREAD_DEG = 15.0
 
         /** Task 3: "invalidates ... if the rotation vector shows the tablet's orientation relative

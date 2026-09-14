@@ -312,4 +312,42 @@ class FareEngineImplInertialBlackoutTest {
             resolved.estimatedDistanceKm,
         )
     }
+
+    @Test
+    fun `closing a fare mid-blackout releases the inertial source so the next fare shadow-seeds`() = runTest {
+        // Bench finding, Karachi tablet, 2026-09-14: the About-tab diagnostics read "Not yet
+        // calibrated" for the whole of a fresh fare because a PREVIOUS fare had been closed while
+        // GPS was lost -- the engine reset its own blackout fields without telling the inertial
+        // source, which stayed in "blackout" mode (no shadow reseeding) for the rest of the process.
+        val inertial = FakeInertialBillingSource()
+        val gps = FakeMeterGps(60.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
+            inertialSpeedSource = inertial,
+            inertialBillingEnabled = true,
+        )
+        engine.startTrip(urbanTariffDto(), startLat = ENTRY_LAT, startLng = ENTRY_LNG)
+        gps.emitFixAt(testScheduler.currentTime, ENTRY_LAT, ENTRY_LNG)
+        advanceOneTickWithNoNewFix()
+        gps.goDark()
+        repeat(8) { advanceOneTickWithNoNewFix() } // blackout declared, never resolved
+        assertEquals("the blackout must have been declared to the source", 60.0, inertial.enteredSpeedKmh)
+        assertEquals(0, inertial.exitedCount)
+
+        engine.close() // meter ended underground
+        assertEquals("close() must release the open blackout", 1, inertial.exitedCount)
+
+        // A second fare started straight after must not release it AGAIN (nothing is open now) --
+        // and, symmetrically, a fare that was never closed but simply restarted must release once.
+        engine.startTrip(urbanTariffDto(), startLat = ENTRY_LAT, startLng = ENTRY_LNG)
+        assertEquals(1, inertial.exitedCount)
+        gps.emitFixAt(testScheduler.currentTime, ENTRY_LAT, ENTRY_LNG)
+        advanceOneTickWithNoNewFix()
+        gps.goDark()
+        repeat(8) { advanceOneTickWithNoNewFix() }
+        engine.startTrip(urbanTariffDto(), startLat = ENTRY_LAT, startLng = ENTRY_LNG) // restarted mid-blackout
+        assertEquals("startTrip over an open blackout must release it too", 2, inertial.exitedCount)
+    }
 }

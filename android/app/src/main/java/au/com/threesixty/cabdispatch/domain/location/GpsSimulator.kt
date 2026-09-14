@@ -51,6 +51,20 @@ class GpsSimulator(private val scope: CoroutineScope) {
     private val _finished = MutableStateFlow(false)
     private var finishedAtMillis: Long? = null
 
+    /**
+     * The route's TRUE motion this tick -- published on every tick, INCLUDING blackout ticks that
+     * withhold the GPS fix -- for [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .SimulatedImu] to synthesise accelerometer/gyro samples from. Bench testing only: this is
+     * what lets a tablet sitting on a desk in Karachi exercise the tunnel dead-reckoning path
+     * (seeded axis -> integration -> estimated position) end to end. `null` whenever no route is
+     * running, so the IMU falls straight back to the real sensors.
+     */
+    private val _kinematics = MutableStateFlow<SimKinematics?>(null)
+    val kinematics: StateFlow<SimKinematics?> = _kinematics.asStateFlow()
+    private var lastKinematicsSpeedKmh: Double? = null
+    private var lastKinematicsBearingDeg: Double? = null
+    private var lastKinematicsElapsedS: Double? = null
+
     /** The route being driven, or null when the simulator is off. */
     val route: StateFlow<SimulatedRoute?> = _route.asStateFlow()
 
@@ -87,6 +101,7 @@ class GpsSimulator(private val scope: CoroutineScope) {
             while (isActive) {
                 val elapsedSeconds = (System.currentTimeMillis() - startedAt) / 1000.0
                 val position = route.positionAt(elapsedSeconds)
+                publishKinematics(route, position, elapsedSeconds)
 
                 // GPS blackout (2026-09-12, W1): inside one of the route's own blackoutWindows,
                 // publish NOTHING -- not a frozen copy of the last fix, an actual skip -- so
@@ -167,10 +182,42 @@ class GpsSimulator(private val scope: CoroutineScope) {
      * real GPS is what restores real position (see [SwitchableSpeedSource]), and blanking the
      * fix here would briefly show "no GPS" on a device that has perfectly good GPS.
      */
+    private fun publishKinematics(route: SimulatedRoute, position: RoutePosition, elapsedSeconds: Double) {
+        val speedKmh = if (position.finished) 0.0 else route.speedAt(elapsedSeconds)
+        val bearing = position.bearingDegrees
+        val prevSpeed = lastKinematicsSpeedKmh
+        val prevBearing = lastKinematicsBearingDeg
+        val prevElapsed = lastKinematicsElapsedS
+        val dt = if (prevElapsed != null) elapsedSeconds - prevElapsed else 0.0
+        val accel = if (prevSpeed != null && dt > 0.0) (speedKmh - prevSpeed) / KMH_PER_MPS / dt else 0.0
+        val yawRate = if (prevBearing != null && dt > 0.0) {
+            var delta = bearing - prevBearing
+            while (delta > HALF_TURN_DEG) delta -= FULL_TURN_DEG
+            while (delta < -HALF_TURN_DEG) delta += FULL_TURN_DEG
+            Math.toRadians(delta) / dt
+        } else {
+            0.0
+        }
+        lastKinematicsSpeedKmh = speedKmh
+        lastKinematicsBearingDeg = bearing
+        lastKinematicsElapsedS = elapsedSeconds
+        _kinematics.value = SimKinematics(
+            speedKmh = speedKmh,
+            bearingDeg = bearing,
+            forwardAccelMps2 = accel,
+            yawRateRadPerS = yawRate,
+            blackout = route.isBlackoutAt(elapsedSeconds),
+        )
+    }
+
     fun stop() {
         job?.cancel()
         job = null
         finishedAtMillis = null
+        _kinematics.value = null
+        lastKinematicsSpeedKmh = null
+        lastKinematicsBearingDeg = null
+        lastKinematicsElapsedS = null
         _speedKmh.value = 0.0
         _activeState.value = false
         _route.value = null
@@ -197,6 +244,9 @@ class GpsSimulator(private val scope: CoroutineScope) {
         fun isSimulating(): Boolean = simulating
 
         const val TICK_INTERVAL_MS = 1_000L
+        private const val KMH_PER_MPS = 3.6
+        private const val HALF_TURN_DEG = 180.0
+        private const val FULL_TURN_DEG = 360.0
         /** How long a finished route stays parked before the simulator releases the meter. */
         const val FINISHED_GRACE_MS = 20_000L
 
@@ -254,3 +304,12 @@ class SwitchableSpeedSource(
         }
     }
 }
+
+/** One tick of a simulated route's true motion -- see [GpsSimulator.kinematics]. */
+data class SimKinematics(
+    val speedKmh: Double,
+    val bearingDeg: Double,
+    val forwardAccelMps2: Double,
+    val yawRateRadPerS: Double,
+    val blackout: Boolean,
+)

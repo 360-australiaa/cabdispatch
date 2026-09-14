@@ -154,7 +154,10 @@ class InertialSpeedSource(
     // ReturnCount: guard-clause style, same accepted pattern as VehicleFrameCalibrator's own methods.
     @Suppress("ReturnCount")
     private fun maybeReseedFromHeading(sample: ImuSample) {
-        if (calibrator.calibration.value?.quality == CalibrationQuality.GOOD) return
+        // No GOOD early-return here (removed 2026-09-14): the calibrator itself decides what a
+        // seed means for a GOOD axis -- it is the ONLY evidence that can retire a persisted axis
+        // learned from bogus events (see VehicleFrameCalibrator.seedFromHeading), and skipping the
+        // call while GOOD kept that guard from ever firing on the bench.
         if (sample.timestampNanos - lastHeadingSeedNanos < HEADING_SEED_INTERVAL_NANOS) return
         val heading = real.locationFix.value?.heading ?: return
         if (real.speedKmh.value < HEADING_SEED_MIN_SPEED_KMH) return

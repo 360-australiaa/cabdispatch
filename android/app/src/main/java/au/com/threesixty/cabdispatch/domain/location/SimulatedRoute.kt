@@ -35,6 +35,9 @@ import kotlin.math.sin
  * form. Pure Kotlin and unit-tested, because a wrong integral would put the simulated taxi in the
  * wrong place rather than merely at the wrong speed.
  */
+private const val INVERSE_STEP_S = 0.25
+private const val INVERSE_SEARCH_TAIL_S = 3600.0
+
 data class SpeedProfile(val segments: List<Segment>) {
     /** One ramp: [durationS] seconds moving linearly from [fromKmh] to [toKmh]. A hold is a
      * segment whose two speeds are equal. */
@@ -69,6 +72,17 @@ data class SpeedProfile(val segments: List<Segment>) {
     }
 
     /** Metres covered by [elapsedS] — the integral of [speedAt], segment by segment. */
+    /** Inverse of [distanceM]: the first elapsed second (to [INVERSE_STEP_S] resolution) at which
+     * the profile has covered [targetM]. Small numeric search rather than a closed form -- the
+     * profile is piecewise-linear in speed, i.e. piecewise-quadratic in distance, and the routes
+     * are a few minutes long, so a 0.25s walk is a few hundred iterations at most. */
+    fun elapsedAtDistanceM(targetM: Double): Double {
+        var t = 0.0
+        val limit = totalDurationS + INVERSE_SEARCH_TAIL_S
+        while (t < limit && distanceM(t) < targetM) t += INVERSE_STEP_S
+        return t
+    }
+
     fun distanceM(elapsedS: Double): Double {
         var t = elapsedS.coerceAtLeast(0.0)
         var total = 0.0
@@ -473,21 +487,47 @@ object SimulatedRoutes {
 
         val leadIn = leadInBefore(listOf(eastPortal, westPortal))
         val waypoints = listOf(leadIn, eastPortal, westPortal)
+        val mps = speedKmh / 3.6
+        val leadInM = haversineM(leadIn, eastPortal)
+        val tunnelM = haversineM(eastPortal, westPortal)
+
+        // A real speed change INSIDE the blackout (2026-09-14, bench-testing the accelerometer
+        // path): cruise in at [speedKmh], slow to [slowKmh] for a stretch mid-tunnel, back up to
+        // [speedKmh] and out. With SimulatedImu feeding the matching acceleration, the dial has to
+        // visibly follow this underground -- a meter that merely held the entry speed (the first
+        // real Sydney drive's failure) reads wrong for the whole middle of the tunnel.
+        val slowKmh = speedKmh * SLOW_FRACTION
+        val slowDownM = SpeedProfile.Segment(SPEED_CHANGE_S, speedKmh, slowKmh).distanceM
+        val slowM = SpeedProfile.Segment(SLOW_HOLD_S, slowKmh, slowKmh).distanceM
+        val speedUpM = SpeedProfile.Segment(SPEED_CHANGE_S, slowKmh, speedKmh).distanceM
+        val marginM = BLACKOUT_MARGIN_S * mps
+        val entryCruiseM = tunnelM * ENTRY_CRUISE_FRACTION
+        val exitCruiseM = tunnelM - entryCruiseM - slowDownM - slowM - speedUpM
+        require(exitCruiseM > marginM) { "LCT too short for the mid-tunnel speed change at $speedKmh km/h" }
+        val profile = SpeedProfile(
+            listOf(
+                SpeedProfile.Segment((leadInM + entryCruiseM) / mps, speedKmh, speedKmh),
+                SpeedProfile.Segment(SPEED_CHANGE_S, speedKmh, slowKmh),
+                SpeedProfile.Segment(SLOW_HOLD_S, slowKmh, slowKmh),
+                SpeedProfile.Segment(SPEED_CHANGE_S, slowKmh, speedKmh),
+                SpeedProfile.Segment(exitCruiseM / mps, speedKmh, speedKmh),
+            ),
+        )
         val route = SimulatedRoute(
             id = "blackout:lane_cove_tunnel",
             name = "GPS blackout — Lane Cove Tunnel",
             description = "A real tunnel run through the cached Lane Cove Tunnel gantries: GPS " +
-                "drops entirely for the ~7km underground crossing and returns at the far portal. " +
-                "Confirms no distance accrues during the gap and the known-corridor catch-up " +
-                "bills the real tunnel length once on reacquisition.",
+                "drops entirely for the ~7km underground crossing and returns at the far portal, " +
+                "with a real slow-down to ${slowKmh.toInt()} km/h mid-tunnel. Confirms the dial " +
+                "keeps a live accelerometer speed through the gap and the tunnel is billed on " +
+                "reacquisition.",
             waypoints = waypoints,
             speedKmh = speedKmh,
+            speedProfile = profile,
         )
 
-        val leadInDurationS = haversineM(leadIn, eastPortal) / (speedKmh / 3.6)
-        val tunnelDurationS = haversineM(eastPortal, westPortal) / (speedKmh / 3.6)
-        val blackoutStartS = leadInDurationS + BLACKOUT_MARGIN_S
-        val blackoutEndS = leadInDurationS + tunnelDurationS - BLACKOUT_MARGIN_S
+        val blackoutStartS = profile.elapsedAtDistanceM(leadInM + marginM)
+        val blackoutEndS = profile.elapsedAtDistanceM(leadInM + tunnelM - marginM)
         require(blackoutStartS < blackoutEndS) {
             "LCT portal separation too short for a $BLACKOUT_MARGIN_S s margin on both ends " +
                 "at $speedKmh km/h -- widen the margin down or drive it faster"
@@ -499,6 +539,13 @@ object SimulatedRoutes {
     /** Seconds of live GPS kept on each side of a blackout window, for a moving baseline before
      * loss and a real reacquisition after -- see [laneCoveTunnelBlackout]'s own doc. */
     private const val BLACKOUT_MARGIN_S = 6.0
+
+    /** Mid-tunnel slow-down for the LCT bench route: to 60% of cruise (54 km/h at 90), over 20s,
+     * held 40s, back up over 20s, starting a quarter of the way in. */
+    private const val SLOW_FRACTION = 0.6
+    private const val SPEED_CHANGE_S = 20.0
+    private const val SLOW_HOLD_S = 40.0
+    private const val ENTRY_CRUISE_FRACTION = 0.25
 
     /**
      * A GPS blackout while the vehicle is genuinely stationary -- an underground car park, not a

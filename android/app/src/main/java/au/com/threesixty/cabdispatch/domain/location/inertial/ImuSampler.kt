@@ -58,6 +58,16 @@ class ImuSampler(private val context: Context) {
     val isRunning: Boolean
         get() = handlerThread != null
 
+    /**
+     * Bench-test hook: when set AND it returns a sample, the published [ImuSample] carries ITS
+     * linear-acceleration/gyro vectors instead of the real sensors' (gravity and the rotation
+     * vector stay real -- they describe how the tablet is mounted, which is exactly what the
+     * synthesis has to respect). Production wiring is [SimulatedImu], which returns `null` -- real
+     * sensors -- whenever the GPS simulator is not driving a route, so a real fare can never see
+     * a fabricated sample: the simulator already marks every such trip `simulated`.
+     */
+    @Volatile var synthetic: SyntheticImuSource? = null
+
     fun start() {
         if (isRunning) return
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
@@ -94,12 +104,16 @@ class ImuSampler(private val context: Context) {
         val publisher = object : Runnable {
             override fun run() {
                 if (!isRunning) return // stop() may have already torn this down on another thread
+                val now = System.nanoTime()
+                val gravity = latestGravity
+                val rotation = latestRotationVector
+                val fake = synthetic?.synthesize(now, gravity, rotation)
                 _samples.value = ImuSample(
-                    timestampNanos = System.nanoTime(),
-                    linearAccelerationMps2 = latestLinearAccel,
-                    gravityMps2 = latestGravity,
-                    gyroscopeRadPerS = latestGyro,
-                    rotationVector = latestRotationVector,
+                    timestampNanos = now,
+                    linearAccelerationMps2 = fake?.linearAccelerationMps2 ?: latestLinearAccel,
+                    gravityMps2 = gravity,
+                    gyroscopeRadPerS = fake?.gyroscopeRadPerS ?: latestGyro,
+                    rotationVector = rotation,
                 )
                 threadHandler.postDelayed(this, PUBLISH_INTERVAL_MS)
             }
@@ -145,3 +159,12 @@ class ImuSampler(private val context: Context) {
         private val DOWN_VECTOR = floatArrayOf(0f, 0f, 9.81f)
     }
 }
+
+/** See [ImuSampler.synthetic]. */
+fun interface SyntheticImuSource {
+    /** `null` = "use the real sensors for this sample". */
+    fun synthesize(nowNanos: Long, gravityMps2: FloatArray, rotationVector: FloatArray): SyntheticImuSample?
+}
+
+/** The two vectors a [SyntheticImuSource] fabricates; gravity/rotation always stay real. */
+class SyntheticImuSample(val linearAccelerationMps2: FloatArray, val gyroscopeRadPerS: FloatArray)

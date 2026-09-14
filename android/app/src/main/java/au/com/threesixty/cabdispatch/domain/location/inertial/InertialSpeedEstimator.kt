@@ -126,10 +126,7 @@ class InertialSpeedEstimator {
         // what it is FOR: the magnitude itself must also be small (this sample, not just its
         // variance) -- a genuine stop has both a near-zero reading AND a steady one; steady cruise
         // has only the second.
-        val isZupt = accelMagnitude < ZUPT_ACCEL_MAGNITUDE_THRESHOLD &&
-            windowVariance(accelMagnitudeWindow) < ZUPT_ACCEL_VARIANCE_THRESHOLD &&
-            (gyroMagnitudeWindow.lastOrNull()?.second ?: 0.0) < ZUPT_GYRO_THRESHOLD_RAD_S &&
-            accelMagnitudeWindow.size >= MIN_ZUPT_WINDOW_SAMPLES
+        val isZupt = isZeroVelocity(accelMagnitude)
 
         if (isZupt) {
             vEstMps = 0.0
@@ -151,6 +148,25 @@ class InertialSpeedEstimator {
         if (lowConfidenceSeconds > UNRELIABLE_AFTER_SECONDS) latchedUnreliable = true
 
         return snapshot(calibrationGood = calibration.quality == CalibrationQuality.GOOD)
+    }
+
+    /** Task 4's ZUPT (zero-velocity update) decision for the current sample -- see the body's own
+     * comments for each clause. Extracted from [step] purely for its complexity budget. */
+    private fun isZeroVelocity(accelMagnitude: Double): Boolean {
+        val quietWindow = accelMagnitude < ZUPT_ACCEL_MAGNITUDE_THRESHOLD &&
+            windowVariance(accelMagnitudeWindow) < ZUPT_ACCEL_VARIANCE_THRESHOLD &&
+            (gyroMagnitudeWindow.lastOrNull()?.second ?: 0.0) < ZUPT_GYRO_THRESHOLD_RAD_S &&
+            accelMagnitudeWindow.size >= MIN_ZUPT_WINDOW_SAMPLES
+        // Bench finding, Karachi tablet, 2026-09-14 (Lane Cove Tunnel route): a quiet window is
+        // NOT proof of a stop. Light road vibration (|a| ~0.2-0.3 m/s^2, low variance) at a steady
+        // 90 km/h cruise satisfied every clause above, the ZUPT zeroed the speed the moment GPS
+        // dropped, and the meter spent the whole tunnel at 0 km/h billing waiting time. A vehicle
+        // cannot come to rest from cruising speed without a sustained deceleration this integrator
+        // would have seen -- so a quiet window only counts as a stop when the integrated speed is
+        // already near zero, OR when the window is at the sensor's own stillness floor (a level a
+        // moving car's mount never holds for a full window: engine + road always exceed it).
+        return quietWindow &&
+            (vEstMps < ZUPT_SPEED_GATE_MPS || windowMax(accelMagnitudeWindow) < ZUPT_STILLNESS_FLOOR_MPS2)
     }
 
     /** The highest speed this estimator will ever report — task 4's bound: the GPS speed at the
@@ -196,6 +212,17 @@ class InertialSpeedEstimator {
          * the variance figure at all, so the very first couple of samples after a [seed] cannot
          * spuriously fire a ZUPT off a near-empty window. */
         private const val MIN_ZUPT_WINDOW_SAMPLES = 10
+
+        /** See the `isZupt` computation: the ordinary quiet-window ZUPT is trusted only once the
+         * integrated speed is already this low (~14 km/h -- a real stop's final roll-out, with room
+         * for the drift a few seconds of free-run accumulates). */
+        private const val ZUPT_SPEED_GATE_MPS = 4.0
+
+        /** ...or when the whole 1.5 s window sits at the sensor's stillness floor. A stationary
+         * tablet's TYPE_LINEAR_ACCELERATION reads well under 0.1 m/s^2; a moving vehicle's mount
+         * does not hold under this for a full window. Sized above the floor, below light road
+         * vibration. */
+        private const val ZUPT_STILLNESS_FLOOR_MPS2 = 0.12
 
         /** Task 4 bounds: `|aForward| <= 4 m/s^2` — anything larger is mount vibration, clamped. */
         private const val MAX_FORWARD_ACCEL_MPS2 = 4.0
@@ -259,6 +286,9 @@ internal fun pushWindowed(window: ArrayDeque<Pair<Long, Double>>, timestampNanos
     val cutoff = timestampNanos - (ZUPT_WINDOW_SECONDS * NANOS_PER_SECOND_LONG).toLong()
     while (window.isNotEmpty() && window.first().first < cutoff) window.removeFirst()
 }
+
+internal fun windowMax(window: ArrayDeque<Pair<Long, Double>>): Double =
+    window.maxOfOrNull { it.second } ?: Double.MAX_VALUE
 
 internal fun windowVariance(window: ArrayDeque<Pair<Long, Double>>): Double {
     if (window.size < 2) return Double.MAX_VALUE // an under-full window must never look like a ZUPT

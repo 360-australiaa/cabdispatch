@@ -200,7 +200,14 @@ private fun rememberNowTick(runningKey: Any?): State<Long> =
  * will eventually show).
  */
 private fun gpsLostPillText(blackout: ActiveBlackout, nowMillis: Long): String {
-    val suffix = if (blackout.entryWasMoving) "no charge yet" else "waiting only"
+    // Since the 2026-09-14 owner decision the meter keeps billing through a blackout off the
+    // tablet's own motion sensors whenever an estimate exists -- "no charge yet" would then be a
+    // lie to the passenger. Say what is actually happening.
+    val suffix = when {
+        blackout.estimatedSpeedKmh != null -> "sensor speed"
+        blackout.entryWasMoving -> "no charge yet"
+        else -> "waiting only"
+    }
     return "GPS LOST ${blackoutElapsedLabel(blackout.startedAtIso, nowMillis)} · $suffix"
 }
 

@@ -156,4 +156,67 @@ class VehicleFrameCalibratorTest {
 
         assertNull(calibrator.calibration.value)
     }
+
+    // --- 2026-09-14 bench finding: the heading seed polices the learned axis ------------------
+
+    /** Seeds heading 90 (east) with a zero rotation vector: the tablet frame IS the world frame,
+     * so the seeded forward axis is +x = [accelAtAngleDeg] 0°. */
+    private fun seedEast(calibrator: VehicleFrameCalibrator) {
+        assertTrue(calibrator.seedFromHeading(imuSample(0L, floatArrayOf(0f, 0f, 0f)), headingDeg = 90.0))
+        assertEquals(CalibrationQuality.SEEDED, calibrator.calibration.value?.quality)
+    }
+
+    @Test
+    fun confirmingEvents_thatDisagreeWithTheSeed_areNotEvidence() {
+        val calibrator = newCalibrator()
+        seedEast(calibrator)
+        // Eight "events" pointing straight backwards (a screen tap during every speed change) --
+        // before the guard these made a GOOD calibration with a sign-flipped axis.
+        feedConfirmingEvents(calibrator, List(8) { 180.0 })
+        val c = calibrator.calibration.value!!
+        assertEquals("nothing may be learned from events pointing away from the seed", 0, c.confirmingEventCount)
+        assertEquals(CalibrationQuality.SEEDED, c.quality)
+        assertEquals(1.0, c.forwardTablet[0], 1e-6)
+    }
+
+    @Test
+    fun confirmingEvents_nearTheSeed_stillLearnAGoodAxis() {
+        val calibrator = newCalibrator()
+        seedEast(calibrator)
+        feedConfirmingEvents(calibrator, listOf(5.0, -5.0, 8.0, -8.0))
+        val c = calibrator.calibration.value!!
+        assertEquals(CalibrationQuality.GOOD, c.quality)
+        assertEquals(VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS, c.confirmingEventCount)
+    }
+
+    @Test
+    fun aGoodAxisThatKeepsDisagreeingWithTheSeed_isDiscardedForTheSeed() {
+        val calibrator = newCalibrator()
+        // Learned (no seed yet) pointing WEST -- the persisted bogus axis of the bench finding.
+        feedConfirmingEvents(calibrator, listOf(180.0, 178.0, 182.0, 180.0))
+        assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
+
+        // Now real driving: the seed says EAST. One disagreement is not enough...
+        repeat(VehicleFrameCalibrator.SEED_DISAGREEMENTS_TO_INVALIDATE - 1) {
+            assertEquals(false, calibrator.seedFromHeading(imuSample(0L, floatArrayOf(0f, 0f, 0f)), headingDeg = 90.0))
+        }
+        assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
+        // ...a sustained one is.
+        assertTrue(calibrator.seedFromHeading(imuSample(0L, floatArrayOf(0f, 0f, 0f)), headingDeg = 90.0))
+        val c = calibrator.calibration.value!!
+        assertEquals(CalibrationQuality.SEEDED, c.quality)
+        assertEquals(0, c.confirmingEventCount)
+        assertEquals("the seed's own east axis is now in force", 1.0, c.forwardTablet[0], 1e-6)
+    }
+
+    @Test
+    fun aGoodAxisThatAgreesWithTheSeed_isKept() {
+        val calibrator = newCalibrator()
+        feedConfirmingEvents(calibrator, listOf(0.0, 3.0, -3.0, 2.0)) // east
+        assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
+        repeat(VehicleFrameCalibrator.SEED_DISAGREEMENTS_TO_INVALIDATE + 2) {
+            calibrator.seedFromHeading(imuSample(0L, floatArrayOf(0f, 0f, 0f)), headingDeg = 90.0)
+        }
+        assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
+    }
 }

@@ -49,7 +49,11 @@ import au.com.threesixty.cabdispatch.domain.TrafficCamera
 import au.com.threesixty.cabdispatch.domain.TrafficHazard
 import au.com.threesixty.cabdispatch.domain.TrafficHazardCategories
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
+import au.com.threesixty.cabdispatch.domain.SpeedCamera
+import au.com.threesixty.cabdispatch.domain.SpeedCameraType
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingHazard
+import au.com.threesixty.cabdispatch.domain.fare.UpcomingSpeedCamera
+import au.com.threesixty.cabdispatch.domain.fare.upcomingSpeedCamera
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingToll
 import au.com.threesixty.cabdispatch.domain.fare.upcomingHazard
 import au.com.threesixty.cabdispatch.domain.fare.upcomingToll
@@ -286,6 +290,18 @@ internal fun MeterBackdropMap(
     }
     var displayedUpcomingHazard by remember { mutableStateOf<UpcomingHazard?>(null) }
     LaunchedEffect(upcomingHazardAhead) { if (upcomingHazardAhead != null) displayedUpcomingHazard = upcomingHazardAhead }
+    // Speed cameras (owner request, 2026-09-14) -- bundled TfNSW list, same "ahead" advisory
+    // pattern as tolls/hazards; the audible/spoken alert lives in HiredViewModel next to the
+    // toll beep, this file only ever draws.
+    val speedCameras = rememberSpeedCameras()
+    val upcomingCameraAhead = remember(speedCameras, vehicle, liveFix?.heading) {
+        // A parked vehicle's stale bearing must not keep a "camera ahead" chip lit at the kerb.
+        vehicle?.let { v -> upcomingSpeedCamera(speedCameras, v.lat, v.lng, liveFix?.movingHeading()) }
+    }
+    var displayedUpcomingCamera by remember { mutableStateOf<UpcomingSpeedCamera?>(null) }
+    LaunchedEffect(upcomingCameraAhead) {
+        if (upcomingCameraAhead != null) displayedUpcomingCamera = upcomingCameraAhead
+    }
     LaunchedEffect(upcoming) { if (upcoming != null) displayedUpcoming = upcoming }
     val markerBitmaps = rememberTrafficMarkerBitmaps()
 
@@ -381,6 +397,14 @@ internal fun MeterBackdropMap(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Speed camera first: the one a driver must act on within seconds.
+            AnimatedVisibility(
+                visible = upcomingCameraAhead != null,
+                enter = fadeIn(tween(TOLL_CHIP_FADE_MS)),
+                exit = fadeOut(tween(TOLL_CHIP_FADE_MS / 2)),
+            ) {
+                displayedUpcomingCamera?.let { SpeedCameraAheadChip(it) }
+            }
             AnimatedVisibility(
                 visible = upcomingHazardAhead != null,
                 enter = fadeIn(tween(TOLL_CHIP_FADE_MS)),
@@ -407,11 +431,13 @@ internal fun MeterBackdropMap(
     // timer — decorative markers redraw when there is new data or the view has moved, nothing
     // else. deleteAll + recreate, same cost/shape as the lines+circles effect above: a handful of
     // markers per screen (filtered to the visible bounds below), nowhere near expensive.
-    LaunchedEffect(mapReady, cameraFramed, trafficOverlay, followKey, hasPlannedRoute) {
+    LaunchedEffect(mapReady, cameraFramed, trafficOverlay, speedCameras, followKey, hasPlannedRoute) {
         val holder = mapHolder.value ?: return@LaunchedEffect
         if (!mapReady) return@LaunchedEffect
         holder.markers.deleteAll()
-        if (trafficOverlay.cameras.isEmpty() && trafficOverlay.hazards.isEmpty()) return@LaunchedEffect
+        val nothingToDraw =
+            trafficOverlay.cameras.isEmpty() && trafficOverlay.hazards.isEmpty() && speedCameras.isEmpty()
+        if (nothingToDraw) return@LaunchedEffect
 
         // The map's own real current viewport, not a guessed radius — see this file's class doc
         // for why "roughly the visible bounds" means asking Mapbox rather than assuming a fixed
@@ -434,6 +460,21 @@ internal fun MeterBackdropMap(
         fun withinView(lat: Double, lng: Double) = lat in south..north && lng in west..east
 
         val options = buildList {
+            // Speed cameras (TfNSW list) -- a line-published camera draws one marker per vertex
+            // in view, so the enforced tunnel length reads as a chain rather than one dot.
+            speedCameras.forEach { camera ->
+                val points = camera.path ?: listOf(camera.latitude to camera.longitude)
+                points.filter { (lat, lng) -> withinView(lat, lng) }.forEach { (lat, lng) ->
+                    add(
+                        PointAnnotationOptions()
+                            .withPoint(Point.fromLngLat(lng, lat))
+                            .withIconImage(
+                                if (camera.type == SpeedCameraType.RED_LIGHT_SPEED) markerBitmaps.redLightSpeedCamera
+                                else markerBitmaps.speedCamera,
+                            ),
+                    )
+                }
+            }
             trafficOverlay.cameras.filter { withinView(it.latitude, it.longitude) }.forEach { camera ->
                 add(
                     PointAnnotationOptions()
@@ -825,6 +866,63 @@ private fun rememberTollRegistrySnapshot(): TollRegistrySnapshot {
     return snapshot
 }
 
+/** The bundled NSW speed-camera list, loaded once per composition of the map panel -- see
+ * [au.com.threesixty.cabdispatch.data.SpeedCameraRegistry]. */
+@Composable
+private fun rememberSpeedCameras(): List<SpeedCamera> {
+    var cameras by remember { mutableStateOf<List<SpeedCamera>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        cameras = runCatching { AppContainer.speedCameraRegistry.cameras() }.getOrDefault(emptyList())
+    }
+    return cameras
+}
+
+/** "Speed camera ahead" -- danger-red glow (this is the one advisory with a fine attached),
+ * distance rounded to 50 m so it doesn't flicker digit-by-digit, school zone / tunnel called out
+ * because both change what the limit is likely to be. Same [GlassCard] shape as the two chips
+ * below it; informational only, never a tap target. */
+// FunctionNaming: PascalCase is the Jetpack Compose convention for a @Composable, as everywhere in this file.
+@Suppress("FunctionNaming")
+@Composable
+private fun SpeedCameraAheadChip(upcoming: UpcomingSpeedCamera) {
+    GlassCard(cornerRadiusDp = 14, glow = CaptainPalette.danger) {
+        Column(
+            modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                buildString {
+                    val redLight = upcoming.type == SpeedCameraType.RED_LIGHT_SPEED
+                    val kind = if (redLight) "Red-light speed camera" else "Speed camera"
+                    append(kind)
+                    append(" ahead — ")
+                    append(roundToFiftyMetres(upcoming.distanceAheadM)).append(" m")
+                },
+                fontFamily = InterFamily,
+                fontWeight = FontWeight.SemiBold,
+                style = Type.tiny,
+                color = CaptainPalette.textPrimary,
+            )
+            Text(
+                buildString {
+                    append(upcoming.name)
+                    if (upcoming.schoolZone) append(" · school zone")
+                    if (upcoming.tunnel) append(" · tunnel")
+                },
+                fontFamily = InterFamily,
+                style = Type.tiny,
+                color = CaptainPalette.textSecondary,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
+private const val CHIP_DISTANCE_STEP_M = 50
+
+private fun roundToFiftyMetres(metres: Double): Int =
+    ((metres / CHIP_DISTANCE_STEP_M).roundToInt() * CHIP_DISTANCE_STEP_M).coerceAtLeast(CHIP_DISTANCE_STEP_M)
+
 /** Calm, non-interactive "toll ahead" advisory — see [MeterBackdropMap]'s class doc for the
  * one-shot fade-in/out this is always shown through, never on its own clock. Plain [GlassCard]
  * (this kit's one floating-over-map surface), warm amber glow to read as an advisory without
@@ -938,6 +1036,8 @@ private fun hazardCategoryLabel(category: String): String = when (category) {
 private class TrafficMarkerBitmaps(
     val camera: Bitmap,
     val hazardByCategory: Map<String, Bitmap>,
+    val speedCamera: Bitmap,
+    val redLightSpeedCamera: Bitmap,
 )
 
 /**
@@ -976,6 +1076,12 @@ private fun rememberTrafficMarkerBitmaps(): TrafficMarkerBitmaps {
         TrafficMarkerBitmaps(
             camera = buildCameraMarkerBitmap(density, cameraRing, cameraBody, cameraIris, cameraPupil),
             hazardByCategory = hazardByCategory,
+            // Speed cameras: same lens motif as the CCTV marker so it reads as "a camera", but a
+            // danger-red ring (fixed) / amber ring (red-light) -- the one marker family on this
+            // map a driver is fined by, so it must not look like the harmless traffic-CCTV dot.
+            speedCamera = buildCameraMarkerBitmap(density, hazardSevereFill, cameraBody, cameraIris, hazardSevereFill),
+            redLightSpeedCamera =
+                buildCameraMarkerBitmap(density, hazardCautionFill, cameraBody, cameraIris, hazardSevereFill),
         )
     }
 }
@@ -1152,3 +1258,9 @@ private fun glyphPathFor(category: String, d: Int, r: Float): android.graphics.P
         close()
     }
 }
+
+/** The fix's bearing only while the vehicle is actually moving -- a bearing at a standstill is
+ * whatever the receiver (or the GPS simulator's parked route) last had, not a direction of travel. */
+private fun LocationFix.movingHeading(): Double? = if (speedKmh >= MOVING_HEADING_MIN_KMH) heading else null
+
+private const val MOVING_HEADING_MIN_KMH = 5.0

@@ -26,9 +26,10 @@ class InertialSpeedEstimatorTest {
         forwardAccel: Float = 0f,
         gravity: FloatArray = floatArrayOf(0f, 0f, 9.81f),
         gyroZ: Float = 0f,
+        verticalAccel: Float = 0f,
     ) = ImuSample(
         timestampNanos = nanos,
-        linearAccelerationMps2 = floatArrayOf(forwardAccel, 0f, 0f),
+        linearAccelerationMps2 = floatArrayOf(forwardAccel, 0f, verticalAccel),
         gravityMps2 = gravity,
         gyroscopeRadPerS = floatArrayOf(0f, 0f, gyroZ),
         rotationVector = floatArrayOf(0f, 0f, 0f),
@@ -182,5 +183,61 @@ class InertialSpeedEstimatorTest {
         }
 
         assertEquals(0.0, last.speedKmh, 0.001)
+    }
+
+    @Test
+    fun cruiseWithLightRoadVibration_neverZuptsFromCruisingSpeed() {
+        // Bench finding, 2026-09-14 (Lane Cove Tunnel route on the Karachi tablet): ~0.2 m/s^2 of
+        // vertical road vibration at a steady 90 km/h is under the 0.3 magnitude threshold and has
+        // low variance, so the old rule zeroed the speed the instant GPS dropped. A car cannot stop
+        // from 90 without a deceleration this integrator would have seen.
+        val estimator = InertialSpeedEstimator()
+        estimator.seed(speedKmh = 90.0, headingDegOrNull = 0.0)
+
+        var t = 0L
+        var last = estimator.step(sample(t, verticalAccel = 0.2f), goodCalibration)
+        repeat(40) {
+            t += 100_000_000L
+            last = estimator.step(sample(t, verticalAccel = if (it % 2 == 0) 0.2f else -0.2f), goodCalibration)
+        }
+
+        assertEquals("cruising speed must survive a quiet window", 90.0, last.speedKmh, 0.001)
+        assertEquals(0, last.zuptCount)
+    }
+
+    @Test
+    fun quietWindow_stillZupts_onceTheIntegratedSpeedIsNearZero() {
+        // The gate must not break the real stop: rolled down to ~10 km/h with the same light
+        // vibration present, a quiet window IS a stop.
+        val estimator = InertialSpeedEstimator()
+        estimator.seed(speedKmh = 10.0, headingDegOrNull = 0.0)
+
+        var t = 0L
+        var last = estimator.step(sample(t, verticalAccel = 0.2f), goodCalibration)
+        repeat(20) {
+            t += 100_000_000L
+            last = estimator.step(sample(t, verticalAccel = if (it % 2 == 0) 0.2f else -0.2f), goodCalibration)
+        }
+
+        assertEquals(0.0, last.speedKmh, 0.001)
+        assertTrue(last.zuptCount > 0)
+    }
+
+    @Test
+    fun trueStillnessFloor_zuptsEvenIfTheIntegratedSpeedDriftedHigh() {
+        // An estimate that drifted (say a missed brake) must still be corrected when the sensors
+        // read a genuinely stationary tablet -- the stillness floor is the escape hatch.
+        val estimator = InertialSpeedEstimator()
+        estimator.seed(speedKmh = 60.0, headingDegOrNull = 0.0)
+
+        var t = 0L
+        var last = estimator.step(sample(t, forwardAccel = 0.01f), goodCalibration)
+        repeat(20) {
+            t += 100_000_000L
+            last = estimator.step(sample(t, forwardAccel = 0.01f), goodCalibration)
+        }
+
+        assertEquals(0.0, last.speedKmh, 0.001)
+        assertTrue(last.zuptCount > 0)
     }
 }
