@@ -1144,16 +1144,36 @@ class FareEngineImpl(
         // (about a second) delay before inertial billing can ever engage, traded deliberately for
         // never having to reorder this method's existing, already-verified F1-F3 sequencing.
         //
-        // [BuildConfig.INERTIAL_BILLING_ENABLED] gates ALL of it: off (the default, owner gate G3
-        // not yet cleared), this block is always false and every line below behaves byte-identical
-        // to pre-W2 code -- [inertialSpeedSource] may still be wired (for shadow-mode residual
-        // logging, [BuildConfig.INERTIAL_SHADOW_ENABLED]) without ever being billed against.
+        // [BuildConfig.INERTIAL_BILLING_ENABLED] gates ALL of it: off, this block is always false
+        // and every line below behaves byte-identical to pre-W2 code -- [inertialSpeedSource] may
+        // still be wired (for shadow-mode residual logging, [BuildConfig.INERTIAL_SHADOW_ENABLED])
+        // without ever being billed against.
+        //
+        // DIRECT OWNER DECISION (2026-09-14): `inertialUsable` used to also require
+        // `inertialEstimate.calibrationGood && !inertialEstimate.unreliable &&
+        // inertialEstimate.confidence != InertialConfidence.LOW` -- i.e. only bill off the estimate
+        // once [VehicleFrameCalibrator] had learned this specific tablet's mounted orientation from
+        // >= 8 real GPS-confirmed events, and only for as long as the estimator's own error budget
+        // stayed within its MEDIUM/HIGH bands, giving up for the rest of the blackout after 120s of
+        // sustained low confidence. The owner asked for the opposite trade explicitly, after being
+        // told what it costs: never let the meter sit at a flat number through a blackout, even on
+        // a tablet that has never been calibrated at all. So now:
+        //  - BEFORE calibration completes, [InertialSpeedEstimator.step] itself still refuses to
+        //    integrate raw accelerometer samples against an unknown forward axis (see that
+        //    function's own doc) -- so what actually gets billed here is a bounded CONSTANT-SPEED
+        //    dead-reckoning at whatever `lastKnownSpeedKmh` was the instant GPS was lost (capped by
+        //    the estimator's own `seedSpeedMps + 30 km/h` ceiling), not a live reading of the
+        //    accelerometer. This is a deliberate, bounded guess, not a frozen zero.
+        //  - AFTER calibration completes (automatic, typically within minutes of ordinary driving,
+        //    persisted per device from then on), this becomes a genuine, continuously-updating
+        //    accelerometer/gyroscope speed estimate, exactly as W2 originally designed it.
+        //  - The 120s "give up on a bad estimate" latch and the LOW-confidence cutoff no longer
+        //    apply either way -- once inertial billing engages for a blackout, it stays engaged for
+        //    the rest of it. Restore the three dropped clauses above (and flip
+        //    `INERTIAL_BILLING_ENABLED` back to `false` in app/build.gradle.kts) to fully revert to
+        //    the original, more conservative G3-gated behaviour.
         val inertialEstimate = if (gpsLost && blackoutEntryFix != null) inertialSpeedSource?.estimate?.value else null
-        val inertialUsable = inertialBillingEnabled &&
-            inertialEstimate != null &&
-            inertialEstimate.calibrationGood &&
-            !inertialEstimate.unreliable &&
-            inertialEstimate.confidence != InertialConfidence.LOW
+        val inertialUsable = inertialBillingEnabled && inertialEstimate != null
 
         // The speed the accrual decision is actually made on. While GPS is lost we never claim
         // motion: a vehicle we cannot see is either stationary (bill waiting), estimated (W2's

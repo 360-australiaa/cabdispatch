@@ -284,14 +284,20 @@ android {
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
 
         // W2 (inertial dead-reckoning through a GPS blackout, 2026-09-12, owner gate G3): billing
-        // against the tablet's own gyroscope/accelerometer estimate stays OFF until the owner has
-        // reviewed >= 3 real drives' shadow-mode residual evidence (see
+        // against the tablet's own gyroscope/accelerometer estimate originally stayed OFF here
+        // until the owner reviewed >= 3 real drives' shadow-mode residual evidence (see
         // `domain/location/inertial/InertialSpeedEstimator.kt`'s doc and the plan's W2 task 9/
-        // acceptance criteria) and flips this in a one-line PR citing that evidence. Shadow mode
-        // itself (the estimator running and logging residuals, never billing) stays ON by default
-        // so that evidence exists to review in the first place -- it costs nothing extra the
-        // estimator was not already going to spend once a hiring is open.
-        buildConfigField("boolean", "INERTIAL_BILLING_ENABLED", "false")
+        // acceptance criteria) and flipped this in a one-line PR citing that evidence.
+        //
+        // FLIPPED ON by direct owner decision (2026-09-14), ahead of that evidence gate — a real
+        // product call, not an engineering one: the owner explicitly chose "never let the meter
+        // sit idle through a blackout" over "wait for proven-accurate shadow-mode residuals first",
+        // after being told what that trades away (see FareEngineImpl.kt#tick's own doc, right
+        // where `inertialUsable` is computed, for exactly what is and is not still guarded once
+        // this flag is on). Revert to `false` to restore the original G3 gate if that evidence
+        // review still needs to happen before this ships to every driver, not just the one this
+        // was turned on for.
+        buildConfigField("boolean", "INERTIAL_BILLING_ENABLED", "true")
         buildConfigField("boolean", "INERTIAL_SHADOW_ENABLED", "true")
     }
 

@@ -218,7 +218,16 @@ class FareEngineImplInertialBlackoutTest {
     }
 
     @Test
-    fun `estimator invalidating mid-blackout resolves UNCALIBRATED and applies no further correction`() = runTest {
+    fun `DIRECT OWNER DECISION 2026-09-14 - losing calibration mid-blackout no longer stops accrual`() = runTest {
+        // This test used to be named "estimator invalidating mid-blackout resolves UNCALIBRATED
+        // and applies no further correction", and asserted the opposite of what it asserts now --
+        // see FareEngineImpl.kt#tick's `inertialUsable` doc for the full "why". The owner explicitly
+        // chose to never let the meter go flat through a blackout again, even once an estimate has
+        // stopped being calibrated/confident, over the previous, more conservative "give up and
+        // bill nothing further" behaviour this test used to lock in. `calibrationGood` flipping to
+        // false mid-blackout (tablet disturbed in its mount, or simply never calibrated in the
+        // first place) no longer matters to `inertialUsable` at all -- only whether an estimate
+        // exists and the master flag is on.
         val inertial = FakeInertialBillingSource()
         val gps = FakeMeterGps(80.0)
         val engine = FareEngineImpl(
@@ -230,39 +239,38 @@ class FareEngineImplInertialBlackoutTest {
         )
         engine.startTrip(urbanTariffDto(), startLat = -33.87, startLng = 151.21)
 
+        // A short chord, same shape as the CHORD_BOUNDED test above: entry and exit only ~50m
+        // apart, but the estimate claims a much larger distance was covered.
+        val exitLat = -33.8704
+        val exitLng = 151.21
+
         gps.emitFixAt(testScheduler.currentTime, ENTRY_LAT, ENTRY_LNG)
         advanceOneTickWithNoNewFix()
         gps.goDark()
         repeat(6) { advanceOneTickWithNoNewFix() } // ages the last fix past MAX_FIX_AGE_MS
-        val distanceAtBlackoutStart = engine.state.value.distanceKm
 
         inertial.publish(usableEstimate(speedKmh = 80.0))
         repeat(5) { advanceOneTickWithNoNewFix() }
-        val billedBeforeInvalidation = engine.state.value.distanceKm
+        val billedBeforeCalibrationLoss = engine.state.value.distanceKm
 
-        // Calibration lost mid-blackout (tablet disturbed in its mount) -- falls back to the W1
-        // rule (bills nothing more while moving) for the rest of the blackout.
+        // Calibration lost mid-blackout (tablet disturbed in its mount) -- must NOT stop accrual.
         inertial.publish(usableEstimate(speedKmh = 80.0).copy(calibrationGood = false))
         repeat(10) { advanceOneTickWithNoNewFix() }
 
-        assertEquals(
-            "nothing more should accrue once calibration is lost mid-blackout",
-            billedBeforeInvalidation.toDouble(),
-            engine.state.value.distanceKm.toDouble(),
-            0.001,
+        assertTrue(
+            "distance must keep accruing off the estimate even once calibrationGood is false",
+            engine.state.value.distanceKm.toDouble() > billedBeforeCalibrationLoss.toDouble() + 0.001,
         )
 
-        gps.emitFixAt(testScheduler.currentTime, EXIT_LAT, EXIT_LNG)
+        gps.emitFixAt(testScheduler.currentTime, exitLat, exitLng)
         advanceOneTickWithNoNewFix()
 
         val resolved = engine.state.value.lastResolvedBlackout!!
-        assertEquals("UNCALIBRATED", resolved.resolution)
-        assertNull("an UNCALIBRATED segment is never reconciled against a reference", resolved.referenceSource)
         assertEquals(
-            "billed must equal exactly what was already billed tick-by-tick, no correction on top",
-            (billedBeforeInvalidation - distanceAtBlackoutStart).toDouble(),
-            resolved.billedDistanceKm.toDouble(),
-            0.05,
+            "inertial billing engaged and stayed engaged -- this is a real INERTIAL segment, " +
+                "never UNCALIBRATED, regardless of calibrationGood mid-blackout",
+            "INERTIAL",
+            resolved.resolution,
         )
     }
 
