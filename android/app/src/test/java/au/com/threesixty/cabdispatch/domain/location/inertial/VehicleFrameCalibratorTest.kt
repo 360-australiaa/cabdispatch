@@ -86,7 +86,10 @@ class VehicleFrameCalibratorTest {
     fun minEventsWithTightSpread_reachesGood() {
         val calibrator = newCalibrator()
         // All within a couple of degrees of 0 -- well under the 15 deg bar.
-        feedConfirmingEvents(calibrator, listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5))
+        feedConfirmingEvents(
+            calibrator,
+            listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5).take(VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS),
+        )
 
         val result = calibrator.calibration.value
         assertNotNull(result)
@@ -97,7 +100,7 @@ class VehicleFrameCalibratorTest {
     @Test
     fun minEventsWithWideSpread_staysLearning() {
         val calibrator = newCalibrator()
-        // Spread well past the 15 deg bar (0..70 deg across 8 events).
+        // Spread well past the 15 deg bar (0..70 deg across MIN_CALIBRATION_EVENTS events).
         val angles = (0 until VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS).map { it * 10.0 }
         feedConfirmingEvents(calibrator, angles)
 
@@ -107,7 +110,10 @@ class VehicleFrameCalibratorTest {
     @Test
     fun mountDisturbance_invalidatesAGoodCalibration() {
         val calibrator = newCalibrator()
-        feedConfirmingEvents(calibrator, listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5))
+        feedConfirmingEvents(
+            calibrator,
+            listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5).take(VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS),
+        )
         assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
 
         // Cools down `pendingSpeedChange` from the 8th confirming event's own GPS jump -- without
@@ -140,7 +146,10 @@ class VehicleFrameCalibratorTest {
     @Test
     fun invalidate_clearsCalibrationAndConfirmingHistory() {
         val calibrator = newCalibrator()
-        feedConfirmingEvents(calibrator, listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5))
+        feedConfirmingEvents(
+            calibrator,
+            listOf(0.0, 1.0, 2.0, -1.0, 0.5, -0.5, 1.5, -1.5).take(VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS),
+        )
         assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
 
         calibrator.invalidate()

@@ -68,6 +68,10 @@ class InertialSpeedSource(
     val residualStats: StateFlow<ResidualStats?> = _residualStats.asStateFlow()
 
     @Volatile private var blackoutActive = false
+    /** The newest [ImuSample] seen by the collect loop below — what [onBlackoutEntered] seeds the
+     * forward axis from at the exact instant GPS drops (see [maybeReseedFromHeading]). */
+    @Volatile private var latestSample: ImuSample? = null
+    private var lastHeadingSeedNanos: Long = 0L
     private var entryFix: LocationFix? = null
     private var traveledAlongHeadingKm = 0.0
     private var lastSampleNanosForDisplay: Long? = null
@@ -76,7 +80,9 @@ class InertialSpeedSource(
         scope.launch {
             imuSampler.samples.collect { sample ->
                 if (sample == null) return@collect
+                latestSample = sample
                 calibrator.onImuSample(sample)
+                if (!blackoutActive) maybeReseedFromHeading(sample)
                 val calib = calibrator.calibration.value
                 val est = estimator.step(sample, calib)
                 _estimate.value = est
@@ -108,6 +114,11 @@ class InertialSpeedSource(
      * shared meaning, not a second independent notion of "speed at loss".
      */
     override fun onBlackoutEntered(entrySpeedKmh: Double, entryHeadingDeg: Double?, entryLocationFix: LocationFix?) {
+        // Last chance to seed the forward axis from a REAL bearing before the free-run starts
+        // (2026-09-14, T5453 field finding) -- the shadow-mode reseed above already keeps this
+        // fresh while moving, this just guarantees the very last live heading is the one used.
+        val sample = latestSample
+        if (sample != null && entryHeadingDeg != null) calibrator.seedFromHeading(sample, entryHeadingDeg)
         blackoutActive = true
         entryFix = entryLocationFix
         traveledAlongHeadingKm = 0.0
@@ -121,6 +132,24 @@ class InertialSpeedSource(
         blackoutActive = false
         entryFix = null
         estimator.seed(real.speedKmh.value, real.locationFix.value?.heading)
+    }
+
+    /**
+     * While GPS is live and the vehicle is genuinely moving (a real bearing needs real motion),
+     * keeps the heading seed fresh at most every [HEADING_SEED_INTERVAL_NANOS] until the learned
+     * calibration reaches GOOD -- see [VehicleFrameCalibrator.seedFromHeading]. Cheap (one 3x3
+     * rotation), and it means a blackout that starts on the very next sample already has a
+     * forward axis no more than two seconds old.
+     */
+    // ReturnCount: guard-clause style, same accepted pattern as VehicleFrameCalibrator's own methods.
+    @Suppress("ReturnCount")
+    private fun maybeReseedFromHeading(sample: ImuSample) {
+        if (calibrator.calibration.value?.quality == CalibrationQuality.GOOD) return
+        if (sample.timestampNanos - lastHeadingSeedNanos < HEADING_SEED_INTERVAL_NANOS) return
+        val heading = real.locationFix.value?.heading ?: return
+        if (real.speedKmh.value < HEADING_SEED_MIN_SPEED_KMH) return
+        lastHeadingSeedNanos = sample.timestampNanos
+        calibrator.seedFromHeading(sample, heading)
     }
 
     /** Rolling-window median/p95 of |residual|, recomputed on every shadow-mode sample once enough
@@ -172,6 +201,13 @@ class InertialSpeedSource(
         /** Caps one display-position step at 30s of travel even if the sensor thread stalls —
          * cosmetic-only guard, mirrors [InertialSpeedEstimator]'s own `MAX_STEP_SECONDS` reasoning. */
         private const val MAX_DISPLAY_STEP_HOURS = MAX_DISPLAY_STEP_SECONDS / SECONDS_PER_HOUR
+
+        /** How often the heading seed is refreshed while GPS is live -- see [maybeReseedFromHeading]. */
+        private const val HEADING_SEED_INTERVAL_NANOS = 2_000_000_000L
+
+        /** Below this a GPS bearing is not trusted to mean "the direction the car is pointing"
+         * (a crawling or stationary fix reports noise for a heading). */
+        private const val HEADING_SEED_MIN_SPEED_KMH = 15.0
 
         /** ~60s of history at [ImuSampler]'s ~10 Hz publish rate. */
         private const val RESIDUAL_BUFFER_SIZE = 600

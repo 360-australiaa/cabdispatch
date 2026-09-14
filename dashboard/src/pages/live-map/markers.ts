@@ -58,7 +58,10 @@ export function getHoverCardFields(
     networkLabel: vehicle.network ?? "—",
     updatedLabel: formatRelativeTime(vehicle.position_updated_at),
     duressActive: duressEvent != null,
-    staleLabel: staleLabel(vehicle.position_updated_at),
+    staleLabel:
+      vehicle.position_source === "estimated"
+        ? "GPS lost — estimated position"
+        : staleLabel(vehicle.position_updated_at),
     idleLabel: idleLabel(vehicle.idleInfo),
     geofenceNames: vehicle.insideGeofences.map((g) => g.name),
   };
@@ -128,7 +131,11 @@ export function renderMarkerContent(
   selected: boolean,
 ) {
   const stale = isStale(vehicle.position_updated_at);
-  const idle = !stale && vehicle.idleInfo.idle;
+  // Dead-reckoned through a tunnel (position_source "estimated", 2026-09-14): the
+  // marker keeps moving, but gets the same dashed "no real signal" outline as a stale
+  // vehicle so a dispatcher never reads an estimate as a fix.
+  const estimated = vehicle.position_source === "estimated";
+  const idle = !stale && !estimated && vehicle.idleInfo.idle;
   const inGeofence = vehicle.insideGeofences.length > 0;
 
   const size = duressEvent ? 22 : 18;
@@ -181,15 +188,16 @@ export function renderMarkerContent(
   // Neither is animated -- a continuously-moving decoration here caused real
   // user distress earlier and was fully reverted (see this file's history);
   // these are static outlines, not motion.
-  if (stale || idle) {
+  if (stale || idle || estimated) {
     const ring = document.createElement("div");
     ring.style.position = "absolute";
     ring.style.inset = "-5px";
     ring.style.borderRadius = "9999px";
     ring.style.pointerEvents = "none";
-    ring.style.borderStyle = stale ? "dashed" : "dotted";
+    ring.style.borderStyle = stale || estimated ? "dashed" : "dotted";
     ring.style.borderWidth = "2px";
-    ring.style.borderColor = stale ? "var(--muted-foreground)" : "var(--warning, #d97706)";
+    ring.style.borderColor = stale || estimated ? "var(--muted-foreground)" : "var(--warning, #d97706)";
+    if (estimated) ring.title = "GPS lost — position estimated from the tablet's motion sensors";
     iconWrap.appendChild(ring);
   }
 

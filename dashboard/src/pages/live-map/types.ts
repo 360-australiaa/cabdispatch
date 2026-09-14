@@ -14,7 +14,9 @@ export interface Page<T> {
   limit: number;
 }
 
-export type PositionSource = "live" | "trip" | "none";
+/** "estimated" (2026-09-14): the tablet's own dead-reckoned position during a GPS
+ * blackout (tunnel) -- shown as a moving marker, labelled as an estimate. */
+export type PositionSource = "live" | "estimated" | "trip" | "none";
 
 /** One row of `GET /v1/vehicles`. */
 export interface VehicleLiveRead {

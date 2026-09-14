@@ -166,8 +166,19 @@ enum class CalibrationQuality {
      * event) are polluting the estimate. Not used for billing; shown to the driver as "learning". */
     LEARNING,
 
-    /** Task 3's bar cleared: `>= MIN_CALIBRATION_EVENTS` with angular spread `< 15°`. The only
-     * quality [InertialSpeedSource] will ever bill against. */
+    /**
+     * A forward axis derived in one shot from the tablet's own rotation-vector orientation plus
+     * the last live GPS bearing ([HeadingSeed]) — no confirming events needed. Ranked BELOW
+     * [GOOD]: [InertialSpeedEstimator] integrates against it (so a first-drive tunnel gets a
+     * live accelerometer speed instead of a frozen entry speed — the T5453 field finding,
+     * 2026-09-14), but it is never persisted and is replaced the moment task 3's learned axis
+     * reaches [GOOD]. Carries no learned bias terms (both zero until stationary windows fill
+     * them in).
+     */
+    SEEDED,
+
+    /** Task 3's bar cleared: `>= MIN_CALIBRATION_EVENTS` with angular spread `< 15°`. The
+     * learned quality [InertialSpeedSource] prefers over [SEEDED] whenever it exists. */
     GOOD,
 }
 

@@ -194,6 +194,13 @@ data class PositionPublishRequestDto(
      * same honest-null posture as [battery]/[network] above. Wire name `heading` — must
      * byte-for-byte match the backend's `PositionPublishRequest.heading` (`app/schemas/live_ops.py`). */
     val heading: Double? = null,
+    /** True when [lat]/[lng]/[speedKmh]/[heading] are the tablet's own dead-reckoned estimate
+     * during a GPS blackout (see [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .InertialSpeedSource]'s display fix), not a real fix -- so the dispatcher's map can keep a
+     * moving marker through a tunnel while saying so. Wire name `estimated`, mirrors the
+     * backend's `PositionPublishRequest.estimated`; defaults false so every pre-existing publish
+     * is byte-identical. */
+    val estimated: Boolean = false,
 )
 
 /** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`

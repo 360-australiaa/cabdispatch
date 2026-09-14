@@ -28,7 +28,11 @@ class Page(BaseModel, Generic[T]):
     limit: int
 
 
-PositionSource = Literal["live", "trip", "none"]
+# "estimated" (2026-09-14): the device's own dead-reckoned position during a GPS
+# blackout, published with PositionPublishRequest.estimated=True -- a moving
+# marker through a tunnel that the dashboard must label as an estimate, never
+# present as a fix.
+PositionSource = Literal["live", "estimated", "trip", "none"]
 
 
 # --- vehicles -------------------------------------------------------------------
@@ -197,6 +201,15 @@ class PositionPublishRequest(BaseModel):
         "same honest-null convention as this codebase's Android LocationFix and the battery/"
         "network fields above.",
     )
+    estimated: bool = Field(
+        default=False,
+        description="True when lat/lng/speed_kmh/heading are the tablet's own dead-reckoned "
+        "estimate during a GPS blackout (accelerometer/gyro integration along the last real "
+        "heading), not a satellite fix. The dashboard keeps a moving marker through a tunnel but "
+        "labels it as an estimate; position_source on GET /v1/vehicles reads \"estimated\". "
+        "Mirrors the Android PositionPublishRequestDto.estimated field; defaults False so every "
+        "pre-existing publisher is unchanged.",
+    )
 
 
 class PositionRead(BaseModel):
@@ -220,6 +233,11 @@ class PositionRead(BaseModel):
         "position, if the device reported one -- see PositionPublishRequest.heading.",
     )
     updated_at: datetime
+    estimated: bool = Field(
+        default=False,
+        description="See PositionPublishRequest.estimated -- carried through the cache and the "
+        "WS /v1/fleet/live frame unchanged.",
+    )
 
 
 class PositionPublishResponse(PositionRead):

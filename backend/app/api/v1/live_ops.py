@@ -221,6 +221,7 @@ async def publish_position(
             network=payload.network,
             speed_kmh=payload.speed_kmh,
             heading=payload.heading,
+            estimated=payload.estimated,
         )
     except live_ops_service.LiveOpsError as exc:
         raise _live_ops_error_to_http(exc) from exc

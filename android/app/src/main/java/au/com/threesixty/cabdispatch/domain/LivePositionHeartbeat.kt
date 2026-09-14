@@ -135,11 +135,26 @@ import kotlinx.coroutines.launch
  * [SettingsViewModel.respondToLocateRequest] already uses — this app has no other real-time
  * on-trip/available/break signal it can read from here yet.
  */
+// LongParameterList: eight constructor parameters, all but the first four DEFAULTED test/production
+// seams (estimatedPositionSource, vehicleUuidResolver, duressActive) -- same accepted reasoning
+// FareEngineImpl's own constructor documents for its seams.
+@Suppress("LongParameterList")
 class LivePositionHeartbeat(
     private val apiService: ApiService,
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
     private val appContext: Context,
+    /**
+     * Dead-reckoned position source consulted ONLY when [speedSource]'s newest fix is older than
+     * [LocationFix.MAX_FIX_AGE_MS] -- i.e. the same "GPS is lost" test the fare engine bills on.
+     * In production this is [au.com.threesixty.cabdispatch.data.AppContainer.inertialSpeedSource],
+     * whose display fix advances along the last heading at the estimated speed for as long as a
+     * hiring's blackout lasts. Published with `estimated = true` so the dashboard keeps a moving,
+     * honestly-labelled marker through a tunnel instead of a frozen dot and "signal lost" (field
+     * finding, T5453, 2026-09-14). `null` (tests, and any caller without an estimator) keeps the
+     * old behaviour exactly.
+     */
+    private val estimatedPositionSource: SpeedSource? = null,
     /** How a rego becomes a fleet-vehicle UUID again when the persisted one stops working -- see
      * `VehicleBinding.kt`'s file doc for the defect this closes. Injectable so a test can drive the
      * recovery without a Retrofit stack; defaults to the real roster lookup. */
@@ -313,7 +328,13 @@ class LivePositionHeartbeat(
      * yet" reasoning as [SettingsViewModel.respondToLocateRequest]: no permission granted, cold
      * start, no signal. */
     private suspend fun publishOnce(vehicleUuid: String): PositionPublishOutcome {
-        val fix = speedSource.locationFix.value ?: return PositionPublishOutcome.NO_FIX
+        val real = speedSource.locationFix.value
+        val realStale = real == null ||
+            System.nanoTime() - real.receivedAtNanos > LocationFix.MAX_FIX_AGE_MS * NANOS_PER_MILLI
+        // See [estimatedPositionSource]'s doc: only ever consulted once the real fix has gone
+        // stale by the fare engine's own definition, never preferred over a live one.
+        val estimate = if (realStale) estimatedPositionSource?.locationFix?.value else null
+        val fix = estimate ?: real ?: return PositionPublishOutcome.NO_FIX
         BatteryStatsCounters.recordHeartbeat()
         return runCatching {
             apiService.publishPosition(
@@ -330,6 +351,7 @@ class LivePositionHeartbeat(
                     // moving, oriented marker instead of just a bare dot.
                     speedKmh = fix.speedKmh,
                     heading = fix.heading,
+                    estimated = estimate != null,
                 ),
             )
         }.fold(
@@ -342,6 +364,8 @@ class LivePositionHeartbeat(
     }
 
     private companion object {
+        private const val NANOS_PER_MILLI = 1_000_000L
+
         /**
          * How often [publishLoop] re-evaluates state and decides whether to publish — NOT the
          * publish interval itself (see [HeartbeatCadence] for that); this is the granularity at

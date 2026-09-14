@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
 import au.com.threesixty.cabdispatch.domain.location.inertial.BlackoutReconciler
+import au.com.threesixty.cabdispatch.domain.fare.gantryChainPath
 import au.com.threesixty.cabdispatch.domain.location.inertial.InertialConfidence
 import au.com.threesixty.cabdispatch.domain.location.inertial.InertialBillingSource
 import au.com.threesixty.cabdispatch.domain.location.roadpath.RoadPathSource
@@ -1252,7 +1253,15 @@ class FareEngineImpl(
                 confidence = blackoutLastConfidence,
                 zuptCount = inertialSpeedSource?.estimate?.value?.zuptCount,
             )
-            resolveBlackout(cs, fix, threshold, inertialTally).also {
+            resolveBlackout(cs, fix, threshold, inertialTally)?.also { resolved ->
+                // Tunnels are where the tolls are, and tunnels are exactly where GPS is lost --
+                // so the ordinary per-fix gantry detection (skipped while gpsLost, see
+                // detectTolls's call site below) never saw a single underground gantry. Walk the
+                // resolved corridor's own gantry chain now, as if the vehicle had reported a fix
+                // at each one. Field finding, T5453, 2026-09-14: a Rozelle Interchange crossing
+                // billed no toll at all and never even raised the "unpriced road" prompt.
+                sweepCorridorTolls(cs, resolved)
+            }.also {
                 blackoutEntryFix = null
                 blackoutEntryWasMoving = false
                 blackoutSegmentId = null
@@ -1614,9 +1623,46 @@ class FareEngineImpl(
      * majority of ticks on any real trip) never triggers a state emission for this alone.
      */
     private fun detectTolls(cs: CalcFareState) {
+        val fix = speedSource.locationFix.value ?: return
+        detectTollsAt(cs, fix.lat, fix.lng, cs.cumulativeDistanceKm)
+    }
+
+    /**
+     * Runs [detectTollsAt] along the gantry chain of the toll road a just-resolved blackout was
+     * matched to ([gantryChainPath], the same matching rule the distance catch-up itself uses),
+     * feeding each gantry's own coordinates through the ordinary detector in order -- so
+     * confirmation radii, direction checks, once-per-road/cumulative-per-point pricing and the
+     * unpriced-road prompt all behave exactly as they would on a live fix at that gantry. The
+     * cumulative distance handed to each step starts at the tunnel mouth (this tick's cumulative
+     * minus what the resolution just billed) and advances leg by leg, so a distance-priced road
+     * meters the corridor rather than seeing entry and exit at the same odometer reading.
+     *
+     * A blackout with no matched corridor (`gantryChainPath` null) sweeps nothing: no evidence,
+     * no charge -- same posture as every other toll decision in this class.
+     */
+    // ReturnCount: guard-clause style, same accepted pattern as resolveBlackout above.
+    @Suppress("ReturnCount")
+    private fun sweepCorridorTolls(cs: CalcFareState, resolved: ResolvedBlackout) {
         val registry = tollRegistry ?: return
         if (registry.gantries.isEmpty()) return
-        val fix = speedSource.locationFix.value ?: return
+        val path = gantryChainPath(registry, resolved.entryLat, resolved.entryLng, resolved.exitLat, resolved.exitLng)
+            ?: return
+        var cumulativeKm = (cs.cumulativeDistanceKm - resolved.billedDistanceKm).coerceAtLeast(BigDecimal.ZERO)
+        var previous: Pair<Double, Double>? = null
+        for (point in path) {
+            previous?.let { (plat, plng) ->
+                cumulativeKm += BigDecimal.valueOf(GeoMath.distanceKm(plat, plng, point.first, point.second))
+            }
+            previous = point
+            detectTollsAt(cs, point.first, point.second, cumulativeKm)
+        }
+    }
+
+    // ReturnCount: the three guards detectTolls itself always carried, unchanged by the split.
+    @Suppress("ReturnCount")
+    private fun detectTollsAt(cs: CalcFareState, lat: Double, lng: Double, cumulativeDistanceKm: BigDecimal) {
+        val registry = tollRegistry ?: return
+        if (registry.gantries.isEmpty()) return
 
         // T1: a road the driver has already added by hand is never also auto-charged. addToll
         // dismisses the road as it goes, so onFix below skips it outright; this is the belt to that
@@ -1627,8 +1673,8 @@ class FareEngineImpl(
         val result = onFix(
             tollDetectionState,
             registry,
-            lat = fix.lat,
-            lng = fix.lng,
+            lat = lat,
+            lng = lng,
             // NSW local: SHB/SHT's time-of-day bands are Sydney wall clock (see shbShtBand).
             // wallClockNow(), not a fresh ZonedDateTime.now() (W0, 2026-09-12): same testability
             // seam resolveTimeClass/resolveIsPeak use -- unlike those, this one legitimately reads
@@ -1637,7 +1683,7 @@ class FareEngineImpl(
             // needs to be the SAME pinnable clock a test controls, not a second, independent
             // `ZonedDateTime.now()` call a test has no way to freeze.
             ts = wallClockNow(),
-            cumulativeDistanceKm = cs.cumulativeDistanceKm,
+            cumulativeDistanceKm = cumulativeDistanceKm,
         )
         if (result.isEmpty) return
 

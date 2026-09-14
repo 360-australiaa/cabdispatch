@@ -100,10 +100,14 @@ class InertialSpeedEstimator {
             ((sample.timestampNanos - previousNanos) / NANOS_PER_SECOND).coerceIn(0.0, MAX_STEP_SECONDS)
         }
 
-        if (calibration == null || calibration.quality != CalibrationQuality.GOOD) {
-            // No usable forward axis: publish the last speed we had (frozen, like the W1 rule this
-            // falls back to) rather than integrating raw tablet-frame acceleration against no known
-            // forward direction, which would be noise, not a speed.
+        val usableAxis = calibration != null &&
+            (calibration.quality == CalibrationQuality.GOOD || calibration.quality == CalibrationQuality.SEEDED)
+        if (calibration == null || !usableAxis) {
+            // No usable forward axis at all: publish the last speed we had (frozen, like the W1
+            // rule this falls back to) rather than integrating raw tablet-frame acceleration
+            // against no known forward direction, which would be noise, not a speed. SEEDED
+            // (2026-09-14, [HeadingSeed]) counts as usable: a physically-derived axis, just not
+            // yet a statistically confirmed one -- see CalibrationQuality.SEEDED's own doc.
             return snapshot(calibrationGood = false)
         }
 
@@ -146,7 +150,7 @@ class InertialSpeedEstimator {
         lowConfidenceSeconds = if (confidenceNow == InertialConfidence.LOW) lowConfidenceSeconds + dt else 0.0
         if (lowConfidenceSeconds > UNRELIABLE_AFTER_SECONDS) latchedUnreliable = true
 
-        return snapshot(calibrationGood = true)
+        return snapshot(calibrationGood = calibration.quality == CalibrationQuality.GOOD)
     }
 
     /** The highest speed this estimator will ever report — task 4's bound: the GPS speed at the

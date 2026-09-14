@@ -107,6 +107,7 @@ fun InertialDiagnosticsPanel(modifier: Modifier = Modifier) {
 
 private fun calibrationLabel(quality: CalibrationQuality?): String = when (quality) {
     CalibrationQuality.GOOD -> "Calibrated"
+    CalibrationQuality.SEEDED -> "Seeded from GPS heading — learning"
     CalibrationQuality.LEARNING -> "Learning — drive normally"
     CalibrationQuality.NONE, null -> "Not yet calibrated"
 }

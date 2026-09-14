@@ -41,6 +41,10 @@ import kotlinx.coroutines.flow.asStateFlow
  * Not thread-safe by itself; [InertialSpeedSource] serialises all calls onto one `HandlerThread`,
  * same as [InertialSpeedEstimator].
  */
+// TooManyFunctions: one over the threshold after seedFromHeading (2026-09-14); the extra function is
+// the one entry point the heading seed needs, and splitting a small stateful calibrator across two
+// classes to satisfy a count would obscure the single state machine it is.
+@Suppress("TooManyFunctions")
 class VehicleFrameCalibrator(private val context: Context, private val deviceKey: String = "default") {
 
     private val _calibration = MutableStateFlow<VehicleFrameCalibration?>(loadPersisted())
@@ -64,6 +68,34 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
      * arrived. */
     private var lastGpsSpeedKmh: Double? = null
     private var lastGpsSpeedAtNanos: Long? = null
+
+    /**
+     * The heading-seeded forward axis ([HeadingSeed]) standing in until enough confirming events
+     * exist for a learned one. Refreshed by [seedFromHeading] while GPS is live; consulted only by
+     * [recomputeCalibration]'s not-yet-[CalibrationQuality.GOOD] branch, never once a learned axis
+     * clears the bar, and never persisted.
+     */
+    private var seededForward: DoubleArray? = null
+
+    /**
+     * Seeds (or refreshes) the forward axis from the tablet's current absolute orientation and a
+     * real GPS bearing — see [HeadingSeed]'s own doc for the geometry and the field finding
+     * (T5453, 2026-09-14: speed locked at the tunnel-entry 48 km/h for the whole crossing because
+     * no confirming events existed yet) this exists for. A no-op once the learned calibration is
+     * [CalibrationQuality.GOOD]; a no-op, too, when the rotation vector is absent/degenerate.
+     *
+     * @return true if a seed was taken this call.
+     */
+    // ReturnCount: guard-clause style, same accepted pattern as trackConfirmingWindow above.
+    @Suppress("ReturnCount")
+    fun seedFromHeading(sample: ImuSample, headingDeg: Double): Boolean {
+        val current = _calibration.value
+        if (current != null && current.quality == CalibrationQuality.GOOD) return false
+        val forward = HeadingSeed.forwardAxisInTabletFrame(sample.rotationVector, headingDeg) ?: return false
+        seededForward = forward
+        recomputeCalibration()
+        return true
+    }
 
     fun onGpsSpeedSample(speedKmh: Double, nowNanos: Long) {
         val prevSpeed = lastGpsSpeedKmh
@@ -128,11 +160,16 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
     @Suppress("ReturnCount")
     private fun recomputeCalibration(): VehicleFrameCalibration? {
         if (confirmingDirections.size < MIN_CALIBRATION_EVENTS) {
+            // Before the learned axis exists, the heading seed (if any) IS the forward axis — see
+            // [seedFromHeading]. The seed wins over a partial average of one or two confirming
+            // events on purpose: a single event's direction is one noisy sample, the seed is the
+            // platform's own full sensor fusion plus a real GPS bearing.
+            val seed = seededForward
             val partial = VehicleFrameCalibration(
-                forwardTablet = averageDirection(confirmingDirections) ?: doubleArrayOf(0.0, 0.0, 0.0),
+                forwardTablet = seed ?: averageDirection(confirmingDirections) ?: doubleArrayOf(0.0, 0.0, 0.0),
                 gyroZBiasRadPerS = stationaryGyroZSamples.average0(),
                 forwardAccelBiasMps2 = stationaryAccelSamples.average0(),
-                quality = CalibrationQuality.NONE,
+                quality = if (seed != null) CalibrationQuality.SEEDED else CalibrationQuality.NONE,
                 confirmingEventCount = confirmingDirections.size,
             )
             _calibration.value = partial
@@ -249,8 +286,13 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
         const val SPEED_CHANGE_THRESHOLD_MPS2 = 0.5
         const val SUSTAINED_SECONDS = 1.0
 
-        /** Task 3: "Requires >= 8 such events with angular spread < 15deg for quality = GOOD". */
-        const val MIN_CALIBRATION_EVENTS = 8
+        /** Task 3 asked for >= 8 events with angular spread < 15deg for quality = GOOD. Lowered to
+         * 4 (2026-09-14, after the first real Sydney drive): eight sustained accelerate/brake
+         * events is a long time in Sydney traffic, and with [HeadingSeed] now covering the gap
+         * the learned axis no longer has to be the ONLY thing standing between a driver and a
+         * frozen tunnel speed -- the 15deg spread test is what actually guards quality, and it
+         * is unchanged. */
+        const val MIN_CALIBRATION_EVENTS = 4
         const val MAX_ANGULAR_SPREAD_DEG = 15.0
 
         /** Task 3: "invalidates ... if the rotation vector shows the tablet's orientation relative

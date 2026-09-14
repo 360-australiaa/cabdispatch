@@ -246,6 +246,7 @@ def build_position(
     network: str | None = None,
     speed_kmh: float | None = None,
     heading: float | None = None,
+    estimated: bool = False,
 ) -> dict[str, Any]:
     return {
         "vehicle_id": vehicle_id,
@@ -256,6 +257,7 @@ def build_position(
         "network": network,
         "speed_kmh": speed_kmh,
         "heading": heading,
+        "estimated": estimated,
         "updated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -427,6 +429,7 @@ async def publish_position(
     network: str | None = None,
     speed_kmh: float | None = None,
     heading: float | None = None,
+    estimated: bool = False,
 ) -> dict[str, Any]:
     """Validates the vehicle belongs to the caller's tenant, then publishes
     the position. Returns the broadcast position dict plus subscriber_count.
@@ -459,6 +462,7 @@ async def publish_position(
         network=network,
         speed_kmh=speed_kmh,
         heading=heading,
+        estimated=estimated,
     )
     delivered = await fleet_broadcaster.publish(tenant_id, position)
 
@@ -662,7 +666,9 @@ def _compose_vehicle_live(
     if live_position is not None:
         lat, lng = live_position["lat"], live_position["lng"]
         position_updated_at = live_position["updated_at"]
-        position_source = "live"
+        # A dead-reckoned publish (tunnel, see PositionPublishRequest.estimated) is still the
+        # freshest thing known -- it wins the position, but says what it is.
+        position_source = "estimated" if live_position.get("estimated") else "live"
     elif open_trip is not None and open_trip.last_lat is not None and open_trip.last_lng is not None:
         lat, lng = open_trip.last_lat, open_trip.last_lng
         position_updated_at = open_trip.last_ts

@@ -1111,6 +1111,9 @@ object AppContainer {
             speedSource,
             CoroutineScope(SupervisorJob() + Dispatchers.Default),
             appContext,
+            // Dead-reckoned fallback for the dispatcher's map through a GPS blackout -- see
+            // LivePositionHeartbeat's constructor doc (T5453 field finding, 2026-09-14).
+            estimatedPositionSource = inertialSpeedSource,
             // W4 task 1 (2026-09-12 optimisation plan): real duress-active check for the
             // HIRED_OR_DURESS cadence tier — see LivePositionHeartbeat's constructor doc for why
             // this is a lambda over duressController.state rather than an injected DuressController.
