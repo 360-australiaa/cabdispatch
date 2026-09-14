@@ -37,6 +37,7 @@ from app.schemas.trips import (
     TelemetryPoint,
     TripCloseRequest,
     TripCreate,
+    TripFareCorrectionRequest,
     TripFlagRequest,
     TripGpsTraceRead,
     TripListResponse,
@@ -1014,3 +1015,47 @@ async def sms_receipt(
         pdf_relative_path=relative_path,
         pdf_generated_now=generated_now,
     )
+
+
+# --- Owner fare correction (2026-09-14) ---------------------------------------------
+
+
+@router.post("/{trip_id}/fare-correction", response_model=TripRead)
+async def correct_trip_fare(
+    trip_id: str,
+    payload: TripFareCorrectionRequest,
+    tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Trip:
+    """Sets a CLOSED trip's stored total (and a proportional GST component) to
+    `payload.total`, appending `payload.reason` to `review_notes`. Owner/admin
+    only. See `TripFareCorrectionRequest`'s doc for the one situation this is
+    for; it is deliberately NOT a general "edit the fare" tool -- the flag is
+    left as it was, so a corrected trip still surfaces on the review list
+    with the full story in its notes."""
+    if current_user.role not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only an owner or admin may correct a fare of record"
+        )
+    trip = await _get_trip_or_404(trip_id, tenant_id, session)
+    if trip.status != TRIP_STATUS_CLOSED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only a closed trip's fare can be corrected")
+
+    previous_total = trip.total
+    new_total = round_half_up(payload.total)
+    if previous_total and previous_total > 0:
+        trip.gst_component = round_half_up(new_total * trip.gst_component / previous_total)
+    else:
+        trip.gst_component = round_half_up(new_total / Decimal(11))
+    trip.total = new_total
+    note = (
+        f"Fare correction by {current_user.role} {current_user.id} on "
+        f"{datetime.now(UTC).isoformat(timespec='seconds')}: total {previous_total} -> {new_total}. "
+        f"{payload.reason.strip()}"
+    )
+    trip.review_notes = f"{trip.review_notes} | {note}" if trip.review_notes else note
+
+    await session.commit()
+    await session.refresh(trip)
+    return trip

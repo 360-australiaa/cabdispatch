@@ -682,6 +682,19 @@ class TripFlagRequest(BaseModel):
 # recipient is supplied per-request rather than read off the trip row.
 
 
+class TripFareCorrectionRequest(BaseModel):
+    """Body for `POST /v1/trips/{id}/fare-correction` -- an owner/admin setting a
+    CLOSED trip's fare of record to a stated amount, with a reason that is
+    appended to `review_notes` for the audit trail. Exists for exactly one
+    situation: a trip whose stored total is not what the passenger paid --
+    the 2026-09-14 T5453 tunnel trip that synced before the fare-of-record fix
+    (device charged 59.03, server recompute 32.52 was stored). It never
+    recomputes anything; it records the owner's decision."""
+
+    total: Decimal = Field(gt=0, description="The fare of record to store, AUD, GST-inclusive.")
+    reason: str = Field(min_length=3, max_length=500)
+
+
 class ReceiptEmailRequest(BaseModel):
     to_email: str = Field(..., min_length=3, max_length=255)
 

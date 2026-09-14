@@ -3572,3 +3572,36 @@ async def test_sync_keeps_the_charged_device_total_when_the_variance_check_fails
     assert Decimal(trip["total"]) == Decimal("59.03")
     assert Decimal(trip["gst_component"]) > 0
     assert "server recomputed" in trip["review_notes"]
+
+
+async def test_owner_fare_correction_sets_total_and_keeps_the_audit_trail(client: AsyncClient, session: AsyncSession):
+    """POST /v1/trips/{id}/fare-correction: owner/admin only, closed trips only, sets the
+    stored total (+ proportional GST) and appends the reason to review_notes."""
+    driver_headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, driver_headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="10.00")
+    resp = await client.post("/v1/trips/sync", json=[item], headers=driver_headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    # A driver may not correct fares.
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/fare-correction", json={"total": "59.03", "reason": "x"}, headers=driver_headers
+    )
+    assert resp.status_code in (403, 422), resp.text
+
+    owner_headers = await auth_headers(client, session, role="owner", tenant_id=tenant_id)
+    resp = await client.post(
+        f"/v1/trips/{trip['id']}/fare-correction",
+        json={"total": "59.03", "reason": "Meter charged 59.03; synced before the fare-of-record fix."},
+        headers=owner_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert Decimal(body["total"]) == Decimal("59.03")
+    assert Decimal(body["gst_component"]) == round_half_up(Decimal("59.03") / Decimal(11))
+    assert "fare-of-record" in body["review_notes"]
+    assert "-> 59.03" in body["review_notes"]
