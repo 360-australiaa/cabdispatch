@@ -3389,9 +3389,8 @@ async def test_tick_rejects_unknown_state_value(client: AsyncClient, session: As
 
 async def test_sync_rejects_unknown_blackout_resolution_value(client: AsyncClient, session: AsyncSession):
     """Same strict-Literal posture for DeviceGpsBlackoutSegment.resolution --
-    an unrecognised value (e.g. a future device build sending "INERTIAL"
-    before this backend's Literal is extended to accept it, see
-    BlackoutResolution's own doc comment) is a 422, not silently stored."""
+    an unrecognised value (a made-up resolution no device build sends) is a 422, not
+    silently stored -- see BlackoutResolution's own doc comment for the real device enum."""
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
@@ -3404,7 +3403,7 @@ async def test_sync_rejects_unknown_blackout_resolution_value(client: AsyncClien
         ended_at=now + timedelta(seconds=60),
         entry=(-33.8688, 151.2093),
         exit_=(-33.86, 151.2093),
-        resolution="INERTIAL",
+        resolution="NOT_A_REAL_RESOLUTION",
         billed_distance_km="1.0",
     )
     item = _sync_item(
@@ -3414,3 +3413,87 @@ async def test_sync_rejects_unknown_blackout_resolution_value(client: AsyncClien
     )
     resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
     assert resp.status_code == 422
+
+
+async def test_sync_accepts_inertial_blackout_segment_with_w2_fields(client: AsyncClient, session: AsyncSession):
+    """Production incident, 2026-09-14: the first device build with inertial
+    billing on sent `resolution: INERTIAL` plus the W2 audit fields and every
+    sync answered 422, so a real Sydney tunnel trip never reached the fleet.
+    The wire schema must accept the whole device enum and carry the W2 fields
+    through onto Trip.device_gps_blackout_segments verbatim."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    entry_lat, entry_lng = -36.10, 150.10
+    exit_lat, exit_lng = -36.10, 150.12
+    now = _FIXED_DAY_START_AT
+    trace = [
+        {"lat": exit_lat, "lng": exit_lng, "speed_kmh": 60, "ts": (now + timedelta(seconds=60)).isoformat()}
+    ]
+    segment = _device_blackout_segment(
+        client_uuid="seg-inertial-1",
+        started_at=now,
+        ended_at=now + timedelta(seconds=60),
+        entry=(entry_lat, entry_lng),
+        exit_=(exit_lat, exit_lng),
+        resolution="INERTIAL",
+        billed_distance_km="1.85",
+    )
+    segment.update(
+        {
+            "estimated_distance_km": "2.40",
+            "reference_distance_km": "1.85",
+            "correction_km": "-0.55",
+            "reference_source": "CHORD_BOUNDED",
+            "confidence": "MEDIUM",
+            "zupt_count": 0,
+        }
+    )
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="0.00",
+        start_lat=entry_lat,
+        start_lng=entry_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    persisted = trip["device_gps_blackout_segments"][0]
+    assert persisted["resolution"] == "INERTIAL"
+    assert persisted["reference_source"] == "CHORD_BOUNDED"
+    assert persisted["confidence"] == "MEDIUM"
+    assert persisted["zupt_count"] == 0
+    assert str(persisted["correction_km"]).startswith("-0.55")
+    # A correction this large relative to the reference is exactly the human-review signal.
+    flags = trip.get("blackout_reconciliation") or []
+    assert any(f["type"] == "inertial_correction_large" for f in flags), flags
+    # Every other device enum value must also be accepted on the wire, never 422.
+    for res in ("UNCALIBRATED", "STOPPED", "STATIONARY"):
+        seg2 = _device_blackout_segment(
+            client_uuid=f"seg-{res.lower()}",
+            started_at=now,
+            ended_at=now + timedelta(seconds=60),
+            entry=(entry_lat, entry_lng),
+            exit_=(exit_lat, exit_lng),
+            resolution=res,
+            billed_distance_km="0",
+        )
+        item2 = _sync_item(
+            tariff_id=tariff.id,
+            gps_trace=trace,
+            device_total="0.00",
+            start_lat=entry_lat,
+            start_lng=entry_lng,
+            start_at=now.isoformat(),
+            end_at=(now + timedelta(seconds=60)).isoformat(),
+            gps_blackout_segments=[seg2],
+            client_uuid=f"trip-{res.lower()}",
+        )
+        resp2 = await client.post("/v1/trips/sync", json=[item2], headers=headers)
+        assert resp2.status_code == 200, (res, resp2.text)

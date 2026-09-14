@@ -1023,6 +1023,43 @@ async def reconcile_gps_blackout_segments(
                         }
                     )
 
+        if segment.resolution == "INERTIAL" and segment.correction_km is not None:
+            # W2 reconciliation evidence (2026-09-14, the pass that admitted INERTIAL
+            # onto the wire): the device reconciled its own tick-by-tick inertial
+            # billing against a reference at reacquisition and recorded the
+            # correction it applied. A correction larger than the same tolerance the
+            # CORRIDOR check above uses is the signal a human should look at -- the
+            # estimator drifted a long way from the road before being pulled back,
+            # or the reference itself was poor (a chord bound rather than a real
+            # road path). Same rule as every other flag here: audit-trail only, the
+            # device's billed figure stands.
+            reference_km = segment.reference_distance_km or segment.billed_distance_km
+            tolerance = max(
+                BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS,
+                reference_km * BLACKOUT_CORRIDOR_KM_TOLERANCE_PCT,
+            )
+            if abs(segment.correction_km) > tolerance:
+                flags.append(
+                    {
+                        "type": "inertial_correction_large",
+                        "segment_client_uuid": segment.client_uuid,
+                        "device_estimated_km": (
+                            str(segment.estimated_distance_km)
+                            if segment.estimated_distance_km is not None
+                            else None
+                        ),
+                        "device_billed_km": str(segment.billed_distance_km),
+                        "correction_km": str(segment.correction_km),
+                        "reference_source": segment.reference_source,
+                        "confidence": segment.confidence,
+                        "detail": (
+                            f"Device reconciled an INERTIAL blackout by {segment.correction_km} km "
+                            f"against a {segment.reference_source or 'unknown'} reference "
+                            f"(tolerance {tolerance} km) -- large drift before correction."
+                        ),
+                    }
+                )
+
     for (start, end, event) in server_intervals:
         if event.get("resolution") == "STOPPED":
             continue

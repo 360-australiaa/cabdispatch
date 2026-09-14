@@ -321,23 +321,29 @@ class TripCloseRequest(BaseModel):
 
 
 # Mirrors Android's `au.com.threesixty.cabdispatch.data.local.entity.
-# BlackoutResolution` / `GpsBlackoutSegmentDto.resolution` (TripsDtos.kt) exactly,
-# as it stands today: NONE (no known road matched the gap -- nothing extra
-# billed), CORRIDOR (a known toll-road corridor matched -- that corridor's real
-# distance was billed) or STATIONARY (the vehicle was not moving when the
-# blackout started -- only waiting time accrued, no distance). NOTE: the wider
-# GPS-blackout program plan (docs/plans/2026-09-12-android-meter-optimisation-
-# and-gps-blackout-plan.md, W1/W2 tasks 3 & 6) documents THREE further values
-# a later device build may send once those workstreams land -- INERTIAL,
-# UNCALIBRATED and STOPPED -- none of which exist on the wire in this
-# codebase's current Android history (`git log -- .../TripsDtos.kt` shows no
-# commit adding them yet). Kept as a strict Literal of only the three values
-# that actually exist today, deliberately, rather than a bare `str`: a
-# genuinely unknown resolution value is a signal worth a 422, not something to
-# silently accept and store — extend this Literal (and the reconciliation
-# logic in app.services.trips) in the same pass that wires up whichever of
-# those three values a future device build actually starts sending.
-BlackoutResolution = Literal["NONE", "CORRIDOR", "STATIONARY"]
+# BlackoutResolution` / `GpsBlackoutSegmentDto.resolution` (TripsDtos.kt):
+#   NONE         -- no known road matched the gap; nothing extra billed
+#   CORRIDOR     -- a known toll-road corridor matched; its real distance was billed
+#   STATIONARY   -- the vehicle was not moving when the blackout started; waiting only
+#   INERTIAL     -- W2: the device billed the gap tick-by-tick off its own
+#                   accelerometer/gyroscope speed estimate, then reconciled it at
+#                   reacquisition against a road-path/corridor reference or the
+#                   entry->exit chord (see `reference_source` below)
+#   UNCALIBRATED -- W2: inertial billing engaged and was then invalidated
+#                   mid-blackout; what was billed tick-by-tick stands, uncorrected
+#   STOPPED      -- reserved (driver-initiated pause coinciding with a gap)
+#
+# PRODUCTION INCIDENT, 2026-09-14: this was a strict Literal of the first three
+# values only, with a note that INERTIAL/UNCALIBRATED "do not exist on the wire
+# yet". The device build that flipped `INERTIAL_BILLING_ENABLED` on (Android
+# commit 72b1e95, same day) started sending INERTIAL on its very first real
+# Sydney tunnel drive, every `POST /v1/trips/sync` for that vehicle answered
+# 422, and the trip never reached the fleet at all -- no fare on the dashboard,
+# no tolls, a shift showing 0 trips / 0 km. A strict Literal is still right
+# (a genuinely unknown value IS worth a 422), but the set has to be kept in
+# lockstep with the device enum, and this comment is the reminder of what a
+# lag between the two costs.
+BlackoutResolution = Literal["NONE", "CORRIDOR", "STATIONARY", "INERTIAL", "UNCALIBRATED", "STOPPED"]
 
 
 class DeviceGpsBlackoutSegment(BaseModel):
@@ -372,6 +378,18 @@ class DeviceGpsBlackoutSegment(BaseModel):
     resolution: BlackoutResolution
     billed_distance_km: Decimal = Field(ge=0)
     corridor_road_id: str | None = None
+    # W2 (inertial dead-reckoning) audit fields -- mirror `GpsBlackoutSegmentDto`'s
+    # `estimated_distance_km` / `reference_distance_km` / `correction_km` /
+    # `reference_source` / `confidence` / `zupt_count` exactly. Non-null only for
+    # INERTIAL/UNCALIBRATED segments; every field optional so a device build
+    # that predates W2 still syncs byte-identically. Evidence for
+    # `reconcile_gps_blackout_segments`, never a billing input (see class doc).
+    estimated_distance_km: Decimal | None = Field(default=None, ge=0)
+    reference_distance_km: Decimal | None = Field(default=None, ge=0)
+    correction_km: Decimal | None = None
+    reference_source: str | None = None
+    confidence: str | None = None
+    zupt_count: int | None = Field(default=None, ge=0)
 
 
 class TripSyncItem(BaseModel):
