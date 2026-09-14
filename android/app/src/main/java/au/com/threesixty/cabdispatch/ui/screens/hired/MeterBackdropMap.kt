@@ -747,7 +747,12 @@ private const val LIVE_TRACE_MAX = 4000
  * dispatcher's dashboard map are visibly one product. Replaces the bare built-in `Style.DARK`
  * this file used before this pass.
  */
-private const val BACKDROP_MAP_STYLE_URI = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za"
+// Owner feedback (2026-09-14): the custom dark style is "too dark in the car" -- the map has to be
+// the prominent thing a driver glances at, not a black panel with faint grey roads. Mapbox's own
+// navigation-day style: bright ground, high-contrast road casings, road names and shields sized
+// for a moving vehicle; it is what a turn-by-turn app looks like in daylight. The dashboard keeps
+// the dark brand style (its operator sits at a desk); the meter is a windscreen surface.
+private const val BACKDROP_MAP_STYLE_URI = "mapbox://styles/mapbox/navigation-day-v1"
 
 /**
  * W3 (road-geometry constraint sources, 2026-09-12 plan) — the one real Mapbox SDK call

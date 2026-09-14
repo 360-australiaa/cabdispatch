@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import au.com.threesixty.cabdispatch.domain.SpeedBand
+import au.com.threesixty.cabdispatch.domain.SpeedZone
 import com.mapbox.geojson.Point
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotation
 import com.mapbox.maps.plugin.annotation.generated.PolylineAnnotationManager
@@ -182,6 +183,42 @@ private fun rememberHudGlowPaint(
     }
 
 /** Centre + centreline radius + stroke of an arc fitted into a [DrawScope]. */
+/** See [drawHudArc]'s `shine`. */
+private const val SHINE_INSET_FRACTION = 0.3f
+private const val SHINE_WIDTH_FRACTION = 0.16f
+private const val SHINE_ALPHA = 0.32f
+
+/**
+ * The speedometer's fixed road-speed colour zones as arc stops (owner request, 2026-09-14):
+ * 0-30 km/h cool violet (LOW), blending into the GOOD green by 40, holding green to 70, warming
+ * to amber at 80 (CAUTION) and red from 100. Positional, not band-driven: the lit stretch of the
+ * ring reveals each zone's colour as the needle passes it, the way a game's tachometer does, and
+ * the ring's colour at the lit end therefore always agrees with [SpeedZone] for that speed.
+ */
+fun speedZoneStops(maxKmh: Float): List<Pair<Float, Color>> {
+    fun at(kmh: Float) = (kmh / maxKmh).coerceIn(0f, 1f)
+    return listOf(
+        0f to CaptainPalette.hudSweepStart,
+        at(SpeedZone.GOOD_FROM_KMH.toFloat()) to CaptainPalette.hudAccent,
+        at(ZONE_GOOD_FULL_KMH) to CaptainPalette.success,
+        at(ZONE_GOOD_HOLD_KMH) to CaptainPalette.neonCyan,
+        at(SpeedZone.CAUTION_FROM_KMH.toFloat()) to CaptainPalette.warning,
+        at(ZONE_RED_KMH) to CaptainPalette.danger,
+    )
+}
+
+/** Where the LOW->GOOD blend completes, where GOOD starts warming, and where CAUTION goes red. */
+private const val ZONE_GOOD_FULL_KMH = 40f
+private const val ZONE_GOOD_HOLD_KMH = 70f
+private const val ZONE_RED_KMH = 100f
+
+/** The zone colour at exactly [speedKmh] -- what the lit end cap and the readout wear. */
+fun speedZoneColor(zone: SpeedZone): Color = when (zone) {
+    SpeedZone.LOW -> CaptainPalette.hudAccent
+    SpeedZone.GOOD -> CaptainPalette.success
+    SpeedZone.CAUTION -> CaptainPalette.warning
+}
+
 private class HudArcGeometry(val center: Offset, val radius: Float, val strokePx: Float) {
     val topLeft: Offset get() = Offset(center.x - radius, center.y - radius)
     val size: Size get() = Size(radius * 2f, radius * 2f)
@@ -214,6 +251,25 @@ private class HudArcGeometry(val center: Offset, val radius: Float, val strokePx
  * — a blur can't do that job on a light background (there's nothing for it to glow against), a
  * sharp saturated line can.
  */
+/** The gloss for [drawHudArc]'s `shine`: a narrow white arc a third of the way in from the outer
+ * edge, faded so it reads as light catching a rounded surface, not a second ring. Drawn inside
+ * the caller's `rotate(startDeg)`. */
+private fun DrawScope.drawArcShine(g: HudArcGeometry, litDeg: Float) {
+    val inset = g.strokePx * SHINE_INSET_FRACTION
+    drawArc(
+        color = Color.White.copy(alpha = SHINE_ALPHA),
+        startAngle = 0f,
+        sweepAngle = litDeg,
+        useCenter = false,
+        topLeft = Offset(g.topLeft.x + inset, g.topLeft.y + inset),
+        size = Size(g.size.width - inset * 2f, g.size.height - inset * 2f),
+        style = Stroke(g.strokePx * SHINE_WIDTH_FRACTION, cap = StrokeCap.Round),
+    )
+}
+
+// LongParameterList: every parameter is a per-gauge rendering choice with a documented default;
+// bundling them into a config object would only move the same nine names one level down.
+@Suppress("LongParameterList")
 private fun DrawScope.drawHudArc(
     g: HudArcGeometry,
     progress: Float,
@@ -221,16 +277,21 @@ private fun DrawScope.drawHudArc(
     sweepDeg: Float,
     glowPaint: android.graphics.Paint,
     glowAlpha: Float = 0.85f,
-    /** Sweep-gradient stops, start -> mid -> end. Defaults to the palette's own, which is what
-     * every gauge other than the speedometer wants. */
-    sweepStops: Triple<Color, Color, Color> = Triple(
-        CaptainPalette.hudSweepStart,
-        CaptainPalette.hudSweepMid,
-        CaptainPalette.hudSweepEnd,
+    /** Sweep-gradient stops as (fraction of the ARC, colour), 0 = arc start, 1 = arc end.
+     * Defaults to the palette's own three, which is what every gauge other than the speedometer
+     * wants; the speedometer passes its fixed road-speed zones (see [speedZoneStops]). */
+    sweepStops: List<Pair<Float, Color>> = listOf(
+        0f to CaptainPalette.hudSweepStart,
+        0.5f to CaptainPalette.hudSweepMid,
+        1f to CaptainPalette.hudSweepEnd,
     ),
     /** Multiplier on the blurred glow pass's stroke width. The speedometer widens this at speed;
      * nothing else changes it. */
     glowStrokeMultiplier: Float = 1.5f,
+    /** Gaming-dial gloss (2026-09-14): a thin, soft white highlight riding the inner edge of the
+     * lit stroke so the ring reads as a lit, rounded tube rather than a flat band. Off for the
+     * small gauges. Purely a shade -- it introduces no motion of its own. */
+    shine: Boolean = false,
 ) {
     drawArc(
         color = CaptainPalette.hudTrack,
@@ -255,14 +316,14 @@ private fun DrawScope.drawHudArc(
             )
         }
         val full = sweepDeg / 360f
+        val stops = sweepStops.sortedBy { it.first }
         drawArc(
             brush = Brush.sweepGradient(
-                colorStops = arrayOf(
-                    0f to sweepStops.first,
-                    full * 0.5f to sweepStops.second,
-                    full to sweepStops.third,
-                    1f to sweepStops.third,
-                ),
+                // The wrap stop at 1.0 is the START colour, not the end one: a sweep gradient wraps, and
+                // the arc's round cap at its start reaches a hair below 0 degrees -- with the end colour
+                // there it drew a red fleck on the 0 km/h cap (bench, 2026-09-15).
+                colorStops = (stops.map { (f, c) -> (full * f.coerceIn(0f, 1f)) to c } + (1f to stops.first().second))
+                    .toTypedArray(),
                 center = g.center,
             ),
             startAngle = 0f,
@@ -272,6 +333,7 @@ private fun DrawScope.drawHudArc(
             size = g.size,
             style = Stroke(g.strokePx, cap = StrokeCap.Round),
         )
+        if (shine && !isLight) drawArcShine(g, lit)
         if (isLight) {
             drawArc(
                 color = CaptainPalette.hudAccent,
@@ -487,6 +549,7 @@ fun GlowingSpeedometer(
         label = "hud-speed",
     )
     val effectiveBand = band ?: rememberSpeedBand(animatedSpeed, thresholdKmh).value
+    val zoneStops = remember(safeMax) { speedZoneStops(safeMax) }
 
     // One scalar carries the whole band character, so a change is a continuous crossfade rather
     // than a jump. A tween, deliberately not hudSpring(): a spring overshooting past 0.5 on a
@@ -534,8 +597,13 @@ fun GlowingSpeedometer(
             val toDistance = (e * 2f).coerceIn(0f, 1f)
             val toFast = (e * 2f - 1f).coerceIn(0f, 1f)
 
-            val litColor = lerp(CaptainPalette.hudAccent, CaptainPalette.neonCyan, toDistance)
-            val hotColor = lerp(litColor, CaptainPalette.hudSweepHot, toFast)
+            // Gaming zones (2026-09-14): the ring's colour is positional (see speedZoneStops);
+            // the glow and the end cap take the colour of the zone the needle is in right now,
+            // so at 95 km/h the whole dial visibly runs hot while at 50 it sits calm green.
+            val zoneNow = SpeedZone.initial(speed.toDouble())
+            val zoneColor = speedZoneColor(zoneNow)
+            val red = zoneNow == SpeedZone.CAUTION && speed >= ZONE_RED_KMH
+            val hotColor = if (red) CaptainPalette.danger else zoneColor
             glowPaint.color = hotColor.toArgb()
 
             // The hum is the FAST band's only new motion, and it is brightness, never position.
@@ -546,13 +614,9 @@ fun GlowingSpeedometer(
             drawHudArc(
                 g, speedFraction, startDeg, sweepDeg, glowPaint,
                 glowAlpha = glowAlpha,
-                sweepStops = Triple(
-                    lerp(CaptainPalette.hudSweepStart, CaptainPalette.hudSweepMid, toFast),
-                    lerp(CaptainPalette.hudSweepMid, CaptainPalette.neonCyan, toFast),
-                    lerp(lerp(CaptainPalette.hudSweepEnd, CaptainPalette.neonCyan, toDistance),
-                        CaptainPalette.hudSweepHot, toFast),
-                ),
-                glowStrokeMultiplier = 1.5f + 0.3f * toFast,
+                sweepStops = zoneStops,
+                glowStrokeMultiplier = 1.5f + 0.3f * toFast + (if (zoneNow == SpeedZone.CAUTION) 0.3f else 0f),
+                shine = true,
             )
 
             if (motion) {
@@ -560,7 +624,7 @@ fun GlowingSpeedometer(
                     g, clock.ember.value, speedFraction, startDeg, sweepDeg, emberPaint,
                     // Hidden entirely in WAITING: a taxi charging waiting time shows a calm,
                     // still ring, which is the state the "calm animations" feedback was about.
-                    color = lerp(CaptainPalette.hudSweepMid, CaptainPalette.hudSweepHot, toFast),
+                    color = hotColor,
                     alpha = (235f * toDistance + 20f * toFast).roundToInt().coerceIn(0, 255),
                     strokeMultiplier = 0.9f + 0.2f * toFast,
                 )

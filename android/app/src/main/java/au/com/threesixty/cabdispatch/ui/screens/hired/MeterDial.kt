@@ -64,6 +64,8 @@ import au.com.threesixty.cabdispatch.data.remote.TariffDto
 import au.com.threesixty.cabdispatch.domain.ActiveBlackout
 import au.com.threesixty.cabdispatch.domain.FareState
 import au.com.threesixty.cabdispatch.domain.SpeedBand
+import au.com.threesixty.cabdispatch.domain.SpeedZone
+import au.com.threesixty.cabdispatch.ui.theme.speedZoneColor
 import au.com.threesixty.cabdispatch.domain.TimeClass
 import au.com.threesixty.cabdispatch.domain.toMeterDisplayString
 import au.com.threesixty.cabdispatch.domain.toMoneyString
@@ -346,11 +348,13 @@ internal fun MeterDial(
         label = "dial-speed",
     )
     val band by rememberSpeedBand(smoothedSpeed, fareState.speedThresholdKmh)
+    // Gaming zones (owner, 2026-09-14): the big km/h figure wears the road-speed zone's colour
+    // (LOW violet / GOOD green / CAUTION amber), with hysteresis so a cruise on a boundary never
+    // flickers. The tariff band still drives the size pop and the caption underneath.
+    var zone by remember { mutableStateOf(SpeedZone.initial(fareState.currentSpeedKmh)) }
+    LaunchedEffect(smoothedSpeed.value.roundToInt()) { zone = SpeedZone.next(zone, smoothedSpeed.value.toDouble()) }
     val bandColor by animateColorAsState(
-        targetValue = when (band) {
-            SpeedBand.WAITING -> CaptainPalette.hudAccent
-            SpeedBand.DISTANCE, SpeedBand.FAST -> CaptainPalette.neonCyan
-        },
+        targetValue = speedZoneColor(zone),
         animationSpec = tween(700),
         label = "band-color",
     )
@@ -667,7 +671,11 @@ internal fun MeterDial(
                         fontWeight = FontWeight.Bold,
                         fontSize = speedSize.sp,
                         color = bandColor,
-                        style = if (band == SpeedBand.FAST) glowStyle(bandColor, 14f) else TextStyle.Default,
+                        style = when (zone) {
+                            SpeedZone.LOW -> TextStyle.Default
+                            SpeedZone.GOOD -> glowStyle(bandColor, 14f)
+                            SpeedZone.CAUTION -> glowStyle(bandColor, 22f)
+                        },
                         modifier = Modifier.scale(bandPop.value),
                     )
                     Text(

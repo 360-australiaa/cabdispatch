@@ -965,7 +965,9 @@ internal fun RowScope.MeterPaneLayout(
             // opaque GlassCard, so it needs no help from the map's own wash to stay legible — the
             // wash's only remaining job is a faint brand-dark tint for visual consistency with the
             // rest of the UI, not contrast protection. Dropped hard.
-            dimAlpha = 0.08f,
+            // 0.08 -> 0 (owner, 2026-09-14: "map is too dark in the car, make it prominent"): no wash
+            // at all over the bright navigation-day style; every overlay draws on its own GlassCard.
+            dimAlpha = 0f,
             modifier = Modifier.fillMaxSize(),
         )
         Column(modifier = Modifier.align(Alignment.TopStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
