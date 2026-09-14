@@ -4,7 +4,13 @@ import au.com.threesixty.cabdispatch.domain.fare.TollGantryRef
 import au.com.threesixty.cabdispatch.domain.fare.TollPriceRef
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.TollRoadRef
+import au.com.threesixty.cabdispatch.domain.location.inertial.InertialBillingSource
+import au.com.threesixty.cabdispatch.domain.location.inertial.InertialConfidence
+import au.com.threesixty.cabdispatch.domain.location.inertial.InertialEstimate
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -113,5 +119,79 @@ class FareEngineImplCorridorTollTest {
             listOf("TUNNEL"),
             state.unpricedTollRoads.map { it.roadId },
         )
+    }
+
+    /** A registry whose one priced road sits entirely INSIDE the blackout -- its gantries are
+     * kilometres from both portals, so `gantryChainPath` (both portals within 250m of the SAME
+     * road) can never match it. The T5453 shape: Rozelle -> M4-M8 -> M4 is three roads. */
+    private fun midTunnelRoadRegistry(amount: String): TollRegistrySnapshot {
+        val road = TollRoadRef(
+            id = "MID_TUNNEL",
+            name = "Mid Tunnel Road",
+            pricingModel = "flat",
+            directional = "both",
+            currentPrice = TollPriceRef(
+                priceClassAMax = BigDecimal(amount),
+                capClassA = null,
+                ratePerKmClassA = null,
+                flagfallClassA = null,
+                timeOfDayRatesClassA = null,
+                confidence = "verified",
+            ),
+        )
+        return TollRegistrySnapshot(
+            roadsById = mapOf(road.id to road),
+            gantries = listOf(
+                TollGantryRef("MID-1", road.id, -33.9200, 151.1530),
+                TollGantryRef("MID-2", road.id, -33.9200, 151.1570),
+            ),
+        )
+    }
+
+    /** Publishes a usable estimate and hands the engine a dead-reckoned path that passes over
+     * the mid-tunnel gantries (with a deliberate drift at the far end for the closure
+     * correction to remove). */
+    private class PathInertialSource(private val path: List<Pair<Double, Double>>) : InertialBillingSource {
+        private val _estimate = MutableStateFlow<InertialEstimate?>(null)
+        override val estimate: StateFlow<InertialEstimate?> = _estimate.asStateFlow()
+        override val blackoutPath: List<Pair<Double, Double>> get() = path
+        override fun onBlackoutEntered(
+            entrySpeedKmh: Double,
+            entryHeadingDeg: Double?,
+            entryLocationFix: LocationFix?,
+        ) {
+            _estimate.value = InertialEstimate(
+                speedKmh = 60.0, headingDegOrNull = 90.0, sigmaVMetresPerSecond = 0.2,
+                confidence = InertialConfidence.HIGH, zuptCount = 0, calibrationGood = true, unreliable = false,
+            )
+        }
+        override fun onBlackoutExited() = Unit
+    }
+
+    @Test
+    fun `a road buried mid-tunnel that no corridor match can see is tolled off the dead-reckoned path`() = runTest {
+        val registry = midTunnelRoadRegistry("5.85")
+        // Straight east along the tunnel's latitude, 20m steps, ending 150m SHORT of the real
+        // exit (dead-reckoning under-ran) -- closure correction stretches it to the exit fix.
+        val steps = 40
+        val drPath = (0..steps).map { i ->
+            TUNNEL_ENTRY_LAT to (TUNNEL_ENTRY_LNG + (TUNNEL_EXIT_LNG - 0.0016 - TUNNEL_ENTRY_LNG) * i / steps)
+        }
+        val inertial = PathInertialSource(drPath)
+        val gps = FakeMeterGps(60.0)
+        val engine = FareEngineImpl(
+            gps,
+            backgroundScope,
+            TollRegistryProvider { registry },
+            nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
+            inertialSpeedSource = inertial,
+            inertialBillingEnabled = true,
+        )
+        driveThroughBlackout(gps, engine)
+
+        val state = engine.state.value
+        assertEquals("INERTIAL", state.lastResolvedBlackout?.resolution)
+        assertEquals(listOf("MID_TUNNEL"), state.autoTollsApplied.map { it.roadId })
+        assertEquals(BigDecimal("5.85"), state.breakdown.tolls)
     }
 }

@@ -481,8 +481,18 @@ class MeterController(
      * `null` (append nothing) only when there has never been a live fix at all — an honest gap,
      * never a fabricated point.
      */
+    // ReturnCount: two honest "nothing to append" guards (no fix ever, stale fix), guard-clause style.
+    @Suppress("ReturnCount")
     private fun nextTracePoint(): TelemetryPointDto? {
         val fix = speedSource.locationFix.value ?: return null
+        // A fix older than the fare engine's own staleness cutoff is NOT a position -- it is the
+        // last place the sky was visible. Appending it every second through a tunnel (which is
+        // what this did until 2026-09-14) hands the server a trace with no time gap and no
+        // movement, so its own recompute sees a parked car, never a blackout: the T5453 tunnel
+        // trip came back from `POST /v1/trips/sync` recomputed at $32.52 against the $59.03 the
+        // meter charged, purely because of these phantom points. Same MAX_FIX_AGE_MS test the
+        // engine bills on, so the trace's gap and the engine's blackout start on the same tick.
+        if (System.nanoTime() - fix.receivedAtNanos > LocationFix.MAX_FIX_AGE_MS * NANOS_PER_MILLI) return null
         return TelemetryPointDto(
             lat = fix.lat,
             lng = fix.lng,
@@ -492,6 +502,8 @@ class MeterController(
     }
 
     companion object {
+        private const val NANOS_PER_MILLI = 1_000_000L
+
         /**
          * The live controller, published for [MeterForegroundService] to read.
          *

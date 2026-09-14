@@ -706,6 +706,7 @@ async def recompute_from_trace(
     surcharge_pct: Decimal | None,
     include_psl: bool,
     negotiated_total: Decimal | None = None,
+    device_segments: list[DeviceGpsBlackoutSegment] | None = None,
 ) -> tuple[FareBreakdown, int, int, int, TimeClass, bool, list[dict], int]:
     """Server-side canonical recompute of a fare from a submitted raw GPS
     trace, used by POST /v1/trips/sync to validate a device's own total.
@@ -805,23 +806,44 @@ async def recompute_from_trace(
         # calls is set by the device's network-batching policy, not GPS availability (a real
         # regression caught by the pre-existing tick test suite when this was tried there too).
         if elapsed_seconds > BLACKOUT_GAP_THRESHOLD_S:
-            corridor_km = await known_corridor_distance_km(
-                session,
-                entry_lat=prev_lat,
-                entry_lng=prev_lng,
-                exit_lat=point.lat,
-                exit_lng=point.lng,
-            )
-            distance_km = corridor_km if corridor_km is not None else Decimal(0)
-            gps_blackout_events.append(
-                {
-                    "start": ts_prev.isoformat(),
-                    "end": ts_point.isoformat(),
-                    "elapsed_s": int(elapsed_seconds),
-                    "matched_km": str(corridor_km) if corridor_km is not None else None,
-                    "resolution": "CORRIDOR" if corridor_km is not None else "NONE",
-                }
-            )
+            # 2026-09-14 (T5453, first real Sydney tunnel drive): the DEVICE's own account of
+            # this exact gap wins when it has one. It billed the gap off its accelerometer/
+            # gyroscope (INERTIAL), or off the same corridor lookup as below (CORRIDOR) -- sensor
+            # evidence this server does not have and cannot reconstruct from a trace that, by
+            # definition, has no points in the gap. Before this, a tunnel the meter charged
+            # $59.03 for recomputed here at $32.52 and THAT became the fare of record. The
+            # corridor lookup remains the fallback for a device build that reports no segments,
+            # and reconcile_gps_blackout_segments still flags every mismatch for a human.
+            device_km, device_resolution = _device_billed_km_for_gap(device_segments, ts_prev, ts_point)
+            if device_km is not None:
+                distance_km = device_km
+                gps_blackout_events.append(
+                    {
+                        "start": ts_prev.isoformat(),
+                        "end": ts_point.isoformat(),
+                        "elapsed_s": int(elapsed_seconds),
+                        "matched_km": str(device_km),
+                        "resolution": f"DEVICE_{device_resolution}",
+                    }
+                )
+            else:
+                corridor_km = await known_corridor_distance_km(
+                    session,
+                    entry_lat=prev_lat,
+                    entry_lng=prev_lng,
+                    exit_lat=point.lat,
+                    exit_lng=point.lng,
+                )
+                distance_km = corridor_km if corridor_km is not None else Decimal(0)
+                gps_blackout_events.append(
+                    {
+                        "start": ts_prev.isoformat(),
+                        "end": ts_point.isoformat(),
+                        "elapsed_s": int(elapsed_seconds),
+                        "matched_km": str(corridor_km) if corridor_km is not None else None,
+                        "resolution": "CORRIDOR" if corridor_km is not None else "NONE",
+                    }
+                )
         else:
             distance_km = plausible_distance_km(
                 prev_lat, prev_lng, point.lat, point.lng, elapsed_seconds
@@ -863,6 +885,29 @@ async def recompute_from_trace(
 # codebase's other geometry/money tolerances are (see e.g.
 # app.services.tolls.TOLL_CONFIRM_RADIUS_M's own "150m, not exact-match"
 # reasoning).
+def _device_billed_km_for_gap(
+    device_segments: list[DeviceGpsBlackoutSegment] | None,
+    gap_start: datetime,
+    gap_end: datetime,
+) -> tuple[Decimal | None, str | None]:
+    """The distance the DEVICE itself billed for the trace gap [gap_start, gap_end], and how
+    (its `resolution`), from the first device-reported blackout segment whose interval matches
+    the gap by `_blackout_intervals_match`'s own rule; `(None, None)` when the device reported no
+    matching segment, or billed nothing for it (a NONE/STATIONARY gap contributes no distance
+    here either -- the ordinary per-tick waiting accrual below already covers it). See
+    `recompute_from_trace`'s gap branch for why the device's account wins."""
+    if not device_segments:
+        return None, None
+    for segment in device_segments:
+        if segment.resolution not in ("INERTIAL", "CORRIDOR", "UNCALIBRATED"):
+            continue
+        if segment.billed_distance_km <= 0:
+            continue
+        if _blackout_intervals_match(_as_utc(segment.started_at), _as_utc(segment.ended_at), gap_start, gap_end):
+            return segment.billed_distance_km, segment.resolution
+    return None, None
+
+
 BLACKOUT_CORRIDOR_KM_TOLERANCE_ABS = Decimal("0.25")
 BLACKOUT_CORRIDOR_KM_TOLERANCE_PCT = Decimal("0.10")
 

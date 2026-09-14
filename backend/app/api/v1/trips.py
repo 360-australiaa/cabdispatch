@@ -290,6 +290,10 @@ async def sync_trips(
                     surcharge_pct=item.surcharge_pct,
                     include_psl=item.include_psl,
                     negotiated_total=item.negotiated_total,
+                    # The device's own account of every GPS blackout on this trip -- the
+                    # recompute bills a trace gap with it when one matches (see
+                    # recompute_from_trace's gap branch, 2026-09-14).
+                    device_segments=item.gps_blackout_segments,
                 )
 
                 # GPS-blackout / STOPPED reconciliation (B-W1) -- purely an audit-trail
@@ -321,10 +325,27 @@ async def sync_trips(
                 # whole Compliance Vault module exists for needs to actually be visible, not silent.
                 fare_check_passed = variance_pct <= 1.0
                 auto_flag_reason: str | None = None
+                # The fare OF RECORD is what the meter charged the passenger. The server's
+                # trace-based recompute is a fraud/bug cross-check that flags a trip for a human;
+                # it must never quietly replace the charged amount on the dashboard, receipts,
+                # shift cash-up and GST reporting with a number nobody paid. Until 2026-09-14 it
+                # did exactly that: a real tunnel trip the meter charged $59.03 for was stored
+                # -- and shown to the owner -- as $32.52. So: a trip that fails the check keeps
+                # the device's total (and a proportional GST component), is flagged, and the
+                # note carries the server's figure for the review.
+                stored_total = breakdown.grand_total
+                stored_gst = breakdown.gst_component
                 if not fare_check_passed:
                     auto_flag_reason = (
                         f"Auto-flagged: fare variance {variance_pct}% exceeds 1% tolerance "
-                        f"(device reported {item.device_total}, server recomputed {breakdown.grand_total})"
+                        f"(device reported {item.device_total}, server recomputed {breakdown.grand_total}). "
+                        f"Stored total is the device's charged fare; the server figure is kept here for review."
+                    )
+                    stored_total = round_half_up(item.device_total)
+                    stored_gst = (
+                        round_half_up(item.device_total * breakdown.gst_component / breakdown.grand_total)
+                        if breakdown.grand_total > 0
+                        else round_half_up(item.device_total / Decimal(11))
                     )
 
                 # New payment methods (blueprint 5.2.5), same validate-before-persist contract as
@@ -403,8 +424,8 @@ async def sync_trips(
                     extras=breakdown.extras,
                     subtotal=breakdown.fare_total,
                     surcharge=breakdown.surcharge,
-                    total=breakdown.grand_total,
-                    gst_component=breakdown.gst_component,
+                    total=stored_total,
+                    gst_component=stored_gst,
                     payment_method=item.payment_method,
                     voucher_code=item.voucher_code,
                     account_reference=item.account_reference,

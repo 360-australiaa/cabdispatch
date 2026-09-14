@@ -3497,3 +3497,78 @@ async def test_sync_accepts_inertial_blackout_segment_with_w2_fields(client: Asy
         )
         resp2 = await client.post("/v1/trips/sync", json=[item2], headers=headers)
         assert resp2.status_code == 200, (res, resp2.text)
+
+
+async def test_sync_bills_a_trace_gap_with_the_devices_own_inertial_segment(
+    client: AsyncClient, session: AsyncSession
+):
+    """2026-09-14 (T5453): a tunnel the meter billed off its own sensors came back from sync
+    recomputed at a third of the fare because the trace has no points underground. When the
+    device reports a blackout segment matching the gap, the recompute must bill the gap with
+    the device's own figure, never the corridor-lookup's None -> 0."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    entry_lat, entry_lng = -33.8693, 151.1764
+    exit_lat, exit_lng = -33.8614, 151.0810  # ~8.8 km west, no registry road seeded here
+    now = _FIXED_DAY_START_AT
+    trace = [
+        {"lat": entry_lat, "lng": entry_lng, "speed_kmh": 48, "ts": (now + timedelta(seconds=10)).isoformat()},
+        # ten minutes of nothing -- the tunnel -- then the far portal
+        {"lat": exit_lat, "lng": exit_lng, "speed_kmh": 50, "ts": (now + timedelta(seconds=610)).isoformat()},
+    ]
+    segment = _device_blackout_segment(
+        client_uuid="seg-tunnel",
+        started_at=now + timedelta(seconds=12),
+        ended_at=now + timedelta(seconds=608),
+        entry=(entry_lat, entry_lng),
+        exit_=(exit_lat, exit_lng),
+        resolution="INERTIAL",
+        billed_distance_km="8.846",
+    )
+    item = _sync_item(
+        tariff_id=tariff.id,
+        gps_trace=trace,
+        device_total="0.00",
+        start_lat=entry_lat,
+        start_lng=entry_lng,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(seconds=610)).isoformat(),
+        gps_blackout_segments=[segment],
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert 8800 <= trip["distance_m"] <= 8900, trip["distance_m"]
+    # The first trace point is itself 10s after start_at (a trivial NONE gap); the tunnel is
+    # the 600s one.
+    tunnel = [e for e in trip["gps_blackout_events"] if e["elapsed_s"] == 600]
+    assert tunnel and tunnel[0]["resolution"] == "DEVICE_INERTIAL", trip["gps_blackout_events"]
+    assert tunnel[0]["matched_km"].startswith("8.846")
+    # And the device's segment now matches a server-side gap -- no "missing on server" flag.
+    flags = trip.get("blackout_reconciliation") or []
+    assert not any(f["type"] == "device_segment_missing_on_server" for f in flags), flags
+
+
+async def test_sync_keeps_the_charged_device_total_when_the_variance_check_fails(
+    client: AsyncClient, session: AsyncSession
+):
+    """The fare of record is what the passenger paid. A trip the server's own recompute
+    disagrees with is FLAGGED with the server figure in the note -- it is not silently
+    re-priced on the dashboard (2026-09-14: $59.03 charged, $32.52 shown)."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = datetime.now(UTC)
+    trace = [{"lat": -33.86, "lng": 151.2093, "speed_kmh": 40, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(tariff_id=tariff.id, gps_trace=trace, device_total="59.03")
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+    assert trip["flagged_for_review"] is True
+    assert trip["max_fare_check_passed"] is False
+    assert Decimal(trip["total"]) == Decimal("59.03")
+    assert Decimal(trip["gst_component"]) > 0
+    assert "server recomputed" in trip["review_notes"]

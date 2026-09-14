@@ -24,6 +24,17 @@ interface InertialBillingSource {
 
     /** Reacquisition — resumes shadow-mode reseeding. */
     fun onBlackoutExited()
+
+    /**
+     * The dead-reckoned polyline (lat, lng) walked since [onBlackoutEntered] -- the same
+     * heading-integrated positions the meter map already shows during a blackout, downsampled
+     * to ~20m steps. Read ONCE by [au.com.threesixty.cabdispatch.domain.FareEngineImpl] at
+     * reacquisition to sweep toll gantries along a tunnel no single registry road brackets
+     * (2026-09-14, T5453: Rozelle Interchange -> M4-M8 Link -> M4 tunnels is three roads, so the
+     * corridor match found none of them). Display-grade geometry, never itself billed as
+     * distance. Empty when no blackout is in progress or the implementation keeps no path.
+     */
+    val blackoutPath: List<Pair<Double, Double>> get() = emptyList()
 }
 
 /**

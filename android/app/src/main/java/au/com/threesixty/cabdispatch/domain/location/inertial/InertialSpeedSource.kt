@@ -74,6 +74,12 @@ class InertialSpeedSource(
     private var lastHeadingSeedNanos: Long = 0L
     private var entryFix: LocationFix? = null
     private var traveledAlongHeadingKm = 0.0
+    /** See [InertialBillingSource.blackoutPath]. Guarded by itself: appended on the sampler thread,
+     * snapshotted from the fare engine's tick. */
+    private val pathPoints = mutableListOf<Pair<Double, Double>>()
+
+    override val blackoutPath: List<Pair<Double, Double>>
+        get() = synchronized(pathPoints) { pathPoints.toList() }
     private var lastSampleNanosForDisplay: Long? = null
 
     init {
@@ -122,6 +128,10 @@ class InertialSpeedSource(
         blackoutActive = true
         entryFix = entryLocationFix
         traveledAlongHeadingKm = 0.0
+        synchronized(pathPoints) {
+            pathPoints.clear()
+            entryLocationFix?.let { pathPoints += it.lat to it.lng }
+        }
         lastSampleNanosForDisplay = null
         estimator.seed(entrySpeedKmh, entryHeadingDeg)
     }
@@ -182,6 +192,12 @@ class InertialSpeedSource(
         } else {
             entry.lat to entry.lng
         }
+        synchronized(pathPoints) {
+            val last = pathPoints.lastOrNull()
+            if (last == null || GeoMath.distanceKm(last.first, last.second, lat, lng) * METRES_PER_KM >= PATH_STEP_M) {
+                pathPoints += lat to lng
+            }
+        }
         return LocationFix(
             lat = lat,
             lng = lng,
@@ -208,6 +224,11 @@ class InertialSpeedSource(
         /** Below this a GPS bearing is not trusted to mean "the direction the car is pointing"
          * (a crawling or stationary fix reports noise for a heading). */
         private const val HEADING_SEED_MIN_SPEED_KMH = 15.0
+
+        /** [blackoutPath] vertex spacing -- a third of the toll detector's 60m confirm radius, so
+         * a gantry the dead-reckoned path genuinely passes over always gets a vertex inside it. */
+        private const val PATH_STEP_M = 20.0
+        private const val METRES_PER_KM = 1000.0
 
         /** ~60s of history at [ImuSampler]'s ~10 Hz publish rate. */
         private const val RESIDUAL_BUFFER_SIZE = 600

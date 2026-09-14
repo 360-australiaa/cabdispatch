@@ -404,7 +404,11 @@ interface FareEngine {
 // constructor, `resumeTrip`'s seven), where a parameter-object refactor would rename the problem
 // rather than solve it: each one is a distinct, independently-defaulted seam, not a bundle of
 // related fields that belong in their own type.
-@Suppress("LongParameterList")
+// LargeClass: crossed the line-count threshold with the 2026-09-14 tunnel fixes (corridor toll
+// sweep + dead-reckoned path). The class is one state machine over one tick; the pieces that
+// could be split (toll detection, blackout resolution) each read and write the same private
+// tracking fields, so a split would be a mechanical move that hides the coupling, not remove it.
+@Suppress("LongParameterList", "LargeClass")
 class FareEngineImpl(
     private val speedSource: SpeedSource,
     private val scope: CoroutineScope,
@@ -1646,6 +1650,7 @@ class FareEngineImpl(
         val registry = tollRegistry ?: return
         if (registry.gantries.isEmpty()) return
         val path = gantryChainPath(registry, resolved.entryLat, resolved.entryLng, resolved.exitLat, resolved.exitLng)
+            ?: deadReckonedPath(resolved)
             ?: return
         var cumulativeKm = (cs.cumulativeDistanceKm - resolved.billedDistanceKm).coerceAtLeast(BigDecimal.ZERO)
         var previous: Pair<Double, Double>? = null
@@ -1656,6 +1661,36 @@ class FareEngineImpl(
             previous = point
             detectTollsAt(cs, point.first, point.second, cumulativeKm)
         }
+    }
+
+    // ReturnCount: the three guards detectTolls itself always carried, unchanged by the split.
+    @Suppress("ReturnCount")
+    /**
+     * The blackout's own dead-reckoned polyline ([InertialBillingSource.blackoutPath]), closure-
+     * corrected so it ends exactly at the real reacquisition fix: whatever the free-run drifted by
+     * over the crossing is distributed along the path in proportion to distance walked (a
+     * straight-line drift -- the dominant error of a heading integral -- cancels exactly; a
+     * curved one shrinks). Used by [sweepCorridorTolls] only when no single registry road brackets
+     * both portals, which is the normal case for a multi-road tunnel system (Rozelle -> M4-M8 ->
+     * M4). `null` with fewer than two vertices -- nothing to walk.
+     */
+    private fun deadReckonedPath(resolved: ResolvedBlackout): List<Pair<Double, Double>>? {
+        val raw = inertialSpeedSource?.blackoutPath ?: return null
+        if (raw.size < 2) return null
+        val legs = DoubleArray(raw.size)
+        for (i in 1 until raw.size) {
+            legs[i] = legs[i - 1] + GeoMath.distanceKm(raw[i - 1].first, raw[i - 1].second, raw[i].first, raw[i].second)
+        }
+        val total = legs.last()
+        if (total <= 0.0) return null
+        val drEnd = raw.last()
+        val dLat = resolved.exitLat - drEnd.first
+        val dLng = resolved.exitLng - drEnd.second
+        val corrected = raw.mapIndexed { i, (lat, lng) ->
+            val f = legs[i] / total
+            (lat + dLat * f) to (lng + dLng * f)
+        }
+        return corrected + (resolved.exitLat to resolved.exitLng)
     }
 
     // ReturnCount: the three guards detectTolls itself always carried, unchanged by the split.
