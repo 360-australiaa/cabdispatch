@@ -170,13 +170,23 @@ fun PermissionsChecklistScreen(navController: NavHostController, next: String? =
             PermKind.FOREGROUND_RUNTIME -> requestForeground()
             PermKind.BACKGROUND_LOCATION -> requestBackgroundLocation()
             PermKind.BATTERY -> openBatteryOptimisation()
+            // Bug found in live on-device testing (2026-09-14): this used a bare
+            // context.startActivity(...) instead of settingsLauncher -- the one thing every other
+            // settings-based card on this screen (BATTERY, BACKGROUND_LOCATION) routes through to
+            // get its refreshKey++ on return. A driver who actually granted "Install unknown apps"
+            // in system Settings and came back saw this card still say "Not allowed" — not stale
+            // for a moment, but forever, since nothing was left to ever re-run
+            // buildPermissionCards() again. settingsLauncher fires the same intent and reports
+            // back through the exact callback the other two already rely on.
             PermKind.INSTALL_PACKAGES ->
-                context.startActivity(
-                    RuntimePermissions.settingsIntentFor(
-                        context,
-                        au.com.threesixty.cabdispatch.domain.DeviceReadiness.MeterPermission.InstallPackages,
-                    ),
-                )
+                // settingsIntentFor is a shared, multi-permission lookup (Intent? — null for any
+                // MeterPermission it doesn't cover); always non-null for InstallPackages
+                // specifically, but the ?.let keeps this call site honest about the shared
+                // function's real return type instead of asserting past it.
+                RuntimePermissions.settingsIntentFor(
+                    context,
+                    au.com.threesixty.cabdispatch.domain.DeviceReadiness.MeterPermission.InstallPackages,
+                )?.let { settingsLauncher.launch(it) }
             PermKind.INFO -> Unit // genuinely nothing to do -- see the notifications card
         }
     }

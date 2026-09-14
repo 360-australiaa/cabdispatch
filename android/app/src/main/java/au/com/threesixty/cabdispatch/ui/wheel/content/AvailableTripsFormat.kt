@@ -6,7 +6,9 @@ import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 
 /**
  * Small formatting/countdown helpers for the Available Trips wheel-slot list + detail screen —
@@ -15,9 +17,16 @@ import java.time.OffsetDateTime
  * here rather than added to [WheelContentFormat] (a sibling agent's file for the Trips/Earnings/
  * Shift slots, landed in parallel with this pass) to avoid a same-file edit race with that agent.
  */
+// Bug found in live on-device testing (2026-09-14): missing the LocalDateTime-as-UTC fallback
+// au.com.threesixty.cabdispatch.ui.screens.dashboard.DriverEngagementFormat.parseInstant already
+// has (SQLAlchemy's DateTime(timezone=True) is a no-op on the SQLite dev backend, so it hands back
+// a naive ISO timestamp with no 'Z'/offset). Without it, this function's own "same defensive shape
+// as formatMessageRelativeTime" doc comment turned out to describe a shared bug, not a shared
+// safeguard: formatOfferRelativeTime's raw-string fallback fired on exactly that input.
 private fun parseOfferInstant(iso: String): Instant? =
     runCatching { Instant.parse(iso) }
         .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
         .getOrNull()
 
 /** "2 min ago" / "Just now" — matches the reference prototype's Available Trips list strings

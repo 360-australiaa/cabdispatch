@@ -69,8 +69,10 @@ import au.com.threesixty.cabdispatch.ui.theme.color
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
@@ -667,8 +669,14 @@ private fun DocumentStatusRow(label: String, expiryIso: String?) {
  * `null` (never a raw ISO string) on a genuinely unparseable value, so the identity row simply
  * omits itself rather than showing raw JSON-ish text. */
 private fun formatMemberSince(iso: String): String? {
+    // Hardened alongside the same gap found in live on-device testing (2026-09-14) elsewhere in
+    // this codebase: a naive ISO timestamp (no 'Z'/offset, what a SQLite dev backend hands back)
+    // used to fail both clauses above. This function already never leaked the raw string (its own
+    // doc: "null... on a genuinely unparseable value"), but a real member-since date silently
+    // omitting itself is still worth the same fix.
     val instant = runCatching { Instant.parse(iso) }
         .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
         .getOrNull() ?: return null
     return DateTimeFormatter.ofPattern("MMM yyyy").format(instant.atZone(ZoneId.systemDefault()))
 }

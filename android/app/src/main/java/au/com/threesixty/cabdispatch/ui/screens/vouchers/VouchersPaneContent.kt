@@ -47,8 +47,10 @@ import au.com.threesixty.cabdispatch.ui.theme.RollingMoneyText
 import au.com.threesixty.cabdispatch.ui.theme.gameClick
 import au.com.threesixty.cabdispatch.ui.theme.neonGlow
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /**
@@ -162,9 +164,15 @@ private data class VoucherBuckets(
     val expired: List<VoucherDto>,
 )
 
+// Bug found in live on-device testing (2026-09-14): missing the LocalDateTime-as-UTC fallback
+// au.com.threesixty.cabdispatch.ui.screens.dashboard.DriverEngagementFormat.parseInstant already
+// has (SQLAlchemy's DateTime(timezone=True) is a no-op on the SQLite dev backend, so it hands back
+// a naive ISO timestamp with no 'Z'/offset). Without it, formatVoucherDate's own documented "falls
+// back to the raw ISO string if it doesn't parse" fired on exactly that input.
 private fun parseVoucherInstant(iso: String): Instant? =
     runCatching { Instant.parse(iso) }
         .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
         .getOrNull()
 
 private fun bucketVouchers(all: List<VoucherDto>, now: Instant = Instant.now()): VoucherBuckets {

@@ -77,7 +77,9 @@ import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 
 /**
  * Wheel slot 1 — "Available Trips" / live dispatch content pane (spec §4: "list of job cards —
@@ -700,9 +702,16 @@ private fun offerWindowSeconds(offeredAt: String, expiresAt: String): Long? {
     return Duration.between(start, end).seconds.takeIf { it > 0L }
 }
 
+// Hardened alongside the same gap found in live on-device testing (2026-09-14) in
+// au.com.threesixty.cabdispatch.ui.screens.messages.MessageTimeFormat and others -- a naive ISO
+// timestamp (no 'Z'/offset, what a SQLite dev backend hands back) used to fail both clauses here
+// too. This one doesn't leak a raw string (offerWindowSeconds returns null, so the countdown ring
+// simply doesn't show), but a real countdown silently failing to render is still a correctness bug
+// worth the same fix.
 private fun parseOfferTimestamp(iso: String): Instant? =
     runCatching { Instant.parse(iso) }
         .recoverCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
         .getOrNull()
 
 // ---------------------------------------------------------------------------------------------
