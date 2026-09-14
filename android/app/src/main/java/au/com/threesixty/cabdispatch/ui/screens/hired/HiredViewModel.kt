@@ -68,6 +68,36 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
     val isNewTripStart: Boolean = SessionHolder.pendingTrip.value != null
 
     /**
+     * One-shot consume gate for the "METER STARTED" banner [isNewTripStart] gates — real bug,
+     * found live on-device (2026-09-14): [isNewTripStart] is a `val`, computed once when this
+     * ViewModel is constructed, and stays whatever it was for this ViewModel's whole lifetime —
+     * correct, since it answers "was THIS hiring a fresh start", a fact that never changes mid-trip.
+     * But [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] itself is disposed and
+     * recomposed fresh every time the driver leaves this pane and comes back (Settings mid-fare,
+     * then back, is the case this was caught on) — this ViewModel survives that round trip (it is
+     * scoped to the nav back-stack entry, not the composable), but the screen's own `remember`ed
+     * `showStartedBanner`/`LaunchedEffect` do not, so a fresh composition replays the banner from
+     * scratch every single time, as long as [isNewTripStart] is still `true` — i.e. for the entire
+     * rest of the trip. A driver back from Settings ten minutes into a fare would see "METER
+     * STARTED" again, implying the meter had just reset. Consuming this exactly once — regardless
+     * of how many times the screen composes — fixes that without touching [isNewTripStart] itself,
+     * which [isRestoredFare]'s doc above still depends on meaning "was a fresh hand-off", not "has
+     * the banner been shown yet".
+     */
+    private var newTripStartBannerConsumed = false
+
+    /** Returns `true` the first time it is ever called on a fresh-trip-start ViewModel, `false`
+     * every time after (and always `false` on a restored fare) — see [newTripStartBannerConsumed]'s
+     * doc. Called from a `LaunchedEffect(Unit)` so it runs once per fresh composition of
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] but only ever actually shows the
+     * banner once across this ViewModel's whole lifetime. */
+    fun consumeNewTripStartBanner(): Boolean {
+        if (!isNewTripStart || newTripStartBannerConsumed) return false
+        newTripStartBannerConsumed = true
+        return true
+    }
+
+    /**
      * True when this screen has attached to a meter that was **already running** before it
      * composed — i.e. A1's `restoreOpenTripIfAny()` rebuilt the fare from an `OPEN` Room row after
      * the process died mid-hiring, and the driver is now looking at a dial that picked up where it
@@ -89,6 +119,20 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
      */
     val isRestoredFare: Boolean =
         SessionHolder.pendingTrip.value == null && AppContainer.meterController.activeClientUuid != null
+
+    /** Same one-shot consume gate as [consumeNewTripStartBanner], for the same reason and the same
+     * bug — [isRestoredFare] is a `val` that stays `true` for this ViewModel's whole lifetime, and
+     * [au.com.threesixty.cabdispatch.ui.screens.hired.HiredScreen] recomposes fresh every time the
+     * driver leaves this pane (Settings mid-fare) and comes back, so the "FARE RESUMED after
+     * restart" banner would otherwise replay on every return for the rest of the trip. */
+    private var restoredFareBannerConsumed = false
+
+    /** See [consumeNewTripStartBanner]'s doc — same shape, gating [isRestoredFare] instead. */
+    fun consumeRestoredFareBanner(): Boolean {
+        if (!isRestoredFare || restoredFareBannerConsumed) return false
+        restoredFareBannerConsumed = true
+        return true
+    }
 
     private val _speechEnabled = MutableStateFlow(false)
     val speechEnabled: StateFlow<Boolean> = _speechEnabled.asStateFlow()

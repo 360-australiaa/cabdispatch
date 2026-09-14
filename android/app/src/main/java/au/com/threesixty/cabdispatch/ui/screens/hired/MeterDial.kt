@@ -37,8 +37,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,6 +69,7 @@ import au.com.threesixty.cabdispatch.domain.toMeterDisplayString
 import au.com.threesixty.cabdispatch.domain.toMoneyString
 import java.time.Duration
 import java.time.Instant
+import kotlinx.coroutines.delay
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.ChakraPetch
 import au.com.threesixty.cabdispatch.ui.theme.GlassCard
@@ -127,20 +130,61 @@ private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(
 
 /**
  * "m:ss" since [ActiveBlackout.startedAtIso] — the wall-clock instant a real blackout began.
- * Recomputed off `Instant.now()` on every recomposition rather than a monotonic clock
- * deliberately: this is a DISPLAY-only "how long has this been going on" figure for the driver,
- * never a billing decision (see [ActiveBlackout.startedAtIso]'s own doc — billing always runs on
- * the engine's monotonic clock). [MeterDial] recomposes once a second for the whole hiring (the
- * fare tick), which is exactly the cadence this needs to stay live without a clock of its own.
- * A malformed/unparseable instant (should never happen — see the caller) renders "0:00" rather
+ * Takes `nowMillis` as an explicit parameter rather than reading `Instant.now()` internally —
+ * see [rememberNowTick]'s doc for why: this used to call `Instant.now()` straight from the
+ * composable body on the assumption that [MeterDial] "recomposes once a second for the whole
+ * hiring (the fare tick)", which is false for exactly the span this pill is on screen for. A
+ * malformed/unparseable instant (should never happen — see the caller) renders "0:00" rather
  * than crashing the dial.
  */
-private fun blackoutElapsedLabel(startedAtIso: String): String {
+private fun blackoutElapsedLabel(startedAtIso: String, nowMillis: Long): String {
     val started = runCatching { Instant.parse(startedAtIso) }.getOrNull() ?: return "0:00"
-    val elapsed = Duration.between(started, Instant.now()).let { if (it.isNegative) Duration.ZERO else it }
+    val rawElapsed = Duration.between(started, Instant.ofEpochMilli(nowMillis))
+    val elapsed = if (rawElapsed.isNegative) Duration.ZERO else rawElapsed
     val totalSeconds = elapsed.seconds
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
+
+/**
+ * Ticks once a second for as long as the caller stays composed — the same "must advance even when
+ * nothing else does" shape
+ * [au.com.threesixty.cabdispatch.ui.wheel.content.AvailableTripsFormat.rememberOfferCountdown]
+ * already uses for an offer countdown.
+ *
+ * Real bug, found live on-device (2026-09-14, GPS-blackout tunnel test): [FareState] is a
+ * `data class`, and [au.com.threesixty.cabdispatch.domain.FareEngine] publishes it as
+ * `_state.value = current.copy(...)`. A `MutableStateFlow` conflates consecutive equal values —
+ * it never emits to collectors when the new value `.equals()` the one already held — and during a
+ * blackout that is billing nothing (a "no charge yet" moving entry, or any blackout once its
+ * catch-up has already resolved) *every field* of that `copy(...)` is identical tick after tick:
+ * same distance, same moving/waiting seconds, same [ActiveBlackout] (same segment id, same
+ * `startedAtIso`, same entry fix). So the flow stops emitting, `collectAsStateWithLifecycle()`
+ * on [HiredViewModel.fareState] stops delivering new values, [MeterDial] stops recomposing, and
+ * this pill's old `Instant.now()`-in-the-composable-body read froze at whatever wall-clock instant
+ * the last *actual* fare-affecting tick happened to land on — for as long as the blackout lasted.
+ * Every other figure on the dial (fare/distance/time) freezing at the same moment is CORRECT — no
+ * money accrues during an untracked gap, so nothing on screen should move — but this pill is
+ * explicitly a live "how long has this been going on" readout with no such excuse, and it is the
+ * one thing a driver watching the dial during a long tunnel queue has to reassure them the meter
+ * itself is not the thing that has hung. Driving it off its own clock, independent of whatever
+ * [FareState] does or does not do this second, fixes that without touching a single line of fare
+ * math — a pure display fix for a pure display bug.
+ *
+ * [runningKey] is the current blackout's own id ([ActiveBlackout.segmentId]) — restarting the loop
+ * on a fresh key when one blackout ends and a new one begins is inert (the clock free-runs off
+ * wall time regardless) but keeps this composable's lifetime obviously scoped to "one blackout",
+ * matching every other keyed effect on this screen.
+ */
+private const val NOW_TICK_INTERVAL_MS = 1000L
+
+@Composable
+private fun rememberNowTick(runningKey: Any?): State<Long> =
+    produceState(initialValue = System.currentTimeMillis(), runningKey) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(NOW_TICK_INTERVAL_MS)
+        }
+    }
 
 /**
  * The GPS-lost pill's full text while a blackout is in progress — "GPS LOST 1:23 · waiting only"
@@ -155,9 +199,9 @@ private fun blackoutElapsedLabel(startedAtIso: String): String {
  * that (a promise about what is NOT being billed right now, not a claim about what the receipt
  * will eventually show).
  */
-private fun gpsLostPillText(blackout: ActiveBlackout): String {
+private fun gpsLostPillText(blackout: ActiveBlackout, nowMillis: Long): String {
     val suffix = if (blackout.entryWasMoving) "no charge yet" else "waiting only"
-    return "GPS LOST ${blackoutElapsedLabel(blackout.startedAtIso)} · $suffix"
+    return "GPS LOST ${blackoutElapsedLabel(blackout.startedAtIso, nowMillis)} · $suffix"
 }
 
 // ============================================================================================
@@ -470,6 +514,10 @@ internal fun MeterDial(
                     // screen, unattended, for the length of an entire tunnel queue.
                     if (fareState.gpsLost) {
                         val blackout = fareState.blackout
+                        // See [rememberNowTick]'s own doc for the bug this fixes — this pill must
+                        // keep advancing every second even on a tick where [fareState] itself does
+                        // not change at all (the common case for a "no charge yet" blackout).
+                        val nowMillis by rememberNowTick(blackout?.segmentId)
                         Row(
                             modifier = Modifier
                                 .padding(top = 6.dp)
@@ -490,8 +538,10 @@ internal fun MeterDial(
                                 tint = CaptainPalette.warning,
                                 modifier = Modifier.size(14.dp),
                             )
+                            val pillText = blackout?.let { gpsLostPillText(it, nowMillis) }
+                                ?: "GPS LOST — WAITING TIME ONLY"
                             Text(
-                                (blackout?.let { gpsLostPillText(it) } ?: "GPS LOST — WAITING TIME ONLY").uppercase(),
+                                pillText.uppercase(),
                                 style = Type.tiny,
                                 letterSpacing = 1.sp,
                                 color = CaptainPalette.warning,

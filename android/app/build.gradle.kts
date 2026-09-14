@@ -132,6 +132,20 @@ val generateDebugNetworkSecurityConfig = tasks.register("generateDebugNetworkSec
     // regardless of what an inputs snapshot thinks changed (local.properties is not a Gradle input
     // file this task declares, so an up-to-date check would otherwise miss that edit entirely).
     outputs.dir(generatedDebugNetworkSecurityConfigDir)
+    // Real bug, found live (2026-09-14): the paragraph above is only half the story. Declaring
+    // outputs with NO declared inputs does not make Gradle rerun this every time -- the opposite:
+    // once `generatedDebugNetworkSecurityConfigDir` exists from a prior run, Gradle's up-to-date
+    // check has nothing that changed to compare against (no inputs registered) and the output
+    // directory still matches its last recorded snapshot, so it marks this task UP-TO-DATE and
+    // skips `doLast` entirely on every later build -- caught in the act: local.properties was
+    // edited from a local backend URL to the production one plus a fresh ALLOW_CLEARTEXT_HOST,
+    // `assembleDebug` reported success, and the installed APK still shipped the stale
+    // (cleartext-less) config from the previous run, throwing "CLEARTEXT communication ... not
+    // permitted" against the very host this edit was meant to allow. `upToDateWhen { false }` is
+    // the direct fix for exactly this shape: it tells Gradle this task is never eligible for the
+    // up-to-date optimisation, so `doLast` below runs on every build regardless, which is what the
+    // paragraph above always intended.
+    outputs.upToDateWhen { false }
     doLast {
         val xmlDir = generatedDebugNetworkSecurityConfigDir.get().asFile.resolve("xml")
         xmlDir.mkdirs()

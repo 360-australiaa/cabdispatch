@@ -283,8 +283,14 @@ fun HiredScreen(
     var showPassengerEdit by remember { mutableStateOf(false) }
 
     var showStartedBanner by remember { mutableStateOf(false) }
-    LaunchedEffect(viewModel.isNewTripStart) {
-        if (viewModel.isNewTripStart) {
+    // LaunchedEffect(Unit), not LaunchedEffect(viewModel.isNewTripStart) (real bug, fixed
+    // 2026-09-14 — see HiredViewModel.consumeNewTripStartBanner's doc): this screen is disposed
+    // and recomposed fresh every time the driver leaves it (e.g. Settings mid-fare) and comes
+    // back, so keying on a value that stays `true` for the ViewModel's whole lifetime replayed
+    // this banner on every return. The ViewModel-side consume-once gate is what actually
+    // guarantees "once per trip" now; this effect just asks it, once per fresh composition.
+    LaunchedEffect(Unit) {
+        if (viewModel.consumeNewTripStartBanner()) {
             showStartedBanner = true
             kotlinx.coroutines.delay(2000)
             showStartedBanner = false
@@ -303,8 +309,13 @@ fun HiredScreen(
     // who was not necessarily looking at the tablet when it happened. Still self-dismissing, still
     // a single delayed reset rather than a loop.
     var showResumedBanner by remember { mutableStateOf(false) }
-    LaunchedEffect(viewModel.isRestoredFare) {
-        if (viewModel.isRestoredFare) {
+    // LaunchedEffect(Unit), not LaunchedEffect(viewModel.isRestoredFare) — same real bug and same
+    // fix as showStartedBanner above: this screen recomposes fresh on every return from Settings
+    // mid-fare, and isRestoredFare stays true for the ViewModel's whole lifetime, so keying on it
+    // replayed "FARE RESUMED after restart" on every return. The ViewModel-side consume-once gate
+    // is what actually guarantees "once per trip" now.
+    LaunchedEffect(Unit) {
+        if (viewModel.consumeRestoredFareBanner()) {
             showResumedBanner = true
             kotlinx.coroutines.delay(5000)
             showResumedBanner = false
