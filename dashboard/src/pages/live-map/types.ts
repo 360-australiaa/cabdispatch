@@ -110,6 +110,15 @@ export interface DuressEventRead {
   tenant_id: string;
   vehicle_id: string;
   driver_id: string;
+  /** The driver's name, joined server-side (admin-panel plan §1.4) so the
+   * live map's "Active duress events" panel never shows a raw UUID. Optional:
+   * the field is being added in parallel, and a response without it falls
+   * back to the vehicle's current driver, then the id. */
+  driver_name?: string | null;
+  /** Server's own "this has been open too long" verdict (same plan item).
+   * Optional for the same reason; `isStaleDuress` in utils.ts applies the
+   * dashboard's own 12h rule when it is absent. */
+  stale?: boolean;
   trigger: DuressTrigger;
   status: DuressStatus;
   opened_at: string;

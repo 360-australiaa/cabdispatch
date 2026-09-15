@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPlaceholderStatus, mergeLivePosition } from "./utils";
+import { describePositionSource, isPlaceholderStatus, isStaleDuress, mergeLivePosition } from "./utils";
 import type { VehicleLiveRead } from "./types";
 import type { LivePosition } from "@/hooks/useLiveMap";
 
@@ -59,5 +59,60 @@ describe("mergeLivePosition", () => {
   });
   it("returns the vehicle untouched when no frame has arrived for it", () => {
     expect(mergeLivePosition(vehicle, {})).toBe(vehicle);
+  });
+});
+
+describe("describePositionSource", () => {
+  const now = Date.parse("2026-09-15T10:00:00Z");
+  const fresh = "2026-09-15T09:59:58Z";
+  const old = "2026-09-15T09:58:00Z";
+
+  it("calls a fresh live fix Live", () => {
+    const badge = describePositionSource("live", fresh, now);
+    expect(badge.kind).toBe("live");
+    expect(badge.label).toBe("Live");
+    expect(badge.variant).toBe("success");
+  });
+
+  it("treats a trip-tick fix as live", () => {
+    expect(describePositionSource("trip", fresh, now).kind).toBe("live");
+  });
+
+  it("calls a real fix older than the threshold Stale", () => {
+    const badge = describePositionSource("live", old, now);
+    expect(badge.kind).toBe("stale");
+    expect(badge.variant).toBe("destructive");
+  });
+
+  it("labels a dead-reckoned position Estimated, and never Stale", () => {
+    expect(describePositionSource("estimated", fresh, now).kind).toBe("estimated");
+    expect(describePositionSource("estimated", old, now).kind).toBe("estimated");
+    expect(describePositionSource("estimated", old, now).variant).toBe("accent");
+  });
+
+  it("reports No fix for a vehicle that never reported, whatever the source says", () => {
+    expect(describePositionSource("none", fresh, now).kind).toBe("none");
+    expect(describePositionSource("live", null, now).kind).toBe("none");
+    expect(describePositionSource("none", null, now).label).toBe("No fix");
+  });
+});
+
+describe("isStaleDuress", () => {
+  const now = Date.parse("2026-09-15T10:00:00Z");
+  const thirteenHoursAgo = "2026-09-14T21:00:00Z";
+  const oneHourAgo = "2026-09-15T09:00:00Z";
+
+  it("is stale after 12 hours unresolved", () => {
+    expect(isStaleDuress({ status: "dispatched", opened_at: thirteenHoursAgo }, now)).toBe(true);
+    expect(isStaleDuress({ status: "open", opened_at: oneHourAgo }, now)).toBe(false);
+  });
+
+  it("trusts the server's own stale flag", () => {
+    expect(isStaleDuress({ status: "open", opened_at: oneHourAgo, stale: true }, now)).toBe(true);
+  });
+
+  it("is never stale once resolved or cancelled", () => {
+    expect(isStaleDuress({ status: "resolved", opened_at: thirteenHoursAgo, stale: true }, now)).toBe(false);
+    expect(isStaleDuress({ status: "cancelled", opened_at: thirteenHoursAgo }, now)).toBe(false);
   });
 });

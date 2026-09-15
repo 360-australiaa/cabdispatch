@@ -52,6 +52,13 @@ class PSLLedgerRead(PSLLedgerBase):
     updated_at: datetime
 
 
+class PSLLedgerRebuildResult(BaseModel):
+    """`POST /v1/psl/ledger/rebuild` — ledger rows created / changed."""
+
+    created: int
+    updated: int
+
+
 # --- PSL top-ups (append-only) -----------------------------------------------
 
 

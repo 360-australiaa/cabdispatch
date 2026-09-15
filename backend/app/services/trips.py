@@ -24,6 +24,7 @@ from app.models.tariffs import Tariff as TariffRow
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_TYPE_AIRPORT_FIXED, Trip, TripGpsTrace
 from app.schemas.trips import DeviceGpsBlackoutSegment, TelemetryPoint
 from app.services import payments as payments_service
+from app.services import psl_ledger as psl_ledger_service
 from app.services.fare_engine import (
     NSW_FARE_ZONE,
     FareBreakdown,
@@ -681,6 +682,12 @@ async def close_trip(
     # Assigned straight from params, never derived from `breakdown` — a tip is not part of
     # the fare-engine's output (see Trip.tip_amount's doc, deviation #6 above).
     trip.tip_amount = params.tip_amount
+
+    # The levy this close just struck goes onto the driver's PSL ledger in the
+    # SAME transaction (idempotent per trip — see accrue_trip_psl). Until the
+    # admin-panel pass nothing did this, so the ledger stayed empty however
+    # many trips closed.
+    await psl_ledger_service.accrue_trip_psl(session, trip=trip)
 
     return breakdown
 

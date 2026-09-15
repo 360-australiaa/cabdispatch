@@ -15,6 +15,8 @@ multi-tenancy enforcement mechanism in this system.
 """
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +27,8 @@ from app.models.driver_engagement import WalletTransaction
 from app.models.user import User
 from app.schemas.driver_engagement import (
     Page,
+    WalletBalanceListRead,
+    WalletBalanceRead,
     WalletRead,
     WalletTransactionCreate,
     WalletTransactionRead,
@@ -34,6 +38,9 @@ from app.services import driver_engagement as svc
 router = APIRouter(prefix="/v1/wallet", tags=["wallet"])
 
 _require_admin = require_role("owner", "admin")
+# Fleet-wide balances are a read for the desk, not a money-affecting write:
+# dispatchers see them too (matches the roles that already see drivers).
+_require_desk = require_role("owner", "admin", "dispatcher")
 
 
 async def _get_tenant_driver_or_404(session: AsyncSession, driver_id: str, tenant_id: str) -> User:
@@ -108,6 +115,46 @@ async def create_wallet_transaction(
     await session.commit()
     await session.refresh(row)
     return row
+
+
+@router.get("/balances", response_model=WalletBalanceListRead)
+async def list_wallet_balances(
+    tenant_id: str = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+    _desk=Depends(_require_desk),
+):
+    """Every driver's derived balance in ONE query (admin-panel plan §4:
+    the Driver Wallets page used to fire one `GET /drivers/{id}` per driver,
+    capped at 100). Every `role == "driver"` user of the tenant is listed,
+    LEFT JOINed to their ledger so a driver with no lines shows 0.00 rather
+    than vanishing; balances are still never stored, only summed here."""
+    stmt = (
+        select(
+            User.id,
+            User.name,
+            User.driver_code,
+            func.coalesce(func.sum(WalletTransaction.amount_aud), 0),
+        )
+        .outerjoin(
+            WalletTransaction,
+            (WalletTransaction.driver_id == User.id) & (WalletTransaction.tenant_id == tenant_id),
+        )
+        .where(User.tenant_id == tenant_id, User.role == "driver")
+        .group_by(User.id, User.name, User.driver_code)
+        .order_by(User.name, User.id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return WalletBalanceListRead(
+        items=[
+            WalletBalanceRead(
+                driver_id=driver_id,
+                driver_name=name,
+                driver_code=code,
+                balance=Decimal(str(balance)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            )
+            for driver_id, name, code, balance in rows
+        ]
+    )
 
 
 @router.get("/drivers/{driver_id}", response_model=WalletRead)

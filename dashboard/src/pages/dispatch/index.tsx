@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { Radio, Send } from "lucide-react";
 import { Badge, Button, Card, CardContent, PageHeader, Pagination, Select, Table } from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
 import { useDriverOptionsQuery } from "@/pages/driver-engagement/hooks";
@@ -9,6 +9,7 @@ import { CreateJobModal } from "./CreateJobModal";
 import { JobDetailPanel } from "./JobDetailPanel";
 import { formatDateTime, formatMoney, jobStatusBadgeVariant } from "./format";
 import { isTerminalJobStatus, type Job } from "./types";
+import { useJobsLive } from "./useJobsLive";
 import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
 const PAGE_SIZE = 20;
@@ -29,6 +30,11 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
  * is the dashboard-side half of that loop: previously the jobs/messages
  * domain was backend-only, with no way to actually create a job to test the
  * driver-side accept/decline flow against.
+ *
+ * Live updates (admin plan §3): the page now subscribes to the same
+ * `WS /v1/jobs/live` feed via `useJobsLive` and refetches on every frame.
+ * Polling is the fallback, not the primary path -- see `pollInterval` below
+ * for the exact policy and the driver-scoped-feed caveat.
  */
 export default function DispatchPage() {
   const [page, setPage] = useState(0);
@@ -36,8 +42,17 @@ export default function DispatchPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
+  const live = useJobsLive();
+  const socketOpen = live.state === "open";
+
   const anyActiveJob = (jobs: Job[] | undefined) =>
     !!jobs && jobs.some((j) => !isTerminalJobStatus(j.status));
+
+  // Socket open: a slow safety poll only (the feed is driver-scoped on an
+  // older backend, so "open and quiet" must not mean "stale forever").
+  // Socket anything else (connecting / closed / error / no token): the
+  // previous fast poll, still only while a job is actually in flight.
+  const pollInterval = socketOpen ? POLL.ROSTER : POLL.REALTIME;
 
   const jobsQuery = useQuery({
     queryKey: ["dispatch-jobs", page, statusFilter],
@@ -45,7 +60,7 @@ export default function DispatchPage() {
       listJobs({ limit: PAGE_SIZE, skip: page * PAGE_SIZE, status: statusFilter || undefined }),
     placeholderData: (prev) => prev,
     ...pollingQueryOptions(
-      whileActive(POLL.REALTIME, (query: { state: { data?: { items?: Job[] } } }) =>
+      whileActive(pollInterval, (query: { state: { data?: { items?: Job[] } } }) =>
         anyActiveJob(query.state.data?.items),
       ),
     ),
@@ -104,11 +119,14 @@ export default function DispatchPage() {
     <div>
       <PageHeader
         title="Dispatch"
-        description="Create jobs and watch them broadcast to available drivers in real time — accept/decline happens on the driver's Android app."
+        description="Create jobs and watch them broadcast to available drivers in real time — drivers answer on the Android app, or dispatch can accept or decline an offer on their behalf."
         actions={
-          <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Send className="h-4 w-4" /> New job
-          </Button>
+          <div className="flex items-center gap-2">
+            <LiveFeedBadge state={live.state} />
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              <Send className="h-4 w-4" /> New job
+            </Button>
+          </div>
         }
       />
 
@@ -156,7 +174,7 @@ export default function DispatchPage() {
 
         <div className="lg:col-span-1">
           {selectedId ? (
-            <JobDetailPanel jobId={selectedId} onClose={() => setSelectedId(null)} />
+            <JobDetailPanel jobId={selectedId} onClose={() => setSelectedId(null)} live={socketOpen} />
           ) : (
             <Card>
               <CardContent className="flex h-40 items-center justify-center text-center text-sm text-muted-foreground">
@@ -178,4 +196,32 @@ export default function DispatchPage() {
       />
     </div>
   );
+}
+
+/** Tells the operator which path is keeping the table fresh, so "why did
+ * that offer take ten seconds to appear" has an answer on screen. */
+function LiveFeedBadge({ state }: { state: ReturnType<typeof useJobsLive>["state"] }) {
+  switch (state) {
+    case "open":
+      return (
+        <Badge variant="success" title="Connected to the live job feed">
+          <Radio className="h-3 w-3" /> Live
+        </Badge>
+      );
+    case "connecting":
+    case "closed":
+      return (
+        <Badge variant="outline" title="Reconnecting to the live job feed — polling meanwhile">
+          Reconnecting…
+        </Badge>
+      );
+    case "error":
+      return (
+        <Badge variant="accent" title="Live feed unavailable — polling instead">
+          Polling
+        </Badge>
+      );
+    default:
+      return null;
+  }
 }

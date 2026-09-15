@@ -42,7 +42,10 @@ class UserSession(Base, TimestampMixin):
     # The live jti pair for this session as of right now. Rotated in place by
     # POST /v1/auth/refresh (see that handler) rather than creating a new row
     # per refresh — a session is one continuous login, not one row per token.
-    current_access_jti: Mapped[str] = mapped_column(String(36), nullable=False)
+    # Indexed: app.core.security.get_current_user looks this row up by its
+    # live access jti on every authenticated request for the 24h idle-expiry
+    # check (see `_enforce_session_idle_expiry` there).
+    current_access_jti: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     current_refresh_jti: Mapped[str] = mapped_column(String(36), nullable=False)
 
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -115,6 +115,9 @@ class ShiftRead(BaseModel):
     card_total: Decimal
     psl_owed: Decimal
     reconciled: bool
+    # Why a once-reconciled shift needs reconciling again (a fare correction
+    # after cash-up) — see app.models.shift.Shift.reconciliation_note.
+    reconciliation_note: str | None = None
     # Zone-plotting fields (see app.models.shift.Shift's DEVIATION note) --
     # managed exclusively via POST /v1/zones/{id}/plot and
     # POST /v1/zones/unplot (app.services.zones), not settable via
@@ -165,5 +168,6 @@ class ShiftReport(BaseModel):
     total_takings: Decimal
     psl_owed: Decimal
     reconciled: bool
+    reconciliation_note: str | None = None
     inspection_json: dict | None
     generated_at: datetime

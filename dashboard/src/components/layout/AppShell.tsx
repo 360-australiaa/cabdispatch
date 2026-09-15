@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ToastProvider } from "@/components/ui/Toast";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
 import { Sidebar } from "./Sidebar";
@@ -32,10 +33,22 @@ function useApplyTenantTheme() {
   }, [tenant?.theme_json?.primary_color, tenant?.theme_json?.accent_color]);
 }
 
-/** Authenticated app frame: brand sidebar + scrollable content area for the active route. */
+/**
+ * Authenticated app frame: brand sidebar + scrollable content area for the
+ * active route.
+ *
+ * The `ErrorBoundary` sits around the `<Outlet>`, inside the shell, rather
+ * than around the shell in `router.tsx` (where it first landed -- see that
+ * file's history and the admin-panel plan §5). Wrapping the shell meant a
+ * render throw on any page took the sidebar down with it, leaving the
+ * operator with only the panel's own two buttons to recover. Here a crashed
+ * page shows the panel in the content area and the nav stays usable; the
+ * boundary resets on the next navigation via `resetKey`.
+ */
 export function AppShell() {
   useApplyTenantTheme();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const { pathname } = useLocation();
 
   // If the viewport grows past the drawer breakpoint while the drawer is open,
   // drop the open state -- otherwise the scrim's state lingers and the next
@@ -81,7 +94,9 @@ export function AppShell() {
 
         <ToastProvider>
           <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 focus:outline-none sm:p-6">
-            <Outlet />
+            <ErrorBoundary resetKey={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </main>
         </ToastProvider>
       </div>

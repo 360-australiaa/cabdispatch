@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Banknote, ListChecks, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardContent, EmptyState, Input, Modal, PageHeader, Select, Table, Tabs, type TabItem, type TableColumn } from "@/components/ui";
+import { Banknote, ListChecks, Pencil, Plus, Receipt, RefreshCw, Trash2 } from "lucide-react";
+import { Badge, Button, Card, CardContent, EmptyState, Input, Modal, PageHeader, Select, Table, Tabs, useToast, type TabItem, type TableColumn } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { errorMessage } from "@/lib/format";
 import { getJurisdictionCapabilities } from "@/lib/i18n";
 import {
   useDeleteLedgerEntryMutation,
   usePSLLedgerQuery,
+  useRebuildLedgerMutation,
   useTopUpsQuery,
   type PSLLedgerEntry,
   type PSLTopUp,
@@ -17,10 +19,14 @@ import { useDriversLookupQuery } from "@/hooks/useTrips";
  * this the page showed fully-enabled write controls to every role,
  * including `driver`, which then just 403'd. */
 const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
+
+/** `POST /v1/psl/ledger/rebuild` is narrower still -- it rewrites every
+ * accrual row in the tenant from trip data, so it is owner/admin only. */
+const REBUILD_ROLES = new Set(["owner", "admin"]);
 import { LedgerFormModal } from "./LedgerFormModal";
 import { TopUpFormModal } from "./TopUpFormModal";
 import { RemittanceReport } from "./RemittanceReport";
-import { PAYMENT_METHOD_OPTIONS, formatDate, formatDateTime, formatMoney, formatPeriod, subtractMoney } from "./format";
+import { PAYMENT_METHOD_OPTIONS, currentPeriod, formatDate, formatDateTime, formatMoney, formatPeriod, subtractMoney } from "./format";
 
 // The backend caps GET /v1/psl/ledger and /v1/psl/topups at limit=200 with no
 // total count (see shared/API_SUMMARY.md) — driver/period are filtered
@@ -43,6 +49,8 @@ const TABS: TabItem<Tab>[] = [
 export default function PslPage() {
   const { user, tenant } = useAuth();
   const canManage = !!user && MANAGE_ROLES.has(user.role);
+  const canRebuild = !!user && REBUILD_ROLES.has(user.role);
+  const toast = useToast();
   // PSL (Passenger Service Levy) is a NSW-specific concept (audit §4,
   // WS-F.4) -- gated the same way as the nav item that links here
   // (components/layout/Sidebar.tsx). The nav link already hides for a
@@ -55,10 +63,17 @@ export default function PslPage() {
   const [tab, setTab] = useState<Tab>("ledger");
 
   const [driverFilter, setDriverFilter] = useState("");
-  const [periodFilter, setPeriodFilter] = useState("");
+  // Defaults to the current month (admin plan §4): the live tenant's page
+  // read "0 ledger rows" partly because an unfiltered ledger over every
+  // period is not what an operator doing this month's remittance wants to
+  // see first. Clearable to "all periods" like before.
+  const [periodFilter, setPeriodFilter] = useState(() => currentPeriod());
 
   const [createOpen, setCreateOpen] = useState(false);
   const [topUpOpen, setTopUpOpen] = useState(false);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
+  const rebuildMutation = useRebuildLedgerMutation();
   const [editingEntry, setEditingEntry] = useState<PSLLedgerEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<PSLLedgerEntry | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -265,6 +280,17 @@ export default function PslPage() {
         actions={
           canManage ? (
             <>
+              {canRebuild && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setRebuildError(null);
+                    setRebuildOpen(true);
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4" /> Rebuild ledger from trips
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setTopUpOpen(true)}>
                 <Banknote className="h-4 w-4" /> Record top-up
               </Button>
@@ -400,6 +426,43 @@ export default function PslPage() {
         defaultDriverId={driverFilter || undefined}
         defaultPeriod={periodFilter || undefined}
       />
+
+      <Modal
+        open={rebuildOpen}
+        onClose={() => setRebuildOpen(false)}
+        title="Rebuild the PSL ledger from trips?"
+        description="Recomputes every driver's monthly accrual (trip count and levy owed) from the closed trips that carried the levy. Amounts collected and remittance dates are kept. Rows already in step are left alone."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setRebuildOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={rebuildMutation.isPending}
+              onClick={async () => {
+                setRebuildError(null);
+                try {
+                  const result = await rebuildMutation.mutateAsync();
+                  setRebuildOpen(false);
+                  toast.success("Ledger rebuilt", {
+                    description: `${result.created} row${result.created === 1 ? "" : "s"} created, ${result.updated} updated.`,
+                  });
+                } catch (err) {
+                  setRebuildError(errorMessage(err));
+                }
+              }}
+            >
+              {rebuildMutation.isPending ? "Rebuilding…" : "Rebuild ledger"}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          Use this when the ledger is empty or out of step with the trips list — for example after
+          trips were closed while the levy accrual was not running.
+        </p>
+        {rebuildError && <p className="mt-2 text-sm text-destructive">{rebuildError}</p>}
+      </Modal>
 
       <Modal
         open={deletingEntry != null}

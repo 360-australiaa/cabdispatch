@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import Vehicle
+from app.models.shift import Shift
 from app.models.trips import TRIP_STATUS_CLOSED, TRIP_STATUS_OPEN, TRIP_TYPES, Trip, TripGpsTrace
 from app.models.user import User
 from app.schemas.trips import (
@@ -52,7 +53,10 @@ from app.services import compliance_expiry as compliance_expiry_service
 from app.services import driver_engagement as driver_engagement_service
 from app.services import fatigue as fatigue_service
 from app.services import payments as payments_service
+from app.services import psl_ledger as psl_ledger_service
 from app.services import receipts as receipts_service
+from app.services import shift as shift_service
+from app.services.audit_log import record_audit
 from app.services.fare_engine import URBAN_TARIFF, resolve_time_class_and_peak, round_half_up
 from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
 from app.services.trips import (
@@ -468,6 +472,11 @@ async def sync_trips(
                 # sync of the same client_uuid; caught OUTSIDE the savepoint below,
                 # because rolling that back is the savepoint's job, not this line's.
                 await session.flush()
+                # Same per-trip PSL accrual the online close path makes
+                # (app.services.trips.close_trip) — inside this item's
+                # savepoint, so a failed item never leaves a levy on the
+                # ledger for a trip that was not stored.
+                await psl_ledger_service.accrue_trip_psl(session, trip=trip)
                 created = trip
         except (
             UnknownTariffError,
@@ -1033,7 +1042,20 @@ async def correct_trip_fare(
     only. See `TripFareCorrectionRequest`'s doc for the one situation this is
     for; it is deliberately NOT a general "edit the fare" tool -- the flag is
     left as it was, so a corrected trip still surfaces on the review list
-    with the full story in its notes."""
+    with the full story in its notes.
+
+    Two things follow the correction, both found missing on the production
+    dashboard (admin-panel plan, items 1.2/1.3):
+
+    * an audit-log entry (`action="fare_correction"`, before/after totals,
+      the caller as actor) in the same transaction — `review_notes` alone is
+      not tamper-evident, and the Audit Log page had no trace of a fare of
+      record being changed;
+    * the trip's shift, if it has one, gets its stored cash/card aggregates
+      recomputed and is flipped back to unreconciled with a note — those
+      aggregates were frozen at cash-up, so a shift kept showing $32.52 and
+      "Reconciled: Yes" after its one trip was corrected to $59.03.
+    """
     if current_user.role not in ("owner", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Only an owner or admin may correct a fare of record"
@@ -1055,6 +1077,33 @@ async def correct_trip_fare(
         f"{payload.reason.strip()}"
     )
     trip.review_notes = f"{trip.review_notes} | {note}" if trip.review_notes else note
+
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=current_user.id,
+        action="fare_correction",
+        entity_type="trip",
+        entity_id=trip.id,
+        before={"total": str(previous_total)},
+        after={"total": str(new_total), "reason": payload.reason.strip()},
+    )
+
+    if trip.shift_id:
+        shift = (
+            await session.execute(
+                select(Shift).where(Shift.id == trip.shift_id, Shift.tenant_id == tenant_id)
+            )
+        ).scalar_one_or_none()
+        if shift is not None:
+            await shift_service.refresh_trip_aggregates(session, shift)
+            shift_service.mark_needs_reconciliation(
+                shift,
+                reason=(
+                    f"fare corrected on {datetime.now(UTC).date().isoformat()} "
+                    f"(trip {trip.id}: {previous_total} -> {new_total}); re-reconcile"
+                ),
+            )
 
     await session.commit()
     await session.refresh(trip)

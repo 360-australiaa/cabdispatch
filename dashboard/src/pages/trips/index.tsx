@@ -59,14 +59,24 @@ export default function TripsPage() {
   // page's "View trip" link) lands here as /trips?search=<value> -- read it
   // once on mount so the link actually pre-filters instead of dumping the
   // dispatcher on the unfiltered list. Same query-param-on-mount convention
-  // as the Duress Desk's `?event=` link.
+  // as the Duress Desk's `?event=` link. `?review=flagged` and `?status=`
+  // are the Overview attention panel's links into this page (admin-panel
+  // plan §6), read the same way.
   const [searchParams] = useSearchParams();
 
-  const [statusFilter, setStatusFilter] = useState<TripStatus | "">("");
+  const [statusFilter, setStatusFilter] = useState<TripStatus | "">(() => {
+    const requested = searchParams.get("status");
+    return requested === "open" || requested === "closed" ? requested : "";
+  });
   const [typeFilter, setTypeFilter] = useState<TripType | "">("");
   const [vehicleFilter, setVehicleFilter] = useState("");
   const [driverFilter, setDriverFilter] = useState("");
-  const [flaggedFilter, setFlaggedFilter] = useState<"" | "true" | "false">("");
+  const [flaggedFilter, setFlaggedFilter] = useState<"" | "true" | "false">(() => {
+    const requested = searchParams.get("review");
+    if (requested === "flagged") return "true";
+    if (requested === "unflagged") return "false";
+    return "";
+  });
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
@@ -142,7 +152,12 @@ export default function TripsPage() {
     {
       key: "start_at",
       header: "Started",
-      render: (row) => formatDateTime(row.start_at),
+      // A real link as well as the row's own onClick (admin-panel plan §1.6):
+      // the row handler is the convenience, the link is the guarantee -- it
+      // works with a middle-click, from the keyboard, and regardless of
+      // which cell's own handler (the vehicle/driver EntityLinks stop
+      // propagation) the click landed on.
+      render: (row) => <EntityLink kind="trip" id={row.id} name={formatDateTime(row.start_at)} />,
       sortable: true,
       sortAccessor: (row) => row.start_at,
     },

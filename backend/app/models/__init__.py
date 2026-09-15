@@ -31,7 +31,7 @@ from app.models.geofence import Geofence
 from app.models.jobs import DriverAvailability, Job, JobOffer
 from app.models.messages import Message
 from app.models.payment import Payment
-from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp
+from app.models.psl_ledger import PSLLedgerEntry, PSLTopUp, PSLTripAccrual
 from app.models.recovery_code import RecoveryCode
 from app.models.shift import Shift
 from app.models.tariffs import Extra, Tariff, TariffChangeLog
@@ -80,6 +80,7 @@ __all__ = [
     "Message",
     "PSLLedgerEntry",
     "PSLTopUp",
+    "PSLTripAccrual",
     "Payment",
     "RecoveryCode",
     "Shift",

@@ -46,7 +46,7 @@ from app.core.database import get_session
 from app.core.security import get_current_tenant_id, get_current_user, require_role
 from app.models.audit_log import AuditLog
 from app.models.user import User
-from app.schemas.audit_log import AuditLogListResponse, AuditLogVerifyResponse
+from app.schemas.audit_log import AuditLogListResponse, AuditLogRead, AuditLogVerifyResponse
 from app.services.audit_log import verify_chain
 
 router = APIRouter(prefix="/v1/audit-log", tags=["audit-log"])
@@ -99,7 +99,20 @@ async def list_audit_log_entries(
     result = await session.execute(
         select(AuditLog).where(*filters).order_by(AuditLog.at.desc()).limit(limit).offset(offset)
     )
-    items = result.scalars().all()
+    rows = result.scalars().all()
+
+    # Actor names in one lookup (the Audit Log page showed raw user UUIDs).
+    # Display-only: `actor_name` is not among the hashed fields, so
+    # resolving it here changes nothing `verify_chain` checks.
+    actor_ids = {row.actor_user_id for row in rows if row.actor_user_id}
+    names: dict[str, str] = {}
+    if actor_ids:
+        name_rows = await session.execute(select(User.id, User.name).where(User.id.in_(actor_ids)))
+        names = {user_id: name for user_id, name in name_rows.all()}
+    items = [
+        AuditLogRead.model_validate(row).model_copy(update={"actor_name": names.get(row.actor_user_id)})
+        for row in rows
+    ]
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 

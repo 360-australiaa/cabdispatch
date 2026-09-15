@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { Bell, BellOff, Cpu, Siren } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bell, BellOff, Clock, Cpu, Siren } from "lucide-react";
 import {
   Badge,
   Button,
@@ -16,16 +16,22 @@ import {
   type TabItem,
 } from "@/components/ui";
 import type { TableColumn } from "@/components/ui/Table";
-import { listDuressEvents } from "./api";
+import { useAuth } from "@/lib/auth";
+import { closeDuressEvent, listDuressEvents } from "./api";
 import { DevicesPanel } from "./DevicesPanel";
 import { EventDetailPanel } from "./EventDetailPanel";
 import { IdentityLabel } from "./IdentityLabel";
 import { TriggerEventModal } from "./TriggerEventModal";
-import { formatDateTime, statusBadgeVariant } from "./format";
+import { formatDateTime, isStaleEvent, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
 import { useDuressAlerts } from "./useDuressAlerts";
 import { useDuressLookups } from "./useDuressLookups";
 import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
+
+/** Same owner/admin/dispatcher gate the backend puts on `POST /{id}/close`
+ * (and that `EventDetailPanel` already mirrors) -- the list-row Close button
+ * below must not render for a role that would only ever get a 403. */
+const MANAGE_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 type ViewTab = "events" | "devices";
 
@@ -88,6 +94,25 @@ export default function DuressPage() {
   const lookups = useDuressLookups();
   const { armed, notifPermission, arm } = useDuressAlerts(eventsQuery.data?.items);
 
+  const { user } = useAuth();
+  const canManage = !!user && MANAGE_ROLES.has(user.role);
+  const queryClient = useQueryClient();
+
+  // Stale events (admin plan §1.4: four rows sat "dispatched" for two weeks)
+  // get a Close button right on the list row, so tidying a forgotten test
+  // event is one click rather than open-the-panel-then-close. Same
+  // `POST /{id}/close` the detail panel calls; the note explains where the
+  // close came from in the escalation log.
+  const closeStaleMutation = useMutation({
+    mutationFn: (eventId: string) =>
+      closeDuressEvent(eventId, { note: "Closed from the Duress Desk list as stale" }),
+    onSuccess: (_event, eventId) => {
+      queryClient.invalidateQueries({ queryKey: ["duress-events"] });
+      queryClient.invalidateQueries({ queryKey: ["duress-event", eventId] });
+    },
+  });
+  const closingId = closeStaleMutation.isPending ? closeStaleMutation.variables : null;
+
   const total = eventsQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -112,14 +137,19 @@ export default function DuressPage() {
     {
       key: "driver_id",
       header: "Driver",
-      render: (row) => (
-        <IdentityLabel
-          id={row.driver_id}
-          label={lookups.resolveDriver(row.driver_id)?.name ?? null}
-          isLoading={lookups.isLoading}
-          kind="driver"
-        />
-      ),
+      render: (row) =>
+        // Server-joined name first (never a UUID for the operator), the
+        // first-100 client lookup only when the backend didn't send one.
+        row.driver_name ? (
+          <span title={row.driver_id}>{row.driver_name}</span>
+        ) : (
+          <IdentityLabel
+            id={row.driver_id}
+            label={lookups.resolveDriver(row.driver_id)?.name ?? null}
+            isLoading={lookups.isLoading}
+            kind="driver"
+          />
+        ),
     },
     {
       key: "trigger",
@@ -129,7 +159,19 @@ export default function DuressPage() {
     {
       key: "status",
       header: "Status",
-      render: (row) => <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>,
+      render: (row) => (
+        <span className="flex flex-wrap items-center gap-1">
+          <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>
+          {isStaleEvent(row) && (
+            <Badge
+              variant="outline"
+              title="Open for more than 12 hours with no resolution — almost certainly a forgotten test or false alarm"
+            >
+              <Clock className="h-3 w-3" /> Stale
+            </Badge>
+          )}
+        </span>
+      ),
       sortable: true,
       sortAccessor: (row) => row.status,
     },
@@ -140,6 +182,29 @@ export default function DuressPage() {
       sortable: true,
       sortAccessor: (row) => row.opened_at,
     },
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: "",
+            className: "text-right",
+            render: (row: DuressEvent) =>
+              isStaleEvent(row) ? (
+                <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    title="Close / resolve this stale event without opening it"
+                    disabled={closingId === row.id}
+                    onClick={() => closeStaleMutation.mutate(row.id)}
+                  >
+                    {closingId === row.id ? "Closing…" : "Close"}
+                  </Button>
+                </div>
+              ) : null,
+          } satisfies TableColumn<DuressEvent>,
+        ]
+      : []),
   ];
 
   return (
@@ -222,6 +287,13 @@ export default function DuressPage() {
           {eventsQuery.isError && (
             <p className="text-sm text-destructive">
               Failed to load duress events. Check the backend connection and try again.
+            </p>
+          )}
+
+          {closeStaleMutation.isError && (
+            <p className="text-sm text-destructive">
+              Could not close that event — it may already be closed, or another dispatcher got
+              there first. Refresh and try again.
             </p>
           )}
 

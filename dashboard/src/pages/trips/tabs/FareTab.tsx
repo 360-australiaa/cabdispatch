@@ -1,10 +1,15 @@
 import { useMemo } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import { EmptyState, ErrorBanner, Skeleton } from "@/components/ui";
-import { errorMessage, formatDurationSeconds, formatMoney, formatPercent, formatTimeShort } from "@/lib/format";
+import { Badge, EmptyState, ErrorBanner, Skeleton } from "@/components/ui";
+import { errorMessage, formatMoney, formatPercent } from "@/lib/format";
 import { useGeofencesQuery } from "@/hooks/useGeofences";
 import { useTollRoadsQuery } from "@/hooks/useTollRoads";
 import type { Trip } from "@/hooks/useTrips";
+import { BlackoutSection } from "./BlackoutSection";
+
+/** The server's own tolerance on the device-vs-recomputed check (backend
+ * `compute_variance_pct` / the sync path's 1% rule). Shown, not enforced. */
+const VARIANCE_THRESHOLD_LABEL = "1.00%";
 
 export interface FareTabProps {
   trip: Trip;
@@ -36,12 +41,17 @@ function FareRow({ label, value, muted }: { label: string; value: string; muted?
  * attribute to a road -- shown as its own honest "Other / unitemised" line,
  * never folded silently into a road it may not belong to.
  *
- * Also renders `trip.gps_blackout_events` (only when the trip actually has
- * any -- the overwhelming majority don't) so a disputed tunnel fare has an
- * answer on this same page: exactly when the meter lost GPS, for how long,
- * and whether a known toll-road corridor explained the gap (real distance
- * billed) or not (nothing extra billed for it). See
- * backend/app/models/trips.py::Trip.gps_blackout_events's own doc comment.
+ * The "Fare check" panel (admin-panel plan §2) puts the two totals the
+ * variance check compares next to each other, with the figure, the
+ * threshold and the flag reason -- previously the page said only "Failed"
+ * or "Flagged". The device's own total is NOT on `TripRead` today (see
+ * `Trip.device_total`'s doc in hooks/useTrips.ts), so that row says "not
+ * stored" rather than back-computing a figure the unsigned variance cannot
+ * give.
+ *
+ * The GPS-blackout audit trail (both accounts, inertial figures, the
+ * reconciliation flags) is `BlackoutSection`, rendered here and on the
+ * Route tab under the map that draws the same stretches dashed.
  */
 export function FareTab({ trip }: FareTabProps) {
   const tollRoadsQuery = useTollRoadsQuery();
@@ -89,8 +99,9 @@ export function FareTab({ trip }: FareTabProps) {
     return { roads, airportTotal, other };
   }, [trip.auto_tolled_roads, trip.auto_tolls_applied, trip.tolls, roadNameById, geofenceById]);
 
-  const variancePctNum = trip.variance_pct != null ? Number(trip.variance_pct) : null;
   const showVarianceWarning = !trip.max_fare_check_passed;
+  const reconciliationFlags = trip.blackout_reconciliation ?? [];
+  const unpricedRoadIds = trip.unpriced_toll_road_ids ?? [];
 
   const registryError = tollRoadsQuery.isError || geofencesQuery.isError;
 
@@ -103,7 +114,8 @@ export function FareTab({ trip }: FareTabProps) {
             <p className="font-semibold">Max fare check failed</p>
             <p>
               Device-reported total differs from the recomputed fare by {formatPercent(trip.variance_pct)}
-              {variancePctNum != null ? " (threshold 1.00%)" : ""}. Review before issuing a receipt.
+              {trip.variance_pct != null ? ` (threshold ${VARIANCE_THRESHOLD_LABEL})` : ""}. Review before
+              issuing a receipt.
             </p>
           </div>
         </div>
@@ -114,6 +126,49 @@ export function FareTab({ trip }: FareTabProps) {
           <span>Max fare check passed — variance {formatPercent(trip.variance_pct)}.</span>
         </div>
       )}
+
+      <div className="rounded-lg border border-border p-3">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Fare check</p>
+        <FareRow label="Server total (fare of record)" value={formatMoney(trip.total)} />
+        <FareRow
+          label="Device total"
+          value={trip.device_total != null ? formatMoney(trip.device_total) : "Not stored on this trip"}
+          muted={trip.device_total == null}
+        />
+        <FareRow
+          label="Variance"
+          value={
+            trip.variance_pct != null
+              ? `${formatPercent(trip.variance_pct)} (threshold ${VARIANCE_THRESHOLD_LABEL})`
+              : "n/a — no device total was checked"
+          }
+          muted={trip.variance_pct == null}
+        />
+        <div className="flex items-center justify-between py-1 text-sm">
+          <span className="text-foreground">Result</span>
+          {trip.status !== "closed" ? (
+            <span className="text-muted-foreground">Pending — trip still open</span>
+          ) : trip.max_fare_check_passed ? (
+            <Badge variant="success">Passed</Badge>
+          ) : (
+            <Badge variant="destructive">Failed</Badge>
+          )}
+        </div>
+        <div className="flex items-start justify-between gap-4 py-1 text-sm">
+          <span className="shrink-0 text-foreground">Review flag</span>
+          <span className={trip.flagged_for_review ? "text-right text-destructive" : "text-right text-muted-foreground"}>
+            {trip.flagged_for_review ? "Flagged for review" : "Not flagged"}
+            {reconciliationFlags.length > 0 &&
+              ` · ${reconciliationFlags.length} blackout reconciliation flag${reconciliationFlags.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+        {trip.review_notes && (
+          <div className="mt-1 rounded-md border border-border bg-muted/40 p-2 text-xs text-foreground">
+            <span className="font-medium text-muted-foreground">Reason / notes: </span>
+            <span className="whitespace-pre-wrap">{trip.review_notes}</span>
+          </div>
+        )}
+      </div>
 
       <div className="rounded-lg border border-border p-3">
         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -170,30 +225,25 @@ export function FareTab({ trip }: FareTabProps) {
             )}
           </div>
         )}
+        {/* Roads the trip genuinely crossed that the registry holds no price
+            for (the Rozelle Interchange case): shown by name, never with a
+            guessed amount, so a dispatcher knows a manual toll may be missing. */}
+        {unpricedRoadIds.length > 0 && (
+          <div className="mt-3 rounded-md border border-warning/60 bg-warning/10 p-2 text-xs">
+            <p className="font-semibold text-warning">Crossed but not priced — a manual toll may be missing</p>
+            <ul className="mt-1 list-disc pl-4 text-foreground">
+              {unpricedRoadIds.map((id) => (
+                <li key={id}>
+                  {roadNameById.get(id) ?? id}
+                  {!roadNameById.has(id) && <span className="text-muted-foreground"> (id not in the registry)</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
-      {(trip.gps_blackout_events?.length ?? 0) > 0 && (
-        <div className="rounded-lg border border-border p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            GPS blackouts
-          </p>
-          <div className="flex flex-col gap-2">
-            {trip.gps_blackout_events!.map((event, i) => (
-              <div key={`${event.start}-${i}`} className="flex items-center justify-between text-sm">
-                <span className="text-foreground">
-                  {formatTimeShort(event.start)} – {formatTimeShort(event.end)}
-                  <span className="text-muted-foreground"> ({formatDurationSeconds(event.elapsed_s)})</span>
-                </span>
-                <span className={event.matched_km != null ? "font-medium text-foreground" : "text-muted-foreground"}>
-                  {event.matched_km != null
-                    ? `${Number(event.matched_km).toFixed(2)} km via known corridor`
-                    : "No known corridor — billed $0 for this gap"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <BlackoutSection trip={trip} roadNameById={roadNameById} />
     </div>
   );
 }

@@ -192,6 +192,32 @@ export function useCreateTopUpMutation() {
   });
 }
 
+/** Result of `POST /v1/psl/ledger/rebuild` -- how many driver/period rows
+ * the rebuild inserted versus corrected in place. */
+export interface PSLLedgerRebuildResult {
+  created: number;
+  updated: number;
+}
+
+/** `POST /v1/psl/ledger/rebuild` (owner/admin). Recomputes every
+ * driver/period accrual row from the closed trips that carried the levy --
+ * the fix for the live tenant showing 0 ledger rows against 140 levied
+ * trips (admin plan §4). Idempotent server-side: rows that already match
+ * are left alone, so the counts in the result are the real delta. */
+export function useRebuildLedgerMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.post<PSLLedgerRebuildResult>("/v1/psl/ledger/rebuild");
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [PSL_LEDGER_KEY] });
+      queryClient.invalidateQueries({ queryKey: [PSL_REPORT_KEY] });
+    },
+  });
+}
+
 /** period must match `YYYY-MM` (backend validates with a regex) — caller gates `enabled` on that. */
 export function usePSLReportQuery(period: string, enabled: boolean) {
   return useQuery({

@@ -28,6 +28,10 @@ class AuditLogRead(BaseModel):
     at: datetime
     hash: str
     previous_hash: str
+    # `users.name` of `actor_user_id`, resolved by the list endpoint in one
+    # lookup; None for system/device actors (actor_user_id NULL) or an actor
+    # since deleted. Not part of the hashed fields -- display only.
+    actor_name: str | None = None
 
 
 class AuditLogListResponse(BaseModel):

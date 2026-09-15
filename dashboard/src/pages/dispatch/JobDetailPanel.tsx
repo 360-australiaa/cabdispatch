@@ -3,13 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, X } from "lucide-react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { errorMessage } from "@/lib/format";
 // Cross-page import of the driver lookup already built for Driver
 // Engagement (same "first 100 drivers in the tenant" lookup convention as
 // `pages/messages/api.ts::listDriverOptions`) -- resolves the raw
 // driver_id/accepted_by_driver_id UUIDs this panel used to show verbatim
 // into real names, same pattern Audit Log already uses for actor_user_id.
 import { useDriverOptionsQuery } from "@/pages/driver-engagement/hooks";
-import { cancelJob, getJob, listJobOffers } from "./api";
+import { acceptJobOffer, cancelJob, declineJobOffer, getJob, listJobOffers } from "./api";
 import {
   formatDateTime,
   formatMoney,
@@ -17,42 +18,47 @@ import {
   offerStatusBadgeVariant,
   secondsUntil,
 } from "./format";
-import { isTerminalJobStatus } from "./types";
+import { isTerminalJobStatus, type JobOffer } from "./types";
 import { POLL, pollingQueryOptions, whileActive } from "@/lib/pollIntervals";
 
 /** Mirrors `DELETE /v1/jobs/{id}`'s `_DISPATCH_ROLES` restriction
  * (`app/api/v1/jobs.py`) — without this, a driver-role user viewing this
- * panel would see an enabled "Cancel job" button that always 403s. */
-const CANCEL_ROLES = new Set(["owner", "admin", "dispatcher"]);
+ * panel would see an enabled "Cancel job" button that always 403s. The
+ * same roles may answer an offer on a driver's behalf (admin plan §3). */
+const DISPATCH_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 /**
- * No `WS /v1/jobs/live` equivalent exists for dispatchers — that socket is
- * deliberately driver-scoped (see `app/api/v1/jobs.py::live`'s docstring: it
- * only pushes offers addressed to the connecting user's own id). A dispatch
- * desk watching an in-flight broadcast doesn't need sub-second push, so this
- * just polls both queries while the job is non-terminal — same "keep it
- * simple" call as everywhere else in this dashboard that isn't
- * safety-critical (only Duress/Live Map use a real WS).
- *
- * D5: the interval used to be a local `const POLL_MS = 2000`. It is now the
- * shared `POLL.REALTIME` band, the same one the jobs list on the parent page
- * uses — the two surfaces watch the same job moving through the same states,
- * and there was no reason for the detail panel to run a second faster than
- * the list it was opened from. Both now also stop entirely while the tab is
- * hidden (see `lib/pollIntervals.ts`).
+ * Live updates come from the parent page's `WS /v1/jobs/live` subscription
+ * (`useJobsLive`), which invalidates this panel's two queries on every
+ * frame. `live` says whether that socket is open: when it is, both queries
+ * drop to a slow safety poll (the feed is driver-scoped on an older backend,
+ * so an open socket can be quiet); when it is not, they poll at the shared
+ * `POLL.REALTIME` band the list uses -- same job, same states, no reason for
+ * the panel to run faster than the list it was opened from. Both stop
+ * entirely while the tab is hidden (see `lib/pollIntervals.ts`) and once the
+ * job is terminal.
  */
 
-export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () => void }) {
+export function JobDetailPanel({
+  jobId,
+  onClose,
+  live = false,
+}: {
+  jobId: string;
+  onClose: () => void;
+  live?: boolean;
+}) {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const canCancelRole = !!user && CANCEL_ROLES.has(user.role);
+  const canDispatch = !!user && DISPATCH_ROLES.has(user.role);
+  const pollInterval = live ? POLL.ROSTER : POLL.REALTIME;
 
   const jobQuery = useQuery({
     queryKey: ["dispatch-job", jobId],
     queryFn: () => getJob(jobId),
     ...pollingQueryOptions(
       whileActive(
-        POLL.REALTIME,
+        pollInterval,
         (query: { state: { data?: { status: string } } }) =>
           !query.state.data || !isTerminalJobStatus(query.state.data.status),
       ),
@@ -63,18 +69,35 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
     queryKey: ["dispatch-job-offers", jobId],
     queryFn: () => listJobOffers(jobId),
     ...pollingQueryOptions(
-      !jobQuery.data || !isTerminalJobStatus(jobQuery.data.status) ? POLL.REALTIME : false,
+      !jobQuery.data || !isTerminalJobStatus(jobQuery.data.status) ? pollInterval : false,
     ),
     enabled: !!jobQuery.data,
   });
 
+  function invalidate() {
+    queryClient.invalidateQueries({ queryKey: ["dispatch-job", jobId] });
+    queryClient.invalidateQueries({ queryKey: ["dispatch-job-offers", jobId] });
+    queryClient.invalidateQueries({ queryKey: ["dispatch-jobs"] });
+  }
+
   const cancelMutation = useMutation({
     mutationFn: () => cancelJob(jobId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["dispatch-job", jobId] });
-      queryClient.invalidateQueries({ queryKey: ["dispatch-jobs"] });
-    },
+    onSuccess: invalidate,
   });
+
+  // Accept/decline on the driver's behalf. Keyed by offer so only the row
+  // being acted on shows "Accepting…"; the error is kept per offer too.
+  const [offerError, setOfferError] = useState<{ offerId: string; message: string } | null>(null);
+  const answerMutation = useMutation({
+    mutationFn: ({ offer, answer }: { offer: JobOffer; answer: "accept" | "decline" }) =>
+      answer === "accept"
+        ? acceptJobOffer(jobId, offer.id, { driver_id: offer.driver_id })
+        : declineJobOffer(jobId, offer.id, { driver_id: offer.driver_id }),
+    onMutate: () => setOfferError(null),
+    onSuccess: invalidate,
+    onError: (err, { offer }) => setOfferError({ offerId: offer.id, message: errorMessage(err) }),
+  });
+  const answeringOfferId = answerMutation.isPending ? answerMutation.variables?.offer.id : null;
 
   const driversQuery = useDriverOptionsQuery();
   const driverNameById = useMemo(() => {
@@ -151,7 +174,9 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
             <div>
               <h3 className="mb-2 text-sm font-medium text-foreground">
                 Offers {!isTerminalJobStatus(job.status) && (
-                  <span className="font-normal text-muted-foreground">(auto-refreshing)</span>
+                  <span className="font-normal text-muted-foreground">
+                    ({live ? "live" : "auto-refreshing"})
+                  </span>
                 )}
               </h3>
               {offersQuery.isLoading ? (
@@ -168,24 +193,63 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
                 <ul className="flex flex-col gap-2">
                   {offersQuery.data!.map((offer) => {
                     const remaining = offer.status === "pending" ? secondsUntil(offer.expires_at, now) : null;
+                    const answering = answeringOfferId === offer.id;
                     return (
                       <li
                         key={offer.id}
-                        className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs"
+                        className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs"
                       >
-                        <span className="font-medium">{driverLabel(offer.driver_id)}</span>
-                        <span className="text-muted-foreground">
-                          offered {formatDateTime(offer.offered_at)}
-                        </span>
-                        {remaining !== null && (
-                          <span
-                            className={remaining <= 5 ? "font-medium text-destructive" : "text-muted-foreground"}
-                            title="Time left before this offer auto-expires"
-                          >
-                            {remaining}s left
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium">{driverLabel(offer.driver_id)}</span>
+                          <span className="text-muted-foreground">
+                            offered {formatDateTime(offer.offered_at)}
                           </span>
+                          {remaining !== null && (
+                            <span
+                              className={remaining <= 5 ? "font-medium text-destructive" : "text-muted-foreground"}
+                              title="Time left before this offer auto-expires"
+                            >
+                              {remaining}s left
+                            </span>
+                          )}
+                          <Badge variant={offerStatusBadgeVariant(offer.status)}>{offer.status}</Badge>
+                        </div>
+                        {canDispatch && offer.status === "pending" && (
+                          <div className="flex justify-end gap-1.5">
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              disabled={answerMutation.isPending}
+                              onClick={() => answerMutation.mutate({ offer, answer: "accept" })}
+                              title={`Accept this offer for ${driverLabel(offer.driver_id)} — e.g. the driver confirmed by radio`}
+                            >
+                              {answering && answerMutation.variables?.answer === "accept"
+                                ? "Accepting…"
+                                : "Accept on behalf"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={answerMutation.isPending}
+                              onClick={() => answerMutation.mutate({ offer, answer: "decline" })}
+                            >
+                              {answering && answerMutation.variables?.answer === "decline"
+                                ? "Declining…"
+                                : "Decline"}
+                            </Button>
+                          </div>
                         )}
-                        <Badge variant={offerStatusBadgeVariant(offer.status)}>{offer.status}</Badge>
+                        {offerError?.offerId === offer.id && (
+                          <p className="text-destructive">
+                            {offerError.message}
+                            {/not addressed to you/i.test(offerError.message) && (
+                              <span className="mt-0.5 block text-muted-foreground">
+                                This backend lets only the driver answer their own offer — answering
+                                on their behalf needs the backend update that accepts a target driver.
+                              </span>
+                            )}
+                          </p>
+                        )}
                       </li>
                     );
                   })}
@@ -193,7 +257,7 @@ export function JobDetailPanel({ jobId, onClose }: { jobId: string; onClose: () 
               )}
             </div>
 
-            {canCancelRole && (
+            {canDispatch && (
               <div className="flex justify-end gap-2 border-t border-border pt-4">
                 <Button
                   variant="destructive"

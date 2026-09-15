@@ -35,6 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
+from pydantic import BaseModel, ConfigDict
+
 from app.core.security import get_current_tenant_id, get_current_user
 from app.schemas.zones import (
     Page,
@@ -96,14 +98,47 @@ async def get_zone_stats(
 # ==================================================================================
 
 
+
+
+# --- On-behalf actions (admin panel plan, 2026-09-15) --------------------------------------
+# The dashboard's dispatch/zones pages act FOR a driver (accept an offer for a driver on the
+# phone, plot a cab into a rank from the desk). The routes stay identity-scoped for a driver
+# token -- a driver can never name another driver -- and only owner/admin/dispatcher may pass a
+# `driver_id` that is not their own.
+
+_ON_BEHALF_ROLES = ("owner", "admin", "dispatcher")
+
+
+class OnBehalfBody(BaseModel):
+    """Optional body: `driver_id` names the driver the action is performed for. Extra fields
+    (the dashboard also sends shift/vehicle ids for its own bookkeeping) are ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    driver_id: str | None = None
+
+
+def _acting_driver_id(user, payload: OnBehalfBody | None) -> str:
+    target = payload.driver_id if payload is not None else None
+    if not target or target == user.id:
+        return user.id
+    if user.role not in _ON_BEHALF_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an owner, admin or dispatcher may act on behalf of another driver",
+        )
+    return target
+
+
 @router.post("/unplot", response_model=ZonePlotRead)
 async def unplot(
+    payload: OnBehalfBody | None = None,
     tenant_id: str = Depends(get_current_tenant_id),
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        shift = await zones_service.unplot(session, tenant_id=tenant_id, driver_id=user.id)
+        shift = await zones_service.unplot(session, tenant_id=tenant_id, driver_id=_acting_driver_id(user, payload))
     except zones_service.ZonesError as exc:
         raise _zones_error_to_http(exc) from exc
     return _shift_to_plot_read(shift)
@@ -112,13 +147,14 @@ async def unplot(
 @router.post("/{zone_id}/plot", response_model=ZonePlotRead)
 async def plot(
     zone_id: str,
+    payload: OnBehalfBody | None = None,
     tenant_id: str = Depends(get_current_tenant_id),
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
         shift = await zones_service.plot_into_zone(
-            session, tenant_id=tenant_id, driver_id=user.id, zone_id=zone_id
+            session, tenant_id=tenant_id, driver_id=_acting_driver_id(user, payload), zone_id=zone_id
         )
     except zones_service.ZonesError as exc:
         raise _zones_error_to_http(exc) from exc

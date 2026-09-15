@@ -114,6 +114,14 @@ class DuressEventRead(BaseModel):
     device_call_result_json: dict | None
     created_at: datetime
     updated_at: datetime
+    # True when still open/escalating/dispatched more than
+    # app.models.duress.DURESS_STALE_AFTER_HOURS after opening -- a
+    # `DuressEvent.stale` property, read via from_attributes.
+    stale: bool = False
+    # The driver's `users.name`, resolved by the router (see
+    # app.api.v1.duress._to_read); None when driver_id is not a known user.
+    # The Live Map panel used to show the raw UUID.
+    driver_name: str | None = None
 
 
 class DuressEventListResponse(BaseModel):

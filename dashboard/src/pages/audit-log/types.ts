@@ -15,6 +15,10 @@ export interface AuditLogEntry {
   /** Null is possible in principle (system-attributed entries), though the
    * create endpoint always attributes to the authenticated caller today. */
   actor_user_id: string | null;
+  /** The actor's display name, joined server-side (admin-panel plan §5).
+   * Optional: being added in parallel; `resolveActorName` in ./format.ts
+   * falls back to the users lookup, then to the raw id. */
+  actor_name?: string | null;
   action: string;
   entity_type: string;
   entity_id: string;

@@ -84,6 +84,21 @@ class WalletRead(BaseModel):
     recent: list[WalletTransactionRead]
 
 
+class WalletBalanceRead(BaseModel):
+    """One row of `GET /v1/wallet/balances`."""
+
+    driver_id: str
+    driver_name: str
+    driver_code: str | None
+    balance: Decimal
+
+
+class WalletBalanceListRead(BaseModel):
+    """`GET /v1/wallet/balances` -- every driver's derived balance, one query."""
+
+    items: list[WalletBalanceRead]
+
+
 # --- ratings ------------------------------------------------------------------
 
 
@@ -264,3 +279,24 @@ class IncentiveProgressListRead(BaseModel):
     """`GET /v1/me/incentives`."""
 
     items: list[IncentiveProgressRead]
+
+
+class IncentiveDriverProgressRead(BaseModel):
+    """One driver's row of `GET /v1/incentives/{id}/progress`. `earned` is
+    the achieved flag (completed >= target); `progress_pct`/`reward_aud` are
+    the same figures the driver's own tile shows, here so the desk view can
+    render the bar without recomputing."""
+
+    driver_id: str
+    driver_name: str
+    completed_trips: int
+    target_trips: int
+    earned: bool
+    progress_pct: int
+    reward_aud: Decimal
+
+
+class IncentiveProgressListResponse(BaseModel):
+    """`GET /v1/incentives/{id}/progress`."""
+
+    items: list[IncentiveDriverProgressRead]

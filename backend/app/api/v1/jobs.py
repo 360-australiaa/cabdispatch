@@ -52,6 +52,8 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from pydantic import BaseModel, ConfigDict
+
 from app.core.security import (
     WebSocketAuth,
     WebSocketAuthError,
@@ -191,17 +193,54 @@ async def cancel_job(
 # ==================================================================================
 
 
+
+
+# --- On-behalf actions (admin panel plan, 2026-09-15) --------------------------------------
+# The dashboard's dispatch/zones pages act FOR a driver (accept an offer for a driver on the
+# phone, plot a cab into a rank from the desk). The routes stay identity-scoped for a driver
+# token -- a driver can never name another driver -- and only owner/admin/dispatcher may pass a
+# `driver_id` that is not their own.
+
+_ON_BEHALF_ROLES = ("owner", "admin", "dispatcher")
+
+
+class OnBehalfBody(BaseModel):
+    """Optional body: `driver_id` names the driver the action is performed for. Extra fields
+    (the dashboard also sends shift/vehicle ids for its own bookkeeping) are ignored."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    driver_id: str | None = None
+
+
+def _acting_driver_id(user, payload: OnBehalfBody | None) -> str:
+    target = payload.driver_id if payload is not None else None
+    if not target or target == user.id:
+        return user.id
+    if user.role not in _ON_BEHALF_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an owner, admin or dispatcher may act on behalf of another driver",
+        )
+    return target
+
+
 @router.post("/{job_id}/offers/{offer_id}/accept", response_model=JobOfferRead)
 async def accept_offer(
     job_id: str,
     offer_id: str,
+    payload: OnBehalfBody | None = None,
     tenant_id: str = Depends(get_current_tenant_id),
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
         return await jobs_service.accept_offer(
-            session, tenant_id=tenant_id, job_id=job_id, offer_id=offer_id, driver_id=user.id
+            session,
+            tenant_id=tenant_id,
+            job_id=job_id,
+            offer_id=offer_id,
+            driver_id=_acting_driver_id(user, payload),
         )
     except jobs_service.JobsError as exc:
         raise _jobs_error_to_http(exc) from exc
@@ -211,13 +250,18 @@ async def accept_offer(
 async def decline_offer(
     job_id: str,
     offer_id: str,
+    payload: OnBehalfBody | None = None,
     tenant_id: str = Depends(get_current_tenant_id),
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     try:
         return await jobs_service.decline_offer(
-            session, tenant_id=tenant_id, job_id=job_id, offer_id=offer_id, driver_id=user.id
+            session,
+            tenant_id=tenant_id,
+            job_id=job_id,
+            offer_id=offer_id,
+            driver_id=_acting_driver_id(user, payload),
         )
     except jobs_service.JobsError as exc:
         raise _jobs_error_to_http(exc) from exc

@@ -36,6 +36,7 @@ from app.core.ratelimit import (
     limiter,
 )
 from app.core.security import (
+    MAX_ACTIVE_SESSIONS_PER_USER,
     TOKEN_TYPE_MFA,
     TOKEN_TYPE_PASSWORD_RESET,
     TOKEN_TYPE_REFRESH,
@@ -52,6 +53,8 @@ from app.core.security import (
     hash_recovery_code,
     mfa_provisioning_uri,
     revocation_store,
+    revoke_session_row,
+    session_is_idle_expired,
     verify_password,
     verify_recovery_code,
     verify_totp_code,
@@ -204,6 +207,23 @@ async def _issue_tokens(user: User, *, session: AsyncSession, request: Request |
     ip_address = request.client.host if (request is not None and request.client) else None
 
     now = datetime.now(UTC)
+
+    # Cap on live sessions per account (app.core.security
+    # .MAX_ACTIVE_SESSIONS_PER_USER): this login must leave room for itself,
+    # so the least-recently-seen sessions beyond the cap are revoked first —
+    # the same jti revocation "sign out everywhere" performs, just aimed at
+    # the oldest rows. A script re-logging-in every run can no longer grow
+    # the Security page's session list without bound.
+    live = await session.execute(
+        select(UserSession)
+        .where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
+        .order_by(UserSession.last_seen_at.asc(), UserSession.created_at.asc())
+    )
+    live_rows = list(live.scalars().all())
+    excess = len(live_rows) - (MAX_ACTIVE_SESSIONS_PER_USER - 1)
+    for stale_row in live_rows[:max(excess, 0)]:
+        await revoke_session_row(session, stale_row, now=now)
+
     row = UserSession(
         user_id=user.id,
         tenant_id=user.tenant_id,
@@ -454,6 +474,25 @@ async def refresh(body: RefreshRequest, session: AsyncSession = Depends(get_sess
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer active")
 
     await _assert_tenant_not_suspended(session, user)
+
+    # Idle expiry on the refresh path too (app.core.security
+    # .SESSION_IDLE_EXPIRY_HOURS): the access-token check in
+    # `get_current_user` alone would let a client that only ever refreshes
+    # keep a day-idle session alive. Looked up by the presented refresh jti
+    # BEFORE rotation, since rotation is what re-points the row.
+    idle_check = await session.execute(
+        select(UserSession).where(
+            UserSession.current_refresh_jti == jti,
+            UserSession.revoked_at.is_(None),
+        )
+    )
+    idle_row = idle_check.scalar_one_or_none()
+    if idle_row is not None and session_is_idle_expired(idle_row.last_seen_at):
+        await revoke_session_row(session, idle_row)
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired after inactivity"
+        )
 
     # Rotation: burn the presented jti BEFORE handing out the replacement, so
     # there is no window in which both the old and the new refresh token work.

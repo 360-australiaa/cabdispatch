@@ -65,7 +65,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TenantScopedMixin, TimestampMixin
@@ -125,6 +125,15 @@ class Shift(Base, TenantScopedMixin, TimestampMixin):
     # --- Reconciliation figures, accepted from the client at shift end ---
     psl_owed: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal(0))
     reconciled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Why a shift that WAS reconciled is no longer: set (and `reconciled`
+    # flipped back to False) by POST /v1/trips/{id}/fare-correction when a
+    # trip on this shift has its fare of record changed after the cash-up —
+    # the stored cash/card aggregates are recomputed at the same time, so the
+    # totals the dashboard shows follow the correction, but the driver's
+    # counted cash was checked against the OLD figure and has to be checked
+    # again. NULL = never asked to be re-reconciled. See
+    # app.services.shift.mark_needs_reconciliation.
+    reconciliation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- zone plotting (see class docstring DEVIATION note) ---
     plotted_zone_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)

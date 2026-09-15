@@ -1,4 +1,5 @@
 import mapboxgl from "mapbox-gl";
+import { installStyleFallback } from "@/lib/mapStyleFallback";
 import type { PlottedVehicle } from "./mapTypes";
 import {
   TRAIL_CASING_LAYER_ID,
@@ -235,7 +236,13 @@ export function resolveInitialCamera(
 
 /** Constructs the map itself, on the camera resolved by `resolveInitialCamera`,
  * with the nav control attached. Sources and layers are added separately, on
- * `load`, by installMapLayers below. */
+ * `load`, by installMapLayers below.
+ *
+ * The custom Studio style has been observed loading with no drawable sources
+ * (admin-panel plan §1.1: markers on a black canvas, no tile requests), so the
+ * map falls back to Mapbox's stock dark style when that happens -- see
+ * `lib/mapStyleFallback.ts`. Registered here, before `load`, so the swap lands
+ * before `installMapLayers` adds anything `setStyle` would discard. */
 export function createFleetMap(container: HTMLDivElement, camera: MapCamera): mapboxgl.Map {
   mapboxgl.accessToken = MAPBOX_TOKEN as string;
   const map = new mapboxgl.Map({
@@ -244,6 +251,7 @@ export function createFleetMap(container: HTMLDivElement, camera: MapCamera): ma
     center: camera.center,
     zoom: camera.zoom,
   });
+  installStyleFallback(map);
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
   return map;
 }

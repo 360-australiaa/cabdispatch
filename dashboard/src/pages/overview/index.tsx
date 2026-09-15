@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, Radio, RadioTower, TabletSmartphone } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Radio, RadioTower, TabletSmartphone } from "lucide-react";
 import { EntityLink } from "@/components/EntityLink";
 import apiClient from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
@@ -10,10 +10,13 @@ import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, PageHeader, Table, type TableColumn } from "@/components/ui";
 import { useFleetLiveSocket } from "@/hooks/useLiveMap";
 import { useRevenueReportQuery } from "@/hooks/useReports";
-import type { TripListResponse } from "@/hooks/useTrips";
+import { useDriversLookupQuery, type TripListResponse } from "@/hooks/useTrips";
 import { useDevices } from "@/pages/fleet/api";
+import type { Vehicle } from "@/pages/fleet/types";
 import { FleetMapCanvas, type VehicleMapState } from "@/pages/live-map/FleetMapCanvas";
 import type { DuressEventListResponse, Page, VehicleLiveRead } from "@/pages/live-map/types";
+import type { ShiftListResponse } from "@/pages/shifts/types";
+import { buildAttentionGroups, type AttentionGroup } from "./attention";
 import {
   batteryColor,
   formatRelativeTime,
@@ -29,6 +32,11 @@ import { useActivityFeed } from "./useActivityFeed";
 /** Server-side caps: `GET /v1/vehicles` le=100, `GET /v1/trips` le=200. */
 const VEHICLE_FETCH_LIMIT = 100;
 const TRIP_FETCH_LIMIT = 200;
+/** The attention queue shows the newest of each kind; the group link leads
+ * to the full filtered list. `GET /v1/shifts` caps limit at 100. */
+const ATTENTION_FETCH_LIMIT = 100;
+/** Rows shown per attention group before the "and N more" link. */
+const ATTENTION_ROWS_PER_GROUP = 5;
 
 /** `YYYY-MM-DD` of the viewer's local calendar day. The tenant row carries no
  * timezone (see lib/format.ts's own note), so "today" is the browser's day --
@@ -108,6 +116,43 @@ export default function OverviewPage() {
   const revenueQuery = useRevenueReportQuery({ from: today.key, to: today.key, group_by: "day" });
   const devicesQuery = useDevices(0, {}, 100);
 
+  // --- data: the attention queue's own sources (admin-panel plan §6) -------
+  // Flagged trips are a server-side filter, not a scan of today's page: a
+  // trip flagged last week is still work. Unreconciled shifts likewise.
+  // Document expiry dates live on the fleet CRUD row (`/v1/fleet/vehicles`),
+  // not the live-ops row the map uses.
+  const flaggedTripsQuery = useQuery({
+    queryKey: ["overview", "flagged-trips"],
+    queryFn: async () => {
+      const res = await apiClient.get<TripListResponse>("/v1/trips", {
+        params: { flagged_for_review: true, skip: 0, limit: ATTENTION_FETCH_LIMIT },
+      });
+      return res.data;
+    },
+    ...pollingQueryOptions(POLL.SUPPORTING),
+  });
+  const unreconciledShiftsQuery = useQuery({
+    queryKey: ["overview", "unreconciled-shifts"],
+    queryFn: async () => {
+      const res = await apiClient.get<ShiftListResponse>("/v1/shifts", {
+        params: { reconciled: false, limit: ATTENTION_FETCH_LIMIT, offset: 0 },
+      });
+      return res.data;
+    },
+    ...pollingQueryOptions(POLL.SUPPORTING),
+  });
+  const fleetVehiclesQuery = useQuery({
+    queryKey: ["overview", "fleet-vehicles"],
+    queryFn: async () => {
+      const res = await apiClient.get<Page<Vehicle>>("/v1/fleet/vehicles", {
+        params: { skip: 0, limit: VEHICLE_FETCH_LIMIT },
+      });
+      return res.data;
+    },
+    ...pollingQueryOptions(POLL.SUPPORTING),
+  });
+  const driversQuery = useDriversLookupQuery();
+
   // --- derived: fleet ------------------------------------------------------
   const vehicles = useMemo(
     () => (vehiclesQuery.data?.items ?? []).map((v) => mergeLivePosition(v, positions)),
@@ -169,6 +214,52 @@ export default function OverviewPage() {
   }, [devices, now]);
 
   const openDuress = useMemo(() => duressQuery.data?.items ?? [], [duressQuery.data]);
+
+  // --- attention queue ------------------------------------------------------
+  const vehicleRegoById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const v of vehicles) map.set(v.id, v.rego);
+    for (const v of fleetVehiclesQuery.data?.items ?? []) map.set(v.id, v.rego);
+    return map;
+  }, [vehicles, fleetVehiclesQuery.data]);
+  const driverNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of driversQuery.data ?? []) map.set(d.id, d.name);
+    // A vehicle's current driver is known even if the drivers lookup is
+    // capped or still loading.
+    for (const v of vehicles) {
+      if (v.current_driver_id && v.current_driver_name) map.set(v.current_driver_id, v.current_driver_name);
+    }
+    return map;
+  }, [driversQuery.data, vehicles]);
+  const attentionGroups = useMemo(
+    () =>
+      buildAttentionGroups({
+        now,
+        flaggedTrips: flaggedTripsQuery.data?.items ?? null,
+        duress: duressQuery.data ? openDuress : null,
+        shifts: unreconciledShiftsQuery.data?.items ?? null,
+        devices: devices ?? null,
+        vehicles: fleetVehiclesQuery.data?.items ?? null,
+        vehicleRegoById,
+        driverNameById,
+      }),
+    [
+      now,
+      flaggedTripsQuery.data,
+      duressQuery.data,
+      openDuress,
+      unreconciledShiftsQuery.data,
+      devices,
+      fleetVehiclesQuery.data,
+      vehicleRegoById,
+      driverNameById,
+    ],
+  );
+  const attentionCount = attentionGroups.reduce((sum, g) => sum + g.items.length, 0);
+  const attentionLoaded = attentionGroups.every((g) => g.loaded);
+  const attentionFailed =
+    flaggedTripsQuery.isError || unreconciledShiftsQuery.isError || fleetVehiclesQuery.isError;
 
   // --- activity feed ---------------------------------------------------------
   const loadedVehicles = vehiclesQuery.data ? vehicles : null;
@@ -341,6 +432,45 @@ export default function OverviewPage() {
         </p>
       )}
 
+      {/* The work, not the counts: every row links into the page with the
+          matching filter already applied (admin-panel plan §6). */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            Attention
+            {attentionLoaded && attentionCount > 0 && (
+              <Badge variant={attentionCount > 0 ? "destructive" : "outline"}>{attentionCount}</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            Flagged trips, duress events left open, shifts ended but not reconciled, tablets needing attention and
+            documents due within 30 days. Click a row to open it, or a heading for the filtered list.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {attentionFailed && (
+            <p className="mb-3 text-sm text-destructive" role="alert">
+              Some of these lists could not be loaded; the groups below cover what did.
+            </p>
+          )}
+          {attentionLoaded && attentionCount === 0 && !attentionFailed ? (
+            <div className="flex items-center gap-2 text-sm text-success">
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+              Nothing needs attention right now.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {attentionGroups
+                .filter((g) => !g.loaded || g.items.length > 0)
+                .map((g) => (
+                  <AttentionGroupCard key={g.key} group={g} />
+                ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader>
@@ -471,6 +601,55 @@ function Kpi({
       </span>
       {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
     </Link>
+  );
+}
+
+/** One group of the attention queue: heading linking to the filtered page,
+ * the first few rows linking to each item, and an "and N more" link. */
+function AttentionGroupCard({ group }: { group: AttentionGroup }) {
+  const shown = group.items.slice(0, ATTENTION_ROWS_PER_GROUP);
+  const hidden = group.items.length - shown.length;
+  return (
+    <section aria-label={group.label} className="rounded-md border border-border p-3">
+      <Link
+        to={group.href}
+        className="flex items-center justify-between gap-2 text-sm font-semibold text-foreground hover:underline"
+      >
+        <span>
+          {group.label}
+          {group.loaded && <span className="ml-1.5 text-muted-foreground">({group.items.length})</span>}
+        </span>
+        <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </Link>
+      {!group.loaded ? (
+        <p className="mt-2 text-xs text-muted-foreground">Checking…</p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-1">
+          {shown.map((item) => (
+            <li key={item.id}>
+              <Link to={item.href} className="block rounded-md px-2 py-1 hover:bg-muted">
+                <span
+                  className={cn(
+                    "block text-sm",
+                    item.tone === "destructive" ? "font-medium text-destructive" : "text-foreground",
+                  )}
+                >
+                  {item.title}
+                </span>
+                <span className="block text-xs text-muted-foreground">{item.detail}</span>
+              </Link>
+            </li>
+          ))}
+          {hidden > 0 && (
+            <li>
+              <Link to={group.href} className="block px-2 py-1 text-xs text-muted-foreground hover:underline">
+                and {hidden} more…
+              </Link>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
   );
 }
 

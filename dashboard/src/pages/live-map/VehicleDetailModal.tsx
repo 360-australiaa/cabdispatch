@@ -6,6 +6,7 @@ import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
 import {
   batteryColor,
+  describePositionSource,
   formatLatLng,
   formatRelativeTime,
   formatSpeed,
@@ -310,9 +311,16 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
               <span className="font-mono text-xs">{formatLatLng(vehicle.lat, vehicle.lng)}</span>
             </Field>
             <Field label="Position source">
-              <Badge variant="outline">{vehicle.position_source}</Badge>
+              {(() => {
+                const badge = describePositionSource(vehicle.position_source, vehicle.position_updated_at);
+                return (
+                  <Badge variant={badge.variant} title={badge.title}>
+                    {badge.label}
+                  </Badge>
+                );
+              })()}
             </Field>
-            <Field label="Position updated">
+            <Field label="Fix age">
               <span
                 className={isStale(vehicle.position_updated_at) ? "text-destructive" : undefined}
                 title={

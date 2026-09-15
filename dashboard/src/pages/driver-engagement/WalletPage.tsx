@@ -27,8 +27,11 @@ import { formatDateTime, formatMoney, WALLET_KIND_LABELS } from "./format";
 const LEDGER_PAGE_SIZE = 20;
 
 /** Driver Wallets — operator view of every driver's balance and one driver's
- * ledger. Two `/v1/wallet/*` endpoints back this:
- * `GET /v1/wallet/drivers/{driver_id}` (one driver's derived balance) and
+ * ledger. Three `/v1/wallet/*` endpoints back this:
+ * `GET /v1/wallet/balances` (every driver's derived balance in one call --
+ * the fleet table; falls back to one `GET /v1/wallet/drivers/{driver_id}`
+ * per driver on an older backend, see `useFleetWalletBalancesQuery`),
+ * `GET /v1/wallet/drivers/{driver_id}` (one driver's balance) and
  * `GET /v1/wallet/transactions` (the real server-paged ledger, with a
  * `total` from an actual `count(*)`, filterable by `driver_id`). The whole
  * page is owner/admin server-side, so it renders a notice for other roles
@@ -50,7 +53,7 @@ export default function WalletPage() {
   const wallet = walletQuery.data;
   const balance = Number(wallet?.balance_aud ?? "0");
 
-  const fleetBalances = useFleetWalletBalancesQuery(canAccess && !selectedDriver ? drivers : []);
+  const fleetBalances = useFleetWalletBalancesQuery(drivers, canAccess && !selectedDriver);
 
   const ledgerQuery = useWalletTransactionsQuery({
     driver_id: canAccess ? driverId || undefined : undefined,
@@ -214,15 +217,23 @@ export default function WalletPage() {
 
       {!selectedDriver && drivers.length > 0 && (
         <>
-          <p className="mb-2 text-xs text-muted-foreground">
-            One request per driver — there is no single "every balance" endpoint yet. Showing the
-            first {drivers.length} driver{drivers.length === 1 ? "" : "s"} in the tenant.
-          </p>
+          {fleetBalances.source === "per-driver" && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              This backend has no fleet-wide balances endpoint yet — showing one request per
+              driver for the first {drivers.length} driver{drivers.length === 1 ? "" : "s"} in the
+              tenant.
+            </p>
+          )}
+          {fleetBalances.isError && (
+            <p className="mb-2 text-sm text-destructive">
+              Failed to load fleet balances. Check the backend connection and try again.
+            </p>
+          )}
           <Table
             columns={balanceColumns}
-            data={fleetBalances}
+            data={fleetBalances.rows}
             rowKey={(row) => row.driver.id}
-            isLoading={false}
+            isLoading={fleetBalances.isLoading}
             emptyState="No drivers yet."
             className="mb-6"
           />

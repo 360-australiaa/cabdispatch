@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { Flag, Lock, Pencil, Trash2 } from "lucide-react";
+import { Flag, Lock, Pencil, Receipt, Trash2 } from "lucide-react";
 import { EntityPage } from "@/components/layout/EntityPage";
 import { EntityLink } from "@/components/EntityLink";
 import { Badge, Button, Modal, Tooltip } from "@/components/ui";
@@ -17,6 +17,7 @@ import {
 import { useDriverUser } from "@/pages/drivers/api";
 import { useVehicle } from "@/pages/fleet/api";
 import { CloseTripSheet } from "./CloseTripSheet";
+import { CorrectFareModal } from "./CorrectFareModal";
 import { FlagTripModal } from "./FlagTripModal";
 import { TripFormModal } from "./TripFormModal";
 import { PAYMENT_METHOD_LABELS, statusBadgeVariant } from "./format";
@@ -41,7 +42,9 @@ import { ActivityTab } from "./tabs/ActivityTab";
  * tooltip rather than a live but silently-403ing button. Close and Flag
  * stay enabled for a dispatcher (day-to-day trip handling, not a
  * destructive/financial-record action), matching `TripDetailModal`'s own
- * posture of gating those only on trip status, not role.
+ * posture of gating those only on trip status, not role. "Correct fare"
+ * (admin-panel plan §3) is owner/admin AND closed-trip only, mirroring the
+ * endpoint's own 403/409 rules -- see `CorrectFareModal`.
  */
 export default function TripPage() {
   const { tripId } = useParams<{ tripId: string }>();
@@ -65,6 +68,7 @@ export default function TripPage() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [correctFareOpen, setCorrectFareOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -181,6 +185,24 @@ export default function TripPage() {
                 </Tooltip>
               )}
 
+              <Tooltip
+                content={
+                  disabledReason ??
+                  (trip.status !== "closed"
+                    ? "Only a closed trip's fare can be corrected"
+                    : "Set the fare of record to what the passenger actually paid")
+                }
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCorrectFareOpen(true)}
+                  disabled={!canManage || trip.status !== "closed"}
+                >
+                  <Receipt className="h-3.5 w-3.5" /> Correct fare
+                </Button>
+              </Tooltip>
+
               <Tooltip content={disabledReason ?? "Edit this trip"}>
                 <Button variant="outline" size="sm" onClick={() => setEditOpen(true)} disabled={!canManage}>
                   <Pencil className="h-3.5 w-3.5" /> Edit
@@ -234,6 +256,7 @@ export default function TripPage() {
         <>
           <CloseTripSheet open={closeOpen} onClose={() => setCloseOpen(false)} trip={trip} />
           <FlagTripModal open={flagOpen} onClose={() => setFlagOpen(false)} trip={trip} />
+          <CorrectFareModal open={correctFareOpen} onClose={() => setCorrectFareOpen(false)} trip={trip} />
           <TripFormModal
             open={editOpen}
             onClose={() => setEditOpen(false)}

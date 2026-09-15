@@ -42,10 +42,12 @@ import { usePositionHistory } from "./usePositionHistory";
 import type { DuressEventListResponse, DuressEventRead, Page, VehicleLiveRead } from "./types";
 import {
   batteryColor,
+  describePositionSource,
   formatLatLng,
   formatRelativeTime,
   geofencesContaining,
   isStale,
+  isStaleDuress,
   mergeLivePosition,
   networkBadgeVariant,
   statusBadgeVariant,
@@ -316,6 +318,23 @@ export default function LiveMapPage() {
     return map;
   }, [mapVehicles]);
 
+  // Driver names for the duress panel without a second fetch: every vehicle
+  // row already carries who is on its open shift. A duress event's own
+  // `driver_name` (joined server-side) wins when present; this is the
+  // fallback for a response that predates that field, and the raw id is the
+  // fallback of last resort -- but shortened and labelled, never a bare UUID.
+  const driverNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const v of mapVehicles) {
+      if (v.current_driver_id && v.current_driver_name) map.set(v.current_driver_id, v.current_driver_name);
+    }
+    return map;
+  }, [mapVehicles]);
+
+  function duressDriverLabel(e: DuressEventRead): string {
+    return e.driver_name ?? driverNameById.get(e.driver_id) ?? `Driver ${e.driver_id.slice(0, 8)}`;
+  }
+
   const total = vehiclesTableQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / TABLE_PAGE_SIZE));
 
@@ -386,7 +405,22 @@ export default function LiveMapPage() {
     {
       key: "position_source",
       header: "Source",
-      render: (v) => <Badge variant="outline">{v.position_source}</Badge>,
+      // Live / Estimated / Stale / No fix, with the fix age beside it -- the
+      // raw enum value used to be printed here, and "trip" or "none" told a
+      // dispatcher nothing about whether to trust the dot on the map.
+      render: (v) => {
+        const badge = describePositionSource(v.position_source, v.position_updated_at);
+        return (
+          <span className="flex items-center gap-1.5">
+            <Badge variant={badge.variant} title={badge.title}>
+              {badge.label}
+            </Badge>
+            {badge.kind !== "none" && (
+              <span className="text-xs text-muted-foreground">{formatRelativeTime(v.position_updated_at)}</span>
+            )}
+          </span>
+        );
+      },
     },
     {
       key: "battery",
@@ -420,9 +454,25 @@ export default function LiveMapPage() {
 
   const duressColumns: TableColumn<DuressEventRead>[] = [
     { key: "vehicle_id", header: "Vehicle", render: (e) => vehicleRegoById.get(e.vehicle_id) ?? e.vehicle_id },
-    { key: "driver_id", header: "Driver" },
+    { key: "driver_id", header: "Driver", render: (e) => <span title={e.driver_id}>{duressDriverLabel(e)}</span> },
     { key: "trigger", header: "Trigger", render: (e) => <Badge variant="outline">{e.trigger}</Badge> },
-    { key: "status", header: "Status", render: (e) => <Badge variant="destructive">{e.status}</Badge> },
+    {
+      key: "status",
+      header: "Status",
+      render: (e) => (
+        <span className="flex items-center gap-1.5">
+          <Badge variant="destructive">{e.status}</Badge>
+          {/* An event nobody has closed in 12h is not an emergency any more, it is
+              a housekeeping problem -- say so instead of leaving it red forever
+              (four sat "dispatched" for two weeks, admin-panel plan §1.4). */}
+          {isStaleDuress(e) && (
+            <Badge variant="outline" title="Open for more than 12 hours without being resolved or cancelled">
+              Stale
+            </Badge>
+          )}
+        </span>
+      ),
+    },
     {
       key: "opened_at",
       header: "Opened",

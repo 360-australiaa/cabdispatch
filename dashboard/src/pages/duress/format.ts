@@ -6,7 +6,7 @@
  * per-page `format.ts` modules). Only the page-specific helpers below are local.
  */
 
-import type { DuressCallResult, DuressStatus } from "./types";
+import { isTerminalStatus, type DuressCallResult, type DuressEvent, type DuressStatus } from "./types";
 
 export {
   errorMessage,
@@ -83,6 +83,28 @@ export function formatCallResultSummary(result: DuressCallResult): string {
     return `Calling ${result.to_phone}`;
   }
   return "Call placed.";
+}
+
+/** How long a non-terminal event may sit before the desk calls it stale.
+ * 12 hours: a real panic event is either resolved or escalated to 000 well
+ * inside a shift; anything open past that is almost certainly a forgotten
+ * test/false alarm nobody closed (the live tenant had four of those). Same
+ * threshold the backend's `stale` flag is specified against. */
+export const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/** Is this event stale? Prefers the server's own `stale` flag when the
+ * backend sends one (single source of truth once it lands); otherwise
+ * computes it here from `opened_at` so an older backend still gets the
+ * badge. Terminal events are never stale -- they are simply closed. */
+export function isStaleEvent(
+  event: Pick<DuressEvent, "status" | "opened_at"> & { stale?: boolean },
+  nowMs: number = Date.now(),
+): boolean {
+  if (isTerminalStatus(event.status)) return false;
+  if (typeof event.stale === "boolean") return event.stale;
+  const openedMs = new Date(event.opened_at).getTime();
+  if (Number.isNaN(openedMs)) return false;
+  return nowMs - openedMs >= STALE_AFTER_MS;
 }
 
 /** Whole seconds remaining until `deadlineIso`, clamped to >= 0. */

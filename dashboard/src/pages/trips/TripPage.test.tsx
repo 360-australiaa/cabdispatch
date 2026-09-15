@@ -163,9 +163,32 @@ const AUDIT_ENTRY = {
   previous_hash: "h0",
 };
 
+const DEVICE_SEGMENT = {
+  client_uuid: "seg-1",
+  started_at: "2026-09-09T10:00:00.000Z",
+  ended_at: "2026-09-09T10:02:30.000Z",
+  entry_lat: -33.865,
+  entry_lng: 151.205,
+  exit_lat: -33.868,
+  exit_lng: 151.208,
+  entry_was_moving: true,
+  resolution: "INERTIAL",
+  billed_distance_km: "1.42",
+  corridor_road_id: null,
+  estimated_distance_km: "1.50",
+  reference_distance_km: "1.42",
+  correction_km: "-0.08",
+  reference_source: "road_path",
+  confidence: "high",
+  zupt_count: 2,
+};
+
 interface HandlerOpts {
   ratingsMatch?: boolean;
   tripOverrides?: Partial<typeof TRIP>;
+  tollRoads?: Array<{ id: string; name: string; toll_points: Array<{ id: string; name: string }> }>;
+  /** Captures the body of a fare-correction POST; the response is the trip with the new total. */
+  onFareCorrection?: (body: unknown) => void;
 }
 
 function installHandlers(opts: HandlerOpts = {}) {
@@ -174,12 +197,17 @@ function installHandlers(opts: HandlerOpts = {}) {
     http.get(`${API}/v1/trips/${TRIP_ID}/gps-trace`, () =>
       HttpResponse.json({ trip_id: TRIP_ID, points: [], point_count: 0 }),
     ),
+    http.post(`${API}/v1/trips/${TRIP_ID}/fare-correction`, async ({ request }) => {
+      const body = (await request.json()) as { total: string; reason: string };
+      opts.onFareCorrection?.(body);
+      return HttpResponse.json({ ...TRIP, ...opts.tripOverrides, total: body.total });
+    }),
     http.get(`${API}/v1/users/${DRIVER_ID}`, () => HttpResponse.json(DRIVER_USER)),
     http.get(`${API}/v1/fleet/vehicles/${VEHICLE_ID}`, () => HttpResponse.json(VEHICLE)),
     http.get(`${API}/v1/vehicles`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 100 })),
     http.get(`${API}/v1/drivers`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 100 })),
     http.get(`${API}/v1/tariffs`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 200 })),
-    http.get(`${API}/v1/toll-roads`, () => HttpResponse.json([])),
+    http.get(`${API}/v1/toll-roads`, () => HttpResponse.json(opts.tollRoads ?? [])),
     http.get(`${API}/v1/geofences`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 200 })),
     http.get(`${API}/v1/payments`, ({ request }) => {
       const url = new URL(request.url);
@@ -295,6 +323,144 @@ describe("TripPage", () => {
     expect(screen.getByText("No known corridor — billed $0 for this gap")).toBeInTheDocument();
   });
 
+  it("lists the meter's own blackout segments with the inertial figures next to the server's account", async () => {
+    installHandlers({
+      ratingsMatch: true,
+      tripOverrides: {
+        gps_blackout_events: [
+          { start: "2026-09-09T10:00:00.000Z", end: "2026-09-09T10:02:30.000Z", elapsed_s: 150, matched_km: null },
+        ],
+        device_gps_blackout_segments: [DEVICE_SEGMENT],
+        blackout_reconciliation: [{ type: "inertial_correction_large", correction_km: "-0.08" }],
+      },
+    });
+    renderPage();
+    await screen.findByText("Fare breakdown");
+
+    const table = screen.getByRole("table", { name: "GPS blackouts" });
+    expect(within(table).getByText("Meter")).toBeInTheDocument();
+    expect(within(table).getByText("Server")).toBeInTheDocument();
+    expect(within(table).getByText("Inertial dead-reckoning")).toBeInTheDocument();
+    // Both accounts recorded the same 150s gap -- one row each.
+    expect(within(table).getAllByText("2m 30s")).toHaveLength(2);
+    expect(within(table).getByText("1.42 km")).toBeInTheDocument();
+    expect(within(table).getByText("1.50 km / 1.42 km")).toBeInTheDocument();
+    expect(within(table).getByText("-0.08 km")).toBeInTheDocument();
+    expect(within(table).getByText("high")).toBeInTheDocument();
+    expect(within(table).getByText("2")).toBeInTheDocument();
+    expect(within(table).getByText("No known corridor — billed $0 for this gap")).toBeInTheDocument();
+    expect(screen.getByText(/Inertial estimate needed a large correction/)).toBeInTheDocument();
+  });
+
+  it("shows the fare check: both totals, the variance against the threshold, and the flag reason", async () => {
+    installHandlers({
+      ratingsMatch: true,
+      tripOverrides: {
+        total: "32.52",
+        device_total: "59.03",
+        variance_pct: "44.90",
+        max_fare_check_passed: false,
+        flagged_for_review: true,
+        review_notes: "Device charged 59.03 through the tunnel",
+      },
+    });
+    renderPage();
+    await screen.findByText("Fare check");
+
+    expect(screen.getByText("Server total (fare of record)")).toBeInTheDocument();
+    expect(screen.getByText("Device total")).toBeInTheDocument();
+    expect(screen.getByText("$59.03")).toBeInTheDocument();
+    expect(screen.getByText("44.90% (threshold 1.00%)")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Device charged 59.03 through the tunnel")).toBeInTheDocument();
+  });
+
+  it("says the device total is not stored rather than back-computing one", async () => {
+    installHandlers({ ratingsMatch: true });
+    renderPage();
+    await screen.findByText("Fare check");
+
+    expect(screen.getByText("Not stored on this trip")).toBeInTheDocument();
+    expect(screen.getByText("0.20% (threshold 1.00%)")).toBeInTheDocument();
+    expect(screen.getByText("Passed")).toBeInTheDocument();
+  });
+
+  it("names toll roads the trip crossed but that carry no price", async () => {
+    installHandlers({
+      ratingsMatch: true,
+      tollRoads: [{ id: "road-rozelle", name: "Rozelle Interchange", toll_points: [] }],
+      tripOverrides: { tolls: "0", unpriced_toll_road_ids: ["road-rozelle", "road-unknown"] },
+    });
+    renderPage();
+    await screen.findByText("Fare breakdown");
+
+    expect(await screen.findByText(/Crossed but not priced/)).toBeInTheDocument();
+    expect(screen.getByText("Rozelle Interchange")).toBeInTheDocument();
+    expect(screen.getByText(/road-unknown/)).toBeInTheDocument();
+  });
+
+  it("captions the route map's dashed blackout stretch and lists the blackout under it", async () => {
+    installHandlers({ ratingsMatch: true, tripOverrides: { device_gps_blackout_segments: [DEVICE_SEGMENT] } });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByText("Fare breakdown");
+
+    await user.click(screen.getByRole("tab", { name: "Route" }));
+    expect(await screen.findByText(/Amber dashed stretch is a GPS blackout/)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "GPS blackouts" })).toBeInTheDocument();
+  });
+
+  it("lets an owner correct the fare of record and announces the result", async () => {
+    const onFareCorrection = vi.fn();
+    installHandlers({ ratingsMatch: true, onFareCorrection });
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /Correct fare/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/stored total \$15\.20/)).toBeInTheDocument();
+
+    const save = within(dialog).getByRole("button", { name: "Save correction" });
+    expect(save).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("New total (AUD, GST-inclusive)"), "59.03");
+    await user.type(within(dialog).getByLabelText("Reason (required)"), "Passenger paid the metered tunnel fare");
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    expect(await screen.findByText("Fare corrected: $15.20 → $59.03")).toBeInTheDocument();
+    expect(onFareCorrection).toHaveBeenCalledWith({
+      total: "59.03",
+      reason: "Passenger paid the metered tunnel fare",
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("surfaces the server's refusal inside the correct-fare dialog", async () => {
+    installHandlers({ ratingsMatch: true });
+    server.use(
+      http.post(`${API}/v1/trips/${TRIP_ID}/fare-correction`, () =>
+        HttpResponse.json({ detail: "Only a closed trip's fare can be corrected" }, { status: 409 }),
+      ),
+    );
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /Correct fare/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("New total (AUD, GST-inclusive)"), "20");
+    await user.type(within(dialog).getByLabelText("Reason (required)"), "typo");
+    await user.click(within(dialog).getByRole("button", { name: "Save correction" }));
+
+    expect(await within(dialog).findByText("Only a closed trip's fare can be corrected")).toBeInTheDocument();
+  });
+
+  it("keeps Correct fare disabled for an open trip", async () => {
+    installHandlers({ ratingsMatch: true, tripOverrides: { status: "open", end_at: null } });
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: /Correct fare/ })).toBeDisabled();
+  });
+
   it("degrades honestly on the Rating tab when no rating matches this trip", async () => {
     installHandlers({ ratingsMatch: false });
     renderPage();
@@ -314,5 +480,8 @@ describe("TripPage", () => {
     expect(editButton).toBeDisabled();
     const deleteButton = screen.getByRole("button", { name: /Delete/ });
     expect(deleteButton).toBeDisabled();
+    // A fare correction is a financial-record change: owner/admin only, same
+    // as the endpoint's own 403.
+    expect(screen.getByRole("button", { name: /Correct fare/ })).toBeDisabled();
   });
 });

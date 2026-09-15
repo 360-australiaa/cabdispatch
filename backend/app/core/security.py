@@ -336,16 +336,103 @@ async def get_optional_token_payload(
     return await _payload_from_credentials(credentials)
 
 
+# --- session idle expiry -----------------------------------------------------
+# A `UserSession` row (app/models/user_session.py) not used for this long is
+# treated as expired on its next use: its jti pair is revoked and the row
+# marked revoked, exactly as if the user had clicked "sign out" on it. Found
+# live: the Security page listed 20 sessions from one IP, because every login
+# from a script, tablet or browser tab made a row that only a human clicking
+# "revoke" could ever end. Refresh tokens live 14 days, so without this a
+# forgotten tab's session stayed listed (and usable) for two weeks.
+SESSION_IDLE_EXPIRY_HOURS = 24
+# `last_seen_at` is only rewritten when it is at least this stale, so a busy
+# dashboard polling every 5 s does not issue a row UPDATE per request. The
+# idle window is 24 h; a touch resolution of 5 min is invisible against it.
+SESSION_TOUCH_INTERVAL_SECONDS = 300
+# The most sessions one account may hold open at once. When a login would
+# exceed it the OLDEST (least recently seen) sessions are revoked to make
+# room — see app.api.v1.auth._issue_tokens.
+MAX_ACTIVE_SESSIONS_PER_USER = 10
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite hands `DateTime(timezone=True)` back tz-naive (see
+    app.services.audit_log._canonical_at); every value this code writes is
+    UTC, so a naive one is re-labelled rather than shifted."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def session_is_idle_expired(last_seen_at: datetime, *, now: datetime | None = None) -> bool:
+    """The one definition of "idle for too long", shared by the access-token
+    path (`_enforce_session_idle_expiry`) and the refresh path
+    (app.api.v1.auth.refresh) so neither can be laxer than the other."""
+    now = now or datetime.now(UTC)
+    return now - _as_utc(last_seen_at) > timedelta(hours=SESSION_IDLE_EXPIRY_HOURS)
+
+
+async def revoke_session_row(session: AsyncSession, row: Any, *, now: datetime | None = None) -> None:
+    """Revokes a `UserSession` row's live jti pair against `revocation_store`
+    (each with its token type's full lifetime as TTL — these jtis come from
+    the row, with no `exp` in hand) and stamps `revoked_at`. Does not commit.
+    Lives here rather than in app.api.v1.auth so the auth dependency below
+    can use it without importing the router."""
+    await revocation_store.revoke(row.current_access_jti, settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    await revocation_store.revoke(row.current_refresh_jti, settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
+    row.revoked_at = now or datetime.now(UTC)
+    session.add(row)
+
+
+async def _enforce_session_idle_expiry(session: AsyncSession, jti: str | None) -> None:
+    """Idle-expires (401) the session owning access `jti` if it has not been
+    seen for SESSION_IDLE_EXPIRY_HOURS; otherwise touches `last_seen_at`
+    (throttled, see SESSION_TOUCH_INTERVAL_SECONDS).
+
+    A token with no session row — one minted directly by
+    `create_access_token` (tests, scripts) rather than by a login — is left
+    alone: session tracking degrades gracefully and never blocks auth, the
+    same contract POST /v1/auth/refresh already keeps.
+    """
+    if not jti:
+        return
+    from app.models.user_session import UserSession  # local import, as User above
+
+    result = await session.execute(
+        select(UserSession).where(
+            UserSession.current_access_jti == jti, UserSession.revoked_at.is_(None)
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return
+    now = datetime.now(UTC)
+    if session_is_idle_expired(row.last_seen_at, now=now):
+        await revoke_session_row(session, row, now=now)
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired after inactivity",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if now - _as_utc(row.last_seen_at) >= timedelta(seconds=SESSION_TOUCH_INTERVAL_SECONDS):
+        row.last_seen_at = now
+        session.add(row)
+        await session.commit()
+
+
 async def get_current_user(
     payload: dict[str, Any] = Depends(get_token_payload),
     session: AsyncSession = Depends(get_session),
 ):
-    """Loads the User row referenced by the token's `sub` claim."""
+    """Loads the User row referenced by the token's `sub` claim — after the
+    session idle-expiry check, so a token whose login has gone quiet for a
+    day is refused here even though the JWT itself is still within `exp`."""
     from app.models.user import User  # local import: avoids import-order issues
 
     user_id = payload.get("sub")
     if not user_id:
         raise _CREDENTIALS_EXCEPTION
+
+    await _enforce_session_idle_expiry(session, payload.get("jti"))
 
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()

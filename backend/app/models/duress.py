@@ -39,7 +39,7 @@ registered together.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import JSON, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -97,6 +97,15 @@ ESCALATION_STAGES: list[str] = [
 # Wall-clock length of the window in which the driver may self-cancel a
 # just-opened event before dispatch escalation is presumed to have taken over.
 CANCEL_WINDOW_SECONDS = 10
+
+# An event still non-terminal this long after it opened is "stale": a real
+# incident is resolved or cancelled within hours, so one that is still
+# open/escalating/dispatched half a day later has almost certainly been
+# forgotten rather than being live (production had four "dispatched" rows
+# sitting untouched for two weeks). Surfaced as `DuressEventRead.stale` so
+# the desk can badge and close them; nothing is auto-closed on this basis —
+# closing a duress event is a human decision.
+DURESS_STALE_AFTER_HOURS = 12
 
 
 class DuressEvent(Base, TenantScopedMixin, TimestampMixin):
@@ -169,3 +178,20 @@ class DuressEvent(Base, TenantScopedMixin, TimestampMixin):
     # escalation cascade) since this call is operator-initiated on demand,
     # not a fixed cascade stage.
     device_call_result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    @property
+    def stale(self) -> bool:
+        """True when the event is still non-terminal more than
+        `DURESS_STALE_AFTER_HOURS` after it opened. A property (not a column)
+        so it can never drift from `status`/`opened_at`; picked up by
+        `DuressEventRead` via `from_attributes`. SQLite hands `opened_at`
+        back tz-naive (same caveat as app.services.audit_log._canonical_at),
+        so a naive value is treated as the UTC it was written as."""
+        if self.status in DURESS_TERMINAL_STATUSES:
+            return False
+        opened_at = self.opened_at
+        if opened_at is None:
+            return False
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=UTC)
+        return datetime.now(UTC) - opened_at > timedelta(hours=DURESS_STALE_AFTER_HOURS)

@@ -101,6 +101,36 @@ describe("ShiftsPage row click", () => {
     expect(await screen.findByRole("heading", { name: `Shift page for ${SHIFT_ID}` })).toBeInTheDocument();
   });
 
+  it("shows the reconciliation note and a Re-reconcile hint when the backend sets one", async () => {
+    server.use(
+      http.get(`${API}/v1/shifts`, () =>
+        HttpResponse.json({
+          items: [
+            {
+              ...SHIFT,
+              reconciled: true,
+              reconciliation_note: "Fare corrected on trip 1234abcd: $32.52 -> $59.03",
+            },
+          ],
+          total: 1,
+          limit: 15,
+          offset: 0,
+        }),
+      ),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Re-reconcile")).toBeInTheDocument();
+    expect(screen.getByText("Fare corrected on trip 1234abcd: $32.52 -> $59.03")).toBeInTheDocument();
+  });
+
+  it("renders no hint for a shift without a note (older backend omits the field)", async () => {
+    renderPage();
+    const table = await screen.findByRole("table");
+    await within(table).findByText("$20.00");
+    expect(screen.queryByText("Re-reconcile")).not.toBeInTheDocument();
+  });
+
   it("the 'View shift' row action also navigates to /shifts/:id", async () => {
     renderPage();
     const user = userEvent.setup();

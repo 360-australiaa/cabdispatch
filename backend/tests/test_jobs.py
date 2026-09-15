@@ -459,3 +459,40 @@ def test_websocket_rejects_missing_token(app):
         except FastAPIWebSocketDisconnect:
             raised = True
         assert raised
+
+
+async def test_admin_can_accept_and_decline_an_offer_on_behalf_of_a_driver(client: AsyncClient, session: AsyncSession):
+    """Admin panel plan (2026-09-15): dispatch accepts/declines FOR a driver by naming driver_id;
+    a driver token naming another driver is still refused."""
+    tenant_id, admin_headers = await _tenant_and_headers(client, session, tenant_name="Jobs Tenant On Behalf")
+    driver_a, headers_a = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="A")
+    driver_b, headers_b = await _available_driver(session=session, client=client, tenant_id=tenant_id, name="B")
+
+    job_id = (await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)).json()["id"]
+    offers = (await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)).json()
+    offer_a = next(o for o in offers if o["driver_id"] == driver_a.id)
+    offer_b = next(o for o in offers if o["driver_id"] == driver_b.id)
+
+    # A driver may not act for another driver.
+    resp = await client.post(
+        f"/v1/jobs/{job_id}/offers/{offer_a['id']}/accept", json={"driver_id": driver_a.id}, headers=headers_b
+    )
+    assert resp.status_code == 403
+
+    # The desk declines B's offer for B, then accepts A's for A.
+    resp = await client.post(
+        f"/v1/jobs/{job_id}/offers/{offer_b['id']}/decline", json={"driver_id": driver_b.id}, headers=admin_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "declined"
+    resp = await client.post(
+        f"/v1/jobs/{job_id}/offers/{offer_a['id']}/accept", json={"driver_id": driver_a.id}, headers=admin_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "accepted"
+    assert (await client.get(f"/v1/jobs/{job_id}", headers=admin_headers)).json()["accepted_by_driver_id"] == driver_a.id
+
+    # An admin with no driver_id is not a driver: the identity-scoped path 403s as before.
+    resp = await client.post(f"/v1/jobs/{job_id}/offers/{offer_a['id']}/accept", json={}, headers=admin_headers)
+    assert resp.status_code in (403, 409)
+

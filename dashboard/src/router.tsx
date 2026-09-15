@@ -1,7 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/components/NotFound";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Spinner } from "@/components/ui";
@@ -68,17 +67,14 @@ const ResetPasswordPage = lazy(() => import("@/pages/login/ResetPasswordPage"));
  *
  * Two structural guards wrap the authenticated area:
  *
- *  - `ErrorBoundary` wraps the authenticated area, so a render throw on any
- *    page shows a recoverable panel instead of blanking the whole app (there
- *    was no boundary anywhere before -- dashboard audit §6). It sits inside
- *    `ProtectedRoute`, so a crash never costs the user their session.
- *
- *    It wraps `AppShell` rather than AppShell's `<Outlet>`, which means a
- *    throwing page currently takes the sidebar down with it and the user
- *    recovers via the panel's own two buttons rather than via the nav.
- *    Wrapping the Outlet instead would be strictly better and is a one-line
- *    change -- but it is a change to `AppShell.tsx`, which this workstream
- *    does not own. Flagged for whoever owns the layout.
+ *  - An `ErrorBoundary` catches a render throw on any page and shows a
+ *    recoverable panel instead of blanking the whole app (there was no
+ *    boundary anywhere before -- dashboard audit §6). It lives inside
+ *    `AppShell`, around the `<Outlet>`, so a crashed page keeps the sidebar
+ *    on screen and the operator can simply navigate away (admin-panel plan
+ *    §5). It used to wrap `AppShell` from here, which took the nav down with
+ *    the page. `ProtectedRoute` stays outside it either way, so a crash never
+ *    costs the user their session.
  *  - The wildcard renders a real 404. It used to be
  *    `<Navigate to="/live-map" replace />`, which turned every mistyped or
  *    stale URL into a silent, un-undoable redirect to the map (see
@@ -125,9 +121,7 @@ export const router = createBrowserRouter([
     path: "/",
     element: (
       <ProtectedRoute>
-        <ErrorBoundary>
-          <AppShell />
-        </ErrorBoundary>
+        <AppShell />
       </ProtectedRoute>
     ),
     children: [

@@ -72,6 +72,16 @@ export interface DuressEvent {
   source: DuressEventSource | string;
   device_audio_ref: string | null;
   device_call_result_json: DuressCallResult | null;
+  /** Server-side "this incident has sat in a non-terminal state for too
+   * long" flag (admin plan §1.4 -- four events sat "dispatched" for two
+   * weeks with nobody noticing). Optional: the field is being added to
+   * `DuressEventRead` in parallel; when it is absent `isStaleEvent()` in
+   * ./format.ts falls back to computing it from `opened_at` client-side. */
+  stale?: boolean;
+  /** Driver's display name, joined server-side so a raw UUID never reaches
+   * the operator mid-incident. Optional for the same reason as `stale`;
+   * the existing first-100 client lookup remains the fallback. */
+  driver_name?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -6,7 +6,25 @@
  * per-page `format.ts` modules). Only the page-specific helpers below are local.
  */
 
+import type { AuditLogEntry } from "./types";
+
 export { errorMessage, formatDateTimeSeconds as formatDateTime, truncateId as shortId } from "@/lib/format";
+
+/**
+ * Who an entry's actor is, in order of preference: the name the API joined
+ * onto the row (`actor_name`), else the name from the `GET /v1/users` lookup
+ * the page already fetches, else the id shortened to eight characters -- and
+ * an em dash for a system-attributed entry with no actor at all. The raw id
+ * is never the first choice again (admin-panel plan §5).
+ */
+export function resolveActorName(
+  entry: Pick<AuditLogEntry, "actor_user_id" | "actor_name">,
+  namesById: ReadonlyMap<string, string>,
+): string {
+  if (entry.actor_name) return entry.actor_name;
+  if (!entry.actor_user_id) return "—";
+  return namesById.get(entry.actor_user_id) ?? entry.actor_user_id.slice(0, 8);
+}
 
 /** "vehicle.update" / "create" -> a badge variant that roughly buckets the
  * action by CRUD-ish verb, purely cosmetic (the backend imposes no fixed enum

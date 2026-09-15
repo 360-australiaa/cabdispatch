@@ -7,6 +7,15 @@ interface ErrorBoundaryProps {
   fallback?: (error: Error, reset: () => void) => ReactNode;
   /** Side-channel for logging; the boundary itself never reports anywhere. */
   onError?: (error: Error, info: ErrorInfo) => void;
+  /**
+   * When this value changes while the panel is showing, the boundary clears
+   * its error and renders its children again. `AppShell` passes the current
+   * pathname, so a crashed page is left behind the moment the operator picks
+   * another one from the sidebar -- without this the boundary, which sits
+   * once around the `<Outlet>` for the whole session, would keep showing the
+   * old page's error on every route.
+   */
+  resetKey?: unknown;
 }
 
 interface ErrorBoundaryState {
@@ -57,6 +66,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     // Keep the stack visible to a developer; the UI below stays human.
     console.error("Unhandled render error:", error, info.componentStack);
     this.props.onError?.(error, info);
+  }
+
+  componentDidUpdate(prevProps: ErrorBoundaryProps) {
+    if (this.state.error && !Object.is(prevProps.resetKey, this.props.resetKey)) {
+      this.reset();
+    }
   }
 
   reset = () => {

@@ -281,12 +281,14 @@ export function formatDurationShort(ms: number): string {
 
 /** "just now" / "30s ago" / "5m ago" / "3h ago" / "2d ago" for a timestamp.
  * A clock-skewed future timestamp clamps to "just now" rather than printing a
- * negative age. Missing or unparseable -> em-dash. */
-export function formatRelativeTime(iso: string | null | undefined): string {
+ * negative age. Missing or unparseable -> em-dash. `now` is injectable so a
+ * caller that already holds one tick (the Overview's `useNow`) labels every
+ * row against the same instant, and so the pure helpers over it are testable. */
+export function formatRelativeTime(iso: string | null | undefined, now: number = Date.now()): string {
   if (!iso) return EM_DASH;
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return EM_DASH;
-  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const diffSec = Math.max(0, Math.floor((now - then) / 1000));
   if (diffSec < 5) return "just now";
   if (diffSec < 60) return `${diffSec}s ago`;
   const diffMin = Math.floor(diffSec / 60);

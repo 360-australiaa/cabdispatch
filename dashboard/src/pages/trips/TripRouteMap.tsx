@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { MapPinOff } from "lucide-react";
+import { installStyleFallback } from "@/lib/mapStyleFallback";
+import type { BlackoutStretch } from "./blackouts";
 
 // Same public/publishable token + custom global style as the Live Map and
 // Tariff Studio's toll-zone picker (pages/live-map/FleetMapCanvas.tsx,
 // pages/tariffs/TollZoneMapPicker.tsx) -- falls back to a plain text summary
 // below when unset so this modal never breaks without a token configured.
+// The custom style itself falls back to Mapbox's stock dark style when it
+// loads empty (lib/mapStyleFallback.ts), same as the live map.
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const MAP_STYLE = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za";
 const SINGLE_POINT_ZOOM = 14;
@@ -26,6 +30,12 @@ const FIT_MAX_ZOOM = 16;
 // never shown together so there's no need to share a constant.
 const TRACE_LINE_COLOR = "#2563eb";
 const FALLBACK_LINE_COLOR = "#9ca3af";
+// Amber, dashed, wider than the trace and drawn over it: a GPS blackout is
+// the one part of the route the meter did NOT see, and it must read as
+// "estimated" at a glance -- the same dashed treatment the live map gives an
+// estimated (tunnel) position (pages/live-map/markers.ts), in a colour
+// neither the trace (blue) nor the straight-line stand-in (grey) uses.
+const BLACKOUT_LINE_COLOR = "#f59e0b";
 
 export interface TripRoutePoint {
   lat: number;
@@ -56,6 +66,13 @@ export interface TripRouteMapProps {
    * degrades honestly to the straight-line stand-in below.
    */
   trace?: TripRoutePoint[] | null;
+  /**
+   * GPS-blackout stretches to draw dashed between their entry and exit
+   * points -- see `blackouts.ts`'s `blackoutStretches`. Each one is a
+   * straight chord (the meter had no fixes in between to draw), and the
+   * caption says so.
+   */
+  blackouts?: BlackoutStretch[] | null;
   className?: string;
 }
 
@@ -130,19 +147,27 @@ const ROUTE_SOURCE_ID = "trip-route-line";
 // dasharray -- no expression to get wrong.
 const TRACE_LAYER_ID = "trip-route-trace-layer";
 const FALLBACK_LAYER_ID = "trip-route-fallback-layer";
+const BLACKOUT_LAYER_ID = "trip-route-blackout-layer";
 
 /** One-line honest caption for whatever's actually drawn -- always visible
  * under the map so a straight reference line is never mistaken for a real
  * route, and a missing endpoint always reads as "not recorded", not as an
  * error or a silent gap. */
-function captionFor(hasStart: boolean, hasEnd: boolean, hasRealTrace: boolean): string {
+export function captionFor(hasStart: boolean, hasEnd: boolean, hasRealTrace: boolean, blackoutCount = 0): string {
+  let caption: string;
   if (hasStart && hasEnd) {
-    return hasRealTrace
+    caption = hasRealTrace
       ? "Solid line shows the GPS path actually recorded for this trip."
       : "Dashed line is a straight reference between pickup and drop-off — no GPS trace was recorded for this trip.";
+  } else if (hasStart) {
+    caption = "Drop-off location not recorded for this trip.";
+  } else {
+    caption = "Pickup location not recorded for this trip.";
   }
-  if (hasStart) return "Drop-off location not recorded for this trip.";
-  return "Pickup location not recorded for this trip.";
+  if (blackoutCount > 0) {
+    caption += ` Amber dashed ${blackoutCount === 1 ? "stretch is a GPS blackout" : `stretches are ${blackoutCount} GPS blackouts`} — a straight chord between the last fix before and the first fix after, not the road driven.`;
+  }
+  return caption;
 }
 
 /** Trip detail map snapshot: an "A" pin at pickup, a "B" pin at drop-off, the
@@ -150,7 +175,7 @@ function captionFor(hasStart: boolean, hasEnd: boolean, hasRealTrace: boolean): 
  * caption explaining exactly what's on screen) for every other case. Falls
  * back to a plain text summary when no VITE_MAPBOX_TOKEN is configured, same
  * posture as TollZoneMapPicker. */
-export function TripRouteMap({ startLat, startLng, endLat, endLng, trace, className }: TripRouteMapProps) {
+export function TripRouteMap({ startLat, startLng, endLat, endLng, trace, blackouts, className }: TripRouteMapProps) {
   const hasStart = hasCoords(startLat, startLng);
   const hasEnd = hasCoords(endLat, endLng);
 
@@ -159,6 +184,7 @@ export function TripRouteMap({ startLat, startLng, endLat, endLng, trace, classN
   }
 
   const hasRealTrace = validTracePoints(trace).length >= 2;
+  const blackoutCount = blackouts?.length ?? 0;
 
   return (
     <div className="space-y-1.5">
@@ -169,6 +195,7 @@ export function TripRouteMap({ startLat, startLng, endLat, endLng, trace, classN
           endLat={endLat}
           endLng={endLng}
           trace={trace}
+          blackouts={blackouts}
           className={className}
         />
       ) : (
@@ -180,12 +207,12 @@ export function TripRouteMap({ startLat, startLng, endLat, endLng, trace, classN
           className={className}
         />
       )}
-      <p className="text-xs text-muted-foreground">{captionFor(hasStart, hasEnd, hasRealTrace)}</p>
+      <p className="text-xs text-muted-foreground">{captionFor(hasStart, hasEnd, hasRealTrace, blackoutCount)}</p>
     </div>
   );
 }
 
-function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, className }: TripRouteMapProps) {
+function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, blackouts, className }: TripRouteMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const startMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -210,6 +237,9 @@ function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, classNa
       center: initialPoints[0] ?? [151.2093, -33.8688],
       zoom: initialPoints.length > 0 ? SINGLE_POINT_ZOOM : 10,
     });
+    // Before `load`, so an empty custom style is swapped out before the
+    // route source below is added (setStyle would discard it).
+    installStyleFallback(map);
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     mapRef.current = map;
 
@@ -234,6 +264,15 @@ function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, classNa
         filter: ["==", ["get", "kind"], "fallback"],
         layout: { "line-join": "round", "line-cap": "round" },
         paint: { "line-color": FALLBACK_LINE_COLOR, "line-width": 2, "line-dasharray": [2, 2] },
+      });
+      // Added last so a blackout chord draws over the trace it interrupts.
+      map.addLayer({
+        id: BLACKOUT_LAYER_ID,
+        type: "line",
+        source: ROUTE_SOURCE_ID,
+        filter: ["==", ["get", "kind"], "blackout"],
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: { "line-color": BLACKOUT_LINE_COLOR, "line-width": 4, "line-opacity": 0.9, "line-dasharray": [1, 2] },
       });
       setStyleLoaded(true);
       fitToPoints(map, initialPoints.length > 0 ? initialPoints : []);
@@ -314,6 +353,13 @@ function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, classNa
           properties: { kind: "fallback" },
         });
       }
+      for (const stretch of blackouts ?? []) {
+        features.push({
+          type: "Feature" as const,
+          geometry: { type: "LineString" as const, coordinates: [stretch.from, stretch.to] },
+          properties: { kind: "blackout", label: stretch.label, source: stretch.source },
+        });
+      }
       source.setData({ type: "FeatureCollection", features });
     }
 
@@ -324,8 +370,11 @@ function MapboxTripRouteMap({ startLat, startLng, endLat, endLng, trace, classNa
       if (hasStart) boundsPoints.push([startLng as number, startLat as number]);
       if (hasEnd) boundsPoints.push([endLng as number, endLat as number]);
     }
+    // A device-reported blackout can sit outside the recorded trace (the
+    // trace has no fixes for exactly that stretch), so it counts for the fit.
+    for (const stretch of blackouts ?? []) boundsPoints.push(stretch.from, stretch.to);
     fitToPoints(map, boundsPoints);
-  }, [hasStart, hasEnd, startLat, startLng, endLat, endLng, trace, styleLoaded]);
+  }, [hasStart, hasEnd, startLat, startLng, endLat, endLng, trace, blackouts, styleLoaded]);
 
   return (
     <div

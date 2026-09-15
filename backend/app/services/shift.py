@@ -434,6 +434,35 @@ async def end_shift(
     return shift
 
 
+async def refresh_trip_aggregates(session: AsyncSession, shift: Shift) -> Shift:
+    """Re-derives the four trip-derived aggregates from the shift's closed
+    trips AS THEY ARE NOW and stores them on the row. `end_shift` computes
+    them once at cash-up and nothing recomputed them afterwards, so a fare
+    corrected after the shift closed (`POST /v1/trips/{id}/fare-correction`)
+    left the shift showing the pre-correction cash. Does NOT commit — the
+    caller's transaction owns that."""
+    trips_count, km_total, cash_total, card_total = await _recompute_trip_aggregates(
+        session, tenant_id=shift.tenant_id, shift_id=shift.id
+    )
+    shift.trips_count = trips_count
+    shift.km_total = km_total
+    shift.cash_total = cash_total
+    shift.card_total = card_total
+    return shift
+
+
+def mark_needs_reconciliation(shift: Shift, *, reason: str) -> Shift:
+    """Flips a shift back to unreconciled and records why on
+    `reconciliation_note` (appended, newest last, so a twice-corrected shift
+    keeps both reasons). The driver's counted cash was checked against
+    figures that have since changed; the check has to happen again."""
+    shift.reconciled = False
+    shift.reconciliation_note = (
+        f"{shift.reconciliation_note} | {reason}" if shift.reconciliation_note else reason
+    )
+    return shift
+
+
 async def start_break(session: AsyncSession, shift: Shift) -> Shift:
     """Starts a break on `shift`: stamps `break_started_at` = now. The caller
     (the router) owns the 409 conflict checks -- break already in progress,
@@ -610,16 +639,35 @@ async def close_open_shifts_for_driver_deletion(
     return list(open_shifts)
 
 
-def build_report(shift: Shift) -> dict:
+async def build_report(session: AsyncSession, shift: Shift) -> dict:
     """Builds the JSON summary payload for `GET /v1/shifts/{id}/report`.
 
     Real PDF/CSV export lives below: `render_report_pdf`/`render_report_csv`
     render this same dict (wrapped as a `ShiftReport`) without changing this
     function's contract.
+
+    The trip-derived figures are read LIVE from the shift's closed trips when
+    it has any (admin-panel plan 1.2: the stored aggregates are a snapshot
+    taken at cash-up, and a fare correction after that point must show on
+    the report). A shift with no closed trips on record keeps its stored
+    figures — an admin-backfilled shift (`POST /v1/shifts` with explicit
+    totals) has no trips to derive anything from, and zeroing it would be
+    wrong.
     """
     duration_minutes: float | None = None
     if shift.end_at is not None:
         duration_minutes = round((shift.end_at - shift.start_at).total_seconds() / 60, 2)
+
+    trips_count, km_total, cash_total, card_total = await _recompute_trip_aggregates(
+        session, tenant_id=shift.tenant_id, shift_id=shift.id
+    )
+    if trips_count == 0:
+        trips_count, km_total, cash_total, card_total = (
+            shift.trips_count,
+            shift.km_total,
+            shift.cash_total,
+            shift.card_total,
+        )
 
     return {
         "shift_id": shift.id,
@@ -629,13 +677,14 @@ def build_report(shift: Shift) -> dict:
         "start_at": shift.start_at,
         "end_at": shift.end_at,
         "duration_minutes": duration_minutes,
-        "trips_count": shift.trips_count,
-        "km_total": shift.km_total,
-        "cash_total": shift.cash_total,
-        "card_total": shift.card_total,
-        "total_takings": round_half_up(shift.cash_total + shift.card_total),
+        "trips_count": trips_count,
+        "km_total": km_total,
+        "cash_total": cash_total,
+        "card_total": card_total,
+        "total_takings": round_half_up(cash_total + card_total),
         "psl_owed": shift.psl_owed,
         "reconciled": shift.reconciled,
+        "reconciliation_note": shift.reconciliation_note,
         "inspection_json": shift.inspection_json,
         "generated_at": datetime.now(UTC),
     }

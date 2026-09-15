@@ -32,6 +32,55 @@ export interface GpsBlackoutEvent {
   /** Real corridor distance billed for this gap, as a decimal string — `null`
    * when no known toll-road corridor explained it (billed nothing extra). */
   matched_km: string | null;
+  /** Not written by the server today (the event dict is start/end/elapsed_s/
+   * matched_km only — see backend/app/models/trips.py); read defensively so
+   * a future label lands on the page without a dashboard change. */
+  resolution?: string | null;
+}
+
+/** Mirrors backend `BlackoutResolution` (app/schemas/trips.py) — the meter's
+ * own enum for how it billed a GPS gap. Kept as a string union plus `string`
+ * on the field below: the backend's history shows exactly what a strict
+ * enum costs when the device adds a value first (its 2026-09-14 incident
+ * note), and a badge that reads "UNKNOWN_VALUE" is better than a crash. */
+export type BlackoutResolution = "NONE" | "CORRIDOR" | "STATIONARY" | "INERTIAL" | "UNCALIBRATED" | "STOPPED";
+
+/**
+ * One device-reported GPS blackout — the wire mirror of backend
+ * `DeviceGpsBlackoutSegment` (app/schemas/trips.py), stored verbatim on
+ * `Trip.device_gps_blackout_segments`. The DEVICE's own account of the gap,
+ * kept separate from the server's `gps_blackout_events` on purpose: the two
+ * are computed by different code on different machines and a disagreement
+ * between them is evidence, not noise (see that schema's own doc). The W2
+ * inertial fields are optional because a meter build predating dead-
+ * reckoning never sends them.
+ */
+export interface DeviceGpsBlackoutSegment {
+  client_uuid: string;
+  started_at: string;
+  ended_at: string;
+  entry_lat: number;
+  entry_lng: number;
+  exit_lat: number;
+  exit_lng: number;
+  entry_was_moving: boolean;
+  resolution: BlackoutResolution | string;
+  billed_distance_km: string;
+  corridor_road_id?: string | null;
+  estimated_distance_km?: string | null;
+  reference_distance_km?: string | null;
+  correction_km?: string | null;
+  reference_source?: string | null;
+  confidence?: string | null;
+  zupt_count?: number | null;
+}
+
+/** One flag from `app.services.trips.reconcile_gps_blackout_segments` —
+ * `{"type": "<kind>", ...details}`, details varying by kind. Audit-trail
+ * only: a flag never changed the fare (see `Trip.blackout_reconciliation`). */
+export interface BlackoutReconciliationFlag {
+  type: string;
+  [detail: string]: unknown;
 }
 
 export interface Trip {
@@ -123,6 +172,27 @@ export interface Trip {
    * against. Optional for the same "absent means not known here yet" reason
    * as the toll fields above. */
   gps_blackout_events?: GpsBlackoutEvent[] | null;
+  /** The meter's own blackout account, side by side with the server's list
+   * above and never merged with it — see `DeviceGpsBlackoutSegment`. */
+  device_gps_blackout_segments?: DeviceGpsBlackoutSegment[] | null;
+  /** Flags from comparing the two accounts; empty means nothing reported or
+   * everything reconciled. See `BlackoutReconciliationFlag`. */
+  blackout_reconciliation?: BlackoutReconciliationFlag[] | null;
+  /** Seconds in the driver-initiated STOPPED state (server-computed, like
+   * moving_s/waiting_s). Optional: absent from older cached rows. */
+  stopped_s?: number;
+  /**
+   * The total the meter itself charged, as a decimal string. NOT on
+   * `TripRead` today -- the server keeps only the unsigned `variance_pct`
+   * from checking it (see `compute_variance_pct` in
+   * backend/app/services/trips.py, `abs(recomputed - device) / recomputed`),
+   * so the device figure cannot be reconstructed from what is stored. Read
+   * optionally so the Fare check panel shows it the day the API exposes it
+   * and says "not stored" honestly until then.
+   */
+  device_total?: string | null;
+  negotiated_total?: string | null;
+  tip_amount?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -221,6 +291,16 @@ export interface TripCloseInput {
 export interface TripFlagInput {
   flagged?: boolean;
   reason?: string | null;
+}
+
+/** Body for `POST /v1/trips/{id}/fare-correction` — mirrors backend
+ * `TripFareCorrectionRequest`: the fare of record to store (AUD, GST-
+ * inclusive, > 0) and a 3–500 character reason that the server appends to
+ * `review_notes`. Owner/admin only, closed trips only (403/409 otherwise).
+ * The endpoint never recomputes anything; it records the owner's decision. */
+export interface TripFareCorrectionInput {
+  total: string;
+  reason: string;
 }
 
 export interface VehicleLite {
@@ -354,6 +434,25 @@ export function useFlagTripMutation() {
   return useMutation({
     mutationFn: async ({ id, input }: { id: string; input: TripFlagInput }) => {
       const res = await apiClient.patch<Trip>(`/v1/trips/${id}/flag`, input);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [TRIPS_KEY] });
+    },
+  });
+}
+
+/**
+ * `POST /v1/trips/{id}/fare-correction` (admin-panel plan §3) -- until now
+ * this endpoint was only ever called by hand. Invalidates every trips query
+ * (the detail page, the list, the Overview's flagged-trip panel) so the
+ * corrected total is what every surface shows next.
+ */
+export function useCorrectFareMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: TripFareCorrectionInput }) => {
+      const res = await apiClient.post<Trip>(`/v1/trips/${id}/fare-correction`, input);
       return res.data;
     },
     onSuccess: () => {

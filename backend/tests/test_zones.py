@@ -544,3 +544,35 @@ async def test_zone_stats_empty_when_no_zones(client, session):
     resp = await client.get("/v1/zones/stats", headers=headers)
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+async def test_admin_can_plot_and_unplot_a_driver_on_behalf(client, session):
+    """Admin panel plan (2026-09-15): Zones & Demand plots/unplots a cab from the desk by naming
+    the driver; the driver's own identity-scoped path is unchanged."""
+    tenant_id, admin_headers = await _tenant_and_headers(client, session, role="admin")
+    zone_id = (await _create_zone(client, session, admin_headers, _zone_payload())).json()["id"]
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id)
+    await _make_open_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id)
+
+    plot_resp = await client.post(
+        f"/v1/zones/{zone_id}/plot",
+        json={"driver_id": driver.id, "vehicle_id": vehicle.id, "shift_id": "ignored-by-the-server"},
+        headers=admin_headers,
+    )
+    assert plot_resp.status_code == 200, plot_resp.text
+    assert plot_resp.json()["driver_id"] == driver.id
+    assert plot_resp.json()["plotted_zone_id"] == zone_id
+
+    unplot_resp = await client.post("/v1/zones/unplot", json={"driver_id": driver.id}, headers=admin_headers)
+    assert unplot_resp.status_code == 200, unplot_resp.text
+    assert unplot_resp.json()["plotted_zone_id"] is None
+
+    # A driver naming a different driver is refused.
+    other = await _make_driver(session, tenant_id=tenant_id, name="Other Driver")
+    other_headers = {
+        "Authorization": f"Bearer {__import__('app.core.security', fromlist=['create_access_token']).create_access_token(user_id=other.id, tenant_id=tenant_id, role='driver')}"
+    }
+    resp = await client.post(f"/v1/zones/{zone_id}/plot", json={"driver_id": driver.id}, headers=other_headers)
+    assert resp.status_code == 403
+

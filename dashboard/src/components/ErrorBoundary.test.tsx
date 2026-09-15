@@ -151,6 +151,47 @@ describe("ErrorBoundary", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
+  it("clears the panel when resetKey changes, and re-catches if the new subtree also throws", () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/trips">
+        <Boom explode />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // A route change with a healthy page behind it: the panel goes away.
+    rerender(
+      <ErrorBoundary resetKey="/live-map">
+        <Boom explode={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText("All good")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // A route change onto another broken page: caught again, not blank.
+    rerender(
+      <ErrorBoundary resetKey="/shifts">
+        <Boom explode message="second page" />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("second page")).toBeInTheDocument();
+  });
+
+  it("keeps the panel when resetKey is unchanged across a re-render", () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/trips">
+        <Boom explode />
+      </ErrorBoundary>,
+    );
+    rerender(
+      <ErrorBoundary resetKey="/trips">
+        <Boom explode={false} />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
   it("sends the user to the live map from the panel", async () => {
     const assign = vi.fn();
     Object.defineProperty(window, "location", {

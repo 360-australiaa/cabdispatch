@@ -1,7 +1,15 @@
 import mapboxgl from "mapbox-gl";
 import type { DuressEventRead } from "./types";
 import type { PlottedVehicle } from "./mapTypes";
-import { formatRelativeTime, formatSpeed, idleLabel, isStale, staleLabel, statusColor } from "./utils";
+import {
+  describePositionSource,
+  formatRelativeTime,
+  formatSpeed,
+  idleLabel,
+  isStale,
+  staleLabel,
+  statusColor,
+} from "./utils";
 
 /**
  * Everything the Mapbox renderer builds by hand in the DOM: the vehicle glyph,
@@ -31,6 +39,10 @@ export interface HoverCardFields {
   batteryLabel: string;
   networkLabel: string;
   updatedLabel: string;
+  /** "Live" / "Estimated" / "Stale" / "No fix" -- see utils.ts's
+   * describePositionSource. Shown as its own row so the card says where
+   * the position came from, not only how old it is (admin-panel plan §2). */
+  sourceLabel: string;
   duressActive: boolean;
   /** "Signal lost 3m ago", or null when not stale -- see utils.ts's
    * staleLabel/isStale. */
@@ -57,6 +69,7 @@ export function getHoverCardFields(
     batteryLabel: vehicle.battery != null ? `${vehicle.battery}%` : "—",
     networkLabel: vehicle.network ?? "—",
     updatedLabel: formatRelativeTime(vehicle.position_updated_at),
+    sourceLabel: describePositionSource(vehicle.position_source, vehicle.position_updated_at).label,
     duressActive: duressEvent != null,
     staleLabel:
       vehicle.position_source === "estimated"
@@ -68,12 +81,16 @@ export function getHoverCardFields(
 }
 
 export const HOVER_CARD_ROWS: Array<
-  [label: string, key: keyof Pick<HoverCardFields, "speedLabel" | "batteryLabel" | "networkLabel" | "updatedLabel">]
+  [
+    label: string,
+    key: keyof Pick<HoverCardFields, "speedLabel" | "batteryLabel" | "networkLabel" | "sourceLabel" | "updatedLabel">,
+  ]
 > = [
   ["Speed", "speedLabel"],
   ["Battery", "batteryLabel"],
   ["Network", "networkLabel"],
-  ["Updated", "updatedLabel"],
+  ["Source", "sourceLabel"],
+  ["Fix age", "updatedLabel"],
 ];
 
 const SVG_NS = "http://www.w3.org/2000/svg";

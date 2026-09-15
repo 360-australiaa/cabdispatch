@@ -63,6 +63,7 @@ from app.models import (
     Payment,
     PSLLedgerEntry,
     PSLTopUp,
+    PSLTripAccrual,
     Shift,
     Subscription,
     Tenant,
@@ -381,6 +382,7 @@ NO_BY_ID_ROUTE: set[type] = {
     TripRating,  # list only: GET /v1/ratings, filters tenant_id
     WalletTransaction,  # read via GET /v1/wallet/drivers/{driver_id}, keyed on driver
     PSLTopUp,  # list only: GET /v1/psl/topups
+    PSLTripAccrual,  # per-trip levy accrual rows, read only in aggregate via GET /v1/psl/ledger (tenant-filtered)
     JobOffer,  # list under its parent job: GET /v1/jobs/{job_id}/offers
     DevicePairingCode,  # write-only surface (POST .../pairing-code)
     DeviceVersionHistory,  # no route at all

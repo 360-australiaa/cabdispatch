@@ -60,6 +60,7 @@ from app.core.security import (
 from app.models.duress import DuressEvent
 from app.models.duress_device import DuressDevice
 from app.models.duress_snapshot import DuressSnapshot
+from app.models.user import User
 from app.schemas.duress import (
     DuressCallRequest,
     DuressCallResponse,
@@ -126,6 +127,28 @@ async def _advance_escalation_lazily(session: AsyncSession, *events: DuressEvent
         await session.rollback()
 
 
+async def _to_reads(session: AsyncSession, events: list[DuressEvent]) -> list[DuressEventRead]:
+    """Serialises events with `driver_name` resolved in ONE `users` lookup
+    (driver_id is an unconstrained cross-domain ref, so this is a lookup,
+    not a relationship; an id that is no longer a user yields None).
+    `stale` needs no help here -- it is a property on the model."""
+    driver_ids = {event.driver_id for event in events if event.driver_id}
+    names: dict[str, str] = {}
+    if driver_ids:
+        rows = await session.execute(select(User.id, User.name).where(User.id.in_(driver_ids)))
+        names = {user_id: name for user_id, name in rows.all()}
+    return [
+        DuressEventRead.model_validate(event).model_copy(
+            update={"driver_name": names.get(event.driver_id)}
+        )
+        for event in events
+    ]
+
+
+async def _to_read(session: AsyncSession, event: DuressEvent) -> DuressEventRead:
+    return (await _to_reads(session, [event]))[0]
+
+
 async def _get_owned_event(session: AsyncSession, *, tenant_id: str, event_id: str) -> DuressEvent:
     result = await session.execute(
         select(DuressEvent).where(DuressEvent.id == event_id, DuressEvent.tenant_id == tenant_id)
@@ -147,7 +170,7 @@ async def trigger(
     session: AsyncSession = Depends(get_session),
 ) -> DuressEvent:
     """Opens a duress event and starts its 10-second cancel window."""
-    return await trigger_event(
+    event = await trigger_event(
         session,
         tenant_id=tenant_id,
         vehicle_id=body.vehicle_id,
@@ -156,6 +179,7 @@ async def trigger(
         gps_stream_ref=body.gps_stream_ref,
         audio_ref=body.audio_ref,
     )
+    return await _to_read(session, event)
 
 
 @router.post("/{event_id}/cancel", response_model=DuressEventRead)
@@ -170,7 +194,7 @@ async def cancel(
     still be `open` and the wall-clock deadline recorded at trigger time must
     not have passed)."""
     event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
-    return await cancel_event(session, event, note=body.note)
+    return await _to_read(session, await cancel_event(session, event, note=body.note))
 
 
 @router.post("/{event_id}/escalate", response_model=DuressEventRead)
@@ -186,9 +210,10 @@ async def escalate(
     Reaching the final stage also fires the real Twilio Voice automated
     escalation call — see `app.services.duress.escalate_event`."""
     event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
-    return await escalate_event(
+    event = await escalate_event(
         session, event, note=body.note, emergency_contact_phone=body.emergency_contact_phone
     )
+    return await _to_read(session, event)
 
 
 @router.post("/{event_id}/close", response_model=DuressEventRead)
@@ -201,7 +226,7 @@ async def close(
 ) -> DuressEvent:
     """Resolves/closes an event."""
     event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
-    return await close_event(session, event, note=body.note)
+    return await _to_read(session, await close_event(session, event, note=body.note))
 
 
 @router.post("/{event_id}/call", response_model=DuressCallResponse)
@@ -703,7 +728,7 @@ async def list_events(
     # `_advance_escalation_lazily`.
     await _advance_escalation_lazily(session, *items)
 
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    return {"items": await _to_reads(session, list(items)), "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("", response_model=DuressEventRead, status_code=status.HTTP_201_CREATED)
@@ -727,7 +752,7 @@ async def create_event(
     session.add(event)
     await session.commit()
     await session.refresh(event)
-    return event
+    return await _to_read(session, event)
 
 
 @router.get("/{event_id}", response_model=DuressEventRead)
@@ -741,7 +766,7 @@ async def get_event(
     stage has fallen due — see `_advance_escalation_lazily`."""
     event = await _get_owned_event(session, tenant_id=tenant_id, event_id=event_id)
     await _advance_escalation_lazily(session, event)
-    return event
+    return await _to_read(session, event)
 
 
 @router.patch("/{event_id}", response_model=DuressEventRead)
@@ -757,7 +782,7 @@ async def update_event(
         setattr(event, field, value)
     await session.commit()
     await session.refresh(event)
-    return event
+    return await _to_read(session, event)
 
 
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,6 @@
 import type { LivePosition } from "@/hooks/useLiveMap";
 import type { Geofence } from "@/hooks/useGeofences";
-import type { VehicleLiveRead } from "./types";
+import type { DuressEventRead, PositionSource, VehicleLiveRead } from "./types";
 import { formatDurationShort, formatRelativeTime } from "@/lib/format";
 
 // Both of these used to live in this file. They are shared implementations
@@ -132,11 +132,89 @@ export function networkBadgeVariant(
  * connection does. */
 const STALE_THRESHOLD_MS = 15_000;
 
-export function isStale(iso: string | null): boolean {
+export function isStale(iso: string | null, now: number = Date.now()): boolean {
   if (!iso) return false;
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return false;
-  return Date.now() - then > STALE_THRESHOLD_MS;
+  return now - then > STALE_THRESHOLD_MS;
+}
+
+/** What a position-source badge says. `kind` folds staleness into the
+ * source -- the four states an operator actually needs to tell apart. */
+export interface PositionSourceBadge {
+  kind: "live" | "estimated" | "stale" | "none";
+  label: string;
+  variant: "success" | "accent" | "destructive" | "outline";
+  /** Tooltip: what the badge means, in one sentence. */
+  title: string;
+}
+
+/**
+ * Badge for `VehicleLiveRead.position_source` (admin-panel plan §2): live /
+ * estimated / stale / none, plus a tooltip. Shared by the Vehicles table,
+ * the vehicle sheet and the marker hover card so no surface words it
+ * differently.
+ *
+ *  - "estimated" is the tablet dead-reckoning through a tunnel: the marker
+ *    keeps moving but nothing here is a GPS fix, so it is shown in the
+ *    accent colour, never green, and is never called stale even when the
+ *    last real fix is old -- an estimate that is still updating is exactly
+ *    what that mode is for.
+ *  - "trip" (the position off the open trip's last tick) counts as live for
+ *    this purpose: it is a real fix, just from the trip channel.
+ *  - Stale overrides a real fix older than `isStale`'s threshold.
+ *  - "none" (or no timestamp at all) is "no fix", never "offline" -- the
+ *    live_status badge next to it already says that.
+ */
+export function describePositionSource(
+  source: PositionSource,
+  positionUpdatedAt: string | null,
+  now: number = Date.now(),
+): PositionSourceBadge {
+  if (source === "none" || !positionUpdatedAt) {
+    return { kind: "none", label: "No fix", variant: "outline", title: "No position has been reported for this vehicle." };
+  }
+  if (source === "estimated") {
+    return {
+      kind: "estimated",
+      label: "Estimated",
+      variant: "accent",
+      title: "GPS lost — position estimated from the tablet's motion sensors, not a satellite fix.",
+    };
+  }
+  if (isStale(positionUpdatedAt, now)) {
+    return {
+      kind: "stale",
+      label: "Stale",
+      variant: "destructive",
+      title: "Last real fix is older than 15s — the tablet may have lost connectivity.",
+    };
+  }
+  return {
+    kind: "live",
+    label: "Live",
+    variant: "success",
+    title: source === "trip" ? "Real fix from the open trip's last tick." : "Real fix from the tablet's live position feed.",
+  };
+}
+
+/** How long a duress event may sit unresolved before the dashboard calls it
+ * stale on its own (admin-panel plan §1.4: four events sat "dispatched" for
+ * two weeks). The server's own `stale` flag, when present, wins. */
+export const STALE_DURESS_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/** A duress event that is neither resolved nor cancelled and has been open
+ * longer than `STALE_DURESS_AFTER_MS` -- or one the server already marked
+ * `stale`. Never true for a closed event, whatever the server says. */
+export function isStaleDuress(
+  event: Pick<DuressEventRead, "status" | "opened_at"> & { stale?: boolean },
+  now: number = Date.now(),
+): boolean {
+  if (event.status === "resolved" || event.status === "cancelled") return false;
+  if (event.stale === true) return true;
+  const opened = new Date(event.opened_at).getTime();
+  if (Number.isNaN(opened)) return false;
+  return now - opened > STALE_DURESS_AFTER_MS;
 }
 
 /** Human-readable "signal lost" label for a stale position, or null when the

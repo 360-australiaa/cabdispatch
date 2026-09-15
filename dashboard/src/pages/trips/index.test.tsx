@@ -70,20 +70,27 @@ const TRIP = {
   updated_at: NOW_ISO,
 };
 
+/** Query params of every GET /v1/trips the page issued, newest last. */
+let tripRequests: URLSearchParams[] = [];
+
 function installHandlers() {
+  tripRequests = [];
   server.use(
-    http.get(`${API}/v1/trips`, () => HttpResponse.json({ items: [TRIP], total: 1, skip: 0, limit: 200 })),
+    http.get(`${API}/v1/trips`, ({ request }) => {
+      tripRequests.push(new URL(request.url).searchParams);
+      return HttpResponse.json({ items: [TRIP], total: 1, skip: 0, limit: 200 });
+    }),
     http.get(`${API}/v1/vehicles`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 100 })),
     http.get(`${API}/v1/drivers`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 100 })),
     http.get(`${API}/v1/tariffs`, () => HttpResponse.json({ items: [], total: 0, skip: 0, limit: 200 })),
   );
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/trips") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/trips"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/trips/:tripId" element={<h1>Trip page for {TRIP_ID}</h1>} />
@@ -111,5 +118,41 @@ describe("TripsPage row click", () => {
     await user.click(rows[1]);
 
     expect(await screen.findByRole("heading", { name: `Trip page for ${TRIP_ID}` })).toBeInTheDocument();
+  });
+
+  it("renders the Started cell as a real link to the trip, which also navigates", async () => {
+    renderPage();
+    const user = userEvent.setup();
+
+    const table = await screen.findByRole("table");
+    await within(table).findByText("Rank / Hail");
+    const link = within(table).getByRole("link", { name: /2026/ });
+    expect(link).toHaveAttribute("href", `/trips/${TRIP_ID}`);
+
+    await user.click(link);
+
+    expect(await screen.findByRole("heading", { name: `Trip page for ${TRIP_ID}` })).toBeInTheDocument();
+  });
+});
+
+describe("TripsPage deep links", () => {
+  it("pre-selects the review filter from ?review=flagged and asks the server for flagged trips only", async () => {
+    renderPage("/trips?review=flagged");
+
+    const table = await screen.findByRole("table");
+    await within(table).findByText("Rank / Hail");
+
+    expect(screen.getByDisplayValue("Flagged for review")).toBeInTheDocument();
+    expect(tripRequests.at(-1)?.get("flagged_for_review")).toBe("true");
+  });
+
+  it("pre-selects the status filter from ?status=closed", async () => {
+    renderPage("/trips?status=closed");
+
+    const table = await screen.findByRole("table");
+    await within(table).findByText("Rank / Hail");
+
+    expect(screen.getByDisplayValue("Closed")).toBeInTheDocument();
+    expect(tripRequests.at(-1)?.get("status")).toBe("closed");
   });
 });

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { FileText, Pencil, Play, Square, Trash2 } from "lucide-react";
+import { AlertTriangle, FileText, Pencil, Play, Square, Trash2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -155,9 +155,25 @@ export default function ShiftsPage() {
       key: "reconciled",
       header: "Reconciled",
       render: (row) => (
-        <Badge variant={reconciledBadgeVariant(row.reconciled)}>
-          {row.reconciled ? "Yes" : "No"}
-        </Badge>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
+            <Badge variant={reconciledBadgeVariant(row.reconciled)}>
+              {row.reconciled ? "Yes" : "No"}
+            </Badge>
+            {row.reconciliation_note && (
+              // A note means the figures moved after sign-off (fare
+              // correction) -- the badge alone would read as a clean "Yes".
+              <Badge variant="accent" title={row.reconciliation_note}>
+                <AlertTriangle className="h-3 w-3" /> Re-reconcile
+              </Badge>
+            )}
+          </div>
+          {row.reconciliation_note && (
+            <p className="max-w-[16rem] truncate text-xs text-muted-foreground" title={row.reconciliation_note}>
+              {row.reconciliation_note}
+            </p>
+          )}
+        </div>
       ),
     },
     {

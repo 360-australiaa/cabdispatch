@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Download, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import {
   Badge,
@@ -13,9 +14,10 @@ import {
   Table,
   type TableColumn,
 } from "@/components/ui";
-import { useAuditLogQuery, useVerifyAuditLogChain, PAGE_LIMIT, type AuditLogFilters } from "./api";
+import { listActorOptions, useAuditLogQuery, useVerifyAuditLogChain, PAGE_LIMIT, type AuditLogFilters } from "./api";
 import { downloadAuditLogCsv } from "./csv";
 import { classifyEntry } from "./diff";
+import { resolveActorName } from "./format";
 import type { AuditLogEntry } from "./types";
 
 const EM_DASH = String.fromCharCode(8212);
@@ -42,6 +44,9 @@ const ACTION_OPTIONS = [
   { value: "shift_device_vehicle_mismatch", label: "shift_device_vehicle_mismatch" },
   { value: "shift_force_closed_driver_deleted", label: "shift_force_closed_driver_deleted" },
   { value: "shift_force_closed_vehicle_deleted", label: "shift_force_closed_vehicle_deleted" },
+  // Emitted by POST /v1/trips/{id}/fare-correction (admin-panel plan §1.3):
+  // entity_type=trip, before/after totals, the owner as actor.
+  { value: "fare_correction", label: "fare_correction" },
 ];
 
 const ENTITY_TYPE_OPTIONS = [
@@ -99,6 +104,20 @@ export default function AuditLogPage() {
 
   const auditQuery = useAuditLogQuery(offset, filters);
   const verifyMutation = useVerifyAuditLogChain();
+
+  // Actor id -> name, for rows the API did not already join a name onto.
+  // Best-effort: a failed lookup leaves the shortened id, never blocks the
+  // log itself (admin-panel plan §5).
+  const actorsQuery = useQuery({
+    queryKey: ["audit-log", "actors"],
+    queryFn: listActorOptions,
+    staleTime: 60_000,
+  });
+  const actorNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const actor of actorsQuery.data ?? []) map.set(actor.id, actor.name);
+    return map;
+  }, [actorsQuery.data]);
 
   const items = auditQuery.data?.items ?? [];
   const total = auditQuery.data?.total ?? 0;
@@ -165,8 +184,8 @@ export default function AuditLogPage() {
       key: "actor_user_id",
       header: "Actor",
       render: (row) => (
-        <span className="font-mono text-xs text-muted-foreground">
-          {row.actor_user_id ? row.actor_user_id.slice(0, 8) : EM_DASH}
+        <span className="text-xs text-foreground" title={row.actor_user_id ?? undefined}>
+          {resolveActorName(row, actorNamesById)}
         </span>
       ),
     },
@@ -402,8 +421,8 @@ export default function AuditLogPage() {
               <span className="text-xs text-muted-foreground">
                 Entity: {detailEntry.entity_type} / {detailEntry.entity_id}
               </span>
-              <span className="text-xs text-muted-foreground">
-                Actor: {detailEntry.actor_user_id ?? EM_DASH}
+              <span className="text-xs text-muted-foreground" title={detailEntry.actor_user_id ?? undefined}>
+                Actor: {resolveActorName(detailEntry, actorNamesById)}
               </span>
             </div>
 

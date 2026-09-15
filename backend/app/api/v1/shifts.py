@@ -201,7 +201,7 @@ async def report(
     """JSON summary of the shift. Real PDF/CSV export is available at
     GET /{shift_id}/report.pdf and GET /{shift_id}/report.csv below."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
-    return build_report(shift)
+    return await build_report(session, shift)
 
 
 @router.get("/{shift_id}/report.pdf")
@@ -216,7 +216,7 @@ async def report_pdf(
     app.api.v1.compliance's GET /vehicles/{id}/dossier.pdf route shape
     (inline Content-Disposition, plain fastapi.Response)."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
-    report_data = ShiftReport(**build_report(shift))
+    report_data = ShiftReport(**(await build_report(session, shift)))
     pdf_bytes = render_report_pdf(report_data)
     return Response(
         content=pdf_bytes,
@@ -237,7 +237,7 @@ async def report_csv(
     app.api.v1.reports's format=csv attachment-download shape (plain
     fastapi.Response, text/csv, attachment Content-Disposition)."""
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
-    report_data = ShiftReport(**build_report(shift))
+    report_data = ShiftReport(**(await build_report(session, shift)))
     csv_body = render_report_csv(report_data)
     return Response(
         content=csv_body,

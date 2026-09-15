@@ -115,6 +115,12 @@ export default function ShiftPage() {
               <Badge variant={reconciledBadgeVariant(shift.reconciled)}>
                 {shift.reconciled ? "Reconciled" : "Not reconciled"}
               </Badge>
+              {shift.reconciliation_note && (
+                // Figures changed after sign-off (see `Shift.reconciliation_note`).
+                <Tooltip content={`${shift.reconciliation_note} — review the figures and re-reconcile.`}>
+                  <Badge variant="accent">Re-reconcile</Badge>
+                </Tooltip>
+              )}
             </div>
           ) : undefined
         }

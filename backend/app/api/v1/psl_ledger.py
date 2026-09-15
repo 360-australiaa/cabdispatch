@@ -13,6 +13,9 @@ Resources:
     create + list only, no update/delete (see app.models.psl_ledger.PSLTopUp).
     `GET /topups` returns the same `Page` envelope as `/ledger`.
   - `/v1/psl/report` — read-only tenant-wide remittance aggregate for a period.
+  - `POST /v1/psl/ledger/rebuild` (owner/admin) — recomputes every ledger
+    row's trip-derived figures from the tenant's closed trips. See
+    app.services.psl_ledger.rebuild_ledger for what it does and does not touch.
 """
 from __future__ import annotations
 
@@ -28,12 +31,13 @@ from app.schemas.driver_engagement import Page
 from app.schemas.psl_ledger import (
     PSLLedgerCreate,
     PSLLedgerRead,
+    PSLLedgerRebuildResult,
     PSLLedgerUpdate,
     PSLReport,
     PSLTopUpCreate,
     PSLTopUpRead,
 )
-from app.services.psl_ledger import build_report, record_topup
+from app.services.psl_ledger import build_report, rebuild_ledger, record_topup
 
 router = APIRouter(prefix="/v1/psl", tags=["psl"])
 
@@ -107,6 +111,22 @@ async def create_ledger_entry(
     await session.commit()
     await session.refresh(entry)
     return entry
+
+
+@router.post("/ledger/rebuild", response_model=PSLLedgerRebuildResult)
+async def rebuild_ledger_entries(
+    tenant_id: str = Depends(get_current_tenant_id),
+    _user: User = Depends(require_role("owner", "admin")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Backfill/repair: accrues every closed, levied trip of the tenant that
+    is not yet on the ledger and resets each (driver, period) row's
+    `trips_count`/`amount_owed` to what its trips add up to. Safe to run any
+    number of times — a second run reports `{"created": 0, "updated": 0}`.
+    Declared BEFORE `/ledger/{entry_id}` so the literal path wins the match."""
+    result = await rebuild_ledger(session, tenant_id=tenant_id)
+    await session.commit()
+    return result
 
 
 @router.get("/ledger/{entry_id}", response_model=PSLLedgerRead)

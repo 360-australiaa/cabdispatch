@@ -32,6 +32,7 @@ import { useDuressLookups } from "./useDuressLookups";
 import {
   formatCallResultSummary,
   formatDateTime,
+  isStaleEvent,
   secondsUntil,
   sourceBadgeVariant,
   sourceLabel,
@@ -184,7 +185,17 @@ export function EventDetailPanel({
           <>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
               <Field label="Status">
-                <Badge variant={statusBadgeVariant(event.status)}>{event.status}</Badge>
+                <span className="flex flex-wrap items-center gap-1">
+                  <Badge variant={statusBadgeVariant(event.status)}>{event.status}</Badge>
+                  {isStaleEvent(event) && (
+                    <Badge
+                      variant="outline"
+                      title="Open for more than 12 hours with no resolution — close it if it was a test or false alarm"
+                    >
+                      Stale
+                    </Badge>
+                  )}
+                </span>
               </Field>
               <Field label="Trigger">
                 <span className="capitalize">{event.trigger}</span>
@@ -198,12 +209,16 @@ export function EventDetailPanel({
                 />
               </Field>
               <Field label="Driver">
-                <IdentityLabel
-                  id={event.driver_id}
-                  label={lookups.resolveDriver(event.driver_id)?.name ?? null}
-                  isLoading={lookups.isLoading}
-                  kind="driver"
-                />
+                {event.driver_name ? (
+                  <span title={event.driver_id}>{event.driver_name}</span>
+                ) : (
+                  <IdentityLabel
+                    id={event.driver_id}
+                    label={lookups.resolveDriver(event.driver_id)?.name ?? null}
+                    isLoading={lookups.isLoading}
+                    kind="driver"
+                  />
+                )}
               </Field>
               <Field label="Opened">{formatDateTime(event.opened_at)}</Field>
               <Field label="Closed">{formatDateTime(event.closed_at)}</Field>

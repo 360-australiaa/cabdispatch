@@ -24,6 +24,15 @@ export interface Shift {
    * `break_started_at` means a break is in progress right now. */
   break_started_at: string | null;
   break_taken: boolean;
+  /** Set server-side when something changed the shift's figures AFTER it was
+   * reconciled -- today that is a fare correction on one of its trips
+   * (`POST /v1/trips/{id}/fare-correction`, admin plan §1.2). The totals on
+   * this row already follow the corrected fare; the note is the flag that
+   * the operator's earlier "Reconciled: Yes" was signed off against the old
+   * numbers and should be looked at again. Optional because the field is
+   * being added to `ShiftRead` in parallel -- an older backend simply omits
+   * it and the list renders as before. */
+  reconciliation_note?: string | null;
   created_at: string;
   updated_at: string;
 }
