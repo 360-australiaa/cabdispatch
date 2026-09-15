@@ -720,7 +720,7 @@ private data class BackdropHolder(
  */
 @Composable
 internal fun rememberLiveTrace(): List<MapPoint> {
-    val fix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
+    val fix = rememberDisplayFix()
     var trace by remember { mutableStateOf<List<MapPoint>>(emptyList()) }
     LaunchedEffect(fix) {
         val f = fix ?: return@LaunchedEffect
@@ -733,6 +733,19 @@ internal fun rememberLiveTrace(): List<MapPoint> {
 }
 
 private const val LIVE_TRACE_MAX = 4000
+
+/**
+ * The fix the meter's map and pills should show -- see [LocationFix.pickDisplayFix]. Recomposes
+ * on every real fix AND on every sensor estimate (10 Hz through a blackout), so the marker keeps
+ * moving through a tunnel exactly as the dashboard's dashed "estimated" marker does.
+ */
+// FunctionNaming: not a composable UI element, but the `remember*` convention this file already uses.
+@Composable
+internal fun rememberDisplayFix(): LocationFix? {
+    val real by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
+    val estimated by AppContainer.inertialSpeedSource.locationFix.collectAsStateWithLifecycle()
+    return remember(real, estimated) { LocationFix.pickDisplayFix(real, estimated, System.nanoTime()) }
+}
 
 // ============================================================================================
 // Live map redesign (2026-09-09) — custom style, camera/hazard markers, toll-ahead advisory.

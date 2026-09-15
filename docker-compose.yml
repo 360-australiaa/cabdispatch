@@ -50,6 +50,8 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # APK hand-off directory served at /downloads/* -- see Caddyfile.
+      - ./downloads:/srv/downloads:ro
       # Named volumes, NOT bind mounts: caddy_data holds the issued
       # certificates and the ACME account key. Lose it and every redeploy
       # re-requests certificates, which will hit Let's Encrypt rate limits

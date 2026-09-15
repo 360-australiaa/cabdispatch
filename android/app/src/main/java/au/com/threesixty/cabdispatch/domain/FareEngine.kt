@@ -108,6 +108,28 @@ data class LocationFix(
          * [receivedAtNanos] doc for why it is measured on a monotonic clock, not wall time.
          */
         const val MAX_FIX_AGE_MS = 5_000L
+
+        /**
+         * The fix the DRIVER'S OWN map should draw the car at (owner report, 2026-09-15: "why
+         * map pin point is not moving" -- through a simulated tunnel the tablet's marker sat at
+         * the portal while the dashboard, fed by the same dead-reckoned estimate, kept moving).
+         * The real fix while it is fresh; once it is older than [MAX_FIX_AGE_MS] -- the very same
+         * staleness line [FareEngineImpl.tick] declares a blackout on -- the sensor-estimated fix
+         * if one has been produced since the real one went quiet; the stale real fix as a last
+         * resort (better a marker at the portal than no marker). Never a fare input: the engine
+         * reads the real source directly.
+         */
+        fun pickDisplayFix(real: LocationFix?, estimated: LocationFix?, nowNanos: Long): LocationFix? {
+            val realFresh = real != null && nowNanos - real.receivedAtNanos <= MAX_FIX_AGE_MS * NANOS_PER_MILLI_LONG
+            val estimateNewer = estimated != null && (real == null || estimated.receivedAtNanos > real.receivedAtNanos)
+            return when {
+                realFresh -> real
+                estimateNewer -> estimated
+                else -> real
+            }
+        }
+
+        private const val NANOS_PER_MILLI_LONG = 1_000_000L
     }
 }
 

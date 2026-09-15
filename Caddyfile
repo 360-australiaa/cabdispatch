@@ -51,6 +51,14 @@
 		}
 	}
 
+	# Meter APK hand-off (2026-09-15): the debug build is ~160 MB, far over any chat or
+	# API upload limit, so the owner drops it in ./downloads on the host and drivers fetch
+	# it straight from the tablet's browser. Static files only, no listing.
+	handle_path /downloads/* {
+		root * /srv/downloads
+		file_server
+	}
+
 	# Everything else is the React SPA.
 	handle {
 		reverse_proxy dashboard:80

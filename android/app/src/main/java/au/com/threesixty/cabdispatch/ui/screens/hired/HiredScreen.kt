@@ -251,7 +251,8 @@ fun HiredScreen(
         .collectAsStateWithLifecycle(initialValue = null)
     val resumedTariff: TariffDto? = cachedTariff?.takeIf { activeTrip != null && it.id == activeTrip?.tariffId }
     val liveTrace = rememberLiveTrace()
-    val liveFix by AppContainer.speedSource.locationFix.collectAsStateWithLifecycle()
+    // Real fix while fresh, sensor-estimated fix through a blackout -- see LocationFix.pickDisplayFix.
+    val liveFix = rememberDisplayFix()
 
     // ---- Navigator (real, wired) ----------------------------------------------------------------
     // MeterNavViewModel is the merged, in-flight navigator ViewModel (destination search, real
