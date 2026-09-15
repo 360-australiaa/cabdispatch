@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import au.com.threesixty.cabdispatch.data.AppContainer
 import au.com.threesixty.cabdispatch.domain.location.SimulatedRoute
 import au.com.threesixty.cabdispatch.domain.location.SimulatedRoutes
+import au.com.threesixty.cabdispatch.domain.location.linktExitBeyond
 import au.com.threesixty.cabdispatch.ui.theme.CaptainPalette
 import au.com.threesixty.cabdispatch.ui.theme.InterFamily
 
@@ -84,7 +85,13 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
         val corridorRoutes = tunnelRegistry?.corridors
             ?.filter { it.name in REAL_PORTAL_ROUTE_CORRIDORS }
             ?.sortedBy { REAL_PORTAL_ROUTE_CORRIDORS.indexOf(it.name) }
-            ?.mapNotNull { SimulatedRoutes.tunnelCorridorBlackout(tunnelRegistry.chainFrom(it)) }
+            ?.mapNotNull { corridor ->
+                val chain = tunnelRegistry.chainFrom(corridor)
+                SimulatedRoutes.tunnelCorridorBlackout(
+                    chain,
+                    runOutTo = registry?.let { linktExitBeyond(chain, it) },
+                )
+            }
             .orEmpty()
         val blackoutRoutes = corridorRoutes + listOfNotNull(
             registry?.let { SimulatedRoutes.laneCoveTunnelBlackout(it) },

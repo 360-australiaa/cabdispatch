@@ -1,0 +1,8675 @@
+{
+ "$schema_version": 1,
+ "source": "Linkt Sydney toll calculator (tollcalc.transurban.com), Tag product base price",
+ "source_url": "https://www.linkt.com.au/using-toll-roads/toll-calculator/sydney",
+ "fetched_at": "2026-09-15T14:48:17Z",
+ "vehicle_classes": {
+  "class_a": "cars, taxis, motorcycles, light commercial",
+  "class_b": "heavy vehicles"
+ },
+ "assets": [
+  {
+   "id": "112",
+   "name": "Hills M2",
+   "road_id": "M2",
+   "billing_asset_id": "112"
+  },
+  {
+   "id": "113",
+   "name": "NorthConnex",
+   "road_id": "NORTHCONNEX",
+   "billing_asset_id": "113"
+  },
+  {
+   "id": "109",
+   "name": "Lane Cove Tunnel & Military Road E-Ramp",
+   "road_id": "LCT",
+   "billing_asset_id": "109"
+  },
+  {
+   "id": "100",
+   "name": "Sydney Harbour Bridge & Tunnel",
+   "road_id": "SHB_SHT",
+   "billing_asset_id": "100"
+  },
+  {
+   "id": "108",
+   "name": "Cross City Tunnel",
+   "road_id": "CCT",
+   "billing_asset_id": "108"
+  },
+  {
+   "id": "101",
+   "name": "Eastern Distributor",
+   "road_id": "ED",
+   "billing_asset_id": "101"
+  },
+  {
+   "id": "140-m5e",
+   "name": "M5 East",
+   "road_id": "M5E",
+   "billing_asset_id": "140"
+  },
+  {
+   "id": "140-m8",
+   "name": "WestConnex M8",
+   "road_id": "M8",
+   "billing_asset_id": "140"
+  },
+  {
+   "id": "105",
+   "name": "M5 South-West Motorway",
+   "road_id": "M5SW",
+   "billing_asset_id": "105"
+  },
+  {
+   "id": "107",
+   "name": "Westlink M7",
+   "road_id": "M7",
+   "billing_asset_id": "107"
+  },
+  {
+   "id": "140-m4",
+   "name": "WestConnex M4",
+   "road_id": "M4",
+   "billing_asset_id": "140"
+  },
+  {
+   "id": "140-m4m5",
+   "name": "Rozelle Interchange",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "billing_asset_id": "140"
+  }
+ ],
+ "points": [
+  {
+   "id": "LINKT:100/shb-northbound:entry",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "shb-northbound",
+   "name": "Sydney Harbour Bridge Northbound",
+   "role": "entry",
+   "latitude": -33.87225,
+   "longitude": 151.20268
+  },
+  {
+   "id": "LINKT:100/shb-northbound:exit",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "shb-northbound",
+   "name": "Sydney Harbour Bridge Northbound",
+   "role": "exit",
+   "latitude": -33.84476,
+   "longitude": 151.21169
+  },
+  {
+   "id": "LINKT:100/shb-southbound:entry",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "shb-southbound",
+   "name": "Sydney Harbour Bridge Southbound",
+   "role": "entry",
+   "latitude": -33.84466,
+   "longitude": 151.21175
+  },
+  {
+   "id": "LINKT:100/shb-southbound:exit",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "shb-southbound",
+   "name": "Sydney Harbour Bridge Southbound",
+   "role": "exit",
+   "latitude": -33.87221,
+   "longitude": 151.20277
+  },
+  {
+   "id": "LINKT:100/sht-northbound:entry",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "sht-northbound",
+   "name": "Sydney Harbour Tunnel Northbound",
+   "role": "entry",
+   "latitude": -33.86256,
+   "longitude": 151.21369
+  },
+  {
+   "id": "LINKT:100/sht-northbound:exit",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "sht-northbound",
+   "name": "Sydney Harbour Tunnel Northbound",
+   "role": "exit",
+   "latitude": -33.84487,
+   "longitude": 151.21157
+  },
+  {
+   "id": "LINKT:100/sht-southbound:entry",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "sht-southbound",
+   "name": "Sydney Harbour Tunnel Southbound",
+   "role": "entry",
+   "latitude": -33.8448,
+   "longitude": 151.21184
+  },
+  {
+   "id": "LINKT:100/sht-southbound:exit",
+   "asset_id": "100",
+   "road_id": "SHB_SHT",
+   "point_id": "sht-southbound",
+   "name": "Sydney Harbour Tunnel Southbound",
+   "role": "exit",
+   "latitude": -33.86255,
+   "longitude": 151.21378
+  },
+  {
+   "id": "LINKT:101/northbound:entry",
+   "asset_id": "101",
+   "road_id": "ED",
+   "point_id": "northbound",
+   "name": "Northbound",
+   "role": "entry",
+   "latitude": -33.91141,
+   "longitude": 151.21291
+  },
+  {
+   "id": "LINKT:101/northbound:exit",
+   "asset_id": "101",
+   "road_id": "ED",
+   "point_id": "northbound",
+   "name": "Northbound",
+   "role": "exit",
+   "latitude": -33.86258,
+   "longitude": 151.21369
+  },
+  {
+   "id": "LINKT:101/southbound:entry",
+   "asset_id": "101",
+   "road_id": "ED",
+   "point_id": "southbound",
+   "name": "Southbound",
+   "role": "entry",
+   "latitude": -33.86257,
+   "longitude": 151.21377
+  },
+  {
+   "id": "LINKT:101/southbound:exit",
+   "asset_id": "101",
+   "road_id": "ED",
+   "point_id": "southbound",
+   "name": "Southbound",
+   "role": "exit",
+   "latitude": -33.9113,
+   "longitude": 151.21302
+  },
+  {
+   "id": "LINKT:105/m5sw:entry",
+   "asset_id": "105",
+   "road_id": "M5SW",
+   "point_id": "m5sw",
+   "name": "M5 South-West Motorway",
+   "role": "entry",
+   "latitude": -33.94321,
+   "longitude": 151.07703
+  },
+  {
+   "id": "LINKT:105/m5sw:exit",
+   "asset_id": "105",
+   "road_id": "M5SW",
+   "point_id": "m5sw",
+   "name": "M5 South-West Motorway",
+   "role": "exit",
+   "latitude": -33.94845,
+   "longitude": 150.89044
+  },
+  {
+   "id": "LINKT:107/bernera-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "bernera-rd",
+   "name": "16. Bernera Rd",
+   "role": "entry",
+   "latitude": -33.93339,
+   "longitude": 150.86909
+  },
+  {
+   "id": "LINKT:107/bernera-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "bernera-rd",
+   "name": "16. Bernera Rd",
+   "role": "exit",
+   "latitude": -33.93308,
+   "longitude": 150.8691
+  },
+  {
+   "id": "LINKT:107/cowpasture-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "cowpasture-rd",
+   "name": "15. Cowpasture Rd",
+   "role": "entry",
+   "latitude": -33.91896,
+   "longitude": 150.85262
+  },
+  {
+   "id": "LINKT:107/cowpasture-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "cowpasture-rd",
+   "name": "15. Cowpasture Rd",
+   "role": "exit",
+   "latitude": -33.91849,
+   "longitude": 150.85262
+  },
+  {
+   "id": "LINKT:107/elizabeth-drv-m12:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "elizabeth-drv-m12",
+   "name": "14. M12 / Elizabeth Drv",
+   "role": "entry",
+   "latitude": -33.87687,
+   "longitude": 150.84322
+  },
+  {
+   "id": "LINKT:107/elizabeth-drv-m12:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "elizabeth-drv-m12",
+   "name": "14. M12 / Elizabeth Drv",
+   "role": "exit",
+   "latitude": -33.8768,
+   "longitude": 150.84357
+  },
+  {
+   "id": "LINKT:107/great-western-hwy:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "great-western-hwy",
+   "name": "9. Great Western Hwy",
+   "role": "entry",
+   "latitude": -33.78927,
+   "longitude": 150.8564
+  },
+  {
+   "id": "LINKT:107/great-western-hwy:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "great-western-hwy",
+   "name": "9. Great Western Hwy",
+   "role": "exit",
+   "latitude": -33.78919,
+   "longitude": 150.85674
+  },
+  {
+   "id": "LINKT:107/m2:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m2",
+   "name": "1. Hills M2",
+   "role": "entry",
+   "latitude": -33.76875,
+   "longitude": 150.96575
+  },
+  {
+   "id": "LINKT:107/m2:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m2",
+   "name": "1. Hills M2",
+   "role": "exit",
+   "latitude": -33.76865,
+   "longitude": 150.96587
+  },
+  {
+   "id": "LINKT:107/m4:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m4",
+   "name": "10. M4 Motorway",
+   "role": "entry",
+   "latitude": -33.79808,
+   "longitude": 150.85439
+  },
+  {
+   "id": "LINKT:107/m4:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m4",
+   "name": "10. M4 Motorway",
+   "role": "exit",
+   "latitude": -33.79818,
+   "longitude": 150.85408
+  },
+  {
+   "id": "LINKT:107/m5:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m5",
+   "name": "17. M5 Motorway",
+   "role": "entry",
+   "latitude": -33.94846,
+   "longitude": 150.89041
+  },
+  {
+   "id": "LINKT:107/m5:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "m5",
+   "name": "17. M5 Motorway",
+   "role": "exit",
+   "latitude": -33.9484,
+   "longitude": 150.89022
+  },
+  {
+   "id": "LINKT:107/norwest-blvd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "norwest-blvd",
+   "name": "3. Norwest Blvd",
+   "role": "entry",
+   "latitude": -33.74517,
+   "longitude": 150.93885
+  },
+  {
+   "id": "LINKT:107/norwest-blvd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "norwest-blvd",
+   "name": "3. Norwest Blvd",
+   "role": "exit",
+   "latitude": -33.7449,
+   "longitude": 150.93903
+  },
+  {
+   "id": "LINKT:107/old-wallgrove-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "old-wallgrove-rd",
+   "name": "11. Old Wallgrove Rd",
+   "role": "entry",
+   "latitude": -33.80979,
+   "longitude": 150.85196
+  },
+  {
+   "id": "LINKT:107/old-wallgrove-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "old-wallgrove-rd",
+   "name": "11. Old Wallgrove Rd",
+   "role": "exit",
+   "latitude": -33.80962,
+   "longitude": 150.85224
+  },
+  {
+   "id": "LINKT:107/old-windsor-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "old-windsor-rd",
+   "name": "2. Old Windsor Rd",
+   "role": "entry",
+   "latitude": -33.75365,
+   "longitude": 150.95329
+  },
+  {
+   "id": "LINKT:107/old-windsor-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "old-windsor-rd",
+   "name": "2. Old Windsor Rd",
+   "role": "exit",
+   "latitude": -33.75402,
+   "longitude": 150.9532
+  },
+  {
+   "id": "LINKT:107/power-st:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "power-st",
+   "name": "7. Power St",
+   "role": "entry",
+   "latitude": -33.75195,
+   "longitude": 150.84602
+  },
+  {
+   "id": "LINKT:107/power-st:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "power-st",
+   "name": "7. Power St",
+   "role": "exit",
+   "latitude": -33.75179,
+   "longitude": 150.8463
+  },
+  {
+   "id": "LINKT:107/quakers-hills-pwy:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "quakers-hills-pwy",
+   "name": "5. Quakers Hills Pwy",
+   "role": "entry",
+   "latitude": -33.73353,
+   "longitude": 150.87483
+  },
+  {
+   "id": "LINKT:107/quakers-hills-pwy:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "quakers-hills-pwy",
+   "name": "5. Quakers Hills Pwy",
+   "role": "exit",
+   "latitude": -33.73378,
+   "longitude": 150.87482
+  },
+  {
+   "id": "LINKT:107/richmond-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "richmond-rd",
+   "name": "6. Richmond Rd",
+   "role": "entry",
+   "latitude": -33.73338,
+   "longitude": 150.84938
+  },
+  {
+   "id": "LINKT:107/richmond-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "richmond-rd",
+   "name": "6. Richmond Rd",
+   "role": "exit",
+   "latitude": -33.73337,
+   "longitude": 150.84904
+  },
+  {
+   "id": "LINKT:107/sunnyholt-rd:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "sunnyholt-rd",
+   "name": "4. Sunnyholt Rd",
+   "role": "entry",
+   "latitude": -33.73875,
+   "longitude": 150.91835
+  },
+  {
+   "id": "LINKT:107/sunnyholt-rd:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "sunnyholt-rd",
+   "name": "4. Sunnyholt Rd",
+   "role": "exit",
+   "latitude": -33.73847,
+   "longitude": 150.91843
+  },
+  {
+   "id": "LINKT:107/the-horsley-dr:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "the-horsley-dr",
+   "name": "12. The Horsley Drv",
+   "role": "entry",
+   "latitude": -33.8415,
+   "longitude": 150.8553
+  },
+  {
+   "id": "LINKT:107/the-horsley-dr:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "the-horsley-dr",
+   "name": "12. The Horsley Drv",
+   "role": "exit",
+   "latitude": -33.84139,
+   "longitude": 150.85558
+  },
+  {
+   "id": "LINKT:107/woodstock-ave:entry",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "woodstock-ave",
+   "name": "8. Woodstock Ave",
+   "role": "entry",
+   "latitude": -33.76049,
+   "longitude": 150.84722
+  },
+  {
+   "id": "LINKT:107/woodstock-ave:exit",
+   "asset_id": "107",
+   "road_id": "M7",
+   "point_id": "woodstock-ave",
+   "name": "8. Woodstock Ave",
+   "role": "exit",
+   "latitude": -33.76054,
+   "longitude": 150.84694
+  },
+  {
+   "id": "LINKT:108/all-other:entry",
+   "asset_id": "108",
+   "road_id": "CCT",
+   "point_id": "all-other",
+   "name": "All other exits",
+   "role": "entry",
+   "latitude": -33.8741,
+   "longitude": 151.20403
+  },
+  {
+   "id": "LINKT:108/all-other:exit",
+   "asset_id": "108",
+   "road_id": "CCT",
+   "point_id": "all-other",
+   "name": "All other exits",
+   "role": "exit",
+   "latitude": -33.87407,
+   "longitude": 151.2175
+  },
+  {
+   "id": "LINKT:108/sir-john:entry",
+   "asset_id": "108",
+   "road_id": "CCT",
+   "point_id": "sir-john",
+   "name": "Sir John Young Crescent Exit",
+   "role": "entry",
+   "latitude": -33.87648,
+   "longitude": 151.22484
+  },
+  {
+   "id": "LINKT:108/sir-john:exit",
+   "asset_id": "108",
+   "road_id": "CCT",
+   "point_id": "sir-john",
+   "name": "Sir John Young Crescent Exit",
+   "role": "exit",
+   "latitude": -33.87122,
+   "longitude": 151.21663
+  },
+  {
+   "id": "LINKT:109/just-lct:entry",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "just-lct",
+   "name": "Just the Lane Cove Tunnel",
+   "role": "entry",
+   "latitude": -33.80139,
+   "longitude": 151.14486
+  },
+  {
+   "id": "LINKT:109/just-lct:exit",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "just-lct",
+   "name": "Just the Lane Cove Tunnel",
+   "role": "exit",
+   "latitude": -33.81275,
+   "longitude": 151.18148
+  },
+  {
+   "id": "LINKT:109/just-ramp:entry",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "just-ramp",
+   "name": "Just the Military Road E-Ramp",
+   "role": "entry",
+   "latitude": -33.8294,
+   "longitude": 151.2138
+  },
+  {
+   "id": "LINKT:109/just-ramp:exit",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "just-ramp",
+   "name": "Just the Military Road E-Ramp",
+   "role": "exit",
+   "latitude": -33.82473,
+   "longitude": 151.21124
+  },
+  {
+   "id": "LINKT:109/lct-and-ramp:entry",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "lct-and-ramp",
+   "name": "Both Lane Cove Tunnel & E-Ramp",
+   "role": "entry",
+   "latitude": -33.8294,
+   "longitude": 151.2138
+  },
+  {
+   "id": "LINKT:109/lct-and-ramp:exit",
+   "asset_id": "109",
+   "road_id": "LCT",
+   "point_id": "lct-and-ramp",
+   "name": "Both Lane Cove Tunnel & E-Ramp",
+   "role": "exit",
+   "latitude": -33.80152,
+   "longitude": 151.14486
+  },
+  {
+   "id": "LINKT:112/beecroft-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "beecroft-road",
+   "name": "4. Beecroft Road",
+   "role": "entry",
+   "latitude": -33.76412,
+   "longitude": 151.08441
+  },
+  {
+   "id": "LINKT:112/beecroft-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "beecroft-road",
+   "name": "4. Beecroft Road",
+   "role": "exit",
+   "latitude": -33.76429,
+   "longitude": 151.08502
+  },
+  {
+   "id": "LINKT:112/christie-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "christie-road",
+   "name": "5. Herring/Christie Road",
+   "role": "entry",
+   "latitude": -33.77309,
+   "longitude": 151.12039
+  },
+  {
+   "id": "LINKT:112/christie-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "christie-road",
+   "name": "5. Herring/Christie Road",
+   "role": "exit",
+   "latitude": -33.77294,
+   "longitude": 151.1204
+  },
+  {
+   "id": "LINKT:112/delhi-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "delhi-road",
+   "name": "7. Delhi Road",
+   "role": "entry",
+   "latitude": -33.79375,
+   "longitude": 151.13592
+  },
+  {
+   "id": "LINKT:112/delhi-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "delhi-road",
+   "name": "7. Delhi Road",
+   "role": "exit",
+   "latitude": -33.79374,
+   "longitude": 151.13603
+  },
+  {
+   "id": "LINKT:112/lane-cove-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "lane-cove-road",
+   "name": "6. Lane Cove Road",
+   "role": "entry",
+   "latitude": -33.78105,
+   "longitude": 151.13229
+  },
+  {
+   "id": "LINKT:112/lane-cove-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "lane-cove-road",
+   "name": "6. Lane Cove Road",
+   "role": "exit",
+   "latitude": -33.78094,
+   "longitude": 151.13235
+  },
+  {
+   "id": "LINKT:112/lane-cove-tunnel:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "lane-cove-tunnel",
+   "name": "8. Lane Cove Tunnel",
+   "role": "entry",
+   "latitude": -33.80146,
+   "longitude": 151.14478
+  },
+  {
+   "id": "LINKT:112/lane-cove-tunnel:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "lane-cove-tunnel",
+   "name": "8. Lane Cove Tunnel",
+   "role": "exit",
+   "latitude": -33.80138,
+   "longitude": 151.14485
+  },
+  {
+   "id": "LINKT:112/m7-abbot-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "m7-abbot-road",
+   "name": "1. Westlink M7/Abbott Road",
+   "role": "entry",
+   "latitude": -33.76867,
+   "longitude": 150.96597
+  },
+  {
+   "id": "LINKT:112/m7-abbot-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "m7-abbot-road",
+   "name": "1. Westlink M7/Abbott Road",
+   "role": "exit",
+   "latitude": -33.76885,
+   "longitude": 150.96582
+  },
+  {
+   "id": "LINKT:112/pennant-hills-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "pennant-hills-road",
+   "name": "3. Pennant Hills Road / NorthConnex",
+   "role": "entry",
+   "latitude": -33.75856,
+   "longitude": 151.04931
+  },
+  {
+   "id": "LINKT:112/pennant-hills-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "pennant-hills-road",
+   "name": "3. Pennant Hills Road / NorthConnex",
+   "role": "exit",
+   "latitude": -33.75878,
+   "longitude": 151.04953
+  },
+  {
+   "id": "LINKT:112/windsor-road:entry",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "windsor-road",
+   "name": "2. Windsor Road",
+   "role": "entry",
+   "latitude": -33.76778,
+   "longitude": 150.99778
+  },
+  {
+   "id": "LINKT:112/windsor-road:exit",
+   "asset_id": "112",
+   "road_id": "M2",
+   "point_id": "windsor-road",
+   "name": "2. Windsor Road",
+   "role": "exit",
+   "latitude": -33.76798,
+   "longitude": 150.99793
+  },
+  {
+   "id": "LINKT:113/m2-west-pennant-hills:entry",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "m2-west-pennant-hills",
+   "name": "Hills M2 Motorway, West Pennant Hills",
+   "role": "entry",
+   "latitude": -33.75873,
+   "longitude": 151.04506
+  },
+  {
+   "id": "LINKT:113/m2-west-pennant-hills:exit",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "m2-west-pennant-hills",
+   "name": "Hills M2 Motorway, West Pennant Hills",
+   "role": "exit",
+   "latitude": -33.75961,
+   "longitude": 151.0452
+  },
+  {
+   "id": "LINKT:113/pacific-motorway-wahroonga:entry",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pacific-motorway-wahroonga",
+   "name": "M1 Pacific Motorway, Wahroonga",
+   "role": "entry",
+   "latitude": -33.7111,
+   "longitude": 151.11623
+  },
+  {
+   "id": "LINKT:113/pacific-motorway-wahroonga:exit",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pacific-motorway-wahroonga",
+   "name": "M1 Pacific Motorway, Wahroonga",
+   "role": "exit",
+   "latitude": -33.71106,
+   "longitude": 151.11572
+  },
+  {
+   "id": "LINKT:113/pennant-hills-road-wahroonga:entry",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pennant-hills-road-wahroonga",
+   "name": "Pennant Hills Rd, Wahroonga",
+   "role": "entry",
+   "latitude": -33.72004,
+   "longitude": 151.10714
+  },
+  {
+   "id": "LINKT:113/pennant-hills-road-wahroonga:exit",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pennant-hills-road-wahroonga",
+   "name": "Pennant Hills Rd, Wahroonga",
+   "role": "exit",
+   "latitude": -33.72016,
+   "longitude": 151.10722
+  },
+  {
+   "id": "LINKT:113/pennant-hills-road:entry",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pennant-hills-road",
+   "name": "Pennant Hills Rd, West Pennant Hills",
+   "role": "entry",
+   "latitude": -33.75743,
+   "longitude": 151.04855
+  },
+  {
+   "id": "LINKT:113/pennant-hills-road:exit",
+   "asset_id": "113",
+   "road_id": "NORTHCONNEX",
+   "point_id": "pennant-hills-road",
+   "name": "Pennant Hills Rd, West Pennant Hills",
+   "role": "exit",
+   "latitude": -33.75735,
+   "longitude": 151.04889
+  },
+  {
+   "id": "LINKT:140-m4/m4-church-st:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-church-st",
+   "name": "1. Church Street, Parramatta",
+   "role": "entry",
+   "latitude": -33.82696,
+   "longitude": 151.00476
+  },
+  {
+   "id": "LINKT:140-m4/m4-church-st:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-church-st",
+   "name": "1. Church Street, Parramatta",
+   "role": "exit",
+   "latitude": -33.82685,
+   "longitude": 151.00475
+  },
+  {
+   "id": "LINKT:140-m4/m4-concord-rd:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-concord-rd",
+   "name": "7. Concord Road, Concord",
+   "role": "entry",
+   "latitude": -33.86476,
+   "longitude": 151.09441
+  },
+  {
+   "id": "LINKT:140-m4/m4-concord-rd:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-concord-rd",
+   "name": "7. Concord Road, Concord",
+   "role": "exit",
+   "latitude": -33.86499,
+   "longitude": 151.09451
+  },
+  {
+   "id": "LINKT:140-m4/m4-hill-rd:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-hill-rd",
+   "name": "4. Hill Road, Homebush",
+   "role": "entry",
+   "latitude": -33.84983,
+   "longitude": 151.05402
+  },
+  {
+   "id": "LINKT:140-m4/m4-hill-rd:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-hill-rd",
+   "name": "4. Hill Road, Homebush",
+   "role": "exit",
+   "latitude": -33.84977,
+   "longitude": 151.05392
+  },
+  {
+   "id": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-homebush-bay-dr",
+   "name": "5. Homebush Bay Drive, Homebush",
+   "role": "entry",
+   "latitude": -33.85696,
+   "longitude": 151.07098
+  },
+  {
+   "id": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-homebush-bay-dr",
+   "name": "5. Homebush Bay Drive, Homebush",
+   "role": "exit",
+   "latitude": -33.85709,
+   "longitude": 151.0709
+  },
+  {
+   "id": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-james-ruse-dr",
+   "name": "2. James Ruse Drive, Clyde",
+   "role": "entry",
+   "latitude": -33.83081,
+   "longitude": 151.02016
+  },
+  {
+   "id": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-james-ruse-dr",
+   "name": "2. James Ruse Drive, Clyde",
+   "role": "exit",
+   "latitude": -33.83093,
+   "longitude": 151.02015
+  },
+  {
+   "id": "LINKT:140-m4/m4-paramatta-rd-north-strathfield:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-paramatta-rd-north-strathfield",
+   "name": "6. Parramatta Road, North Strathfield",
+   "role": "entry",
+   "latitude": -33.86346,
+   "longitude": 151.0853
+  },
+  {
+   "id": "LINKT:140-m4/m4-paramatta-rd-strathfield:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-paramatta-rd-strathfield",
+   "name": "8. Parramatta Road, Strathfield",
+   "role": "entry",
+   "latitude": -33.86665,
+   "longitude": 151.09499
+  },
+  {
+   "id": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-paramatta-rd-strathfield",
+   "name": "8. Parramatta Road, Strathfield",
+   "role": "exit",
+   "latitude": -33.86657,
+   "longitude": 151.09509
+  },
+  {
+   "id": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-parramatta-rd-ashfield",
+   "name": "10. Ashfield",
+   "role": "entry",
+   "latitude": -33.88089,
+   "longitude": 151.13191
+  },
+  {
+   "id": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-parramatta-rd-ashfield",
+   "name": "10. Ashfield",
+   "role": "exit",
+   "latitude": -33.88073,
+   "longitude": 151.13202
+  },
+  {
+   "id": "LINKT:140-m4/m4-silverwater-road:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-silverwater-road",
+   "name": "3. Silverwater Road, Silverwater",
+   "role": "entry",
+   "latitude": -33.84268,
+   "longitude": 151.04401
+  },
+  {
+   "id": "LINKT:140-m4/m4-silverwater-road:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-silverwater-road",
+   "name": "3. Silverwater Road, Silverwater",
+   "role": "exit",
+   "latitude": -33.84279,
+   "longitude": 151.04401
+  },
+  {
+   "id": "LINKT:140-m4/m4-wattle-st:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-wattle-st",
+   "name": "9. Haberfield",
+   "role": "entry",
+   "latitude": -33.87543,
+   "longitude": 151.13466
+  },
+  {
+   "id": "LINKT:140-m4/m4-wattle-st:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-wattle-st",
+   "name": "9. Haberfield",
+   "role": "exit",
+   "latitude": -33.87516,
+   "longitude": 151.13432
+  },
+  {
+   "id": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-west-of-church-st",
+   "name": "West of Church Street, Parramatta",
+   "role": "entry",
+   "latitude": -33.82761,
+   "longitude": 150.99572
+  },
+  {
+   "id": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "asset_id": "140-m4",
+   "road_id": "M4",
+   "point_id": "m4-west-of-church-st",
+   "name": "West of Church Street, Parramatta",
+   "role": "exit",
+   "latitude": -33.82774,
+   "longitude": 150.9957
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-anzac",
+   "name": "12. Anzac Bridge, Rozelle Interchange",
+   "role": "entry",
+   "latitude": -33.86922,
+   "longitude": 151.17697
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-anzac",
+   "name": "12. Anzac Bridge, Rozelle Interchange",
+   "role": "exit",
+   "latitude": -33.86869,
+   "longitude": 151.1765
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-city-west-link:entry",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-city-west-link",
+   "name": "11b. City West Link, Rozelle Interchange",
+   "role": "entry",
+   "latitude": -33.8729,
+   "longitude": 151.16969
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-city-west-link:exit",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-city-west-link",
+   "name": "11b. City West Link, Rozelle Interchange",
+   "role": "exit",
+   "latitude": -33.87279,
+   "longitude": 151.16983
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-iron-cove:entry",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-iron-cove",
+   "name": "11a. Iron Cove Bridge, Rozelle Interchange",
+   "role": "entry",
+   "latitude": -33.86174,
+   "longitude": 151.16626
+  },
+  {
+   "id": "LINKT:140-m4m5/rozelle-iron-cove:exit",
+   "asset_id": "140-m4m5",
+   "road_id": "ROZELLE_INTERCHANGE",
+   "point_id": "rozelle-iron-cove",
+   "name": "11a. Iron Cove Bridge, Rozelle Interchange",
+   "role": "exit",
+   "latitude": -33.8618,
+   "longitude": 151.16616
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-bexley-rd:entry",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-bexley-rd",
+   "name": "16. Bexley Rd, Earlwood",
+   "role": "entry",
+   "latitude": -33.93614,
+   "longitude": 151.11123
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-bexley-rd:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-bexley-rd",
+   "name": "16. Bexley Rd, Earlwood",
+   "role": "exit",
+   "latitude": -33.93592,
+   "longitude": 151.111
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-general-holmes:entry",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-general-holmes",
+   "name": "19. General Holmes Drv, Arncliffe",
+   "role": "entry",
+   "latitude": -33.94177,
+   "longitude": 151.1927
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-general-holmes:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-general-holmes",
+   "name": "19. General Holmes Drv, Arncliffe",
+   "role": "exit",
+   "latitude": -33.94175,
+   "longitude": 151.19239
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-king-georges-rd",
+   "name": "14. King Georges Rd, Beverly Hills",
+   "role": "entry",
+   "latitude": -33.94314,
+   "longitude": 151.07701
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-king-georges-rd",
+   "name": "14. King Georges Rd, Beverly Hills",
+   "role": "exit",
+   "latitude": -33.94318,
+   "longitude": 151.07716
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-kingsgrove-rd:entry",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-kingsgrove-rd",
+   "name": "15. Kingsgrove Rd, Kingsgrove",
+   "role": "entry",
+   "latitude": -33.93829,
+   "longitude": 151.10093
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-kingsgrove-rd:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-kingsgrove-rd",
+   "name": "15. Kingsgrove Rd, Kingsgrove",
+   "role": "exit",
+   "latitude": -33.93844,
+   "longitude": 151.10109
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-marsh-st:entry",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-marsh-st",
+   "name": "18. Marsh St & West Botany St, Arncliffe",
+   "role": "entry",
+   "latitude": -33.93782,
+   "longitude": 151.15307
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-marsh-st:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-marsh-st",
+   "name": "18. Marsh St & West Botany St, Arncliffe",
+   "role": "exit",
+   "latitude": -33.93775,
+   "longitude": 151.15312
+  },
+  {
+   "id": "LINKT:140-m5e/m5e-princes-hwy:exit",
+   "asset_id": "140-m5e",
+   "road_id": "M5E",
+   "point_id": "m5e-princes-hwy",
+   "name": "17. Princess Hwy",
+   "role": "exit",
+   "latitude": -33.93578,
+   "longitude": 151.14823
+  },
+  {
+   "id": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "asset_id": "140-m8",
+   "road_id": "M8",
+   "point_id": "m5e-king-georges-rd",
+   "name": "14. King Georges Rd, Beverly Hills",
+   "role": "entry",
+   "latitude": -33.94314,
+   "longitude": 151.07701
+  },
+  {
+   "id": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "asset_id": "140-m8",
+   "road_id": "M8",
+   "point_id": "m5e-king-georges-rd",
+   "name": "14. King Georges Rd, Beverly Hills",
+   "role": "exit",
+   "latitude": -33.94318,
+   "longitude": 151.07716
+  },
+  {
+   "id": "LINKT:140-m8/m8-st-peters:entry",
+   "asset_id": "140-m8",
+   "road_id": "M8",
+   "point_id": "m8-st-peters",
+   "name": "13. St Peters Interchange",
+   "role": "entry",
+   "latitude": -33.91407,
+   "longitude": 151.18044
+  },
+  {
+   "id": "LINKT:140-m8/m8-st-peters:exit",
+   "asset_id": "140-m8",
+   "road_id": "M8",
+   "point_id": "m8-st-peters",
+   "name": "13. St Peters Interchange",
+   "role": "exit",
+   "latitude": -33.91408,
+   "longitude": 151.1807
+  }
+ ],
+ "pairs": [
+  {
+   "entry": "LINKT:100/shb-northbound:entry",
+   "exit": "LINKT:100/shb-northbound:exit",
+   "billing_asset_id": "100",
+   "billing_name": "Sydney Harbour Bridge & Tunnel",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:100/shb-southbound:entry",
+   "exit": "LINKT:100/shb-southbound:exit",
+   "billing_asset_id": "100",
+   "billing_name": "Sydney Harbour Bridge & Tunnel",
+   "class_a": [
+    {
+     "day": "weekdays",
+     "interval": "0630-0930",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "0930-1600",
+     "price": 3.3
+    },
+    {
+     "day": "weekdays",
+     "interval": "1600-1900",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "1900-0630",
+     "price": 2.76
+    },
+    {
+     "day": "weekend",
+     "interval": "0800-2000",
+     "price": 3.3
+    },
+    {
+     "day": "weekend",
+     "interval": "2000-0800",
+     "price": 2.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "weekdays",
+     "interval": "0630-0930",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "0930-1600",
+     "price": 3.3
+    },
+    {
+     "day": "weekdays",
+     "interval": "1600-1900",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "1900-0630",
+     "price": 2.76
+    },
+    {
+     "day": "weekend",
+     "interval": "0800-2000",
+     "price": 3.3
+    },
+    {
+     "day": "weekend",
+     "interval": "2000-0800",
+     "price": 2.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:100/sht-northbound:entry",
+   "exit": "LINKT:100/sht-northbound:exit",
+   "billing_asset_id": "100",
+   "billing_name": "Sydney Harbour Bridge & Tunnel",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:100/sht-southbound:entry",
+   "exit": "LINKT:100/sht-southbound:exit",
+   "billing_asset_id": "100",
+   "billing_name": "Sydney Harbour Bridge & Tunnel",
+   "class_a": [
+    {
+     "day": "weekdays",
+     "interval": "0630-0930",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "0930-1600",
+     "price": 3.3
+    },
+    {
+     "day": "weekdays",
+     "interval": "1600-1900",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "1900-0630",
+     "price": 2.76
+    },
+    {
+     "day": "weekend",
+     "interval": "0800-2000",
+     "price": 3.3
+    },
+    {
+     "day": "weekend",
+     "interval": "2000-0800",
+     "price": 2.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "weekdays",
+     "interval": "0630-0930",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "0930-1600",
+     "price": 3.3
+    },
+    {
+     "day": "weekdays",
+     "interval": "1600-1900",
+     "price": 4.41
+    },
+    {
+     "day": "weekdays",
+     "interval": "1900-0630",
+     "price": 2.76
+    },
+    {
+     "day": "weekend",
+     "interval": "0800-2000",
+     "price": 3.3
+    },
+    {
+     "day": "weekend",
+     "interval": "2000-0800",
+     "price": 2.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:101/northbound:entry",
+   "exit": "LINKT:101/northbound:exit",
+   "billing_asset_id": "101",
+   "billing_name": "Eastern Distributor",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.48
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 20.97
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:101/southbound:entry",
+   "exit": "LINKT:101/southbound:exit",
+   "billing_asset_id": "101",
+   "billing_name": "Eastern Distributor",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:105/m5sw:entry",
+   "exit": "LINKT:105/m5sw:exit",
+   "billing_asset_id": "105",
+   "billing_name": "M5 South-West Motorway",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.06
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.19
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.28
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.65
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/bernera-rd:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.82
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.46
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.57
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.71
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.84
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.52
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.86
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 20.58
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.96
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.88
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/cowpasture-rd:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.03
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.82
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.46
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.04
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.12
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/elizabeth-drv-m12:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/great-western-hwy:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.81
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 29.43
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/great-western-hwy:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/great-western-hwy:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/great-western-hwy:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.03
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/great-western-hwy:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.92
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/great-western-hwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.81
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 29.43
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/old-windsor-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.9
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.7
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/power-st:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.39
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.17
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/quakers-hills-pwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.94
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.82
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.28
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.84
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m2:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.28
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.57
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.71
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.41
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.23
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 25.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.71
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.13
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m4:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.44
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.32
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.65
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.84
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.52
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.41
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.23
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.7
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 29.1
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/m5:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/great-western-hwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 25.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.36
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.08
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/power-st:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.72
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.16
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/quakers-hills-pwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.83
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.12
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.36
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/norwest-blvd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.86
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 20.58
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.04
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.12
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.71
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.13
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.7
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 29.1
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.36
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.08
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.28
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.24
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.72
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.9
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.7
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-wallgrove-rd:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.45
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/old-windsor-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.9
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.7
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/power-st:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.39
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.17
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/power-st:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.72
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.16
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/power-st:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.11
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.33
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/power-st:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.6
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.8
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/quakers-hills-pwy:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.94
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.82
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/quakers-hills-pwy:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/quakers-hills-pwy:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/great-western-hwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.28
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.84
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.83
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.28
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/power-st:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.11
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.33
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.48
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.44
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/richmond-rd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 19.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/great-western-hwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.03
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.12
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.36
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.24
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.72
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/power-st:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.6
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.8
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/quakers-hills-pwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.48
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.44
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/sunnyholt-rd:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.96
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.88
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/m2:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.4
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/norwest-blvd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.9
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.7
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/richmond-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.66
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 19.98
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/sunnyholt-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.14
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.42
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/the-horsley-dr:entry",
+   "exit": "LINKT:107/woodstock-ave:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/bernera-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/cowpasture-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 30.03
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/elizabeth-drv-m12:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/great-western-hwy:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 1.92
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/m4:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.44
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.32
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/m5:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.5
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/old-wallgrove-rd:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.45
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:107/woodstock-ave:entry",
+   "exit": "LINKT:107/the-horsley-dr:exit",
+   "billing_asset_id": "107",
+   "billing_name": "Westlink M7",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:108/all-other:entry",
+   "exit": "LINKT:108/all-other:exit",
+   "billing_asset_id": "108",
+   "billing_name": "Cross City Tunnel",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.41
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.82
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:108/sir-john:entry",
+   "exit": "LINKT:108/sir-john:exit",
+   "billing_asset_id": "108",
+   "billing_name": "Cross City Tunnel",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:109/just-lct:entry",
+   "exit": "LINKT:109/just-lct:exit",
+   "billing_asset_id": "109",
+   "billing_name": "Lane Cove Tunnel & Military Road E-Ramp",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.3
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.94
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:109/just-ramp:entry",
+   "exit": "LINKT:109/just-ramp:exit",
+   "billing_asset_id": "109",
+   "billing_name": "Lane Cove Tunnel & Military Road E-Ramp",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:109/lct-and-ramp:entry",
+   "exit": "LINKT:109/lct-and-ramp:exit",
+   "billing_asset_id": "109",
+   "billing_name": "Lane Cove Tunnel & Military Road E-Ramp",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.45
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.41
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/beecroft-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/beecroft-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/beecroft-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/beecroft-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/beecroft-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/christie-road:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/beecroft-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/delhi-road:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/beecroft-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.44
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.44
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-road:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/beecroft-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.31
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.95
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/lane-cove-tunnel:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.32
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.96
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/m7-abbot-road:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 11.3
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.32
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.96
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/pennant-hills-road:entry",
+   "exit": "LINKT:112/windsor-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.32
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.96
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/christie-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/delhi-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/lane-cove-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/lane-cove-tunnel:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/m7-abbot-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 11.3
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:112/windsor-road:entry",
+   "exit": "LINKT:112/pennant-hills-road:exit",
+   "billing_asset_id": "112",
+   "billing_name": "Hills M2",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.32
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.96
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/m2-west-pennant-hills:entry",
+   "exit": "LINKT:113/pacific-motorway-wahroonga:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/m2-west-pennant-hills:entry",
+   "exit": "LINKT:113/pennant-hills-road-wahroonga:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pacific-motorway-wahroonga:entry",
+   "exit": "LINKT:113/m2-west-pennant-hills:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pacific-motorway-wahroonga:entry",
+   "exit": "LINKT:113/pennant-hills-road:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pennant-hills-road-wahroonga:entry",
+   "exit": "LINKT:113/m2-west-pennant-hills:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pennant-hills-road-wahroonga:entry",
+   "exit": "LINKT:113/pennant-hills-road:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pennant-hills-road:entry",
+   "exit": "LINKT:113/pacific-motorway-wahroonga:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:113/pennant-hills-road:entry",
+   "exit": "LINKT:113/pennant-hills-road-wahroonga:exit",
+   "billing_asset_id": "113",
+   "billing_name": "NorthConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.64
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-church-st:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex M4",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.22
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.67
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-concord-rd:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.95
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.85
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.97
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.55
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.65
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.05
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.85
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.01
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.05
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.58
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.75
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.97
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 29.91
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-hill-rd:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 11.69
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 35.09
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.51
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.38
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.85
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.55
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.78
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 11.35
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.85
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.55
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 20.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.41
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-homebush-bay-dr:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-hill-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 13.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.51
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.08
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.55
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.65
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.52
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.55
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.65
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.51
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-james-ruse-dr:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-north-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.38
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-north-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.08
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-north-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.36
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.09
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-north-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.38
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.08
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.36
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.09
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-paramatta-rd-strathfield:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.85
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.55
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.55
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.65
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.49
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-parramatta-rd-ashfield:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.79
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.39
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-hill-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 2.61
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.85
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.78
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 11.35
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.52
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.36
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.09
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.49
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.49
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.77
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.31
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.78
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.35
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-silverwater-road:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.51
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.53
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.27
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.81
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.85
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 17.55
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.55
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 28.65
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.83
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.49
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.79
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.39
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.27
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-wattle-st:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.48
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 19.45
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex M4",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-hill-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.58
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 16.75
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 20.25
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 3.05
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-paramatta-rd-strathfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.33
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 24.99
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-parramatta-rd-ashfield:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.79
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.39
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.77
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.31
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.79
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.39
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4/m4-west-of-church-st:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.22
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 21.67
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.8
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.41
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.5
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.51
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.78
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 32.35
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.75
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 14.27
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-anzac:entry",
+   "exit": "LINKT:140-m4m5/rozelle-iron-cove:exit",
+   "billing_asset_id": "140",
+   "billing_name": "Rozelle Interchange",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-city-west-link:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-city-west-link:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-city-west-link:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-iron-cove:entry",
+   "exit": "LINKT:140-m4m5/rozelle-anzac:exit",
+   "billing_asset_id": "140",
+   "billing_name": "Rozelle Interchange",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-iron-cove:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-iron-cove:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m4m5/rozelle-iron-cove:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-bexley-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-bexley-rd:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-general-holmes:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-general-holmes:entry",
+   "exit": "LINKT:140-m5e/m5e-kingsgrove-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.67
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.02
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-general-holmes:entry",
+   "exit": "LINKT:140-m5e/m5e-marsh-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "M5 East",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-general-holmes:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-city-west-link:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-iron-cove:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-bexley-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-general-holmes:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-marsh-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.29
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-princes-hwy:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.56
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.69
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-kingsgrove-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-general-holmes:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.67
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.02
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-kingsgrove-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-marsh-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.25
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-kingsgrove-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-princes-hwy:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.04
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.14
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-marsh-st:entry",
+   "exit": "LINKT:140-m5e/m5e-general-holmes:exit",
+   "billing_asset_id": "140",
+   "billing_name": "M5 East",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 0.0
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-marsh-st:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.29
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-marsh-st:entry",
+   "exit": "LINKT:140-m5e/m5e-kingsgrove-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.25
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 18.76
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m5e/m5e-marsh-st:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.29
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-city-west-link:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m4m5/rozelle-iron-cove:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.54
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.63
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-bexley-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 4.0
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.01
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-general-holmes:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-marsh-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.76
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 23.29
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m5e/m5e-princes-hwy:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 7.56
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 22.69
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m5e-king-georges-rd:entry",
+   "exit": "LINKT:140-m8/m8-st-peters:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-concord-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 8.95
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 26.85
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-homebush-bay-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 10.53
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 31.59
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-james-ruse-dr:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-silverwater-road:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.51
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 37.53
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-wattle-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 6.48
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 19.45
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4/m4-west-of-church-st:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 12.74
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 38.22
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4m5/rozelle-city-west-link:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m4m5/rozelle-iron-cove:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 5.19
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 15.57
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m5e/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  },
+  {
+   "entry": "LINKT:140-m8/m8-st-peters:entry",
+   "exit": "LINKT:140-m8/m5e-king-georges-rd:exit",
+   "billing_asset_id": "140",
+   "billing_name": "WestConnex",
+   "class_a": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 9.15
+    }
+   ],
+   "class_b": [
+    {
+     "day": "all",
+     "interval": "0000-2400",
+     "price": 27.47
+    }
+   ]
+  }
+ ],
+ "stats": {
+  "pairs_fetched": 2545,
+  "pairs_direct": 363,
+  "pairs_indirect_skipped": 2182,
+  "pairs_errored": 0,
+  "pairs_free_direction": 11
+ }
+}

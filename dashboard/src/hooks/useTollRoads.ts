@@ -27,13 +27,21 @@ export type TollPricingModel =
   | "distance"
   | "distance_with_flagfall"
   | "time_of_day"
-  | "unpriced";
+  | "unpriced"
+  | "toll_free"
+  // 2026-09-15, owner decision "copy all pricing from Linkt": the road is priced at Linkt's own
+  // entry-point -> exit-point figure (`TollPricePair`), never a formula.
+  | "entry_exit";
 
 /** How gantry crossings become a charge. NOT derivable from the pricing model:
  * Hills M2 and Lane Cove Tunnel are both `per_point` and charge differently
  * (M2 additively per point traversed; LCT once, whichever point fired first).
  * See `backend/app/models/toll.py`'s TOLL_CHARGING_POLICIES. */
-export type TollChargingPolicy = "once_per_road" | "cumulative_per_point" | "distance_metered";
+export type TollChargingPolicy =
+  | "once_per_road"
+  | "cumulative_per_point"
+  | "distance_metered"
+  | "entry_exit_pair";
 
 export type TollDirectional = "both" | "one_way" | "northbound_only" | "southbound_only" | null;
 
@@ -118,6 +126,11 @@ export interface TollRoad {
   current_price: TollRoadPriceRevision | null;
   /** Empty for every road priced at the road level. */
   toll_points: TollPoint[];
+  /** `entry_exit` roads only: Linkt pairs starting on this road and their Class A range
+   * (display only -- a trip is charged its own pair). 0 / null on every other road. */
+  entry_exit_pair_count: number;
+  entry_exit_min_class_a: string | null;
+  entry_exit_max_class_a: string | null;
 }
 
 export interface TollGantry {

@@ -12,6 +12,8 @@ in place of the old flat-circle-per-road view.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,12 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.platform import require_platform_owner
 from app.core.database import get_session
 from app.core.security import get_current_user, require_role
-from app.models.toll import TollGantry, TollPoint, TollRoad, TollRoadPriceRevision
+from app.models.toll import TollGantry, TollPoint, TollPricePair, TollRoad, TollRoadPriceRevision
 from app.models.user import User
 from app.schemas.toll import (
     TollGantryRead,
     TollPointPriceRevisionRead,
     TollPointRead,
+    TollPricePairRead,
     TollRoadDetailRead,
     TollRoadPriceRevisionCreate,
     TollRoadPriceRevisionRead,
@@ -41,6 +44,24 @@ _require_owner_role = require_role("owner")
 
 async def _require_platform_owner(user: User = Depends(_require_owner_role)) -> None:
     await require_platform_owner(user=user)
+
+
+async def _entry_exit_summary(session: AsyncSession, road: TollRoad) -> tuple[int, Decimal | None, Decimal | None]:
+    """(pair count, min, max Class A) over the Linkt pairs whose ENTRY point is on `road` --
+    `(0, None, None)` for any road that is not `entry_exit`."""
+    if road.pricing_model != "entry_exit":
+        return 0, None, None
+    pairs = (
+        await session.execute(
+            select(TollPricePair)
+            .join(TollGantry, TollGantry.id == TollPricePair.entry_gantry_id)
+            .where(TollGantry.toll_road_id == road.id)
+        )
+    ).scalars().all()
+    prices = [Decimal(str(band["price"])) for pair in pairs for band in (pair.class_a_bands or [])]
+    if not prices:
+        return len(pairs), None, None
+    return len(pairs), min(prices), max(prices)
 
 
 async def _gantry_count(session: AsyncSession, road_id: str) -> int:
@@ -97,6 +118,7 @@ def _to_road_read(
     gantry_count: int,
     current: TollRoadPriceRevision | None,
     toll_points: list[TollPointRead],
+    entry_exit: tuple[int, Decimal | None, Decimal | None] = (0, None, None),
 ) -> TollRoadRead:
     return TollRoadRead(
         id=road.id,
@@ -113,6 +135,9 @@ def _to_road_read(
         gantry_count=gantry_count,
         current_price=TollRoadPriceRevisionRead.model_validate(current) if current is not None else None,
         toll_points=toll_points,
+        entry_exit_pair_count=entry_exit[0],
+        entry_exit_min_class_a=entry_exit[1],
+        entry_exit_max_class_a=entry_exit[2],
     )
 
 
@@ -134,6 +159,7 @@ async def list_toll_roads(
                 gantry_count=gantry_count,
                 current=current,
                 toll_points=await _toll_points(session, road),
+                entry_exit=await _entry_exit_summary(session, road),
             )
         )
     return out
@@ -161,6 +187,21 @@ async def list_all_toll_gantries(
         await session.execute(select(TollGantry).order_by(TollGantry.toll_road_id, TollGantry.id))
     ).scalars().all()
     return [TollGantryRead.model_validate(g) for g in gantries]
+
+
+@router.get("/price-pairs", response_model=list[TollPricePairRead])
+async def list_toll_price_pairs(
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+) -> list[TollPricePairRead]:
+    """Every Linkt entry-point -> exit-point price (`app.models.toll.TollPricePair`), the whole
+    Sydney table in one response (~1,000 small rows) -- the meter caches it beside the gantries
+    and prices an `entry_exit` road from it offline. MUST stay declared above `GET /{road_id}`
+    (route order, see `list_all_toll_gantries`)."""
+    pairs = (
+        await session.execute(select(TollPricePair).order_by(TollPricePair.id))
+    ).scalars().all()
+    return [TollPricePairRead.model_validate(pair) for pair in pairs]
 
 
 @router.get("/{road_id}", response_model=TollRoadDetailRead)
@@ -192,6 +233,7 @@ async def get_toll_road(
         gantry_count=len(gantries),
         current=current,
         toll_points=await _toll_points(session, road),
+                entry_exit=await _entry_exit_summary(session, road),
     )
     return TollRoadDetailRead(
         **base.model_dump(),

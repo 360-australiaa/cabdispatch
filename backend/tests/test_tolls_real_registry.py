@@ -38,8 +38,9 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.toll import TollGantry
-from app.services.tolls import haversine_m
+from app.models.toll import TollGantry, TollPricePair, TollRoad
+from app.services.fare_engine import NSW_FARE_ZONE
+from app.services.tolls import haversine_m, select_pair_band_price
 from scripts.seed_toll_roads import seed_toll_roads
 
 from .test_tolls import _create_trip, _seed_tariff, _tenant_of, _tick, auth_headers
@@ -82,10 +83,30 @@ _PARALLEL_OFFSET_M = 100.0
 
 
 async def _real_gantries(session: AsyncSession, road_id: str) -> list[TollGantry]:
+    """The road's TfNSW gantries -- what a formula-priced road is detected by."""
     result = await session.execute(
-        select(TollGantry).where(TollGantry.toll_road_id == road_id).order_by(TollGantry.id)
+        select(TollGantry)
+        .where(TollGantry.toll_road_id == road_id, TollGantry.source_sheet != "linkt")
+        .order_by(TollGantry.id)
     )
     return list(result.scalars().all())
+
+
+async def _linkt_drive(session: AsyncSession, road_id: str) -> tuple[list[TollGantry], TollPricePair]:
+    """For an `entry_exit` road (2026-09-15 Linkt pricing): the dearest direct pair that starts on
+    it, as [entry point, exit point] -- what a real drive of that road is detected by."""
+    pairs = (
+        await session.execute(
+            select(TollPricePair)
+            .join(TollGantry, TollGantry.id == TollPricePair.entry_gantry_id)
+            .where(TollGantry.toll_road_id == road_id)
+        )
+    ).scalars().all()
+    assert pairs, f"{road_id} has no Linkt pairs -- fixture assumption broken"
+    pair = max(pairs, key=lambda p: max(b["price"] for b in p.class_a_bands))
+    entry = await session.get(TollGantry, pair.entry_gantry_id)
+    exit_ = await session.get(TollGantry, pair.exit_gantry_id)
+    return [entry, exit_], pair
 
 
 def _offset_perpendicular(
@@ -144,7 +165,12 @@ async def _drive(
         return _offset_perpendicular(gantries, g, offset_m)
 
     first_lat, first_lng = point(gantries[0])
-    trip = await _create_trip(client, headers, tariff_id, start_lat=first_lat - 0.004, start_lng=first_lng)
+    # Dated today, not test_trips' fixed July day: the real registry's revisions (M4-M8 Link's
+    # 2026-09-09 formula, the Linkt pairs fetched 2026-09-15) must be in force for the drive.
+    trip = await _create_trip(
+        client, headers, tariff_id, start_lat=first_lat - 0.004, start_lng=first_lng,
+        start_at=datetime.now(NSW_FARE_ZONE).replace(hour=14, minute=0, second=0, microsecond=0).isoformat(),
+    )
     t0 = datetime.fromisoformat(trip["start_at"])
 
     body: dict = {}
@@ -167,6 +193,20 @@ async def test_driving_a_real_road_over_its_own_gantries_still_charges(
     headers = await auth_headers(client, session, role="driver")
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = await session.get(TollRoad, road_id)
+    if road.pricing_model == "entry_exit":
+        # Linkt pricing (2026-09-15): a real drive is detected by its entry point and exit point.
+        points, pair = await _linkt_drive(session, road_id)
+        body = await _drive(client, headers, tariff.id, points)
+        expected = select_pair_band_price(pair.class_a_bands, datetime.fromisoformat(body["start_at"]))
+        assert Decimal(body["tolls"]) == expected, f"{road_id} {pair.id}: charged {body['tolls']}, Linkt says {expected}"
+        # One charge line, for Linkt's amount. Its key may be a sibling WestConnex road when the
+        # interchange hosts co-located entry points (King Georges Road: M8 / M5 East / M5 SW).
+        charged = {k: Decimal(v) for k, v in body["auto_tolled_roads"].items()}
+        assert list(charged.values()) == [expected], charged
+        assert body["unpriced_toll_road_ids"] == []
+        return
 
     gantries = await _real_gantries(session, road_id)
     assert gantries, f"{road_id} has no seeded gantries -- fixture assumption broken"
@@ -192,7 +232,11 @@ async def test_driving_parallel_to_a_real_road_charges_nothing(
     tenant_id = await _tenant_of(client, headers)
     tariff = await _seed_tariff(session, tenant_id=tenant_id)
 
-    gantries = await _real_gantries(session, road_id)
+    road = await session.get(TollRoad, road_id)
+    if road.pricing_model == "entry_exit":
+        gantries, _ = await _linkt_drive(session, road_id)
+    else:
+        gantries = await _real_gantries(session, road_id)
 
     # Guard the premise twice over, because a parallel test that drifts out of range
     # passes for the wrong reason and proves nothing.

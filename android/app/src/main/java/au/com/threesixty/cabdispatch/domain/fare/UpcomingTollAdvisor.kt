@@ -81,6 +81,8 @@ fun upcomingToll(
     var best: TollGantryRef? = null
     var bestDistanceM = Double.MAX_VALUE
     for (gantry in registry.gantries) {
+        // An entry_exit road (Linkt pricing) has entry AND exit points; only an entry is "a toll ahead".
+        if (registry.roadsById[gantry.tollRoadId]?.pricingModel == "entry_exit" && gantry.ramp != "entry") continue
         val distanceM = tollHaversineM(lat, lng, gantry.latitude, gantry.longitude)
         if (distanceM > lookaheadM || distanceM >= bestDistanceM) continue
 
@@ -95,7 +97,7 @@ fun upcomingToll(
     val road = registry.roadsById[gantry.tollRoadId] ?: return null
     return UpcomingToll(
         roadName = road.name,
-        price = representativeTollPrice(road, gantry),
+        price = representativeTollPrice(road, gantry, registry),
         distanceAheadM = bestDistanceM,
     )
 }
@@ -123,10 +125,16 @@ internal fun angularDifferenceDeg(a: Double, b: Double): Double {
  * `null` (never a guess) when none of the above is captured for this road/point — the banner
  * still names the road; it just shows no dollar figure.
  */
-internal fun representativeTollPrice(road: TollRoadRef, gantry: TollGantryRef): BigDecimal? {
-    gantry.tollPointId?.let { pointId ->
-        road.tollPoints[pointId]?.priceClassA?.let { return it }
-    }
-    val price = road.currentPrice ?: return null
-    return price.priceClassAMax ?: price.capClassA
+internal fun representativeTollPrice(
+    road: TollRoadRef,
+    gantry: TollGantryRef,
+    registry: TollRegistrySnapshot = TollRegistrySnapshot.EMPTY,
+): BigDecimal? = when {
+    // Linkt pricing: the dearest pair from this entry point -- the most this crossing could cost.
+    road.pricingModel == "entry_exit" -> registry.pricePairs.values
+        .filter { it.entryGantryId == gantry.id }
+        .mapNotNull { pair -> pair.classABands.maxOfOrNull { it.price } }
+        .maxOrNull()
+    else -> gantry.tollPointId?.let { road.tollPoints[it]?.priceClassA }
+        ?: road.currentPrice?.let { it.priceClassAMax ?: it.capClassA }
 }

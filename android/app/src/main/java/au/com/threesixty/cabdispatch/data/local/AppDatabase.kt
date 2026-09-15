@@ -25,6 +25,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.TariffEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TariffSigningKeyEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollPricePairEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TrafficCameraEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TrafficHazardEntity
@@ -154,13 +155,14 @@ import kotlinx.serialization.builtins.ListSerializer
         TollRoadEntity::class,
         TollPointEntity::class,
         TollGantryEntity::class,
+        TollPricePairEntity::class,
         AirportZoneEntity::class,
         TrafficCameraEntity::class,
         TrafficHazardEntity::class,
         TripBlackoutSegmentEntity::class,
         TripTracePointEntity::class,
     ],
-    version = 17,
+    version = 18,
     // A9 toolchain upgrade (2026-09-08): turned ON, now that Room runs through KSP (see
     // app/build.gradle.kts's `ksp { arg("room.schemaLocation", ...) }`) instead of the kapt setup
     // that produced no schema JSON at all on this project. This captures v12 onward under
@@ -558,5 +560,37 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE sync_outbox ADD COLUMN nextAttemptAt INTEGER NOT NULL DEFAULT 0")
         db.execSQL("ALTER TABLE sync_outbox ADD COLUMN deadLettered INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * 17 -> 18 (2026-09-15, "copy all pricing from Linkt"): `toll_gantries.ramp` ("entry" / "exit" on a
+ * Linkt entry/exit point, NULL on every TfNSW gantry) and the `toll_price_pairs` cache of Linkt's
+ * entry-point -> exit-point prices -- see [TollPricePairEntity]. Both start empty/NULL and are
+ * filled by the next registry refresh, which is the safe state (an `entry_exit` road with no
+ * pairs cached is flagged for the driver, never guessed). SQL matches Room's own
+ * `createAllTables` for v18 (`app/schemas/.../18.json`); exercised by `RoomMigrationTest`.
+ */
+@Suppress("MagicNumber")
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `toll_gantries` ADD COLUMN `ramp` TEXT")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `toll_price_pairs` (
+                `id` TEXT NOT NULL,
+                `entryGantryId` TEXT NOT NULL,
+                `exitGantryId` TEXT NOT NULL,
+                `billingName` TEXT NOT NULL,
+                `classABandsJson` TEXT NOT NULL,
+                `fetchedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_toll_price_pairs_entryGantryId` " +
+                "ON `toll_price_pairs` (`entryGantryId`)",
+        )
     }
 }

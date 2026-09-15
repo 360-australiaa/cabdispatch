@@ -49,11 +49,10 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from pydantic import BaseModel, ConfigDict
-
 from app.core.security import (
     WebSocketAuth,
     WebSocketAuthError,

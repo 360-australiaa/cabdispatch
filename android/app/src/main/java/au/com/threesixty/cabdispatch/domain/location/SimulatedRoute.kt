@@ -555,6 +555,9 @@ object SimulatedRoutes {
     fun tunnelCorridorBlackout(
         corridor: au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelCorridor,
         speedKmh: Double = 80.0,
+        /** Where the drive ends after the far portal -- the Linkt exit point the toll is priced at
+         * (2026-09-15), when known; otherwise a straight [LEAD_IN_M] run-out. */
+        runOutTo: LatLng? = null,
     ): SimulatedRoute? {
         val pts = corridor.points.map { LatLng(it.first, it.second) }
         if (pts.size < 2) return null
@@ -562,10 +565,10 @@ object SimulatedRoutes {
         val a = pts[pts.size - 2]
         val b = pts.last()
         val lastLegM = haversineM(a, b)
-        val runOut = if (lastLegM <= 0.0) {
-            LatLng(b.lat + RUN_OUT_FALLBACK_DEG, b.lng)
-        } else {
-            interpolate(a, b, 1.0 + LEAD_IN_M / lastLegM)
+        val runOut = when {
+            runOutTo != null -> runOutTo
+            lastLegM <= 0.0 -> LatLng(b.lat + RUN_OUT_FALLBACK_DEG, b.lng)
+            else -> interpolate(a, b, 1.0 + LEAD_IN_M / lastLegM)
         }
         val waypoints = listOf(leadIn) + pts + runOut
         val mps = speedKmh / 3.6

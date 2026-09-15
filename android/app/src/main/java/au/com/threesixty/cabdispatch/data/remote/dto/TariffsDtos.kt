@@ -124,6 +124,11 @@ data class TollRoadDto(
      * what a crossing is charged — so this is where its actual prices live. Returned on the
      * LIST endpoint too, so one call is enough to price every road. */
     @SerialName("toll_points") val tollPoints: List<TollPointDto> = emptyList(),
+    /** `entry_exit` roads (Linkt pricing, 2026-09-15): pairs starting on this road and their
+     * Class A range -- display only, a trip is charged its own pair. */
+    @SerialName("entry_exit_pair_count") val entryExitPairCount: Int = 0,
+    @SerialName("entry_exit_min_class_a") val entryExitMinClassA: String? = null,
+    @SerialName("entry_exit_max_class_a") val entryExitMaxClassA: String? = null,
 )
 
 /** Mirrors `TollPointRead` — one named toll point of a `per_point` road. */
@@ -227,6 +232,31 @@ data class TollGantryDto(
 /** Mirrors `TollRoadDetailRead` — [TollRoadDto]'s fields plus this one road's real gantries.
  * [priceHistory] is fetched (the backend always returns it) but deliberately never cached/read
  * on-device — see [TollRoadDto.currentPrice]'s doc. */
+/** One Linkt time band of a [TollPricePairDto]: `day` "all" / "weekdays" / "weekend", `interval`
+ * "HHMM-HHMM" (may wrap midnight), `price` the Tag base toll as a decimal string. */
+@Serializable
+data class TollPriceBandDto(
+    val day: String,
+    val interval: String,
+    val price: String,
+)
+
+/** `GET /v1/toll-roads/price-pairs` row (backend `TollPricePairRead`): Linkt's own price for one
+ * entry point -> exit point trip -- the `entry_exit` pricing model every NSW toll road uses since
+ * 2026-09-15 ("copy all pricing from Linkt"). The two ids are [TollGantryDto.id]s whose
+ * [TollGantryDto.ramp] is "entry" / "exit". */
+@Serializable
+data class TollPricePairDto(
+    val id: String,
+    @SerialName("entry_gantry_id") val entryGantryId: String,
+    @SerialName("exit_gantry_id") val exitGantryId: String,
+    @SerialName("billing_asset_id") val billingAssetId: String,
+    @SerialName("billing_name") val billingName: String,
+    @SerialName("class_a_bands") val classABands: List<TollPriceBandDto> = emptyList(),
+    @SerialName("class_b_bands") val classBBands: List<TollPriceBandDto> = emptyList(),
+    @SerialName("effective_date") val effectiveDate: String,
+)
+
 @Serializable
 data class TollRoadDetailDto(
     val id: String,

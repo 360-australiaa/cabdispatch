@@ -178,6 +178,8 @@ const PRICING_MODEL_LABELS: Record<string, string> = {
   distance_with_flagfall: "Distance + flagfall",
   time_of_day: "Time of day",
   unpriced: "Unpriced",
+  toll_free: "Toll-free",
+  entry_exit: "Entry → exit (Linkt)",
 };
 
 /** Shown only where it changes what a trip pays — i.e. on a `per_point` road,
@@ -187,6 +189,7 @@ const CHARGING_POLICY_LABELS: Record<string, string> = {
   cumulative_per_point: "Charged per point traversed",
   once_per_road: "Charged once per trip",
   distance_metered: "Metered by distance",
+  entry_exit_pair: "Linkt's price for the entry and exit points used",
 };
 
 const DIRECTION_LABELS: Record<string, string> = {
@@ -205,6 +208,25 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
 
 function CurrentPriceCell({ road }: { road: TollRoad }) {
   const price = road.current_price;
+  // Linkt pricing (2026-09-15): the road's own figure is whichever entry->exit pair the trip
+  // drove, so the headline is the range across its pairs, never a formula.
+  if (road.pricing_model === "entry_exit") {
+    if (!road.entry_exit_pair_count) {
+      return <span className="text-muted-foreground">No Linkt pairs loaded — re-seed required</span>;
+    }
+    return (
+      <span className="text-sm">
+        {road.entry_exit_min_class_a && road.entry_exit_max_class_a && (
+          <>
+            {formatMoney(road.entry_exit_min_class_a)} – {formatMoney(road.entry_exit_max_class_a)}
+          </>
+        )}
+        <div className="text-xs text-muted-foreground">
+          {road.entry_exit_pair_count} entry→exit pairs, Linkt&apos;s own prices
+        </div>
+      </span>
+    );
+  }
   if (!price) return <span className="text-muted-foreground">Not priced</span>;
 
   if (road.pricing_model === "zone_flat") {

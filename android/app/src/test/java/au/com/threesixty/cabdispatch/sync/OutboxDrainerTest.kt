@@ -12,6 +12,7 @@ import au.com.threesixty.cabdispatch.data.local.entity.SyncOutboxEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TripStatus
 import au.com.threesixty.cabdispatch.data.remote.ApiService
+import au.com.threesixty.cabdispatch.data.remote.TollPricePairDto
 import au.com.threesixty.cabdispatch.data.remote.ComplianceDossierDto
 import au.com.threesixty.cabdispatch.data.remote.ComplianceExpiryPageDto
 import au.com.threesixty.cabdispatch.data.remote.CorporateAccountPageDto
@@ -1087,6 +1088,7 @@ private class FakeApiService : ApiService {
     // NSW toll-road registry (automatic toll detection, 2026-09) — pulled by
     // TollRegistryCache on its own schedule, never by the outbox drainer under test here.
     override suspend fun tollRoads(): List<au.com.threesixty.cabdispatch.data.remote.TollRoadDto> = notUsed()
+    override suspend fun tollPricePairs(): List<TollPricePairDto> = emptyList()
     override suspend fun tollRoadDetail(roadId: String): au.com.threesixty.cabdispatch.data.remote.TollRoadDetailDto = notUsed()
     override suspend fun listGeofences(kind: String?, skip: Int, limit: Int): au.com.threesixty.cabdispatch.data.remote.GeofenceListResponseDto = notUsed()
     override suspend fun airportGeofencePresets(): List<au.com.threesixty.cabdispatch.data.remote.GeofencePresetDto> = notUsed()

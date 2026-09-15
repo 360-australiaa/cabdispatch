@@ -24,6 +24,7 @@ the two dedup mechanisms are independent and additive (see
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from itertools import combinations, pairwise
@@ -35,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.toll import (
     TollGantry,
     TollPointPriceRevision,
+    TollPricePair,
     TollRoad,
     TollRoadPriceRevision,
 )
@@ -47,6 +49,21 @@ from app.services.fare_engine import NSW_FARE_ZONE, round_half_up
 # still REVISE its existing `auto_tolled_roads` entry (rather than being
 # skipped as "already charged") -- see apply_toll_detection below.
 _DISTANCE_METERED_PRICING_MODELS = ("distance", "distance_with_flagfall")
+
+# `entry_exit` roads (every Linkt-priced road since 2026-09-15): a section's state lives in
+# `trip.toll_road_progress` under this one reserved key, as a JSON string of
+# `[{"entry": gantry id, "exit": gantry id | None, "road": road id, "amount": "8.80"}, ...]` --
+# the sections driven so far, last one possibly still open. Reserved-key rather than a new column
+# so the migration stays additive; every other key of that map is still a road id -> km string.
+ENTRY_EXIT_STATE_KEY = "__entry_exit_sections"
+
+# Linkt places an interchange's entry point and exit point at the same spot (Homebush Bay Drive:
+# 15 m apart), so a vehicle driving THROUGH an interchange confirms both. An entry point this close
+# to the exit just recorded is that same interchange, not a re-entry -- it never opens a new
+# section. (A driver who genuinely leaves and rejoins at the same interchange is billed one trip
+# instead of two: the cheaper reading, never the dearer guess.)
+ENTRY_EXIT_CO_LOCATED_M = 200.0
+
 
 # Gantries are precise point structures (unlike the old "near this landmark"
 # circles, which used 300-1500m radii) — a tight, DOCUMENTED app-level
@@ -564,6 +581,163 @@ def effective_rate_per_km_class_a(
 # --- gantry detection -----------------------------------------------------------
 
 
+def _band_matches(band: dict, local_ts: datetime) -> bool:
+    day = band.get("day", "all")
+    weekday = local_ts.weekday()  # 0 = Monday
+    if day == "weekdays" and weekday >= 5:
+        return False
+    if day == "weekend" and weekday < 5:
+        return False
+    interval = band.get("interval", "0000-2400")
+    try:
+        start_s, end_s = interval.split("-")
+        start = int(start_s[:2]) * 60 + int(start_s[2:])
+        end = int(end_s[:2]) * 60 + int(end_s[2:])
+    except (ValueError, AttributeError):
+        return False
+    minute = local_ts.hour * 60 + local_ts.minute
+    if end <= start:  # wraps midnight, e.g. "1900-0630"
+        return minute >= start or minute < end
+    return start <= minute < end
+
+
+def select_pair_band_price(bands: list[dict], ts: datetime) -> Decimal | None:
+    """The Linkt band in force at `ts` (NSW local time) -- see `TollPricePair.class_a_bands`.
+    None when no band covers the moment (never for real Linkt data, which always has an
+    "all / 0000-2400" band or a full weekday+weekend partition)."""
+    local_ts = ts.astimezone(NSW_FARE_ZONE)
+    for band in bands:
+        if _band_matches(band, local_ts):
+            return Decimal(str(band["price"]))
+    return None
+
+
+def _entry_exit_sections(progress: dict[str, str]) -> list[dict]:
+    raw = progress.get(ENTRY_EXIT_STATE_KEY)
+    if not raw:
+        return []
+    try:
+        sections = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return sections if isinstance(sections, list) else []
+
+
+async def _apply_entry_exit_hits(
+    session: AsyncSession,
+    *,
+    confirmed_hits: list[TollGantry],
+    roads_by_id: dict[str, TollRoad],
+    progress: dict[str, str],
+    charged_roads: dict[str, str],
+    unpriced: set[str],
+    ts: datetime,
+) -> Decimal:
+    """The `entry_exit` pricing model (Linkt, 2026-09-15). Passing an ENTRY point opens a section
+    unless one is still open with no exit yet, or the entry is the same interchange as the exit
+    just recorded (see ENTRY_EXIT_CO_LOCATED_M). Passing an EXIT point that Linkt prices from the
+    open section's entry sets (or, for a later exit on the same section, REVISES) that section's
+    charge to Linkt's own pair price for the band in force now; the section stays revisable until
+    the next entry opens a new one. An exit Linkt does not price from this entry (the other
+    carriageway's point, or one behind us) is ignored. An exit with no section at all -- the
+    vehicle was already on the motorway when the trip started -- is flagged for the driver to add
+    manually, never guessed. Entries are processed before exits within one tick so a trip that
+    starts at an interchange opens its section before seeing that interchange's own exit point.
+    Charges are keyed by the entry point's road id and summed across that road's sections; the
+    return value is the net change to `trip.tolls` (the entry's road is usually not among THIS
+    tick's hits -- Concord Road entry, King Georges Road exit -- so it cannot be re-derived from
+    the roads detected here)."""
+    sections = _entry_exit_sections(progress)
+    touched_roads: set[str] = set()
+    exits_this_tick = [g for g in confirmed_hits if g.ramp == "exit" and g.id.startswith("LINKT:")]
+    for gantry in sorted(confirmed_hits, key=lambda g: 0 if g.ramp == "entry" else 1):
+        road = roads_by_id.get(gantry.toll_road_id)
+        # Only Linkt's own points price an entry_exit road; the road's TfNSW gantries (which also
+        # carry ramp entry/exit) are kept for corridor geometry and never open or close a section.
+        if road is None or road.pricing_model != "entry_exit" or not gantry.id.startswith("LINKT:"):
+            continue
+        last = sections[-1] if sections else None
+        if gantry.ramp == "entry":
+            if last is not None and last.get("exit") is None:
+                # Still inside a section with no exit yet. Linkt lists several entry points at one
+                # spot where the same on-ramp feeds different products (Lane Cove Tunnel: "just
+                # the tunnel" vs "tunnel and Military Road e-ramp"); until an exit says which,
+                # every co-located entry is a candidate for this section.
+                if gantry.id not in last["entries"] and await _co_located(session, gantry, last["entry"]):
+                    last["entries"].append(gantry.id)
+                continue
+            if last is not None and await _same_interchange(session, gantry, last, exits_this_tick):
+                continue  # driving through: this interchange's exit point was just recorded
+            sections.append({"entry": gantry.id, "entries": [gantry.id], "exit": None, "road": road.id, "amount": None})
+            continue
+        if last is None:
+            unpriced.add(road.id)
+            continue
+        pair = None
+        for entry_id in last.get("entries") or [last["entry"]]:
+            pair = await session.get(TollPricePair, f"{entry_id}->{gantry.id}")
+            if pair is not None:
+                break
+        if pair is None:
+            continue  # an exit Linkt does not price from any of this section's entries: not ours
+        price = select_pair_band_price(pair.class_a_bands or [], ts)
+        if price is None:
+            unpriced.add(road.id)
+            continue
+        # The exit says which co-located entry the trip really used; the charge is keyed by THAT
+        # entry point's road (King Georges Road hosts an M8, an M5 East and an M5 South-West entry).
+        priced_entry = await session.get(TollGantry, pair.entry_gantry_id)
+        if priced_entry is not None and priced_entry.toll_road_id != last["road"]:
+            touched_roads.add(last["road"])
+            last["road"] = priced_entry.toll_road_id
+        last["exit"] = gantry.id
+        last["amount"] = str(round_half_up(price))
+        touched_roads.add(last["road"])
+        unpriced.discard(last["road"])
+        unpriced.discard(road.id)
+    progress[ENTRY_EXIT_STATE_KEY] = json.dumps(sections)
+    delta = Decimal(0)
+    for road_id in touched_roads:
+        total = round_half_up(
+            sum(
+                (Decimal(sec["amount"]) for sec in sections if sec.get("road") == road_id and sec.get("amount")),
+                Decimal(0),
+            )
+        )
+        delta += total - Decimal(charged_roads.get(road_id, "0"))
+        if total == 0 and not any(sec.get("road") == road_id for sec in sections):
+            charged_roads.pop(road_id, None)  # the section moved to another road: no $0.00 ghost
+        else:
+            charged_roads[road_id] = str(total)
+    return delta
+
+
+async def _co_located(session: AsyncSession, gantry: TollGantry, other_id: str) -> bool:
+    other = await session.get(TollGantry, other_id)
+    return (
+        other is not None
+        and haversine_m(gantry.latitude, gantry.longitude, other.latitude, other.longitude) <= ENTRY_EXIT_CO_LOCATED_M
+    )
+
+
+async def _same_interchange(
+    session: AsyncSession, entry: TollGantry, last_section: dict | None, exits_this_tick: list[TollGantry]
+) -> bool:
+    """True when `entry` sits within ENTRY_EXIT_CO_LOCATED_M of an exit point confirmed on this
+    same tick, or of the exit the last section recorded (the two halves of one interchange)."""
+    for exit_gantry in exits_this_tick:
+        if haversine_m(entry.latitude, entry.longitude, exit_gantry.latitude, exit_gantry.longitude) <= ENTRY_EXIT_CO_LOCATED_M:
+            return True
+    last_exit_id = (last_section or {}).get("exit")
+    if not last_exit_id:
+        return False
+    last_exit = await session.get(TollGantry, last_exit_id)
+    return (
+        last_exit is not None
+        and haversine_m(entry.latitude, entry.longitude, last_exit.latitude, last_exit.longitude) <= ENTRY_EXIT_CO_LOCATED_M
+    )
+
+
 async def find_nearby_gantries(
     session: AsyncSession, *, lat: float, lng: float, radius_m: float = GANTRY_DETECTION_RADIUS_M
 ) -> list[TollGantry]:
@@ -807,15 +981,36 @@ async def apply_toll_detection(
     # distance-priced road is set here too, at FIRST confirmed contact rather than
     # when corroboration completes, so a road never under-bills the stretch between
     # its first and second confirmed gantry.
+    confirmed_hits: list[TollGantry] = []
     for gantry in hits:
         if haversine_m(lat, lng, gantry.latitude, gantry.longitude) <= TOLL_CONFIRM_RADIUS_M:
             confirmed.setdefault(gantry.toll_road_id, set()).add(gantry.id)
             progress.setdefault(gantry.toll_road_id, str(cumulative_distance_km))
+            confirmed_hits.append(gantry)
 
+    roads_by_id: dict[str, TollRoad] = {}
     for road_id in {g.toll_road_id for g in hits}:
         road = await session.get(TollRoad, road_id)
+        if road is not None:
+            roads_by_id[road_id] = road
+
+    # Linkt entry/exit pricing (2026-09-15) -- its roads never reach the formula branches below.
+    tolls += await _apply_entry_exit_hits(
+        session,
+        confirmed_hits=confirmed_hits,
+        roads_by_id=roads_by_id,
+        progress=progress,
+        charged_roads=charged_roads,
+        unpriced=unpriced,
+        ts=ts,
+    )
+
+    for road_id in {g.toll_road_id for g in hits}:
+        road = roads_by_id.get(road_id)
         if road is None:
             continue  # FK integrity guarantees this never happens for real data
+        if road.pricing_model == "entry_exit":
+            continue  # fully handled by _apply_entry_exit_hits above
 
         if road.pricing_model == "unpriced":
             unpriced.add(road_id)

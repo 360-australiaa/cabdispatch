@@ -41,4 +41,7 @@ data class TollGantryEntity(
     val latitude: Double,
     val longitude: Double,
     val fetchedAt: Long,
+    /** "entry" / "exit" for a Linkt entry/exit point of an `entry_exit` road (2026-09-15), null for
+     * every TfNSW gantry. Added by MIGRATION_17_18. */
+    val ramp: String? = null,
 )

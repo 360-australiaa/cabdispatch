@@ -355,6 +355,8 @@ data class TollGantryRef(
     val latitude: Double,
     val longitude: Double,
     val tollPointId: String? = null,
+    /** "entry" / "exit" on a Linkt entry/exit point of an `entry_exit` road, null otherwise. */
+    val ramp: String? = null,
 )
 
 /** Immutable, in-memory snapshot of the cached registry loaded once per trip (or refresh) — never
@@ -362,6 +364,8 @@ data class TollGantryRef(
 data class TollRegistrySnapshot(
     val roadsById: Map<String, TollRoadRef>,
     val gantries: List<TollGantryRef>,
+    /** Linkt entry->exit prices keyed by [TollPricePairRef.id] -- see [TollPricePairRef]. */
+    val pricePairs: Map<String, TollPricePairRef> = emptyMap(),
 ) {
     companion object {
         val EMPTY = TollRegistrySnapshot(emptyMap(), emptyList())
@@ -461,6 +465,10 @@ class TollDetectionState {
      */
     val confirmedGantries: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
+    /** `entry_exit` roads: the sections driven so far, last one possibly still open -- see
+     * [applyEntryExitHits]. */
+    val entryExitSections: MutableList<EntryExitSection> = mutableListOf()
+
     /** The immediately preceding GPS fix, for bearing classification — `null` before the first
      * fix. Advanced on EVERY [onFix] call, hit or not, matching the backend's own
      * `apply_toll_detection`'s `(prev_lat, prev_lng)` contract ("the immediately preceding point
@@ -485,6 +493,7 @@ class TollDetectionState {
         chargedRoads.clear()
         roadEntryDistanceKm.clear()
         unpricedRoadIds.clear()
+        entryExitSections.clear()
         dismissedRoadIds.clear()
         confirmedGantries.clear()
         previousFix = null
@@ -590,9 +599,19 @@ fun onFix(
     val changed = mutableMapOf<String, BigDecimal>()
     val newlyUnpriced = mutableSetOf<String>()
 
+    // Linkt entry/exit pricing (2026-09-15) -- its roads never reach the formula branches below.
+    applyEntryExitHits(
+        state,
+        registry,
+        hits.filter { tollHaversineM(lat, lng, it.latitude, it.longitude) <= radii.confirmM(it) },
+        ts,
+        EntryExitOutcome(changed, newlyUnpriced),
+    )
+
     for (roadId in hits.map { it.tollRoadId }.distinct()) {
         if (roadId in state.dismissedRoadIds) continue
         val road = registry.roadsById[roadId] ?: continue
+        if (road.pricingModel == "entry_exit") continue // handled by applyEntryExitHits above
 
         if (road.pricingModel == "unpriced") {
             if (state.unpricedRoadIds.add(roadId)) newlyUnpriced.add(roadId)

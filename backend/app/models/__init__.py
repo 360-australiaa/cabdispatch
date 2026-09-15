@@ -41,6 +41,7 @@ from app.models.toll import (
     TollGantry,
     TollPoint,
     TollPointPriceRevision,
+    TollPricePair,
     TollRoad,
     TollRoadPriceRevision,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "TollGantry",
     "TollPoint",
     "TollPointPriceRevision",
+    "TollPricePair",
     "TollRoad",
     "TollRoadPriceRevision",
     "TrafficCamera",

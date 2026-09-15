@@ -4,15 +4,20 @@ import au.com.threesixty.cabdispatch.data.cabDispatchJson
 import au.com.threesixty.cabdispatch.data.local.dao.TollRegistryDao
 import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollPricePairEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.TollGantryDto
 import au.com.threesixty.cabdispatch.data.remote.TollPointDto
+import au.com.threesixty.cabdispatch.data.remote.TollPriceBandDto
+import au.com.threesixty.cabdispatch.data.remote.TollPricePairDto
 import au.com.threesixty.cabdispatch.data.remote.TollRoadDto
 import au.com.threesixty.cabdispatch.data.remote.TollTimeOfDayRateDto
 import au.com.threesixty.cabdispatch.domain.fare.TimeOfDayRateRef
 import au.com.threesixty.cabdispatch.domain.fare.TollGantryRef
 import au.com.threesixty.cabdispatch.domain.fare.TollPointRef
+import au.com.threesixty.cabdispatch.domain.fare.TollPriceBandRef
+import au.com.threesixty.cabdispatch.domain.fare.TollPricePairRef
 import au.com.threesixty.cabdispatch.domain.fare.TollPriceRef
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.TollRoadRef
@@ -60,6 +65,7 @@ class TollRegistryCache(
                 road.id to road.toRef(pointsByRoad[road.id].orEmpty())
             },
             gantries = gantries.map { it.toRef() },
+            pricePairs = dao.getAllPricePairs().associate { it.id to it.toRef() },
         )
     }
 
@@ -83,7 +89,12 @@ class TollRegistryCache(
         val gantryEntities = roads.flatMap { road ->
             apiService.tollRoadDetail(road.id).gantries.map { it.toEntity(road.id, now) }
         }
-        dao.replaceAll(roadEntities, gantryEntities, pointEntities)
+        // Linkt entry->exit prices (2026-09-15): an old backend without the endpoint leaves the
+        // cache without pairs, which is the safe state (entry_exit roads flag, never guess).
+        val pairEntities = runCatching { apiService.tollPricePairs() }
+            .getOrDefault(emptyList())
+            .map { it.toEntity(now) }
+        dao.replaceAll(roadEntities, gantryEntities, pointEntities, pairEntities)
     }
 
     private fun TollRoadDto.toEntity(fetchedAt: Long): TollRoadEntity = TollRoadEntity(
@@ -111,6 +122,27 @@ class TollRegistryCache(
         latitude = latitude,
         longitude = longitude,
         fetchedAt = fetchedAt,
+        ramp = ramp,
+    )
+
+    private fun TollPricePairDto.toEntity(fetchedAt: Long): TollPricePairEntity = TollPricePairEntity(
+        id = id,
+        entryGantryId = entryGantryId,
+        exitGantryId = exitGantryId,
+        billingName = billingName,
+        classABandsJson = cabDispatchJson.encodeToString(classABands),
+        fetchedAt = fetchedAt,
+    )
+
+    private fun TollPricePairEntity.toRef(): TollPricePairRef = TollPricePairRef(
+        entryGantryId = entryGantryId,
+        exitGantryId = exitGantryId,
+        billingName = billingName,
+        classABands = runCatching { cabDispatchJson.decodeFromString<List<TollPriceBandDto>>(classABandsJson) }
+            .getOrDefault(emptyList())
+            .mapNotNull { band ->
+                band.price.toBigDecimalOrNull()?.let { TollPriceBandRef(band.day, band.interval, it) }
+            },
     )
 
     private fun TollPointDto.toEntity(fetchedAt: Long): TollPointEntity = TollPointEntity(
@@ -160,6 +192,7 @@ class TollRegistryCache(
         tollPointId = tollPointId,
         latitude = latitude,
         longitude = longitude,
+        ramp = ramp,
     )
 
     private fun String.toBigDecimalOrNull(): BigDecimal? = runCatching { BigDecimal(this) }.getOrNull()

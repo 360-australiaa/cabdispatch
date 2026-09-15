@@ -162,6 +162,39 @@ class TollRoadRead(BaseModel):
     # is a descriptive range, never what a trip is charged), and the meter's
     # own registry sync would cache a road it then cannot price.
     toll_points: list[TollPointRead] = []
+    # `pricing_model == "entry_exit"` roads only: how many Linkt entry->exit pairs start on this
+    # road and the cheapest / dearest Class A figure among them (the dashboard's headline; a trip
+    # is charged its own pair, never this range). All None/0 on every other road.
+    entry_exit_pair_count: int = 0
+    entry_exit_min_class_a: Decimal | None = None
+    entry_exit_max_class_a: Decimal | None = None
+
+
+class TollPriceBandRead(BaseModel):
+    """One Linkt time band of a `TollPricePair`: `day` is "all" / "weekdays" / "weekend",
+    `interval` is "HHMM-HHMM" (may wrap midnight), `price` is the Tag base toll in AUD."""
+
+    day: str
+    interval: str
+    price: Decimal
+
+
+class TollPricePairRead(BaseModel):
+    """Linkt's price for one entry point -> exit point trip -- see `app.models.toll.TollPricePair`.
+    `entry_gantry_id` / `exit_gantry_id` are `TollGantryRead.id`s with `ramp` "entry" / "exit"."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    entry_gantry_id: str
+    exit_gantry_id: str
+    billing_asset_id: str
+    billing_name: str
+    class_a_bands: list[TollPriceBandRead]
+    class_b_bands: list[TollPriceBandRead]
+    effective_date: date
+    source_url: str | None = None
+    retrieved_at: date | None = None
 
 
 class TollRoadDetailRead(TollRoadRead):

@@ -14,6 +14,7 @@ import au.com.threesixty.cabdispatch.data.local.MIGRATION_13_14
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_14_15
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_15_16
 import au.com.threesixty.cabdispatch.data.local.MIGRATION_16_17
+import au.com.threesixty.cabdispatch.data.local.MIGRATION_17_18
 import au.com.threesixty.cabdispatch.data.remote.ApiService
 import au.com.threesixty.cabdispatch.data.remote.MapboxDirections
 import au.com.threesixty.cabdispatch.data.remote.MapboxGeocoding
@@ -324,6 +325,7 @@ object AppContainer {
                 MIGRATION_14_15,
                 MIGRATION_15_16,
                 MIGRATION_16_17,
+                MIGRATION_17_18,
             )
             .build()
 

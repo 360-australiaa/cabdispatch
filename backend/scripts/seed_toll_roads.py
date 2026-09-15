@@ -145,7 +145,7 @@ from decimal import Decimal
 from itertools import combinations
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import ProgrammingError
 
 import app.models  # noqa: F401 -- populate Base.metadata before any query runs
@@ -154,6 +154,7 @@ from app.models.toll import (
     TollGantry,
     TollPoint,
     TollPointPriceRevision,
+    TollPricePair,
     TollRoad,
     TollRoadPriceRevision,
 )
@@ -161,6 +162,11 @@ from app.services.tolls import haversine_m
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "app" / "data"
 _ROADS_JSON = _DATA_DIR / "nsw_toll_roads.json"
+# Linkt's own entry-point -> exit-point prices (2026-09-15, owner: "copy all pricing from Linkt,
+# Linkt pricing is accurate") -- written by `scripts/fetch_linkt_prices.py`, applied LAST by
+# `_apply_linkt_pricing` below so every road it covers ends up `pricing_model = "entry_exit"`
+# no matter what nsw_toll_roads.json says about it.
+_LINKT_JSON = _DATA_DIR / "linkt_nsw_pricing.json"
 _GANTRIES_CSV = _DATA_DIR / "nsw_toll_gantries.csv"
 
 # Maps the gantry CSV's own `motorway_code` column to the matching
@@ -566,15 +572,84 @@ async def _seed_gantries(session, roads_by_id: dict[str, TollRoad]) -> None:
         print(f"  NOTE: toll_point {point_id!r} has 0 gantries in this dataset -- priced but not GPS-auto-detectable yet")
 
 
+async def _apply_linkt_pricing(session, roads_by_id: dict[str, TollRoad]) -> None:
+    """Overlay `linkt_nsw_pricing.json`: Linkt's entry/exit points become `TollGantry` rows
+    (`source_sheet = "linkt"`, `ramp` = entry/exit), every direct pair a `TollPricePair`, and each
+    covered road is switched to `pricing_model = "entry_exit"` / `charging_policy =
+    "entry_exit_pair"`. The road's formula revision rows are left in place as reference (the
+    dashboard still shows them under "previous model"); they are simply no longer what a trip
+    pays. Idempotent: points upsert by id, pairs are replaced wholesale."""
+    if not _LINKT_JSON.exists():
+        print(f"  NOTE: {_LINKT_JSON.name} missing -- Linkt entry/exit pricing not applied")
+        return
+    with _LINKT_JSON.open(encoding="utf-8") as f:
+        linkt = json.load(f)
+    fetched = date.fromisoformat(linkt["fetched_at"][:10])
+    covered = {a["road_id"] for a in linkt["assets"]}
+    for road_id in sorted(covered):
+        road = roads_by_id.get(road_id)
+        if road is None:
+            raise ValueError(f"linkt asset maps to unknown toll_road {road_id!r}")
+        road.pricing_model = "entry_exit"
+        road.charging_policy = "entry_exit_pair"
+        road.source_note = (
+            f"Priced at Linkt's own entry-point -> exit-point figures (Sydney toll calculator, "
+            f"fetched {linkt['fetched_at'][:10]}); see toll_price_pairs. Formula revisions kept as reference only."
+        )
+    await session.commit()
+    n_points = 0
+    for pt in linkt["points"]:
+        result = await session.execute(select(TollGantry).where(TollGantry.id == pt["id"]))
+        gantry = result.scalar_one_or_none()
+        fields = {
+            "toll_road_id": pt["road_id"],
+            "toll_point_id": None,
+            "location": pt["name"],
+            "ramp": pt["role"],
+            "direction": None,
+            "latitude": float(pt["latitude"]),
+            "longitude": float(pt["longitude"]),
+            "source_sheet": "linkt",
+        }
+        if gantry is None:
+            session.add(TollGantry(id=pt["id"], **fields))
+        else:
+            for key, value in fields.items():
+                setattr(gantry, key, value)
+        n_points += 1
+    await session.commit()
+    await session.execute(delete(TollPricePair))
+    await session.commit()
+    for pair in linkt["pairs"]:
+        session.add(
+            TollPricePair(
+                id=f"{pair['entry']}->{pair['exit']}",
+                entry_gantry_id=pair["entry"],
+                exit_gantry_id=pair["exit"],
+                billing_asset_id=pair["billing_asset_id"],
+                billing_name=pair["billing_name"],
+                class_a_bands=pair["class_a"],
+                class_b_bands=pair["class_b"],
+                effective_date=fetched,
+                source_url=linkt.get("source_url"),
+                retrieved_at=fetched,
+            )
+        )
+    await session.commit()
+    print(
+        f"  Linkt entry/exit pricing: {len(covered)} roads switched to entry_exit, "
+        f"{n_points} entry/exit points, {len(linkt['pairs'])} price pairs (fetched {linkt['fetched_at'][:10]})"
+    )
+
+
 async def seed_toll_roads() -> None:
     with _ROADS_JSON.open(encoding="utf-8") as f:
         roads_data = json.load(f)
-
     async with AsyncSessionLocal() as session:
         await _retire_superseded_roads(session)
         roads_by_id = await _seed_roads_and_revisions(session, roads_data)
         await _seed_gantries(session, roads_by_id)
-
+        await _apply_linkt_pricing(session, roads_by_id)
     print(f"Done: {len(roads_by_id)} toll roads seeded.")
 
 

@@ -7,8 +7,12 @@ import androidx.room.Query
 import androidx.room.Transaction
 import au.com.threesixty.cabdispatch.data.local.entity.TollGantryEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollPointEntity
+import au.com.threesixty.cabdispatch.data.local.entity.TollPricePairEntity
 import au.com.threesixty.cabdispatch.data.local.entity.TollRoadEntity
 
+// TooManyFunctions: three CRUD verbs for each of the four cached registry tables (roads, points,
+// gantries, Linkt price pairs) plus the one transaction that replaces them together.
+@Suppress("TooManyFunctions")
 @Dao
 interface TollRegistryDao {
 
@@ -20,6 +24,15 @@ interface TollRegistryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPoints(points: List<TollPointEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPricePairs(pairs: List<TollPricePairEntity>)
+
+    @Query("DELETE FROM toll_price_pairs")
+    suspend fun clearPricePairs()
+
+    @Query("SELECT * FROM toll_price_pairs")
+    suspend fun getAllPricePairs(): List<TollPricePairEntity>
 
     @Query("DELETE FROM toll_roads")
     suspend fun clearRoads()
@@ -56,12 +69,15 @@ interface TollRegistryDao {
         roads: List<TollRoadEntity>,
         gantries: List<TollGantryEntity>,
         points: List<TollPointEntity>,
+        pricePairs: List<TollPricePairEntity> = emptyList(),
     ) {
+        clearPricePairs()
         clearGantries()
         clearPoints()
         clearRoads()
         upsertRoads(roads)
         upsertPoints(points)
         upsertGantries(gantries)
+        upsertPricePairs(pricePairs)
     }
 }

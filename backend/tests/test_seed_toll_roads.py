@@ -32,6 +32,8 @@ files disagree -- exactly what should happen.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import func, select
 
@@ -39,11 +41,13 @@ from app.models.toll import (
     TollGantry,
     TollPoint,
     TollPointPriceRevision,
+    TollPricePair,
     TollRoad,
     TollRoadPriceRevision,
 )
 from app.services.tolls import current_price_revision
 from scripts.seed_toll_roads import (
+    _DATA_DIR,
     _MOTORWAY_CODE_TO_ROAD_ID,
     _ORPHAN_ROADS_WITH_NO_GANTRY_DATA,
     seed_toll_roads,
@@ -68,6 +72,39 @@ _REAL_ROAD_IDS = {
 _RETIRED_ROAD_IDS = ("MILITARY_E_RAMP", "M4M5_ROZELLE")
 
 
+def _linkt_data() -> dict:
+    return json.loads((_DATA_DIR / "linkt_nsw_pricing.json").read_text(encoding="utf-8"))
+
+
+_LINKT_POINT_COUNT = len(_linkt_data()["points"])
+
+
+async def test_seed_toll_roads_applies_linkt_entry_exit_pricing(session):
+    """2026-09-15, owner: "copy all pricing from Linkt". Every Linkt-covered road is `entry_exit`,
+    its entry/exit points are gantries with ramp entry/exit, and the pairs carry Linkt's own
+    prices -- Anzac Bridge -> Homebush Bay Drive $8.80 as one WestConnex trip."""
+    await seed_toll_roads()
+    linkt = _linkt_data()
+    for asset in linkt["assets"]:
+        road = await session.get(TollRoad, asset["road_id"])
+        assert road is not None and road.pricing_model == "entry_exit", asset
+        assert road.charging_policy == "entry_exit_pair"
+    n_pairs = (await session.execute(select(func.count()).select_from(TollPricePair))).scalar_one()
+    assert n_pairs == len(linkt["pairs"]) > 300
+    anzac = await session.get(TollGantry, "LINKT:140-m4m5/rozelle-anzac:entry")
+    assert anzac is not None and anzac.ramp == "entry" and anzac.toll_road_id == "ROZELLE_INTERCHANGE"
+    homebush = await session.get(TollGantry, "LINKT:140-m4/m4-homebush-bay-dr:exit")
+    assert homebush is not None and homebush.ramp == "exit" and homebush.toll_road_id == "M4"
+    pair = await session.get(TollPricePair, "LINKT:140-m4m5/rozelle-anzac:entry->LINKT:140-m4/m4-homebush-bay-dr:exit")
+    assert pair is not None and pair.billing_name == "WestConnex"
+    assert pair.class_a_bands == [{"day": "all", "interval": "0000-2400", "price": 8.8}]
+    haberfield = await session.get(TollPricePair, "LINKT:140-m4/m4-wattle-st:entry->LINKT:140-m4/m4-homebush-bay-dr:exit")
+    assert haberfield.class_a_bands[0]["price"] == 5.85
+    # Re-seeding replaces the pairs wholesale, never duplicates them.
+    await seed_toll_roads()
+    assert (await session.execute(select(func.count()).select_from(TollPricePair))).scalar_one() == n_pairs
+
+
 async def test_seed_toll_roads_loads_all_roads_and_gantries(session):
     await seed_toll_roads()
 
@@ -80,11 +117,19 @@ async def test_seed_toll_roads_loads_all_roads_and_gantries(session):
         )
     ).scalar_one()
     assert n_roads == 15  # every real road in nsw_toll_roads.json, none of them a stub anymore
-    assert n_gantries == 141
+    n_tfnsw_gantries = (
+        await session.execute(
+            select(func.count())
+            .select_from(TollGantry)
+            .where(TollGantry.toll_road_id.in_(_REAL_ROAD_IDS), TollGantry.source_sheet != "linkt")
+        )
+    ).scalar_one()
+    assert n_tfnsw_gantries == 141
+    assert n_gantries == 141 + _LINKT_POINT_COUNT
     assert set(_MOTORWAY_CODE_TO_ROAD_ID.values()) <= _REAL_ROAD_IDS
 
     m7 = await session.get(TollRoad, "M7")
-    assert m7.pricing_model == "distance"
+    assert m7.pricing_model == "entry_exit"  # Linkt pricing overlay, 2026-09-15
     assert m7.derived_corridor_km is not None and m7.derived_corridor_km > 0
 
     # M12: permanently toll-free by government policy, not merely unpriced
@@ -115,7 +160,7 @@ async def test_seed_toll_roads_loads_all_roads_and_gantries(session):
     # correctly has zero gantries of its own (they were never really its
     # gantries to begin with).
     rozelle = await session.get(TollRoad, "ROZELLE_INTERCHANGE")
-    assert rozelle.pricing_model == "unpriced"
+    assert rozelle.pricing_model == "entry_exit"  # priced by Linkt's Anzac Bridge / Iron Cove / City West Link pairs
 
     # Roads left with zero gantry data stay real rows -- priced-but-un-auto-
     # detectable for M5E, genuinely-unpriced for ROZELLE_INTERCHANGE (see
@@ -125,10 +170,12 @@ async def test_seed_toll_roads_loads_all_roads_and_gantries(session):
     for orphan_id in _ORPHAN_ROADS_WITH_NO_GANTRY_DATA:
         count = (
             await session.execute(
-                select(func.count()).select_from(TollGantry).where(TollGantry.toll_road_id == orphan_id)
+                select(func.count())
+                .select_from(TollGantry)
+                .where(TollGantry.toll_road_id == orphan_id, TollGantry.source_sheet != "linkt")
             )
         ).scalar_one()
-        assert count == 0
+        assert count == 0  # no TfNSW gantry data; their Linkt entry/exit points are what prices them now
         road = await session.get(TollRoad, orphan_id)
         assert road is not None
 
@@ -152,7 +199,7 @@ async def test_seed_toll_roads_is_idempotent(session):
     ).scalar_one()
 
     assert n_roads == 15
-    assert n_gantries == 141
+    assert n_gantries == 141 + _LINKT_POINT_COUNT
     assert n_revisions_m7 == 1  # re-running with the same effective_date never duplicates
 
 
@@ -175,8 +222,10 @@ async def test_seed_toll_roads_seeds_per_point_prices_and_charging_policy(sessio
     await seed_toll_roads()
 
     m2 = await session.get(TollRoad, "M2")
-    assert m2.pricing_model == "per_point"
-    assert m2.charging_policy == "cumulative_per_point"
+    # Since the 2026-09-15 Linkt overlay the M2 is priced by entry/exit pair; its named toll
+    # points and their prices stay seeded as reference and for the dashboard.
+    assert m2.pricing_model == "entry_exit"
+    assert m2.charging_policy == "entry_exit_pair"
 
     point_ids = set(
         (
@@ -205,8 +254,10 @@ async def test_seed_toll_roads_seeds_per_point_prices_and_charging_policy(sessio
     # ramp a vehicle uses one of. See app.models.toll's docstring: this is a
     # flagged interpretation call, and the test pins the chosen reading.
     lct = await session.get(TollRoad, "LCT")
-    assert lct.pricing_model == "per_point"
-    assert lct.charging_policy == "once_per_road"
+    # Since the 2026-09-15 Linkt overlay the LCT, like every Linkt road, is priced by entry/exit
+    # pair; its two named points and their prices stay seeded as reference.
+    assert lct.pricing_model == "entry_exit"
+    assert lct.charging_policy == "entry_exit_pair"
 
 
 async def test_seed_toll_roads_prices_westconnex_with_a_shared_network_cap(session):
@@ -278,7 +329,9 @@ async def test_seed_toll_roads_gives_m5sw_real_chain_sequence_and_cumulative_dis
     await seed_toll_roads()
 
     gantries = (
-        await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))
+        await session.execute(
+            select(TollGantry).where(TollGantry.toll_road_id == "M5SW", TollGantry.source_sheet != "linkt")
+        )
     ).scalars().all()
     assert len(gantries) == 10
 
@@ -309,13 +362,21 @@ async def test_seed_toll_roads_real_chain_backfill_is_idempotent(session):
     await seed_toll_roads()
     first_pass = {
         g.id: (g.sequence_position, g.cumulative_distance_km)
-        for g in (await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))).scalars().all()
+        for g in (
+            await session.execute(
+                select(TollGantry).where(TollGantry.toll_road_id == "M5SW", TollGantry.source_sheet != "linkt")
+            )
+        ).scalars().all()
     }
 
     await seed_toll_roads()
     second_pass = {
         g.id: (g.sequence_position, g.cumulative_distance_km)
-        for g in (await session.execute(select(TollGantry).where(TollGantry.toll_road_id == "M5SW"))).scalars().all()
+        for g in (
+            await session.execute(
+                select(TollGantry).where(TollGantry.toll_road_id == "M5SW", TollGantry.source_sheet != "linkt")
+            )
+        ).scalars().all()
     }
 
     assert first_pass == second_pass

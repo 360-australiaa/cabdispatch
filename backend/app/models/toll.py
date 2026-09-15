@@ -186,6 +186,10 @@ TOLL_PRICING_MODELS = {
     "time_of_day",
     "unpriced",
     "toll_free",
+    # 2026-09-15, owner decision "copy all pricing from Linkt": the road's price is Linkt's own
+    # entry-point -> exit-point figure (`TollPricePair`), never a formula. See
+    # `scripts/fetch_linkt_prices.py` for the source and why.
+    "entry_exit",
 }
 
 # Real `directional` values from the source dataset.
@@ -206,6 +210,9 @@ TOLL_CHARGING_POLICIES = {
     "once_per_road",
     "cumulative_per_point",
     "distance_metered",
+    # `entry_exit` roads: a section opens at a Linkt entry point and is priced by the LAST Linkt
+    # exit point passed on that section (`TollPricePair`); one trip may drive several sections.
+    "entry_exit_pair",
 }
 
 
@@ -474,3 +481,42 @@ class TollGantry(Base, TimestampMixin):
 
     road: Mapped[TollRoad] = relationship(back_populates="gantries")
     toll_point: Mapped[TollPoint | None] = relationship(back_populates="gantries")
+
+
+class TollPricePair(Base, TimestampMixin):
+    """Linkt's own price for one ENTRY point -> EXIT point trip (2026-09-15, "copy all pricing
+    from Linkt"). Both ends are `TollGantry` rows with `source_sheet = "linkt"` and `ramp` =
+    "entry" / "exit"; every pair sits within ONE billing asset (WestConnex's M4 / Rozelle
+    Interchange / M8 / M5 East sub-roads bill together as asset "140", so Anzac Bridge -> Homebush
+    Bay Drive is a single pair at $8.80 -- one flagfall, one per-km run -- exactly as Linkt bills
+    it and unlike the per-road formulas this registry used before).
+
+    `class_a_bands` / `class_b_bands`: `[{"day": "all"|"weekdays"|"weekend", "interval":
+    "HHMM-HHMM", "price": 8.8}, ...]` -- Linkt's Tag base price per time band (one "all /
+    0000-2400" band for every road except the Harbour crossings' six). `interval` may wrap
+    midnight ("1900-0630"). Evaluated in NSW local time at the moment the exit is passed, see
+    `app.services.tolls.select_pair_band_price`.
+
+    Rebuilt wholesale by `scripts/seed_toll_roads.py` from `app/data/linkt_nsw_pricing.json`
+    (itself written by `scripts/fetch_linkt_prices.py`).
+    """
+
+    __tablename__ = "toll_price_pairs"
+
+    # "<entry gantry id>-><exit gantry id>"
+    id: Mapped[str] = mapped_column(String(300), primary_key=True)
+    entry_gantry_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("toll_gantries.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    exit_gantry_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("toll_gantries.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Linkt's billing asset ("140" = WestConnex, "112" = Hills M2, ...) and its display name, so a
+    # receipt can say "WestConnex" for a Rozelle Interchange -> M4 pair.
+    billing_asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    billing_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    class_a_bands: Mapped[list] = mapped_column(JSON, nullable=False)
+    class_b_bands: Mapped[list] = mapped_column(JSON, nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    retrieved_at: Mapped[date | None] = mapped_column(Date, nullable=True)

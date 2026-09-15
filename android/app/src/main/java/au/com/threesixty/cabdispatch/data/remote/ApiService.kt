@@ -273,6 +273,12 @@ interface ApiService {
     @GET("/v1/toll-roads")
     suspend fun tollRoads(): List<TollRoadDto>
 
+    /** `GET /v1/toll-roads/price-pairs` -- every Linkt entry point -> exit point price, the whole
+     * Sydney table (~1,000 small rows), cached beside the gantries so an `entry_exit` road is priced
+     * offline. See [TollPricePairDto]. */
+    @GET("/v1/toll-roads/price-pairs")
+    suspend fun tollPricePairs(): List<TollPricePairDto>
+
     /** `GET /v1/toll-roads/{road_id}` — adds this one road's real gantry coordinates
      * ([TollRoadDetailDto.gantries]) on top of everything [tollRoads] already returns. */
     @GET("/v1/toll-roads/{roadId}")
