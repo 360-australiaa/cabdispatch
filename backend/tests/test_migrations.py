@@ -127,3 +127,28 @@ def test_migrated_schema_matches_the_orm_models(migrated_sqlite_url):
         + "\n\nRun `alembic revision --autogenerate` to see the migration that would "
         "close this, then write it deliberately."
     )
+
+
+def test_running_an_upgrade_never_disables_the_application_loggers():
+    """2026-09-16 field report: `tests/test_request_logging.py`'s two caplog assertions failed
+    with "no app.request record" only in full-suite order, never alone. Root cause was here, not
+    in the request-logging code: `alembic/env.py`'s own `fileConfig()` call (run in-process by
+    every `command.upgrade`/`command.downgrade`) defaulted to `disable_existing_loggers=True` --
+    Python's `logging.config.fileConfig`'s own stock default -- which silently and PERMANENTLY
+    sets `.disabled = True` on every logger not named in `alembic.ini`'s own `[loggers]` section
+    (`root`/`sqlalchemy`/`alembic` only), the moment any test that already created "app.request"
+    (or any other `app.*` logger) as a real object runs an upgrade afterward. Fixed with an
+    explicit `disable_existing_loggers=False` in `env.py`; this pins it directly (a probe logger,
+    created BEFORE the upgrade runs, same as the real "app.request" was by the time
+    `tests/test_migrations.py`'s own tests happened to run) so a future revert of that one keyword
+    argument fails loudly here, not as an unrelated-looking flake three files away.
+    """
+    import logging
+
+    probe = logging.getLogger("app.test_migrations_probe")
+    probe.disabled = False
+    command.upgrade(alembic_config(), "head")  # against the shared session database; already at head
+    assert probe.disabled is False, (
+        "an alembic upgrade run in-process must never disable a pre-existing application logger "
+        "-- see this test's own doc for the exact mechanism and the real symptom it caused"
+    )

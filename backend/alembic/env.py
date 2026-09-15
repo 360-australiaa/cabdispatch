@@ -22,8 +22,22 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
+#
+# disable_existing_loggers=False (2026-09-16 fix; stock Alembic template default is True):
+# fileConfig()'s own default silently sets `.disabled = True` on every PRE-EXISTING logger not
+# named in alembic.ini's own `[loggers]` section (`root`, `sqlalchemy`, `alembic` only) --
+# permanently, for the life of the process, with nothing to ever re-enable them. Harmless for a
+# real `alembic upgrade head` CLI invocation (a fresh process, nothing else logging yet), but
+# `command.upgrade()` runs this same `env.py` in-process from the test suite's own migration
+# tests (`tests/test_migrations.py`) and from `app.services.trips`' own runtime migration guard --
+# any test that runs AFTER something has already created "app.request"/"app.core.errors"/etc. as
+# real logger objects (i.e., after the app's own middleware/routes have been imported) silently
+# and permanently disabled them for the rest of the session. Real bug found live, 2026-09-16:
+# tests/test_request_logging.py's two caplog assertions failed with "no app.request record" only
+# in full-suite order, never in isolation -- `Logger.disabled=True` bypasses `caplog.at_level`'s own
+# level-setting entirely, a different mechanism from the level/propagation caplog actually controls.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
