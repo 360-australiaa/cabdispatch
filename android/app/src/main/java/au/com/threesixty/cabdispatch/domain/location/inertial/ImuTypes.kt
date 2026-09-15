@@ -35,6 +35,23 @@ interface InertialBillingSource {
      * distance. Empty when no blackout is in progress or the implementation keeps no path.
      */
     val blackoutPath: List<Pair<Double, Double>> get() = emptyList()
+
+    /** True when [blackoutPath] is the real road geometry of a locked tunnel corridor rather than
+     * free-run dead reckoning -- the engine then walks it as-is instead of closure-correcting it
+     * to the exit fix (2026-09-15 tunnel lock, see
+     * [au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelCorridor]). */
+    val blackoutPathIsRoadLocked: Boolean get() = false
+
+    /** The locked corridor's toll-registry road id, when a tunnel lock is in force. */
+    val lockedRoadId: String? get() = null
+
+    /** The locked corridor's display name ("Lane Cove Tunnel (Westbound)"), when locked. */
+    val lockedCorridorName: String? get() = null
+
+    /** Road distance along the locked corridor from the blackout entry to the reacquisition fix,
+     * km -- the billing reference that replaces the chord (null when not locked or the fix is
+     * not on the corridor). */
+    fun roadLockedPathKm(exitLat: Double, exitLng: Double): Double? = null
 }
 
 /**

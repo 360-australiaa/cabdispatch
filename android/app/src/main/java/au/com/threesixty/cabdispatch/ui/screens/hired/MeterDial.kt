@@ -206,6 +206,7 @@ private fun gpsLostPillText(blackout: ActiveBlackout, nowMillis: Long): String {
     // tablet's own motion sensors whenever an estimate exists -- "no charge yet" would then be a
     // lie to the passenger. Say what is actually happening.
     val suffix = when {
+        blackout.lockedCorridorName != null -> blackout.lockedCorridorName.substringBefore(" (")
         blackout.estimatedSpeedKmh != null -> "sensor speed"
         blackout.entryWasMoving -> "no charge yet"
         else -> "waiting only"

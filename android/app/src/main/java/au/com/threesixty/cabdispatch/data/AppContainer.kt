@@ -782,12 +782,19 @@ object AppContainer {
         au.com.threesixty.cabdispatch.domain.location.inertial.VehicleFrameCalibrator(appContext)
     }
 
+    /** Loaded once, in the background, the first time the inertial source is built; null until
+     * then, which the source treats as "no corridor known" (plain dead reckoning). */
+    @Volatile private var tunnelRegistry: au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelRegistry? = null
+
     val inertialSpeedSource: au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource by lazy {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        scope.launch { tunnelRegistry = TunnelRegistryLoader(appContext).load() }
         au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource(
             imuSampler = imuSampler,
             calibrator = vehicleFrameCalibrator,
             real = speedSource,
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            scope = scope,
+            tunnelRegistry = { tunnelRegistry },
         )
     }
 

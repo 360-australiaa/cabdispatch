@@ -76,4 +76,16 @@ object GeoMath {
         val normalisedLng = (Math.toDegrees(lambda2) + HALF_TURNS_DEG).mod(FULL_TURN_DEG) - HALF_TURN_DEG
         return Math.toDegrees(phi2) to normalisedLng
     }
+
+    /** Initial bearing from (lat1,lng1) to (lat2,lng2), degrees true in [0, 360). */
+    fun bearingDeg(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val p1 = Math.toRadians(lat1)
+        val p2 = Math.toRadians(lat2)
+        val dl = Math.toRadians(lng2 - lng1)
+        val y = kotlin.math.sin(dl) * kotlin.math.cos(p2)
+        val x = kotlin.math.cos(p1) * kotlin.math.sin(p2) -
+            kotlin.math.sin(p1) * kotlin.math.cos(p2) * kotlin.math.cos(dl)
+        return (Math.toDegrees(kotlin.math.atan2(y, x)) + FULL_TURN_DEG) % FULL_TURN_DEG
+    }
+
 }

@@ -384,6 +384,9 @@ data class ActiveBlackout(
     val entryWasMoving: Boolean,
     val estimatedSpeedKmh: Double? = null,
     val confidence: String? = null,
+    /** The tunnel corridor the position is locked to, when GPS dropped at a known portal
+     * (2026-09-15) -- e.g. "Lane Cove Tunnel (Westbound)"; null for a free-run blackout. */
+    val lockedCorridorName: String? = null,
 )
 
 /**

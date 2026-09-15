@@ -1397,6 +1397,7 @@ class FareEngineImpl(
                         // usable (see [inertialUsable]'s own doc for every reason that can happen).
                         estimatedSpeedKmh = if (inertialUsable) inertialEstimate.speedKmh else null,
                         confidence = if (inertialUsable) inertialEstimate.confidence.name else null,
+                        lockedCorridorName = inertialSpeedSource?.lockedCorridorName,
                     )
                 }
             }
@@ -1580,7 +1581,11 @@ class FareEngineImpl(
         if (inertial.invalidatedMidway) return common
 
         val chordKm = BigDecimal.valueOf(GeoMath.distanceKm(entryFix.lat, entryFix.lng, exitFix.lat, exitFix.lng))
-        val roadPathKm = lookupRoadPathKm(entryFix, exitFix)
+        // A tunnel lock (2026-09-15) knows the road distance from the portal to the reacquisition
+        // fix exactly; it outranks the registry's gantry-chain lookup, which itself outranks the
+        // chord bound.
+        val lockedKm = inertialSpeedSource?.roadLockedPathKm(exitFix.lat, exitFix.lng)
+        val roadPathKm = lockedKm?.let { BigDecimal.valueOf(it) } ?: lookupRoadPathKm(entryFix, exitFix)
         val reconciliation = BlackoutReconciler.reconcile(
             estimatedKm = inertial.billedKm,
             chordKm = chordKm,
@@ -1593,7 +1598,10 @@ class FareEngineImpl(
         return common.copy(
             resolution = BlackoutResolution.INERTIAL.name,
             billedDistanceKm = reconciliation.billedKm,
-            corridorRoadId = if (onRoadPath) nearestGantryRoadId(entryFix, exitFix) else null,
+            corridorRoadId = when {
+                !onRoadPath -> null
+                else -> inertialSpeedSource?.lockedRoadId ?: nearestGantryRoadId(entryFix, exitFix)
+            },
             referenceDistanceKm = reconciliation.referenceKm,
             correctionKm = reconciliation.correctionKm,
             referenceSource = reconciliation.referenceSource.name,
@@ -1721,8 +1729,12 @@ class FareEngineImpl(
      * M4). `null` with fewer than two vertices -- nothing to walk.
      */
     private fun deadReckonedPath(resolved: ResolvedBlackout): List<Pair<Double, Double>>? {
-        val raw = inertialSpeedSource?.blackoutPath ?: return null
+        val source = inertialSpeedSource ?: return null
+        val raw = source.blackoutPath
         if (raw.size < 2) return null
+        // A road-locked path IS the tunnel's geometry: walk it as-is (plus the exit fix), never
+        // stretch it towards the exit -- that would pull it off the road the gantries sit on.
+        if (source.blackoutPathIsRoadLocked) return raw + (resolved.exitLat to resolved.exitLng)
         val legs = DoubleArray(raw.size)
         for (i in 1 until raw.size) {
             legs[i] = legs[i - 1] + GeoMath.distanceKm(raw[i - 1].first, raw[i - 1].second, raw[i].first, raw[i].second)

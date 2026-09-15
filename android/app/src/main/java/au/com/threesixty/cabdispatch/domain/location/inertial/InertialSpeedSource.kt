@@ -3,6 +3,8 @@ package au.com.threesixty.cabdispatch.domain.location.inertial
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.SpeedSource
 import au.com.threesixty.cabdispatch.domain.location.GeoMath
+import au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelLock
+import au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,7 +49,20 @@ class InertialSpeedSource(
     private val real: SpeedSource,
     scope: CoroutineScope,
     private val estimator: InertialSpeedEstimator = InertialSpeedEstimator(),
+    /** The bundled tunnel corridors, or null while still loading / on a build without the
+     * asset -- see [au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelRegistry]. */
+    private val tunnelRegistry: () -> TunnelRegistry? = { null },
 ) : SpeedSource, InertialBillingSource {
+
+    /** The corridor this blackout is locked to, if GPS dropped at a known tunnel portal. */
+    @Volatile private var tunnelLock: TunnelLock? = null
+
+    override val blackoutPathIsRoadLocked: Boolean get() = tunnelLock != null
+    override val lockedRoadId: String? get() = tunnelLock?.corridor?.roadId
+    override val lockedCorridorName: String? get() = tunnelLock?.corridor?.name
+
+    override fun roadLockedPathKm(exitLat: Double, exitLng: Double): Double? =
+        tunnelLock?.roadKmTo(exitLat, exitLng)
 
     private val _speedKmh = MutableStateFlow(0.0)
     private val _fix = MutableStateFlow<LocationFix?>(null)
@@ -128,6 +143,9 @@ class InertialSpeedSource(
         blackoutActive = true
         entryFix = entryLocationFix
         traveledAlongHeadingKm = 0.0
+        // Owner instruction (2026-09-15): at a known tunnel portal, lock to the tunnel and follow
+        // its road, never a straight line off into the suburbs.
+        tunnelLock = entryLocationFix?.let { fix -> tunnelRegistry()?.match(fix.lat, fix.lng, entryHeadingDeg) }
         synchronized(pathPoints) {
             pathPoints.clear()
             entryLocationFix?.let { pathPoints += it.lat to it.lng }
@@ -141,6 +159,7 @@ class InertialSpeedSource(
     override fun onBlackoutExited() {
         blackoutActive = false
         entryFix = null
+        tunnelLock = null
         estimator.seed(real.speedKmh.value, real.locationFix.value?.heading)
     }
 
@@ -189,11 +208,26 @@ class InertialSpeedSource(
             val dtHours = (dtSeconds / SECONDS_PER_HOUR).coerceIn(0.0, MAX_DISPLAY_STEP_HOURS)
             traveledAlongHeadingKm += est.speedKmh * dtHours
         }
-        val heading = est.headingDegOrNull
-        val (lat, lng) = if (heading != null) {
-            GeoMath.destination(entry.lat, entry.lng, heading, traveledAlongHeadingKm)
+        val lock = tunnelLock
+        val heading: Double?
+        val lat: Double
+        val lng: Double
+        if (lock != null) {
+            // Locked to the tunnel: the integrated distance is walked along the corridor's own
+            // geometry, and the heading reported is the road's, not the gyro's.
+            val onRoad = lock.positionAt(traveledAlongHeadingKm)
+            lat = onRoad.first
+            lng = onRoad.second
+            heading = lock.headingAt(traveledAlongHeadingKm)
         } else {
-            entry.lat to entry.lng
+            heading = est.headingDegOrNull
+            val free = if (heading != null) {
+                GeoMath.destination(entry.lat, entry.lng, heading, traveledAlongHeadingKm)
+            } else {
+                entry.lat to entry.lng
+            }
+            lat = free.first
+            lng = free.second
         }
         synchronized(pathPoints) {
             val last = pathPoints.lastOrNull()
