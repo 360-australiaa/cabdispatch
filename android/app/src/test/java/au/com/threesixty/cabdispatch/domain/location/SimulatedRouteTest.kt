@@ -260,4 +260,27 @@ class SimulatedRouteTest {
         assertTrue(r.speedKmh < 10.0)
         assertTrue(haversineM(r.positionAt(0.0).point, r.positionAt(30.0).point) > 0.0)
     }
+
+
+    @Test
+    fun `a real-portal tunnel route drops GPS just inside the portal and follows every corridor vertex`() {
+        val corridor = au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelCorridor(
+            id = "t",
+            name = "Test Tunnel (Westbound)",
+            roadId = "LCT",
+            points = (0..40).map { i -> -33.80 to (151.20 - i * 0.001) }, // ~3.7 km straight west
+        )
+        val route = SimulatedRoutes.tunnelCorridorBlackout(corridor, speedKmh = 80.0)
+        assertNotNull(route)
+        route!!
+        assertEquals(43, route.waypoints.size) // lead-in + 41 vertices + run-out
+        val window = route.blackoutWindows.single()
+        // 400 m lead-in at 80 km/h is 18 s, plus the 6 s margin: GPS drops ~24 s in, not at t=0.
+        assertTrue("blackout starts at ${window.start}s", window.start in 20.0..30.0)
+        // ...and the vehicle is inside the corridor when it does.
+        val atStart = route.positionAt(window.start)
+        assertTrue(atStart.point.lng < 151.20 && atStart.point.lng > 151.19)
+        // GPS is back before the last vertex.
+        assertTrue(route.positionAt(window.endInclusive).point.lng > 151.16)
+    }
 }

@@ -76,7 +76,17 @@ fun GpsSimulatorPanel(modifier: Modifier = Modifier) {
         // registry the toll routes above do (real LCT gantries), so it is built here alongside
         // them and is simply absent -- not faked -- on a tablet that has never synced. carPark
         // needs no registry at all.
-        val blackoutRoutes = listOfNotNull(
+        // Real-portal tunnel drives (2026-09-15 tunnel lock): the two corridors the field tests
+        // used -- Lane Cove westbound (the bench route) and the M4 East westbound T5453 drove.
+        // Each drives the whole chain the entry bore leads into: from the Anzac Bridge the Rozelle
+        // Interchange westbound bore runs on into the M4 East (the owner's test case, 2026-09-15).
+        val tunnelRegistry = AppContainer.tunnelRegistryOrNull
+        val corridorRoutes = tunnelRegistry?.corridors
+            ?.filter { it.name in REAL_PORTAL_ROUTE_CORRIDORS }
+            ?.sortedBy { REAL_PORTAL_ROUTE_CORRIDORS.indexOf(it.name) }
+            ?.mapNotNull { SimulatedRoutes.tunnelCorridorBlackout(tunnelRegistry.chainFrom(it)) }
+            .orEmpty()
+        val blackoutRoutes = corridorRoutes + listOfNotNull(
             registry?.let { SimulatedRoutes.laneCoveTunnelBlackout(it) },
             SimulatedRoutes.carParkBlackout(),
         )
@@ -238,3 +248,10 @@ private fun SimulatorButton(text: String, danger: Boolean, onClick: () -> Unit) 
         )
     }
 }
+
+/** The real-portal tunnel drives offered by the simulator, in menu order. */
+private val REAL_PORTAL_ROUTE_CORRIDORS = listOf(
+    "Rozelle Interchange Tunnel (Westbound)", // Anzac Bridge -> Rozelle -> M4 East (chained)
+    "Lane Cove Tunnel (Westbound)",
+    "Westconnex M4 East Tunnel (Westbound)",
+)

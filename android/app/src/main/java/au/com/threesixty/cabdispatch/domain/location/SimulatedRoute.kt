@@ -313,6 +313,10 @@ object SimulatedRoutes {
 
     private const val LEAD_IN_M = 400.0
 
+    /** ~400 m of latitude, the run-out used when a corridor's last leg has no length. */
+    private const val RUN_OUT_FALLBACK_DEG = 0.0036
+    private const val TUNNEL_METRES_PER_KM = 1000.0
+
     /**
      * A plain city drive with no toll roads anywhere near it -- for exercising flagfall, the
      * distance rate and the tariff's time-of-day handling without a toll confusing the total.
@@ -533,6 +537,71 @@ object SimulatedRoutes {
                 "at $speedKmh km/h -- widen the margin down or drive it faster"
         }
 
+        return route.copy(blackoutWindows = listOf(blackoutStartS..blackoutEndS))
+    }
+
+    /**
+     * A GPS blackout that starts at a REAL tunnel portal and follows the tunnel's real geometry
+     * (2026-09-15, tunnel lock): the vehicle drives the lead-in, GPS drops [BLACKOUT_MARGIN_S]
+     * after the first corridor vertex, the route follows every vertex of [corridor], GPS returns
+     * [BLACKOUT_MARGIN_S] before the last one, then a short run-out. This is the drive that must
+     * show the pill naming the tunnel, the marker on the tunnel alignment, and the toll at exit.
+     * [laneCoveTunnelBlackout] above keeps its gantry-to-gantry shape (a blackout that starts
+     * 3 km before the portal), which is the "no known corridor" free-run case.
+     */
+    // ReturnCount: three "this corridor cannot host the drive" guards, guard-clause style like the
+    // rest of this object.
+    @Suppress("ReturnCount")
+    fun tunnelCorridorBlackout(
+        corridor: au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelCorridor,
+        speedKmh: Double = 80.0,
+    ): SimulatedRoute? {
+        val pts = corridor.points.map { LatLng(it.first, it.second) }
+        if (pts.size < 2) return null
+        val leadIn = leadInBefore(pts)
+        val a = pts[pts.size - 2]
+        val b = pts.last()
+        val lastLegM = haversineM(a, b)
+        val runOut = if (lastLegM <= 0.0) {
+            LatLng(b.lat + RUN_OUT_FALLBACK_DEG, b.lng)
+        } else {
+            interpolate(a, b, 1.0 + LEAD_IN_M / lastLegM)
+        }
+        val waypoints = listOf(leadIn) + pts + runOut
+        val mps = speedKmh / 3.6
+        val leadInM = haversineM(leadIn, pts.first())
+        val tunnelM = corridor.lengthKm * TUNNEL_METRES_PER_KM
+        val runOutM = haversineM(pts.last(), runOut)
+        val slowKmh = speedKmh * SLOW_FRACTION
+        val slowDownM = SpeedProfile.Segment(SPEED_CHANGE_S, speedKmh, slowKmh).distanceM
+        val slowM = SpeedProfile.Segment(SLOW_HOLD_S, slowKmh, slowKmh).distanceM
+        val speedUpM = SpeedProfile.Segment(SPEED_CHANGE_S, slowKmh, speedKmh).distanceM
+        val marginM = BLACKOUT_MARGIN_S * mps
+        val entryCruiseM = tunnelM * ENTRY_CRUISE_FRACTION
+        val exitCruiseM = tunnelM - entryCruiseM - slowDownM - slowM - speedUpM + runOutM
+        if (exitCruiseM <= marginM) return null // too short for the mid-tunnel speed change
+        val profile = SpeedProfile(
+            listOf(
+                SpeedProfile.Segment((leadInM + entryCruiseM) / mps, speedKmh, speedKmh),
+                SpeedProfile.Segment(SPEED_CHANGE_S, speedKmh, slowKmh),
+                SpeedProfile.Segment(SLOW_HOLD_S, slowKmh, slowKmh),
+                SpeedProfile.Segment(SPEED_CHANGE_S, slowKmh, speedKmh),
+                SpeedProfile.Segment(exitCruiseM / mps, speedKmh, speedKmh),
+            ),
+        )
+        val route = SimulatedRoute(
+            id = "blackout:corridor:${corridor.id}",
+            name = "GPS blackout — ${corridor.name}, real portal",
+            description = "Drives the real ${corridor.name} geometry (${corridor.lengthKm.toInt()} km): GPS " +
+                "drops at the portal and returns at the far end. The pill must name the tunnel, the marker " +
+                "must stay on the tunnel alignment, and the toll must be added at reacquisition.",
+            waypoints = waypoints,
+            speedKmh = speedKmh,
+            speedProfile = profile,
+        )
+        val blackoutStartS = profile.elapsedAtDistanceM(leadInM + marginM)
+        val blackoutEndS = profile.elapsedAtDistanceM(leadInM + tunnelM - marginM)
+        if (blackoutStartS >= blackoutEndS) return null
         return route.copy(blackoutWindows = listOf(blackoutStartS..blackoutEndS))
     }
 

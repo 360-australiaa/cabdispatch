@@ -786,6 +786,14 @@ object AppContainer {
      * then, which the source treats as "no corridor known" (plain dead reckoning). */
     @Volatile private var tunnelRegistry: au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelRegistry? = null
 
+    /** The loaded tunnel corridors, or null while still loading. Touching [inertialSpeedSource]
+     * is what starts the load, so a caller that only wants the corridors still gets them. */
+    val tunnelRegistryOrNull: au.com.threesixty.cabdispatch.domain.location.tunnel.TunnelRegistry?
+        get() {
+            inertialSpeedSource
+            return tunnelRegistry
+        }
+
     val inertialSpeedSource: au.com.threesixty.cabdispatch.domain.location.inertial.InertialSpeedSource by lazy {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         scope.launch { tunnelRegistry = TunnelRegistryLoader(appContext).load() }

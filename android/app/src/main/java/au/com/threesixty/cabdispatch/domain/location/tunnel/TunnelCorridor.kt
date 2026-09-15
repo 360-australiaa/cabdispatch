@@ -157,11 +157,62 @@ class TunnelRegistry(val corridors: List<TunnelCorridor>) {
      * heading -> no lock: direction is what tells the two bores apart.
      */
     fun match(lat: Double, lng: Double, headingDeg: Double?): TunnelLock? {
-        if (headingDeg == null) return null
-        return corridors
-            .mapNotNull { corridor -> candidateLock(corridor, lat, lng, headingDeg) }
-            .minByOrNull { it.second }
-            ?.first
+        val best = if (headingDeg == null) {
+            null
+        } else {
+            corridors
+                .mapNotNull { corridor -> candidateLock(corridor, lat, lng, headingDeg) }
+                .minByOrNull { it.second }
+                ?.first
+        }
+        // Lock to the whole chain the entry bore leads into (Anzac Bridge -> Rozelle Interchange
+        // westbound -> M4 East, 2026-09-15), so a blackout that spans two connected tunnels keeps
+        // following the road instead of holding at the first bore's exit portal.
+        return best?.let { TunnelLock(chainFrom(it.corridor), it.entryAlongKm) }
+    }
+
+    /**
+     * [start] followed by every corridor that continues it: repeatedly the corridor whose first
+     * vertex lies within [CHAIN_GAP_M] of the current last vertex AND whose initial bearing is
+     * within [BEARING_TOLERANCE_DEG] of the current final bearing (the opposite bore also starts
+     * at our exit portal, but points the other way, so it never chains). The gap between two
+     * enforcement paths is bridged by a straight leg. Returns [start] itself when nothing
+     * continues it. Capped at [MAX_CHAIN_HOPS] hops.
+     */
+    fun chainFrom(start: TunnelCorridor): TunnelCorridor {
+        val used = mutableListOf(start)
+        var points = start.points
+        var current = start
+        repeat(MAX_CHAIN_HOPS) {
+            val (lastLat, lastLng) = current.points.last()
+            val endBearing = current.bearingAt(current.lengthKm)
+            val next = corridors
+                .filter { it !in used }
+                .mapNotNull { c ->
+                    val (fLat, fLng) = c.points.first()
+                    val gapM = GeoMath.distanceKm(lastLat, lastLng, fLat, fLng) * TunnelCorridor.METRES_PER_KM
+                    // "Continues" = the next bore heads the way we are going, judged against
+                    // BOTH our final leg and the straight gap leg to it -- interchange tunnels
+                    // bend right at the join (Rozelle westbound ends on 297, the M4 East begins
+                    // on 246), so either reference may be the fair one.
+                    val gapBearing = GeoMath.bearingDeg(lastLat, lastLng, fLat, fLng)
+                    val startBearing = c.bearingAt(0.0)
+                    val diff = minOf(bearingDiff(startBearing, endBearing), bearingDiff(startBearing, gapBearing))
+                    if (gapM <= CHAIN_GAP_M && diff <= CHAIN_BEARING_TOLERANCE_DEG) c to gapM else null
+                }
+                .minByOrNull { it.second }
+                ?.first ?: return@repeat
+            used += next
+            points = points + next.points
+            current = next
+        }
+        if (used.size == 1) return start
+        return TunnelCorridor(
+            id = used.joinToString("+") { it.id },
+            name = start.name,
+            roadId = start.roadId,
+            points = points,
+        )
     }
 
     /** ([TunnelLock], distance from the vehicle in metres) if [corridor] is lockable from here. */
@@ -174,16 +225,25 @@ class TunnelRegistry(val corridors: List<TunnelCorridor>) {
         val p = corridor.nearestVertex(lat, lng)
         val tooFar = p.distanceM > ENTRY_RADIUS_M
         val leaving = corridor.lengthKm - p.alongKm < MIN_REMAINING_KM
-        val delta = corridor.bearingAt(p.alongKm) - headingDeg + HALF_TURN_DEG + FULL_TURN_DEG
-        val diff = abs((delta % FULL_TURN_DEG) - HALF_TURN_DEG)
-        val wrongWay = diff > BEARING_TOLERANCE_DEG
+        val wrongWay = bearingDiff(corridor.bearingAt(p.alongKm), headingDeg) > BEARING_TOLERANCE_DEG
         return if (tooFar || leaving || wrongWay) null else TunnelLock(corridor, p.alongKm) to p.distanceM
     }
 
+    private fun bearingDiff(a: Double, b: Double): Double =
+        abs(((a - b + HALF_TURN_DEG + FULL_TURN_DEG) % FULL_TURN_DEG) - HALF_TURN_DEG)
+
     companion object {
-        /** A tunnel portal fix is a real GPS fix on the approach; 150 m covers the last good fix
-         * being a few seconds before the portal and a lane's worth of offset. */
-        const val ENTRY_RADIUS_M = 150.0
+        /** The last good fix before a tunnel can be several hundred metres before the portal (the
+         * receiver degrades on the approach ramp: T5453's was 273 m out); heading is what keeps
+         * 400 m safe. */
+        const val ENTRY_RADIUS_M = 400.0
+
+        /** How far apart two enforcement paths may be and still be one continuous tunnel drive
+         * (Rozelle Interchange westbound ends ~1.4 km before the M4 East path begins; the road
+         * between them is still underground). */
+        const val CHAIN_GAP_M = 2000.0
+        const val CHAIN_BEARING_TOLERANCE_DEG = 75.0
+        const val MAX_CHAIN_HOPS = 4
         const val BEARING_TOLERANCE_DEG = 50.0
         const val MIN_REMAINING_KM = 0.3
         private const val FULL_TURN_DEG = 360.0

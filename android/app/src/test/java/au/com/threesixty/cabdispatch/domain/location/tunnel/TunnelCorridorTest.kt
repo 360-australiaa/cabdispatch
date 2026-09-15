@@ -32,6 +32,8 @@ class TunnelCorridorTest {
     fun `no heading, too far away, or arriving at the exit portal means no lock`() {
         assertNull(registry.match(-33.8001, 151.1995, headingDeg = null))
         assertNull(registry.match(-33.81, 151.1995, headingDeg = 275.0)) // ~1.1 km off
+        // ~330 m before the portal: still a lock.
+        assertNotNull(registry.match(-33.8001, 151.2035, headingDeg = 275.0))
         assertNull(registry.match(-33.80, 151.171, headingDeg = 275.0)) // 100 m before the WB exit portal
     }
 
@@ -62,5 +64,25 @@ class TunnelCorridorTest {
         assertTrue("got $beyond", beyond!! > westbound.lengthKm)
         // Reacquired somewhere else entirely: not a road-locked answer.
         assertNull(lock.roadKmTo(-33.85, 151.25))
+    }
+
+    @Test
+    fun `a bore that continues into another bore is locked as one chain, never the opposite bore`() {
+        // Bore A runs west and ends where bore B (also westbound, 500 m gap) begins; the eastbound
+        // bore of A starts at A's exit portal too, pointing back east.
+        val a = TunnelCorridor("a", "A (Westbound)", "M4", (0..20).map { i -> -33.80 to (151.20 - i * 0.001) })
+        val b = TunnelCorridor("b", "B (Westbound)", "M8", (0..20).map { i -> -33.80 to (151.175 - i * 0.001) })
+        val aBack = TunnelCorridor("a-eb", "A (Eastbound)", "M4", (0..20).map { i -> -33.8004 to (151.18 + i * 0.001) })
+        val reg = TunnelRegistry(listOf(a, b, aBack))
+        val lock = reg.match(-33.80, 151.199, headingDeg = 270.0)!!
+        assertEquals("a+b", lock.corridor.id)
+        assertEquals("A (Westbound)", lock.corridor.name)
+        assertTrue(
+            "chain spans both bores plus the gap, got ${lock.corridor.lengthKm}",
+            lock.corridor.lengthKm > 4.0,
+        )
+        // 3 km along the chain is inside bore B, not parked at A's exit.
+        val (_, lng) = lock.positionAt(traveledKm = 3.0)
+        assertTrue("got $lng", lng < 151.175)
     }
 }
