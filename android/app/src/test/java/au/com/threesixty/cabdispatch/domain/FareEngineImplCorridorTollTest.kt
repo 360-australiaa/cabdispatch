@@ -151,10 +151,16 @@ class FareEngineImplCorridorTollTest {
     /** Publishes a usable estimate and hands the engine a dead-reckoned path that passes over
      * the mid-tunnel gantries (with a deliberate drift at the far end for the closure
      * correction to remove). */
-    private class PathInertialSource(private val path: List<Pair<Double, Double>>) : InertialBillingSource {
+    private class PathInertialSource(
+        private val path: List<Pair<Double, Double>>,
+        private val roadLocked: Boolean = false,
+        private val roadIds: Set<String> = emptySet(),
+    ) : InertialBillingSource {
         private val _estimate = MutableStateFlow<InertialEstimate?>(null)
         override val estimate: StateFlow<InertialEstimate?> = _estimate.asStateFlow()
         override val blackoutPath: List<Pair<Double, Double>> get() = path
+        override val blackoutPathIsRoadLocked: Boolean get() = roadLocked
+        override val lockedRoadIds: Set<String> get() = roadIds
         override fun onBlackoutEntered(
             entrySpeedKmh: Double,
             entryHeadingDeg: Double?,
@@ -193,5 +199,83 @@ class FareEngineImplCorridorTollTest {
         assertEquals("INERTIAL", state.lastResolvedBlackout?.resolution)
         assertEquals(listOf("MID_TUNNEL"), state.autoTollsApplied.map { it.roadId })
         assertEquals(BigDecimal("5.85"), state.breakdown.tolls)
+    }
+
+    /** [midTunnelRoadRegistry] shifted ~350 m north of the tunnel latitude: the surface gantry
+     * sites of a real tunnel road sit that far from the tunnel alignment (Haberfield: 374 m). */
+    private fun offsetMidTunnelRoadRegistry(amount: String): TollRegistrySnapshot {
+        val base = midTunnelRoadRegistry(amount)
+        return base.copy(gantries = base.gantries.map { it.copy(latitude = it.latitude + 0.00315) })
+    }
+
+    private fun straightTunnelPath(): List<Pair<Double, Double>> {
+        val steps = 40
+        return (0..steps).map { i ->
+            TUNNEL_ENTRY_LAT to (TUNNEL_ENTRY_LNG + (TUNNEL_EXIT_LNG - TUNNEL_ENTRY_LNG) * i / steps)
+        }
+    }
+
+    private fun kotlinx.coroutines.test.TestScope.engineOn(
+        registry: TollRegistrySnapshot,
+        inertial: InertialBillingSource,
+        gps: FakeMeterGps,
+    ) = FareEngineImpl(
+        gps,
+        backgroundScope,
+        TollRegistryProvider { registry },
+        nanoTimeSource = virtualNanoTimeSource(), wallClockNow = fixedDayWallClock(),
+        inertialSpeedSource = inertial,
+        inertialBillingEnabled = true,
+    )
+
+    @Test
+    fun `a road-locked tunnel path tolls gantries that sit 350 m off the alignment`() = runTest {
+        // Anzac Bridge -> M4 East, 2026-09-15: at the live-GPS radii the sweep missed the Haberfield
+        // entry gantry (374 m from the tunnel path) and charged the M4 for 1 km instead of 5.
+        val registry = offsetMidTunnelRoadRegistry("5.85")
+        val gps = FakeMeterGps(60.0)
+        val inertial = PathInertialSource(straightTunnelPath(), roadLocked = true, roadIds = setOf("MID_TUNNEL"))
+        val engine = engineOn(registry, inertial, gps)
+        driveThroughBlackout(gps, engine)
+        assertEquals(listOf("MID_TUNNEL"), engine.state.value.autoTollsApplied.map { it.roadId })
+        assertEquals(BigDecimal("5.85"), engine.state.value.breakdown.tolls)
+    }
+
+    @Test
+    fun `a road-locked sweep keeps the surface radii for roads the lock does not run along`() = runTest {
+        // Second Anzac Bridge -> M4 East run, 2026-09-15: a flat 450 m charged the M4-M8 Link,
+        // whose Haberfield ramp gantries are 400 m from the M4 East bore. Same 350 m offset road,
+        // but the lock says the vehicle is on "M4", not on it.
+        val registry = offsetMidTunnelRoadRegistry("5.85")
+        val gps = FakeMeterGps(60.0)
+        val inertial = PathInertialSource(straightTunnelPath(), roadLocked = true, roadIds = setOf("M4"))
+        val engine = engineOn(registry, inertial, gps)
+        driveThroughBlackout(gps, engine)
+        assertTrue("not the locked road", engine.state.value.autoTollsApplied.isEmpty())
+    }
+
+    @Test
+    fun `a toll-free road crossed in the sweep is neither charged nor flagged for manual entry`() = runTest {
+        // Iron Cove Link, 2026-09-15 bench: `toll_free` fell through to the unpriced prompt.
+        val base = midTunnelRoadRegistry("0.00")
+        val free = base.roadsById.getValue("MID_TUNNEL").copy(id = "FREE_LINK", pricingModel = "toll_free")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf(free.id to free),
+            gantries = base.gantries.map { it.copy(tollRoadId = free.id) },
+        )
+        val gps = FakeMeterGps(60.0)
+        val engine = engineOn(registry, PathInertialSource(straightTunnelPath()), gps)
+        driveThroughBlackout(gps, engine)
+        assertTrue(engine.state.value.autoTollsApplied.isEmpty())
+        assertTrue("free road must not ask the driver to add a toll", engine.state.value.unpricedTollRoads.isEmpty())
+    }
+
+    @Test
+    fun `a free-run dead-reckoned path keeps the tight surface radii`() = runTest {
+        val registry = offsetMidTunnelRoadRegistry("5.85")
+        val gps = FakeMeterGps(60.0)
+        val engine = engineOn(registry, PathInertialSource(straightTunnelPath(), roadLocked = false), gps)
+        driveThroughBlackout(gps, engine)
+        assertTrue("350 m off a guessed line is not on the road", engine.state.value.autoTollsApplied.isEmpty())
     }
 }

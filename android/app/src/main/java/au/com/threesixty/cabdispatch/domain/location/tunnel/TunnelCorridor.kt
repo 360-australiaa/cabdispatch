@@ -22,6 +22,9 @@ class TunnelCorridor(
     /** The toll-registry road this corridor belongs to (e.g. "LCT"), or null when unknown. */
     val roadId: String?,
     val points: List<Pair<Double, Double>>,
+    /** Every toll road a CHAINED corridor runs along, in driving order ([roadId] is the first);
+     * the gantry sweep widens its search to exactly these roads and no others. */
+    val roadIds: List<String> = listOfNotNull(roadId),
 ) {
     init {
         require(points.size >= 2) { "a corridor needs at least two points" }
@@ -212,6 +215,7 @@ class TunnelRegistry(val corridors: List<TunnelCorridor>) {
             name = start.name,
             roadId = start.roadId,
             points = points,
+            roadIds = used.mapNotNull { it.roadId }.distinct(),
         )
     }
 

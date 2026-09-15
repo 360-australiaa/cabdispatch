@@ -107,6 +107,44 @@ const val TOLL_GANTRY_DETECTION_RADIUS_M = 150.0
 const val TOLL_CONFIRM_RADIUS_M = 60.0
 
 /**
+ * Detection AND confirmation radius used when the position is LOCKED to a tunnel corridor
+ * (2026-09-15 bench, Anzac Bridge -> M4 East): the registry's gantry coordinates are the surface
+ * gantry sites, the TfNSW tunnel alignment runs up to ~400 m from them (Haberfield entry: 374 m,
+ * Ashfield: 246 m), so at the live-GPS radii the sweep saw only the Concord pair and charged the
+ * M4 for 1 km instead of Haberfield -> Homebush. A locked path IS the road, so "within 450 m of
+ * the path" is "on the road" -- the adjacent-road false-charge risk the 60 m confirmation guards
+ * against on the surface does not exist underground.
+ */
+const val TUNNEL_LOCK_GANTRY_RADIUS_M = 450.0
+
+/**
+ * The detection and confirmation radii one [onFix] pass uses. [SURFACE] is the live-GPS pair for
+ * every gantry. [tunnelLocked] keeps that pair for every road EXCEPT the ones the locked chain
+ * runs along, which get [TUNNEL_LOCK_GANTRY_RADIUS_M] for both -- the second bench run
+ * (2026-09-15) with a flat 450 m for every road charged the M4-M8 Link $2.20 at Haberfield,
+ * whose southbound ramp gantries sit 400 m from the M4 East bore the vehicle was actually in.
+ * The lock tells us which road we are on; only that road's gantries may be that far off.
+ */
+data class GantryRadii(
+    val detectM: Double,
+    val confirmM: Double,
+    val roadLockedIds: Set<String> = emptySet(),
+) {
+    fun detectM(gantry: TollGantryRef): Double =
+        if (gantry.tollRoadId in roadLockedIds) TUNNEL_LOCK_GANTRY_RADIUS_M else detectM
+
+    fun confirmM(gantry: TollGantryRef): Double =
+        if (gantry.tollRoadId in roadLockedIds) TUNNEL_LOCK_GANTRY_RADIUS_M else confirmM
+
+    companion object {
+        val SURFACE = GantryRadii(TOLL_GANTRY_DETECTION_RADIUS_M, TOLL_CONFIRM_RADIUS_M)
+
+        /** The radii for a blackout sweep locked to a chain running along [roadIds]. */
+        fun tunnelLocked(roadIds: Set<String>): GantryRadii = SURFACE.copy(roadLockedIds = roadIds)
+    }
+}
+
+/**
  * How many of a road's own gantries must be confirmed at close range before the road is charged —
  * the "multiple checkpoints" corroboration rule.
  *
@@ -342,6 +380,16 @@ fun findNearbyGantries(
     radiusM: Double = TOLL_GANTRY_DETECTION_RADIUS_M,
 ): List<TollGantryRef> = registry.gantries.filter { tollHaversineM(lat, lng, it.latitude, it.longitude) <= radiusM }
 
+/** [findNearbyGantries] with a per-gantry radius -- see [GantryRadii]. */
+fun findNearbyGantries(
+    registry: TollRegistrySnapshot,
+    lat: Double,
+    lng: Double,
+    radii: GantryRadii,
+): List<TollGantryRef> = registry.gantries.filter {
+    tollHaversineM(lat, lng, it.latitude, it.longitude) <= radii.detectM(it)
+}
+
 /**
  * How many close-range gantry confirmations [roadId] needs before it may be charged.
  *
@@ -505,6 +553,9 @@ data class TollDetectionResult(
  * A road in [TollDetectionState.dismissedRoadIds] (the driver already removed this auto-charge —
  * see [dismissCharge]) is skipped entirely for the rest of the trip, even if crossed again.
  */
+// LongParameterList: six positional inputs plus the one optional [GantryRadii] the tunnel-lock sweep
+// overrides; folding the position into a data class would touch every caller for no clarity gain.
+@Suppress("LongParameterList")
 fun onFix(
     state: TollDetectionState,
     registry: TollRegistrySnapshot,
@@ -512,18 +563,19 @@ fun onFix(
     lng: Double,
     ts: ZonedDateTime,
     cumulativeDistanceKm: BigDecimal,
+    radii: GantryRadii = GantryRadii.SURFACE,
 ): TollDetectionResult {
     val previous = state.previousFix
     state.previousFix = lat to lng
 
-    val hits = findNearbyGantries(registry, lat, lng)
+    val hits = findNearbyGantries(registry, lat, lng, radii)
     if (hits.isEmpty()) return TollDetectionResult()
 
     // Record close-range evidence BEFORE any pricing. A gantry only counts as crossed once the
     // trip has actually passed within TOLL_CONFIRM_RADIUS_M of it -- see that constant's doc for
     // the adjacent-road false charge this prevents.
     for (gantry in hits) {
-        if (tollHaversineM(lat, lng, gantry.latitude, gantry.longitude) <= TOLL_CONFIRM_RADIUS_M) {
+        if (tollHaversineM(lat, lng, gantry.latitude, gantry.longitude) <= radii.confirmM(gantry)) {
             state.confirmedGantries.getOrPut(gantry.tollRoadId) { mutableSetOf() }.add(gantry.id)
             // Anchor a distance-priced road's accrual at the FIRST confirmed contact, not at the
             // point corroboration completes. Corroboration decides WHETHER to charge; it must not
@@ -546,6 +598,9 @@ fun onFix(
             if (state.unpricedRoadIds.add(roadId)) newlyUnpriced.add(roadId)
             continue
         }
+        // Iron Cove Link (2026-09-15 bench): a road the registry says is free is neither charged
+        // nor "add it manually" -- it used to fall through to the unpriced prompt below.
+        if (road.pricingModel == "toll_free") continue
 
         val allowed = directionAllowsCharge(road.directional, compass)
         if (allowed == false) continue // genuinely the wrong direction — never charge

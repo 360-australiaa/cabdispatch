@@ -7,6 +7,7 @@ import au.com.threesixty.cabdispatch.domain.fare.chargeDisplayName
 import au.com.threesixty.cabdispatch.domain.fare.TollRegistrySnapshot
 import au.com.threesixty.cabdispatch.domain.fare.dismissCharge
 import au.com.threesixty.cabdispatch.domain.fare.knownCorridorDistanceKm
+import au.com.threesixty.cabdispatch.domain.fare.GantryRadii
 import au.com.threesixty.cabdispatch.domain.fare.onFix
 import au.com.threesixty.cabdispatch.data.local.entity.BlackoutResolution
 import au.com.threesixty.cabdispatch.domain.fare.toDomainTariff
@@ -1716,13 +1717,21 @@ class FareEngineImpl(
             ?: deadReckonedPath(resolved)
             ?: return
         var cumulativeKm = (cs.cumulativeDistanceKm - resolved.billedDistanceKm).coerceAtLeast(BigDecimal.ZERO)
+        // A road-locked path is the tunnel's own geometry; the surface gantry sites sit up to
+        // ~400 m from it, so the sweep widens both radii -- see TUNNEL_LOCK_GANTRY_RADIUS_M.
+        val locked = inertialSpeedSource?.blackoutPathIsRoadLocked == true
+        val radii = if (locked) {
+            GantryRadii.tunnelLocked(inertialSpeedSource.lockedRoadIds)
+        } else {
+            GantryRadii.SURFACE
+        }
         var previous: Pair<Double, Double>? = null
         for (point in path) {
             previous?.let { (plat, plng) ->
                 cumulativeKm += BigDecimal.valueOf(GeoMath.distanceKm(plat, plng, point.first, point.second))
             }
             previous = point
-            detectTollsAt(cs, point.first, point.second, cumulativeKm)
+            detectTollsAt(cs, point.first, point.second, cumulativeKm, radii)
         }
     }
 
@@ -1762,7 +1771,13 @@ class FareEngineImpl(
 
     // ReturnCount: the three guards detectTolls itself always carried, unchanged by the split.
     @Suppress("ReturnCount")
-    private fun detectTollsAt(cs: CalcFareState, lat: Double, lng: Double, cumulativeDistanceKm: BigDecimal) {
+    private fun detectTollsAt(
+        cs: CalcFareState,
+        lat: Double,
+        lng: Double,
+        cumulativeDistanceKm: BigDecimal,
+        radii: GantryRadii = GantryRadii.SURFACE,
+    ) {
         val registry = tollRegistry ?: return
         if (registry.gantries.isEmpty()) return
 
@@ -1786,6 +1801,7 @@ class FareEngineImpl(
             // `ZonedDateTime.now()` call a test has no way to freeze.
             ts = wallClockNow(),
             cumulativeDistanceKm = cumulativeDistanceKm,
+            radii = radii,
         )
         if (result.isEmpty) return
 

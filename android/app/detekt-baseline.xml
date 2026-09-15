@@ -29,7 +29,7 @@
     <ID>CyclomaticComplexMethod:ProfileScreen.kt$@Composable private fun IdentityCard(session: DriverSession?, viewModel: ProfileViewModel)</ID>
     <ID>CyclomaticComplexMethod:ReceiptOptions.kt$@Composable internal fun ReceiptScreen(s: CloseAndPayUiState.ReceiptStep, vm: CloseAndPayViewModel)</ID>
     <ID>CyclomaticComplexMethod:ShiftStatsBar.kt$@Composable internal fun NextBreakTile( remaining: Duration?, session: DriverSession?, isAvailable: Boolean, fatigueAlertCount: Int?, latestFatigueKind: String?, onTakeBreak: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>CyclomaticComplexMethod:TollDetector.kt$fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, ): TollDetectionResult</ID>
+    <ID>CyclomaticComplexMethod:TollDetector.kt$@Suppress("LongParameterList") fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, radii: GantryRadii = GantryRadii.SURFACE, ): TollDetectionResult</ID>
     <ID>CyclomaticComplexMethod:TollDetector.kt$private fun chargePerPointRoad( state: TollDetectionState, road: TollRoadRef, hits: List&lt;TollGantryRef&gt;, changed: MutableMap&lt;String, BigDecimal&gt;, newlyUnpriced: MutableSet&lt;String&gt;, )</ID>
     <ID>CyclomaticComplexMethod:TripDetailScreen.kt$@Composable private fun FareCard(state: TripDetailUiState.Loaded)</ID>
     <ID>EmptyFunctionBlock:MeterBackdropMap.kt$&lt;no name provided&gt;${}</ID>
@@ -484,7 +484,7 @@
     <ID>LongMethod:ShiftStatsBar.kt$@Composable internal fun ShiftStatsBar( state: WheelDashboardUiState, extras: HomeExtras, onTakeBreak: () -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>LongMethod:StatusMapPanel.kt$@Composable internal fun StatusMapPanel(onPlotZone: () -&gt; Unit)</ID>
     <ID>LongMethod:TermsDisclaimerScreen.kt$@Composable fun TermsDisclaimerScreen(onAccept: () -&gt; Unit)</ID>
-    <ID>LongMethod:TollDetector.kt$fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, ): TollDetectionResult</ID>
+    <ID>LongMethod:TollDetector.kt$@Suppress("LongParameterList") fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, radii: GantryRadii = GantryRadii.SURFACE, ): TollDetectionResult</ID>
     <ID>LongMethod:TripDetailScreen.kt$@Composable private fun DisputeSection(state: TripDetailUiState.Loaded, vm: TripDetailViewModel)</ID>
     <ID>LongMethod:TripDetailScreen.kt$@Composable private fun FareCard(state: TripDetailUiState.Loaded)</ID>
     <ID>LongMethod:TripDetailScreen.kt$@Composable private fun RouteMapCard(trip: TripEntity, gpsTracePoints: List&lt;TelemetryPointDto&gt;)</ID>
@@ -1837,7 +1837,7 @@
     <ID>MayBeConst:TariffCanonicalPayload.kt$/** Matches the `Numeric(10, 4)` column precision the backend quantizes every rate field to * (`app.services.tariff_signing._RATE_QUANT`) before signing. */ private val RATE_QUANT_SCALE = 4</ID>
     <ID>MayBeConst:TenantBranding.kt$TenantBranding$/** * The operator's regulatory authorisation number, as issued by its jurisdiction — TfNSW's TSP * authorisation, here. `null` for an operator whose jurisdiction issues no such number, in * which case every caller must omit it entirely rather than render a blank or a dash: a missing * authorisation number and an unknown one look identical on screen and mean very different * things. */ val authorisationNumber: String? = "TSP-448041"</ID>
     <ID>NestedBlockDepth:MeterBackdropMap.kt$private fun glyphPathFor(category: String, d: Int, r: Float): android.graphics.Path</ID>
-    <ID>NestedBlockDepth:TollDetector.kt$fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, ): TollDetectionResult</ID>
+    <ID>NestedBlockDepth:TollDetector.kt$@Suppress("LongParameterList") fun onFix( state: TollDetectionState, registry: TollRegistrySnapshot, lat: Double, lng: Double, ts: ZonedDateTime, cumulativeDistanceKm: BigDecimal, radii: GantryRadii = GantryRadii.SURFACE, ): TollDetectionResult</ID>
     <ID>NestedBlockDepth:TollDetector.kt$private fun chargePerPointRoad( state: TollDetectionState, road: TollRoadRef, hits: List&lt;TollGantryRef&gt;, changed: MutableMap&lt;String, BigDecimal&gt;, newlyUnpriced: MutableSet&lt;String&gt;, )</ID>
     <ID>ReturnCount:AirportZoneCache.kt$AirportZoneCache$override fun zonesContaining(lat: Double, lng: Double): List&lt;AirportZone&gt;?</ID>
     <ID>ReturnCount:AirportZoneCache.kt$AirportZoneCache$private fun GeofenceDto.toEntity(fetchedAt: Long): AirportZoneEntity?</ID>

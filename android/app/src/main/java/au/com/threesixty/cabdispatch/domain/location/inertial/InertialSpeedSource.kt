@@ -59,6 +59,7 @@ class InertialSpeedSource(
 
     override val blackoutPathIsRoadLocked: Boolean get() = tunnelLock != null
     override val lockedRoadId: String? get() = tunnelLock?.corridor?.roadId
+    override val lockedRoadIds: Set<String> get() = tunnelLock?.corridor?.roadIds?.toSet().orEmpty()
     override val lockedCorridorName: String? get() = tunnelLock?.corridor?.name
 
     override fun roadLockedPathKm(exitLat: Double, exitLng: Double): Double? =

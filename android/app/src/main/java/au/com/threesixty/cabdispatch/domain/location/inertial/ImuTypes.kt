@@ -45,6 +45,10 @@ interface InertialBillingSource {
     /** The locked corridor's toll-registry road id, when a tunnel lock is in force. */
     val lockedRoadId: String? get() = null
 
+    /** Every toll road the locked chain runs along (Rozelle Interchange + M4 for the Anzac Bridge
+     * -> M4 East drive); empty when not locked. */
+    val lockedRoadIds: Set<String> get() = emptySet()
+
     /** The locked corridor's display name ("Lane Cove Tunnel (Westbound)"), when locked. */
     val lockedCorridorName: String? get() = null
 
