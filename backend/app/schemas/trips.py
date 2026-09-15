@@ -454,6 +454,21 @@ class TripSyncItem(BaseModel):
     # see app.services.trips.reconcile_gps_blackout_segments for what the
     # server does with it.
     gps_blackout_segments: list[DeviceGpsBlackoutSegment] = Field(default_factory=list)
+    # 2026-09-16 fix -- the field this same doc used to say had no backend counterpart: the
+    # device's own per-road toll-detection audit trail (mirrors Trip.auto_tolled_roads' own
+    # shape, road id -> charged amount as a decimal string), sent as DISPUTE EVIDENCE, never a
+    # billing input in its own right (trip.tolls already comes from `tolls` above, trusted the
+    # same way `device_total` is). Real gap this closes: `recompute_from_trace`'s own gantry
+    # sweep runs over `gps_trace`, which -- by design, see MeterForegroundService.nextTracePoint's
+    # own doc -- has NO points during a GPS blackout, so a trip whose tolls were entirely
+    # detected underground (a tunnel crossing) synced with a correct `tolls` total but an EMPTY
+    # `auto_tolled_roads`, leaving the dashboard's toll-evidence panel with nothing to show for
+    # exactly the trips a driver or passenger is most likely to dispute. See
+    # app.api.v1.trips.sync_trips' own comment on where this is merged in, and
+    # app.services.tolls.validate_device_reported_tolled_roads for how a road id is checked
+    # against the real registry before being trusted at all -- an unrecognised id is dropped,
+    # never stored.
+    auto_tolled_roads: dict[str, Decimal] = Field(default_factory=dict)
     # DEVICE ADVISORY ONLY, same convention as time_class/is_peak/maxi above --
     # see TelemetryPoint.state's own doc. The device's own cumulative "seconds
     # this trip spent STOPPED" count, cross-checked (never trusted outright)

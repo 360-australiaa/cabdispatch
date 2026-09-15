@@ -1062,6 +1062,138 @@ async def test_sync_bills_the_known_corridor_distance_across_a_real_gps_blackout
     assert abs(Decimal(event["matched_km"]) - (leg1_km + leg2_km)) < Decimal("0.01"), event
 
 
+async def test_sync_stores_device_reported_toll_evidence_for_a_real_blackout(
+    client: AsyncClient, session: AsyncSession
+):
+    """2026-09-16 fix: a tunnel crossing's real per-road toll breakdown never reached the dashboard
+    for a synced trip, because `recompute_from_trace`'s own gantry sweep runs over `gps_trace`,
+    which has no points during the blackout by design (see
+    `MeterForegroundService.nextTracePoint`'s own doc) -- so `trip.tolls` was the device's correct
+    total (already trusted, same as `device_total`) but `trip.auto_tolled_roads` stayed `{}`, with
+    nothing for a driver or passenger's dispute to point at. A device-reported claim for a REAL
+    registered road, on a trip that reported a genuine blackout, must now show up there -- and must
+    never touch the billed total itself."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = TollRoad(
+        id="TESTSYNCEVIDENCE", api_code=None, name="Test Evidence Tunnel", operator="Test Operator",
+        pricing_model="flat", charging_policy="once_per_road", directional="both",
+    )
+    session.add(road)
+    await session.commit()
+    session.add(
+        TollRoadPriceRevision(
+            toll_road_id="TESTSYNCEVIDENCE", price_class_a_min=Decimal("6.20"), price_class_a_max=Decimal("6.20"),
+            price_class_b_min=None, price_class_b_max=None, cap_class_a=None, cap_class_b=None,
+            rate_per_km_class_a=None, flagfall_class_a=None, network_cap_class_a=None,
+            time_of_day_rates_class_a=None, currency="AUD", gst_included=True,
+            effective_date=date(2026, 7, 1), indexation="quarterly", confidence="verified",
+        )
+    )
+    await session.commit()
+
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": -35.48, "lng": 150.92, "speed_kmh": 80, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="20.79",
+        tolls="6.20", start_lat=-35.50, start_lng=150.90,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[
+            _device_blackout_segment(
+                client_uuid=str(uuid.uuid4()), started_at=now, ended_at=now + timedelta(seconds=60),
+                entry=(-35.50, 150.90), exit_=(-35.48, 150.92), resolution="INERTIAL", billed_distance_km="3.00",
+            )
+        ],
+        auto_tolled_roads={"TESTSYNCEVIDENCE": "6.20"},
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["auto_tolled_roads"] == {"TESTSYNCEVIDENCE": "6.20"}
+    # Never touched by this evidence merge -- both already came from `tolls`/`device_total` above,
+    # trusted the same way the grand total is, same as before this fix existed.
+    assert Decimal(trip["tolls"]) == Decimal("6.20")
+
+
+async def test_sync_drops_a_device_reported_toll_for_a_road_the_registry_does_not_know(
+    client: AsyncClient, session: AsyncSession
+):
+    """A road id the server's registry has never heard of is dropped outright, never stored --
+    the identity check `validate_device_reported_tolled_roads` exists for: a corrupted, stale, or
+    forged client claim must never introduce a nonexistent road into the trip's evidence trail."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    now = _FIXED_DAY_START_AT
+    trace = [{"lat": -35.48, "lng": 150.92, "speed_kmh": 80, "ts": (now + timedelta(seconds=60)).isoformat()}]
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="14.59",
+        tolls="0.00", start_lat=-35.50, start_lng=150.90,
+        start_at=now.isoformat(), end_at=(now + timedelta(seconds=60)).isoformat(),
+        gps_blackout_segments=[
+            _device_blackout_segment(
+                client_uuid=str(uuid.uuid4()), started_at=now, ended_at=now + timedelta(seconds=60),
+                entry=(-35.50, 150.90), exit_=(-35.48, 150.92), resolution="INERTIAL", billed_distance_km="3.00",
+            )
+        ],
+        auto_tolled_roads={"NOT_A_REAL_ROAD": "99.99"},
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    # Empty dict, same "or None" convention every other optional evidence field on this
+    # endpoint already follows (blackout_reconciliation, device_gps_blackout_segments).
+    assert trip["auto_tolled_roads"] is None
+
+
+async def test_sync_ignores_device_reported_tolls_when_no_blackout_was_reported(
+    client: AsyncClient, session: AsyncSession
+):
+    """The gate is the blackout, not just an unfamiliar-looking claim: with no
+    `gps_blackout_segments` at all, every real toll on the trip was available to the server's own
+    trace-based sweep the whole way, so a device claim beyond that is left out rather than
+    silently trusted -- even for an otherwise perfectly real, registered road."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+
+    road = TollRoad(
+        id="TESTSYNCNOBLACKOUT", api_code=None, name="Test No-Blackout Road", operator="Test Operator",
+        pricing_model="flat", charging_policy="once_per_road", directional="both",
+    )
+    session.add(road)
+    await session.commit()
+    session.add(
+        TollRoadPriceRevision(
+            toll_road_id="TESTSYNCNOBLACKOUT", price_class_a_min=Decimal("4.00"), price_class_a_max=Decimal("4.00"),
+            price_class_b_min=None, price_class_b_max=None, cap_class_a=None, cap_class_b=None,
+            rate_per_km_class_a=None, flagfall_class_a=None, network_cap_class_a=None,
+            time_of_day_rates_class_a=None, currency="AUD", gst_included=True,
+            effective_date=date(2026, 7, 1), indexation="quarterly", confidence="verified",
+        )
+    )
+    await session.commit()
+
+    now = _FIXED_DAY_START_AT
+    trace = _continuous_trace(start_lat=-33.8688, start_lng=151.2093, end_lat=-33.8600, end_lng=151.2093, start_at=now)
+    item = _sync_item(
+        tariff_id=tariff.id, gps_trace=trace, device_total="4.00", tolls="4.00",
+        start_lat=-33.8688, start_lng=151.2093,
+        start_at=now.isoformat(), end_at=(now + timedelta(minutes=5)).isoformat(),
+        auto_tolled_roads={"TESTSYNCNOBLACKOUT": "4.00"},
+    )
+    resp = await client.post("/v1/trips/sync", json=[item], headers=headers)
+    assert resp.status_code == 200, resp.text
+    trip = resp.json()["results"][0]["trip"]
+
+    assert trip["auto_tolled_roads"] is None
+
+
 async def test_sync_records_a_simulated_trip_as_simulated(client: AsyncClient, session: AsyncSession):
     """A trip driven on the meter's GPS simulator must arrive flagged.
 

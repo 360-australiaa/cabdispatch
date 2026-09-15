@@ -59,6 +59,7 @@ from app.services import shift as shift_service
 from app.services.audit_log import record_audit
 from app.services.fare_engine import URBAN_TARIFF, resolve_time_class_and_peak, round_half_up
 from app.services.payments import InvalidAccountReferenceError, InvalidVoucherCodeError
+from app.services.tolls import validate_device_reported_tolled_roads
 from app.services.trips import (
     CloseParams,
     DisputeReasonRequiredError,
@@ -315,6 +316,20 @@ async def sync_trips(
                     server_stopped_s=stopped_s,
                 )
 
+                # Device-reported toll evidence (2026-09-16 fix) -- ONLY ever the dispute-evidence
+                # breakdown (Trip.auto_tolled_roads), NEVER trip.tolls/trip.total itself (those are
+                # `tolls`/`stored_total` above, already trusted from the device the same way
+                # `device_total` is for the grand total). Gated on this trip actually reporting a
+                # GPS blackout at all: a trip with none had every real toll available to the
+                # server's own trace-based apply_toll_detection sweep inside recompute_from_trace,
+                # so a device claim beyond that would be unexplained rather than the "the road was
+                # underground" gap this exists to close -- kept out rather than silently trusted.
+                device_tolled_roads = (
+                    await validate_device_reported_tolled_roads(session, item.auto_tolled_roads)
+                    if item.gps_blackout_segments
+                    else {}
+                )
+
                 variance_pct = compute_variance_pct(breakdown.grand_total, item.device_total)
 
                 # Real gap found live (2026-08-27, first-ever real device sync against a real
@@ -420,6 +435,7 @@ async def sync_trips(
                         or None
                     ),
                     blackout_reconciliation=blackout_reconciliation or None,
+                    auto_tolled_roads=device_tolled_roads or None,
                     flag_fall=breakdown.flag_fall,
                     dist_amount=breakdown.distance_charge,
                     wait_amount=breakdown.waiting_charge,

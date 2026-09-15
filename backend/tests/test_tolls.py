@@ -49,6 +49,7 @@ from app.services.tolls import (
     direction_allows_charge,
     haversine_m,
     select_time_of_day_price,
+    validate_device_reported_tolled_roads,
 )
 from tests.conftest import auth_headers
 from tests.test_trips import _create_trip, _seed_tariff, _tenant_of
@@ -1140,3 +1141,30 @@ async def test_duplicate_effective_date_price_revision_is_409(client: AsyncClien
     )
     assert resp.status_code == 409
 
+
+
+# --- validate_device_reported_tolled_roads (2026-09-16, blackout toll evidence) -----------------
+
+
+async def test_validate_device_reported_tolled_roads_keeps_only_known_roads(
+    session: AsyncSession,
+):
+    await _make_road(session, road_id="TESTDEVROAD", pricing_model="flat", directional="both", price_class_a="5.15")
+
+    result = await validate_device_reported_tolled_roads(
+        session, {"TESTDEVROAD": Decimal("5.15"), "NOT_A_REAL_ROAD": Decimal("99.99")}
+    )
+
+    assert result == {"TESTDEVROAD": "5.15"}
+
+
+async def test_validate_device_reported_tolled_roads_rounds_the_amount(session: AsyncSession):
+    await _make_road(session, road_id="TESTDEVROUND", pricing_model="flat", directional="both", price_class_a="1.00")
+
+    result = await validate_device_reported_tolled_roads(session, {"TESTDEVROUND": Decimal("4.755")})
+
+    assert result == {"TESTDEVROUND": "4.76"}
+
+
+async def test_validate_device_reported_tolled_roads_empty_input_is_a_no_op(session: AsyncSession):
+    assert await validate_device_reported_tolled_roads(session, {}) == {}

@@ -738,6 +738,29 @@ async def _same_interchange(
     )
 
 
+async def validate_device_reported_tolled_roads(
+    session: AsyncSession, reported: dict[str, Decimal]
+) -> dict[str, str]:
+    """Filters a device's own `TripSyncItem.auto_tolled_roads` claim down to road ids this
+    server's own registry currently recognises -- an id it does not is dropped outright, never
+    stored, so a corrupted/forged/stale client report can never introduce a road that does not
+    exist into the trip's dispute-evidence trail. The AMOUNT itself is not independently verified
+    (the server has no way to, precisely because this is evidence for the underground stretch it
+    cannot see -- same trust boundary `TripSyncItem.device_total` already crosses for the trip's
+    grand total, just narrower), only the road's identity.
+
+    Returns `{road_id: "amount"}` (decimal-as-string, matching `Trip.auto_tolled_roads`' own
+    column shape) for exactly the entries that passed; `{}` for an empty or entirely-unrecognised
+    `reported`. See `app.api.v1.trips.sync_trips`'s own comment for where this is merged into the
+    trip's stored evidence and why it never touches `trip.tolls`/`trip.total`.
+    """
+    if not reported:
+        return {}
+    result = await session.execute(select(TollRoad.id).where(TollRoad.id.in_(reported.keys())))
+    known_ids = set(result.scalars().all())
+    return {road_id: str(round_half_up(amount)) for road_id, amount in reported.items() if road_id in known_ids}
+
+
 async def find_nearby_gantries(
     session: AsyncSession, *, lat: float, lng: float, radius_m: float = GANTRY_DETECTION_RADIUS_M
 ) -> list[TollGantry]:
