@@ -387,6 +387,12 @@ data class ActiveBlackout(
     /** The tunnel corridor the position is locked to, when GPS dropped at a known portal
      * (2026-09-15) -- e.g. "Lane Cove Tunnel (Westbound)"; null for a free-run blackout. */
     val lockedCorridorName: String? = null,
+    /** Every bore in the locked chain, by name -- [lockedCorridorName] alone (2026-09-15 field
+     * report) is only the ENTRY bore's name, so a camera/advisory suppression check against it
+     * missed every later bore of a chained lock (Anzac Bridge -> Rozelle Interchange -> M4 East:
+     * the speed-camera warning kept firing once inside the M4 East, the second bore). Empty for a
+     * free-run blackout, same as [lockedCorridorName] being null. */
+    val lockedCorridorNames: Set<String> = emptySet(),
 )
 
 /**

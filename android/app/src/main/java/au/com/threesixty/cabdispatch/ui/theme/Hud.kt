@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -1121,7 +1122,20 @@ fun Color.toMapboxHex(): String = "#%06X".format(0xFFFFFF and toArgb())
  * [value] in the tone colour ("SYSTEM STATUS · ONLINE", "GPS · 12 sats"). 56dp tall for the
  * elderly-friendly touch standard the rest of the app's chips follow. Non-neutral tones get a
  * matching outer halo via [GlassCard]'s `glow`.
+ *
+ * [valueMaxWidthDp] caps the VALUE text specifically (ellipsized, never wrapped — this pill's
+ * height is fixed, so a wrap would overflow it) rather than letting it grow unbounded. Null (every
+ * existing caller before 2026-09-15) keeps that unbounded behaviour exactly as it was. Real bug,
+ * found live: the hired-screen "Zone" pill's value is an operator-entered zone name with no
+ * length limit of its own (`Zone.name`, up to 255 chars on the backend) — a long one grew the
+ * whole Trip/Zone row past the map's top-start corner and into the toll/hazard/camera chip column
+ * docked top-end, the "toll-ahead chip overlapping the zone pill" report. That call site now
+ * passes a cap; every other caller is unaffected.
  */
+// LongParameterList: one over the threshold after valueMaxWidthDp (2026-09-15) -- a shared widget
+// with 20+ call sites, five of its six params defaulted; splitting it to satisfy a count would
+// obscure the one small pill it is.
+@Suppress("LongParameterList")
 @Composable
 fun HudStatusPill(
     label: String,
@@ -1129,6 +1143,7 @@ fun HudStatusPill(
     modifier: Modifier = Modifier,
     tone: HudTone = HudTone.Neutral,
     pulsing: Boolean = tone != HudTone.Neutral,
+    valueMaxWidthDp: Dp? = null,
 ) {
     val toneColor = tone.color()
     GlassCard(
@@ -1160,7 +1175,11 @@ fun HudStatusPill(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 18.sp,
                 color = toneColor,
-                modifier = Modifier.padding(start = 8.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 8.dp).let {
+                    if (valueMaxWidthDp != null) it.widthIn(max = valueMaxWidthDp) else it
+                },
             )
         }
     }

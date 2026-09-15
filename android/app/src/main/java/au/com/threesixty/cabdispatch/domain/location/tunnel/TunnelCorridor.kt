@@ -25,6 +25,12 @@ class TunnelCorridor(
     /** Every toll road a CHAINED corridor runs along, in driving order ([roadId] is the first);
      * the gantry sweep widens its search to exactly these roads and no others. */
     val roadIds: List<String> = listOfNotNull(roadId),
+    /** Every bore's own [name] in a CHAINED corridor, in driving order ([name] is the first) --
+     * 2026-09-15 field report: an advisory (the speed-camera warning) suppressed by comparing
+     * against [name] alone kept firing once inside a LATER bore, because a chain keeps only its
+     * entry bore's own name. See [au.com.threesixty.cabdispatch.domain.fare
+     * .isSuppressedByLockedCorridor]'s call site for the fix. */
+    val names: List<String> = listOf(name),
 ) {
     init {
         require(points.size >= 2) { "a corridor needs at least two points" }
@@ -175,36 +181,56 @@ class TunnelRegistry(val corridors: List<TunnelCorridor>) {
     }
 
     /**
-     * [start] followed by every corridor that continues it: repeatedly the corridor whose first
-     * vertex lies within [CHAIN_GAP_M] of the current last vertex AND whose initial bearing is
-     * within [BEARING_TOLERANCE_DEG] of the current final bearing (the opposite bore also starts
-     * at our exit portal, but points the other way, so it never chains). The gap between two
-     * enforcement paths is bridged by a straight leg. Returns [start] itself when nothing
-     * continues it. Capped at [MAX_CHAIN_HOPS] hops.
+     * Every corridor that continues from [corridor]'s own exit portal, paired with its join gap
+     * (m): the corridor whose first vertex lies within [CHAIN_GAP_M] of [corridor]'s last vertex
+     * AND whose initial bearing is within [CHAIN_BEARING_TOLERANCE_DEG] of [corridor]'s final
+     * bearing (the opposite bore also starts at the same exit portal, but points the other way,
+     * so it never qualifies). The RAW candidate set -- [chainFrom] auto-continues through it only
+     * when there is exactly one; more than one is a genuine fork (common in this dataset: 7 of 22
+     * corridors have one -- Westconnex M4 East eastbound alone forks to BOTH the M8 and the
+     * Rozelle Interchange), left for [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .InertialSpeedSource] to resolve live, from the vehicle's own measured heading, once it
+     * actually reaches that point -- not a static geometric guess made here at blackout entry,
+     * before any of that heading data exists (2026-09-16 fix; see [extendAtFork]).
+     *
+     * Excludes every bore already folded into [corridor] itself (its own "+"-joined id), so a
+     * chain can never candidate its own constituent bores back to itself.
+     */
+    fun candidatesAt(corridor: TunnelCorridor): List<Pair<TunnelCorridor, Double>> {
+        val alreadyIn = corridor.id.split("+").toSet()
+        val (lastLat, lastLng) = corridor.points.last()
+        val endBearing = corridor.bearingAt(corridor.lengthKm)
+        return corridors.mapNotNull { c ->
+            if (c.id in alreadyIn) return@mapNotNull null
+            val (fLat, fLng) = c.points.first()
+            val gapM = GeoMath.distanceKm(lastLat, lastLng, fLat, fLng) * TunnelCorridor.METRES_PER_KM
+            // "Continues" = the next bore heads the way we are going, judged against BOTH our
+            // final leg and the straight gap leg to it -- interchange tunnels bend right at the
+            // join (Rozelle westbound ends on 297, the M4 East begins on 246), so either
+            // reference may be the fair one.
+            val gapBearing = GeoMath.bearingDeg(lastLat, lastLng, fLat, fLng)
+            val startBearing = c.bearingAt(0.0)
+            val diff = minOf(bearingDiff(startBearing, endBearing), bearingDiff(startBearing, gapBearing))
+            if (gapM <= CHAIN_GAP_M && diff <= CHAIN_BEARING_TOLERANCE_DEG) c to gapM else null
+        }
+    }
+
+    /**
+     * [start] followed by every corridor that UNAMBIGUOUSLY continues it -- see [candidatesAt]'s
+     * own doc for exactly what "continues" means and why a genuine fork (more than one
+     * candidate) stops the chain here rather than guessing one by gap distance alone (that used
+     * to be this function's own rule; the field report and fix are in [candidatesAt]'s doc).
+     * Returns [start] itself when nothing unambiguously continues it. Capped at [MAX_CHAIN_HOPS]
+     * hops -- a real fork always ends the chain sooner than that in this dataset.
      */
     fun chainFrom(start: TunnelCorridor): TunnelCorridor {
         val used = mutableListOf(start)
         var points = start.points
         var current = start
         repeat(MAX_CHAIN_HOPS) {
-            val (lastLat, lastLng) = current.points.last()
-            val endBearing = current.bearingAt(current.lengthKm)
-            val next = corridors
-                .filter { it !in used }
-                .mapNotNull { c ->
-                    val (fLat, fLng) = c.points.first()
-                    val gapM = GeoMath.distanceKm(lastLat, lastLng, fLat, fLng) * TunnelCorridor.METRES_PER_KM
-                    // "Continues" = the next bore heads the way we are going, judged against
-                    // BOTH our final leg and the straight gap leg to it -- interchange tunnels
-                    // bend right at the join (Rozelle westbound ends on 297, the M4 East begins
-                    // on 246), so either reference may be the fair one.
-                    val gapBearing = GeoMath.bearingDeg(lastLat, lastLng, fLat, fLng)
-                    val startBearing = c.bearingAt(0.0)
-                    val diff = minOf(bearingDiff(startBearing, endBearing), bearingDiff(startBearing, gapBearing))
-                    if (gapM <= CHAIN_GAP_M && diff <= CHAIN_BEARING_TOLERANCE_DEG) c to gapM else null
-                }
-                .minByOrNull { it.second }
-                ?.first ?: return@repeat
+            val candidates = candidatesAt(current)
+            if (candidates.size != 1) return@repeat // none, or a genuine fork -- leave it for runtime
+            val next = candidates.single().first
             used += next
             points = points + next.points
             current = next
@@ -216,6 +242,48 @@ class TunnelRegistry(val corridors: List<TunnelCorridor>) {
             roadId = start.roadId,
             points = points,
             roadIds = used.mapNotNull { it.roadId }.distinct(),
+            names = used.map { it.name }.distinct(),
+        )
+    }
+
+    /**
+     * Extends [corridor] by exactly one hop across a fork, using [liveHeadingDeg] -- the
+     * vehicle's own dead-reckoned heading right now, integrated from the gyro since GPS was lost
+     * -- to pick among the candidates [candidatesAt] finds at [corridor]'s current tail. Called
+     * once per sample by [au.com.threesixty.cabdispatch.domain.location.inertial
+     * .InertialSpeedSource] as the locked position approaches [corridor]'s own [TunnelCorridor
+     * .lengthKm], not just once at blackout entry -- see that class's own doc.
+     *
+     * Zero candidates (a genuine dead end/no known continuation): returns [corridor] unchanged,
+     * same as [chainFrom]. Exactly one: takes it, same as an unambiguous [chainFrom] hop, no
+     * heading needed. More than one (a real fork) with [liveHeadingDeg] null (no measured heading
+     * yet -- shouldn't happen once inside a blackout with a valid entry heading, but the estimator
+     * makes no promises): returns [corridor] unchanged rather than guessing, the same "no data, no
+     * guess" rule the rest of this pipeline follows -- [InertialSpeedSource] simply calls this
+     * again on the next sample, once a heading exists. More than one WITH a heading: the
+     * candidate whose own entry bearing ([TunnelCorridor.bearingAt] at 0.0) is closest to
+     * [liveHeadingDeg] -- the vehicle's actual measured direction through the join, not a static
+     * guess from the corridor geometry alone.
+     */
+    // ReturnCount: three guard-clause returns (no candidates, exactly one taken via `when`'s own
+    // return, no heading to resolve a real fork with) plus the one real result -- same accepted
+    // guard-clause style as chainFrom's own helpers above.
+    @Suppress("ReturnCount")
+    fun extendAtFork(corridor: TunnelCorridor, liveHeadingDeg: Double?): TunnelCorridor {
+        val candidates = candidatesAt(corridor).map { it.first }
+        val chosen = when {
+            candidates.isEmpty() -> return corridor
+            candidates.size == 1 -> candidates.single()
+            liveHeadingDeg == null -> return corridor
+            else -> candidates.minBy { bearingDiff(it.bearingAt(0.0), liveHeadingDeg) }
+        }
+        return TunnelCorridor(
+            id = "${corridor.id}+${chosen.id}",
+            name = corridor.name,
+            roadId = corridor.roadId,
+            points = corridor.points + chosen.points,
+            roadIds = (corridor.roadIds + chosen.roadIds).distinct(),
+            names = (corridor.names + chosen.names).distinct(),
         )
     }
 

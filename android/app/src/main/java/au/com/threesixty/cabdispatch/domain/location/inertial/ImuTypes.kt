@@ -52,6 +52,12 @@ interface InertialBillingSource {
     /** The locked corridor's display name ("Lane Cove Tunnel (Westbound)"), when locked. */
     val lockedCorridorName: String? get() = null
 
+    /** Every bore in the locked chain, by name -- see [au.com.threesixty.cabdispatch.domain
+     * .TripModels.ActiveBlackout.lockedCorridorNames]'s own doc for why [lockedCorridorName] alone
+     * (the entry bore's name) is not enough to suppress an advisory once inside a LATER bore of a
+     * chained lock. */
+    val lockedCorridorNames: Set<String> get() = emptySet()
+
     /** Road distance along the locked corridor from the blackout entry to the reacquisition fix,
      * km -- the billing reference that replaces the chord (null when not locked or the fix is
      * not on the corridor). */

@@ -71,3 +71,17 @@ fun upcomingSpeedCamera(
         distanceAheadM = bestDistanceM,
     )
 }
+
+/**
+ * True when this advisory is for the average-speed camera whose own enforcement path IS the
+ * tunnel bore the position is currently locked to and walking -- that camera is not "ahead", it
+ * is the road being driven, so the warning is suppressed for the whole crossing (2026-09-14).
+ *
+ * [lockedCorridorNames] must be every bore's name in the locked chain
+ * (`TunnelCorridor.names`/`ActiveBlackout.lockedCorridorNames`), not only the chain's entry-bore
+ * name: a 2026-09-15 field report found the warning still firing once inside the SECOND bore of a
+ * chained lock (Anzac Bridge -> Rozelle Interchange -> M4 East), because a single-name check only
+ * ever matched the entry bore.
+ */
+fun UpcomingSpeedCamera.isSuppressedByLockedCorridor(lockedCorridorNames: Set<String>): Boolean =
+    lockedCorridorNames.any { it.equals(name, ignoreCase = true) }

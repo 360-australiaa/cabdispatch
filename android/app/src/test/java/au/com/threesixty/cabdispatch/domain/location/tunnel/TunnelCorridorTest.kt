@@ -84,5 +84,76 @@ class TunnelCorridorTest {
         // 3 km along the chain is inside bore B, not parked at A's exit.
         val (_, lng) = lock.positionAt(traveledKm = 3.0)
         assertTrue("got $lng", lng < 151.175)
+        // 2026-09-15 field report: an advisory suppression check against `name` alone (the chain's
+        // entry bore, "A (Westbound)") missed the second bore -- `names` must carry both.
+        assertEquals(listOf("A (Westbound)", "B (Westbound)"), lock.corridor.names)
+    }
+
+    // --- a genuine fork: more than one bore continues the same exit portal (2026-09-16) --------
+
+    // A ends heading due west (270 deg). Two real continuations, both close enough and both
+    // within CHAIN_BEARING_TOLERANCE_DEG of A's own end bearing, but 45 deg apart from EACH
+    // OTHER: B keeps going due west (270), C forks off to the southwest (~225) -- Westconnex M4
+    // East eastbound's real shape (forks to both the M8 and the Rozelle Interchange).
+    private val forkA = TunnelCorridor("fa", "Fork A", "TESTA", (0..10).map { i -> -33.80 to (151.20 - i * 0.001) })
+    private val forkB = TunnelCorridor(
+        "fb", "Fork B (west)", "TESTB",
+        (0..10).map { i -> -33.80 to (151.1895 - i * 0.001) },
+    )
+    private val forkC = TunnelCorridor(
+        "fc", "Fork C (southwest)", "TESTC",
+        (0..10).map { i -> (-33.8004 - i * 0.0007) to (151.1895 - i * 0.0007) },
+    )
+    private val forkRegistry = TunnelRegistry(listOf(forkA, forkB, forkC))
+
+    @Test
+    fun `candidatesAt finds every real continuation of a fork, not just the nearest`() {
+        val candidates = forkRegistry.candidatesAt(forkA).map { it.first.id }.toSet()
+        assertEquals(setOf("fb", "fc"), candidates)
+    }
+
+    @Test
+    fun `chainFrom stops at a genuine fork rather than guessing the nearest gap`() {
+        // Before the 2026-09-16 fix this auto-picked whichever candidate had the smaller join
+        // gap -- exactly the static, entry-time-only guess this fix replaces with a live one.
+        val chained = forkRegistry.chainFrom(forkA)
+        assertEquals("fa", chained.id)
+        assertEquals(forkA.lengthKm, chained.lengthKm, 1e-9)
+    }
+
+    @Test
+    fun `extendAtFork picks the candidate whose own bearing matches the live heading`() {
+        val towardB = forkRegistry.extendAtFork(forkA, liveHeadingDeg = 268.0)
+        assertEquals("fa+fb", towardB.id)
+
+        val towardC = forkRegistry.extendAtFork(forkA, liveHeadingDeg = 222.0)
+        assertEquals("fa+fc", towardC.id)
+    }
+
+    @Test
+    fun `extendAtFork never guesses across a real fork with no live heading`() {
+        val unresolved = forkRegistry.extendAtFork(forkA, liveHeadingDeg = null)
+        assertEquals("fa", unresolved.id)
+    }
+
+    @Test
+    fun `extendAtFork auto-continues an unambiguous single candidate even with no heading`() {
+        val single = TunnelRegistry(listOf(forkA, forkB)) // no forkC -- only one candidate at all
+        val extended = single.extendAtFork(forkA, liveHeadingDeg = null)
+        assertEquals("fa+fb", extended.id)
+    }
+
+    @Test
+    fun `extendAtFork at a genuine dead end returns the corridor unchanged`() {
+        val deadEnd = TunnelRegistry(listOf(forkA)) // nothing else registered at all
+        val unchanged = deadEnd.extendAtFork(forkA, liveHeadingDeg = 270.0)
+        assertEquals("fa", unchanged.id)
+    }
+
+    @Test
+    fun `extendAtFork never candidates a bore already folded into the chain`() {
+        val towardB = forkRegistry.extendAtFork(forkA, liveHeadingDeg = 268.0)
+        // forkB is now part of the chain; asking again must never offer it (or forkA) back to itself.
+        assertTrue(forkRegistry.candidatesAt(towardB).none { it.first.id == "fb" || it.first.id == "fa" })
     }
 }

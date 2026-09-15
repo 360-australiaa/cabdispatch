@@ -1406,6 +1406,7 @@ class FareEngineImpl(
                         estimatedSpeedKmh = if (inertialUsable) inertialEstimate.speedKmh else null,
                         confidence = if (inertialUsable) inertialEstimate.confidence.name else null,
                         lockedCorridorName = inertialSpeedSource?.lockedCorridorName,
+                        lockedCorridorNames = inertialSpeedSource?.lockedCorridorNames.orEmpty(),
                     )
                 }
             }

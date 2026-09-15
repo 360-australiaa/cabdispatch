@@ -950,7 +950,7 @@ internal fun RowScope.MeterPaneLayout(
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp)),
     ) {
         MeterBackdropMap(
-            lockedCorridorName = fareState.blackout?.lockedCorridorName,
+            lockedCorridorNames = fareState.blackout?.lockedCorridorNames.orEmpty(),
             startLat = tripContext?.startLat,
             startLng = tripContext?.startLng,
             persistedTrace = persistedTrace,
@@ -992,7 +992,13 @@ internal fun RowScope.MeterPaneLayout(
                         .minByOrNull { it.radiusM }
                         ?.let { z -> if (z.name.isBlank()) "ZONE ${z.number}" else "${z.number} · ${z.name.uppercase()}" }
                 }
-                zoneLabel?.let { HudStatusPill(label = "Zone", value = it, tone = HudTone.Neutral) }
+                zoneLabel?.let {
+                    // Capped, not unbounded (2026-09-15 fix): a long operator-entered zone name
+                    // used to grow this pill across the map panel and collide with the toll/
+                    // hazard/camera chip column docked in the opposite (top-end) corner -- see
+                    // [HudStatusPill]'s own doc on [valueMaxWidthDp].
+                    HudStatusPill(label = "Zone", value = it, tone = HudTone.Neutral, valueMaxWidthDp = 130.dp)
+                }
                 AnimatedVisibility(visible = hasDestination && navState.offRoute, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
                     HudStatusPill(label = "Nav", value = "REROUTING…", tone = HudTone.Warning)
                 }

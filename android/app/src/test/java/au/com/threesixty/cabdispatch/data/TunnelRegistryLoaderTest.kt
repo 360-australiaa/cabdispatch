@@ -44,5 +44,12 @@ class TunnelRegistryLoaderTest {
         // 8 km in, the locked position is west of Haberfield, i.e. inside the M4 East bore.
         val (_, lng) = lock!!.positionAt(traveledKm = 8.0)
         assertTrue("got $lng", lng < 151.14)
+        // 2026-09-15 field report: the M4 East, the second bore, must be its OWN name here too --
+        // an advisory suppression check against `lock.corridor.name` alone (the entry bore only)
+        // missed it, so the speed-camera warning kept firing once inside the M4 East.
+        assertTrue(
+            "chain names must include the M4 East bore, got ${lock.corridor.names}",
+            lock.corridor.names.any { it.contains("M4 East", ignoreCase = true) },
+        )
     }
 }

@@ -17,6 +17,7 @@ import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ToneGeneratorAlertTone
 import au.com.threesixty.cabdispatch.domain.SpeechPriority
 import au.com.threesixty.cabdispatch.domain.SpeedCameraType
+import au.com.threesixty.cabdispatch.domain.fare.isSuppressedByLockedCorridor
 import au.com.threesixty.cabdispatch.domain.fare.upcomingSpeedCamera
 import au.com.threesixty.cabdispatch.domain.TextToSpeechAnnouncer
 import au.com.threesixty.cabdispatch.domain.TollPreset
@@ -270,8 +271,12 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                     // Same standstill rule as the map chip: no bearing of travel while parked.
                     val heading = fix?.heading?.takeIf { fix.speedKmh >= SPEED_CAMERA_MIN_MOVING_KMH }
                     fix?.let { upcomingSpeedCamera(cameras, it.lat, it.lng, heading) }
-                        // The tunnel we are locked to is not a camera "ahead" (see MeterBackdropMap).
-                        ?.takeUnless { it.name.equals(fareState.value.blackout?.lockedCorridorName, ignoreCase = true) }
+                        // Every bore in the locked chain is not a camera "ahead" (see
+                        // MeterBackdropMap) -- lockedCorridorName alone is only the chain's entry
+                        // bore, which missed a later bore's own alert (2026-09-15 field report).
+                        ?.takeUnless {
+                            it.isSuppressedByLockedCorridor(fareState.value.blackout?.lockedCorridorNames.orEmpty())
+                        }
                 }
                 .distinctUntilChanged { old, new -> old?.id == new?.id }
                 .collect { ahead ->

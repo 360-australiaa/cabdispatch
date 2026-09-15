@@ -3,6 +3,7 @@ package au.com.threesixty.cabdispatch.domain.fare
 import au.com.threesixty.cabdispatch.domain.SpeedCamera
 import au.com.threesixty.cabdispatch.domain.SpeedCameraType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -65,5 +66,41 @@ class UpcomingSpeedCameraAdvisorTest {
         val ahead =
             upcomingSpeedCamera(listOf(botanyRoad, nearer), southOfCameraLat, southOfCameraLng, headingDeg = 0.0)
         assertEquals(1, ahead?.id)
+    }
+
+    // --- isSuppressedByLockedCorridor (2026-09-15 field report) -------------------------------
+
+    private val m4East = SpeedCamera(
+        id = 6216, name = "Westconnex M4 East Tunnel (Eastbound)", type = SpeedCameraType.FIXED,
+        latitude = -33.8613, longitude = 151.0809, tunnel = true,
+    )
+
+    @Test
+    fun `the camera whose path is the single locked corridor is suppressed`() {
+        val ahead = upcomingSpeedCamera(listOf(m4East), -33.8613, 151.0800, headingDeg = 90.0)!!
+        assertTrue(ahead.isSuppressedByLockedCorridor(setOf("Westconnex M4 East Tunnel (Eastbound)")))
+    }
+
+    @Test
+    fun `a camera not in the locked set is never suppressed`() {
+        val ahead = upcomingSpeedCamera(listOf(m4East), -33.8613, 151.0800, headingDeg = 90.0)!!
+        assertFalse(ahead.isSuppressedByLockedCorridor(setOf("Lane Cove Tunnel (Westbound)")))
+        assertFalse(ahead.isSuppressedByLockedCorridor(emptySet()))
+    }
+
+    @Test
+    fun `a camera in a LATER bore of a chained lock is suppressed, not only the entry bore`() {
+        // 2026-09-15 field report: the lock's own displayed name is the chain's ENTRY bore only
+        // ("Rozelle Interchange Tunnel (Westbound)"), but the vehicle is now inside the M4 East,
+        // the second bore -- a check against the entry name alone kept the camera warning firing.
+        val ahead = upcomingSpeedCamera(listOf(m4East), -33.8613, 151.0800, headingDeg = 90.0)!!
+        val chain = setOf("Rozelle Interchange Tunnel (Westbound)", "Westconnex M4 East Tunnel (Eastbound)")
+        assertTrue(ahead.isSuppressedByLockedCorridor(chain))
+    }
+
+    @Test
+    fun `suppression matches case-insensitively`() {
+        val ahead = upcomingSpeedCamera(listOf(m4East), -33.8613, 151.0800, headingDeg = 90.0)!!
+        assertTrue(ahead.isSuppressedByLockedCorridor(setOf("westconnex m4 east tunnel (eastbound)")))
     }
 }

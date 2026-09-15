@@ -61,6 +61,7 @@ class InertialSpeedSource(
     override val lockedRoadId: String? get() = tunnelLock?.corridor?.roadId
     override val lockedRoadIds: Set<String> get() = tunnelLock?.corridor?.roadIds?.toSet().orEmpty()
     override val lockedCorridorName: String? get() = tunnelLock?.corridor?.name
+    override val lockedCorridorNames: Set<String> get() = tunnelLock?.corridor?.names?.toSet().orEmpty()
 
     override fun roadLockedPathKm(exitLat: Double, exitLng: Double): Double? =
         tunnelLock?.roadKmTo(exitLat, exitLng)
@@ -88,6 +89,11 @@ class InertialSpeedSource(
      * forward axis from at the exact instant GPS drops (see [maybeReseedFromHeading]). */
     @Volatile private var latestSample: ImuSample? = null
     private var lastHeadingSeedNanos: Long = 0L
+    /** The GPS bearing [onBlackoutEntered] froze the seed attempt at, retried against each new
+     * IMU sample while the calibration is still not [CalibrationQuality.SEEDED]/[CalibrationQuality.GOOD]
+     * -- see [maybeRetrySeedDuringBlackout]'s own doc for the gap this closes. Null when entry had
+     * no live GPS bearing at all -- there is nothing to retry with, same as before this fix. */
+    private var blackoutEntryHeadingDeg: Double? = null
     private var entryFix: LocationFix? = null
     private var traveledAlongHeadingKm = 0.0
     /** See [InertialBillingSource.blackoutPath]. Guarded by itself: appended on the sampler thread,
@@ -104,7 +110,7 @@ class InertialSpeedSource(
                 if (sample == null) return@collect
                 latestSample = sample
                 calibrator.onImuSample(sample)
-                if (!blackoutActive) maybeReseedFromHeading(sample)
+                if (!blackoutActive) maybeReseedFromHeading(sample) else maybeRetrySeedDuringBlackout(sample)
                 val calib = calibrator.calibration.value
                 val est = estimator.step(sample, calib)
                 _estimate.value = est
@@ -142,6 +148,7 @@ class InertialSpeedSource(
         val sample = latestSample
         if (sample != null && entryHeadingDeg != null) calibrator.seedFromHeading(sample, entryHeadingDeg)
         blackoutActive = true
+        blackoutEntryHeadingDeg = entryHeadingDeg
         entryFix = entryLocationFix
         traveledAlongHeadingKm = 0.0
         // Owner instruction (2026-09-15): at a known tunnel portal, lock to the tunnel and follow
@@ -159,6 +166,7 @@ class InertialSpeedSource(
      * the next tick) so the estimator does not sit on a frozen, now-stale free-run estimate. */
     override fun onBlackoutExited() {
         blackoutActive = false
+        blackoutEntryHeadingDeg = null
         entryFix = null
         tunnelLock = null
         estimator.seed(real.speedKmh.value, real.locationFix.value?.heading)
@@ -185,6 +193,32 @@ class InertialSpeedSource(
         calibrator.seedFromHeading(sample, heading)
     }
 
+    /**
+     * Real gap found 2026-09-16 (owner field report, speed froze mid-tunnel on a REAL drive):
+     * [onBlackoutEntered]'s own seed attempt is a single shot against whichever [ImuSample]
+     * happened to be [latestSample] at that exact instant -- [HeadingSeed.forwardAxisInTabletFrame]
+     * returns null (a no-op seed) whenever THAT ONE sample's rotation vector is absent or
+     * degenerate, and nothing retried it for the rest of the blackout, holding the display frozen
+     * the whole crossing even though the very next IMU sample, a fraction of a second later, would
+     * likely have carried a perfectly good rotation vector.
+     *
+     * Retries the SAME frozen [blackoutEntryHeadingDeg] (the last real GPS bearing before signal
+     * was lost -- never a guess, never refreshed mid-blackout, since there is no new bearing to
+     * refresh it from) against every subsequent sample until the calibration reaches
+     * [CalibrationQuality.SEEDED] or [CalibrationQuality.GOOD], then stops mattering (a no-op call,
+     * same as [maybeReseedFromHeading]'s own already-GOOD case). A null [blackoutEntryHeadingDeg]
+     * (no live GPS bearing at all when the blackout began) has nothing to retry with -- that case
+     * is the genuine "no data at all" one this function does not, and should not, try to fix; see
+     * [VehicleFrameCalibrator.seedFromHeading]'s own doc for why publishing the last known speed is
+     * the correct, honest answer when there is truly no direction evidence of any kind.
+     */
+    private fun maybeRetrySeedDuringBlackout(sample: ImuSample) {
+        val heading = blackoutEntryHeadingDeg ?: return
+        val quality = calibrator.calibration.value?.quality
+        if (quality == CalibrationQuality.SEEDED || quality == CalibrationQuality.GOOD) return
+        calibrator.seedFromHeading(sample, heading)
+    }
+
     /** Rolling-window median/p95 of |residual|, recomputed on every shadow-mode sample once enough
      * history exists to make the figure meaningful -- see [ResidualStats]'s own doc. */
     private fun recordResidual(residualKmh: Double) {
@@ -200,6 +234,34 @@ class InertialSpeedSource(
         )
     }
 
+    /**
+     * Real gap found 2026-09-16 (7 of the bundled 22 tunnel corridors genuinely fork -- Westconnex
+     * M4 East eastbound alone splits to both the M8 and the Rozelle Interchange): the lock used to
+     * be a single [TunnelCorridor] chained ONCE, eagerly, at [onBlackoutEntered] -- a real fork was
+     * silently resolved by [TunnelRegistry.chainFrom]'s own static "smallest join gap" tie-break,
+     * decided before the vehicle had even reached the join, let alone before any IMU heading data
+     * from inside the tunnel existed to check it against.
+     *
+     * Called once per sample while locked: as soon as the dead-reckoned distance reaches the
+     * current lock's own [TunnelCorridor.lengthKm] -- the tail bore's exit portal -- asks
+     * [TunnelRegistry.extendAtFork] to extend it by one more hop, using [liveHeadingDeg] (the
+     * estimator's own gyro-integrated heading, built up the whole way through the tunnel) to pick
+     * among a genuine fork's candidates. A no-op every other sample (cheap: one length compare),
+     * a no-op forever once nothing more continues the lock (dead end, or [TunnelRegistry
+     * .MAX_CHAIN_HOPS] reached), and a no-op for exactly as many samples as it takes
+     * [liveHeadingDeg] to stop being null after a fork is reached (never guesses).
+     */
+    // ReturnCount: three honest "nothing to extend yet" guards (no lock, not at the tail yet, no
+    // registry loaded), guard-clause style, same accepted pattern as this class's other methods.
+    @Suppress("ReturnCount")
+    private fun maybeExtendLockAtFork(liveHeadingDeg: Double?) {
+        val lock = tunnelLock ?: return
+        if (traveledAlongHeadingKm < lock.corridor.lengthKm) return
+        val registry = tunnelRegistry() ?: return
+        val extended = registry.extendAtFork(lock.corridor, liveHeadingDeg)
+        if (extended !== lock.corridor) tunnelLock = TunnelLock(extended, lock.entryAlongKm)
+    }
+
     private fun displayFix(est: InertialEstimate, sampleNanos: Long): LocationFix? {
         val entry = entryFix ?: return null
         val previousNanos = lastSampleNanosForDisplay
@@ -209,6 +271,7 @@ class InertialSpeedSource(
             val dtHours = (dtSeconds / SECONDS_PER_HOUR).coerceIn(0.0, MAX_DISPLAY_STEP_HOURS)
             traveledAlongHeadingKm += est.speedKmh * dtHours
         }
+        maybeExtendLockAtFork(est.headingDegOrNull)
         val lock = tunnelLock
         val heading: Double?
         val lat: Double

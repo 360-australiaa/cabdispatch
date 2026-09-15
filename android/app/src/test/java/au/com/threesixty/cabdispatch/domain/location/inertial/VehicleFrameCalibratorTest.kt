@@ -251,4 +251,31 @@ class VehicleFrameCalibratorTest {
         }
         assertEquals(CalibrationQuality.GOOD, calibrator.calibration.value?.quality)
     }
+
+    @Test
+    fun `a failed seed attempt does not block a later retry with the same heading from succeeding`() {
+        // 2026-09-16 field report: onBlackoutEntered's own seed attempt is a single shot against
+        // whichever IMU sample happened to be latest at that exact instant -- if THAT ONE sample's
+        // rotation vector was absent (the sensor had not produced a reading yet), the seed failed
+        // and nothing retried it for the rest of the blackout, freezing the display. The fix
+        // (InertialSpeedSource.maybeRetrySeedDuringBlackout) retries the SAME frozen entry heading
+        // against every later sample until one succeeds -- this pins the calibrator-level guarantee
+        // that retry relies on: a failed attempt must not poison a later successful one.
+        val calibrator = newCalibrator()
+        val noSensorYet = imuSample(0L, floatArrayOf(0f, 0f, 0f), gyro = floatArrayOf(0f, 0f, 0f))
+            .copy(rotationVector = floatArrayOf()) // too few components -- HeadingSeed's own "absent" case
+        assertEquals(
+            "an absent rotation vector must not seed anything",
+            false,
+            calibrator.seedFromHeading(noSensorYet, headingDeg = 90.0),
+        )
+        assertNull("a failed seed attempt must leave calibration untouched, not NONE", calibrator.calibration.value)
+
+        // A later sample, same frozen heading, now carries a real (if identity) rotation vector.
+        val sensorNowReporting = imuSample(1_000_000L, floatArrayOf(0f, 0f, 0f))
+        assertTrue(calibrator.seedFromHeading(sensorNowReporting, headingDeg = 90.0))
+        val c = calibrator.calibration.value!!
+        assertEquals(CalibrationQuality.SEEDED, c.quality)
+        assertEquals(1.0, c.forwardTablet[0], 1e-6)
+    }
 }

@@ -53,6 +53,7 @@ import au.com.threesixty.cabdispatch.domain.SpeedCamera
 import au.com.threesixty.cabdispatch.domain.SpeedCameraType
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingHazard
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingSpeedCamera
+import au.com.threesixty.cabdispatch.domain.fare.isSuppressedByLockedCorridor
 import au.com.threesixty.cabdispatch.domain.fare.upcomingSpeedCamera
 import au.com.threesixty.cabdispatch.domain.fare.UpcomingToll
 import au.com.threesixty.cabdispatch.domain.fare.upcomingHazard
@@ -251,10 +252,13 @@ internal fun MeterBackdropMap(
     destLng: Double? = null,
     plannedRoute: List<MapPoint> = emptyList(),
     dimAlpha: Float = 0.62f,
-    /** The tunnel corridor the blackout position is locked to, when any (2026-09-15) -- the
-     * average-speed camera whose path IS that corridor is not "ahead", it is the road being
-     * driven, so its chip is suppressed for the whole crossing. */
-    lockedCorridorName: String? = null,
+    /** Every bore's name in the tunnel chain the blackout position is locked to, when any
+     * (2026-09-15) -- the average-speed camera whose path IS one of those bores is not "ahead",
+     * it is the road being driven, so its chip is suppressed for the whole crossing. A single
+     * name (the chain's entry bore only) is not enough: a 2026-09-15 field report found the
+     * warning still firing once inside a LATER bore of a chained lock -- see
+     * [au.com.threesixty.cabdispatch.domain.fare.isSuppressedByLockedCorridor]'s own doc. */
+    lockedCorridorNames: Set<String> = emptySet(),
 ) {
     val routePoints = remember(persistedTrace, liveTrace) {
         persistedTrace.map { MapPoint(it.lat, it.lng) } + liveTrace
@@ -301,10 +305,10 @@ internal fun MeterBackdropMap(
     // pattern as tolls/hazards; the audible/spoken alert lives in HiredViewModel next to the
     // toll beep, this file only ever draws.
     val speedCameras = rememberSpeedCameras()
-    val upcomingCameraAhead = remember(speedCameras, vehicle, liveFix?.heading, lockedCorridorName) {
+    val upcomingCameraAhead = remember(speedCameras, vehicle, liveFix?.heading, lockedCorridorNames) {
         // A parked vehicle's stale bearing must not keep a "camera ahead" chip lit at the kerb.
         vehicle?.let { v -> upcomingSpeedCamera(speedCameras, v.lat, v.lng, liveFix?.movingHeading()) }
-            ?.takeUnless { it.isTheLockedCorridor(lockedCorridorName) }
+            ?.takeUnless { it.isSuppressedByLockedCorridor(lockedCorridorNames) }
     }
     var displayedUpcomingCamera by remember { mutableStateOf<UpcomingSpeedCamera?>(null) }
     LaunchedEffect(upcomingCameraAhead) {
@@ -1291,7 +1295,3 @@ private fun LocationFix.movingHeading(): Double? = if (speedKmh >= MOVING_HEADIN
 
 private const val MOVING_HEADING_MIN_KMH = 5.0
 
-/** True when this camera is the average-speed section of the tunnel the blackout is locked to
- * (same TfNSW name, e.g. "Rozelle Interchange Tunnel (Westbound)"). */
-private fun UpcomingSpeedCamera.isTheLockedCorridor(lockedCorridorName: String?): Boolean =
-    lockedCorridorName != null && name.equals(lockedCorridorName, ignoreCase = true)
