@@ -270,8 +270,8 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 12
-        versionName = "0.7.0"
+        versionCode = 13
+        versionName = "0.7.1"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

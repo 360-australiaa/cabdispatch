@@ -29,7 +29,13 @@ import {
 // still works offline / without a maps API key.
 export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
-export const MAP_STYLE_URL = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za";
+// 2026-09-15: the custom Studio style (mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za)
+// loads its JSON and iconsets but never requests a single tile in production -- both the Live
+// Map and the Overview tile rendered as a black canvas with markers. Mapbox's own dark style
+// is the map until the Studio style is repaired; installStyleFallback stays wired as the
+// safety net for that style too.
+export const MAP_STYLE_URL = "mapbox://styles/mapbox/dark-v11";
+export const CUSTOM_BRAND_STYLE_URL = "mapbox://styles/benfarid/cmtbnyhe4000e01pcgx2t51za";
 
 /**
  * The camera the map opens on when it has nothing better to show, resolved by
