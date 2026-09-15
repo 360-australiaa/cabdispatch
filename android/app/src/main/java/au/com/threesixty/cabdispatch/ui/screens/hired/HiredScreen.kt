@@ -950,6 +950,7 @@ internal fun RowScope.MeterPaneLayout(
             .border(1.dp, CaptainPalette.panelBorder, RoundedCornerShape(24.dp)),
     ) {
         MeterBackdropMap(
+            lockedCorridorName = fareState.blackout?.lockedCorridorName,
             startLat = tripContext?.startLat,
             startLng = tripContext?.startLng,
             persistedTrace = persistedTrace,

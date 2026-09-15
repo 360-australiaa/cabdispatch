@@ -236,7 +236,10 @@ internal data class MapPoint(val lat: Double, val lng: Double)
 // logo drawn but no tiles or zones, exactly this failure mode. The explicit mapView.onStart() call
 // plus this DisposableEffect's manual ON_START/ON_STOP forwarding are the fix, verified on-device,
 // and stay exactly as they are.
-@Suppress("Lifecycle")
+// LongParameterList/LongMethod/CyclomaticComplexMethod/FunctionNaming: the one screen-sized composable
+// of the meter map; it was baselined under its previous signature and the tunnel-lock parameter
+// (2026-09-15) changed that signature. Splitting it is a separate refactor.
+@Suppress("Lifecycle", "LongParameterList", "LongMethod", "CyclomaticComplexMethod", "FunctionNaming")
 internal fun MeterBackdropMap(
     startLat: Double?,
     startLng: Double?,
@@ -248,6 +251,10 @@ internal fun MeterBackdropMap(
     destLng: Double? = null,
     plannedRoute: List<MapPoint> = emptyList(),
     dimAlpha: Float = 0.62f,
+    /** The tunnel corridor the blackout position is locked to, when any (2026-09-15) -- the
+     * average-speed camera whose path IS that corridor is not "ahead", it is the road being
+     * driven, so its chip is suppressed for the whole crossing. */
+    lockedCorridorName: String? = null,
 ) {
     val routePoints = remember(persistedTrace, liveTrace) {
         persistedTrace.map { MapPoint(it.lat, it.lng) } + liveTrace
@@ -294,9 +301,10 @@ internal fun MeterBackdropMap(
     // pattern as tolls/hazards; the audible/spoken alert lives in HiredViewModel next to the
     // toll beep, this file only ever draws.
     val speedCameras = rememberSpeedCameras()
-    val upcomingCameraAhead = remember(speedCameras, vehicle, liveFix?.heading) {
+    val upcomingCameraAhead = remember(speedCameras, vehicle, liveFix?.heading, lockedCorridorName) {
         // A parked vehicle's stale bearing must not keep a "camera ahead" chip lit at the kerb.
         vehicle?.let { v -> upcomingSpeedCamera(speedCameras, v.lat, v.lng, liveFix?.movingHeading()) }
+            ?.takeUnless { it.isTheLockedCorridor(lockedCorridorName) }
     }
     var displayedUpcomingCamera by remember { mutableStateOf<UpcomingSpeedCamera?>(null) }
     LaunchedEffect(upcomingCameraAhead) {
@@ -1282,3 +1290,8 @@ private fun glyphPathFor(category: String, d: Int, r: Float): android.graphics.P
 private fun LocationFix.movingHeading(): Double? = if (speedKmh >= MOVING_HEADING_MIN_KMH) heading else null
 
 private const val MOVING_HEADING_MIN_KMH = 5.0
+
+/** True when this camera is the average-speed section of the tunnel the blackout is locked to
+ * (same TfNSW name, e.g. "Rozelle Interchange Tunnel (Westbound)"). */
+private fun UpcomingSpeedCamera.isTheLockedCorridor(lockedCorridorName: String?): Boolean =
+    lockedCorridorName != null && name.equals(lockedCorridorName, ignoreCase = true)

@@ -270,6 +270,8 @@ class HiredViewModel(application: Application) : AndroidViewModel(application) {
                     // Same standstill rule as the map chip: no bearing of travel while parked.
                     val heading = fix?.heading?.takeIf { fix.speedKmh >= SPEED_CAMERA_MIN_MOVING_KMH }
                     fix?.let { upcomingSpeedCamera(cameras, it.lat, it.lng, heading) }
+                        // The tunnel we are locked to is not a camera "ahead" (see MeterBackdropMap).
+                        ?.takeUnless { it.name.equals(fareState.value.blackout?.lockedCorridorName, ignoreCase = true) }
                 }
                 .distinctUntilChanged { old, new -> old?.id == new?.id }
                 .collect { ahead ->
