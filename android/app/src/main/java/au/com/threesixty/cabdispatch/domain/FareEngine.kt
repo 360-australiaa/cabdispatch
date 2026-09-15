@@ -626,6 +626,11 @@ class FareEngineImpl(
     private var blackoutSegmentId: String? = null
     private var blackoutStartedAtIso: String? = null
 
+    /** [nanoTimeSource] at the instant the blackout was declared -- the duration input to
+     * [BlackoutReconciler.maxPlausibleKm], on the same pinnable clock every other elapsed-time
+     * figure in this engine uses (never the wall clock, which a test cannot freeze). */
+    private var blackoutStartedAtNanos: Long = 0L
+
     /**
      * W2: the running total the inertial estimate has billed, tick-by-tick, for the CURRENT
      * blackout — [BlackoutReconciler]'s `estimatedKm` input at reacquisition. Reset to zero
@@ -933,6 +938,7 @@ class FareEngineImpl(
         blackoutEntryWasMoving = openSegment.entryWasMoving
         blackoutSegmentId = openSegment.clientUuid
         blackoutStartedAtIso = openSegment.startedAtIso
+        blackoutStartedAtNanos = nanoTimeSource()
     }
 
     override fun updatePassengerCount(count: Int) {
@@ -1285,6 +1291,7 @@ class FareEngineImpl(
                 // process death one tick later still has both halves of the story consistent.
                 blackoutSegmentId = UUID.randomUUID().toString()
                 blackoutStartedAtIso = Instant.now().toString()
+                blackoutStartedAtNanos = nowNanos
                 blackoutInertialBilledKm = BigDecimal.ZERO
                 blackoutInertialEngaged = false
                 blackoutInertialInvalidatedMidway = false
@@ -1586,10 +1593,12 @@ class FareEngineImpl(
         // chord bound.
         val lockedKm = inertialSpeedSource?.roadLockedPathKm(exitFix.lat, exitFix.lng)
         val roadPathKm = lockedKm?.let { BigDecimal.valueOf(it) } ?: lookupRoadPathKm(entryFix, exitFix)
+        val blackoutSeconds = (nanoTimeSource() - blackoutStartedAtNanos) / NANOS_PER_SECOND_D
         val reconciliation = BlackoutReconciler.reconcile(
             estimatedKm = inertial.billedKm,
             chordKm = chordKm,
             roadPathKm = roadPathKm,
+            maxPlausibleKm = BlackoutReconciler.maxPlausibleKm(blackoutSeconds),
         )
         if (reconciliation.correctionKm.signum() != 0) {
             calcEngine.reconcileBlackoutDistance(cs, reconciliation.correctionKm)
@@ -1939,6 +1948,7 @@ class FareEngineImpl(
 
         private const val NANOS_PER_SECOND = 1_000_000_000.0
         private const val NANOS_PER_MILLI = 1_000_000L
+        private const val NANOS_PER_SECOND_D = 1_000_000_000.0
         private const val SECONDS_PER_HOUR = 3600.0
     }
 }

@@ -40,12 +40,44 @@ object BlackoutReconciler {
         val referenceKm: BigDecimal?,
     )
 
-    enum class ReferenceSource { ROAD_PATH, CHORD_BOUNDED }
+    enum class ReferenceSource { ROAD_PATH, CHORD_BOUNDED, IMPLAUSIBLE_EXIT }
 
-    fun reconcile(estimatedKm: BigDecimal, chordKm: BigDecimal, roadPathKm: BigDecimal?): Result {
+    /** No road vehicle covers ground faster than this; a reacquisition fix that implies more is
+     * a receiver glitch or a teleport (bench, 2026-09-15: the simulator released to the tablet's
+     * real Karachi GPS at the end of a Sydney tunnel run and the chord bound "corrected" the fare
+     * up by 11,025 km). */
+    const val MAX_PLAUSIBLE_KMH = 150.0
+
+    /** Grace for a blackout that begins or ends a few seconds off the true portal times. */
+    const val PLAUSIBILITY_GRACE_KM = 0.5
+
+    fun maxPlausibleKm(blackoutSeconds: Double): BigDecimal {
+        val hours = blackoutSeconds.coerceAtLeast(0.0) / SECONDS_PER_HOUR
+        return BigDecimal.valueOf(hours * MAX_PLAUSIBLE_KMH + PLAUSIBILITY_GRACE_KM)
+    }
+
+    private const val SECONDS_PER_HOUR = 3600.0
+
+    fun reconcile(
+        estimatedKm: BigDecimal,
+        chordKm: BigDecimal,
+        roadPathKm: BigDecimal?,
+        /** The most ground the blackout's duration allows -- see [maxPlausibleKm]. Null skips
+         * the check (callers with no duration in hand). */
+        maxPlausibleKm: BigDecimal? = null,
+    ): Result {
         val billed: BigDecimal
         val source: ReferenceSource
-        if (roadPathKm != null && roadPathKm.signum() > 0) {
+        // Judged on the CHORD only: the chord is the raw exit fix, which is what a receiver glitch
+        // or a source hand-over corrupts. A road-path reference can only exist when that same
+        // exit fix sat on a known road, so a plausible chord vouches for it.
+        val implausible = maxPlausibleKm != null && chordKm > maxPlausibleKm
+        if (implausible) {
+            // The exit fix cannot be where the vehicle is: never bill towards it. The sensor
+            // estimate stands, capped at what the duration allows, and the segment says so.
+            billed = estimatedKm.min(maxPlausibleKm)
+            source = ReferenceSource.IMPLAUSIBLE_EXIT
+        } else if (roadPathKm != null && roadPathKm.signum() > 0) {
             billed = roadPathKm
             source = ReferenceSource.ROAD_PATH
         } else {
