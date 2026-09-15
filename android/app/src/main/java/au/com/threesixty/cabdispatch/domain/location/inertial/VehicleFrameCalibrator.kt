@@ -26,7 +26,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * the vehicle's own forward/backward axis, and its SIGN (relative to whether GPS speed rose or
  * fell) resolves forward from backward. Averaging several such events, weighted equally, and
  * requiring their individual directions to agree within a 15 degree spread before trusting the
- * average, is task 3's calibration bar.
+ * average, is task 3's calibration bar. Failing that bar with a heading seed already in hand
+ * (2026-09-15 fix) reverts to the seed rather than downgrading to [CalibrationQuality.LEARNING] --
+ * see [recomputeCalibration]'s own comment.
  *
  * ### Persistence and invalidation
  * The learned frame survives a process restart (`SecurePrefs`-backed, per device — same store
@@ -207,9 +209,34 @@ class VehicleFrameCalibrator(private val context: Context, private val deviceKey
         }
         val mean = averageDirection(confirmingDirections) ?: return _calibration.value
         val spreadDeg = confirmingDirections.maxOf { angleBetweenDeg(it, mean) }
-        val quality = if (spreadDeg < MAX_ANGULAR_SPREAD_DEG) CalibrationQuality.GOOD else CalibrationQuality.LEARNING
+        val seed = seededForward
+        // Live gap found 2026-09-15 (real Sydney tunnel drive, speed froze mid-crossing): each
+        // confirming event already had to agree with the seed within MAX_SEED_DISAGREEMENT_DEG (60
+        // deg) to enter [confirmingDirections] at all -- see [trackConfirmingWindow] -- but four such
+        // events can still disagree with EACH OTHER by >= MAX_ANGULAR_SPREAD_DEG (four noisy
+        // accelerate/brake events, none individually more than ~25 deg off the seed, still spread
+        // 50 deg pairwise). That used to downgrade straight to LEARNING and throw the seed away,
+        // even though the seed -- physics-derived, not squeezed from these same noisy events -- was
+        // still perfectly good evidence. [InertialSpeedEstimator] treats LEARNING exactly like no
+        // calibration at all and freezes the displayed speed, so this regressed a tablet that had
+        // already achieved a working seeded estimate back to frozen, mid-drive. A noisy confirming
+        // average must never be worse than doing nothing with it: fall back to the seed, not to
+        // LEARNING, whenever one exists. [confirmingDirections] itself is untouched either way, so
+        // it keeps accumulating toward a real GOOD calibration.
+        val quality: CalibrationQuality
+        val forwardTablet: DoubleArray
+        if (spreadDeg < MAX_ANGULAR_SPREAD_DEG) {
+            quality = CalibrationQuality.GOOD
+            forwardTablet = mean
+        } else if (seed != null) {
+            quality = CalibrationQuality.SEEDED
+            forwardTablet = seed
+        } else {
+            quality = CalibrationQuality.LEARNING
+            forwardTablet = mean
+        }
         val result = VehicleFrameCalibration(
-            forwardTablet = mean,
+            forwardTablet = forwardTablet,
             gyroZBiasRadPerS = stationaryGyroZSamples.average0(),
             forwardAccelBiasMps2 = stationaryAccelSamples.average0(),
             quality = quality,

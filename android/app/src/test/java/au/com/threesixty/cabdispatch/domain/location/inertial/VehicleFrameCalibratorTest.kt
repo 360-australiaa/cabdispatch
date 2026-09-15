@@ -108,6 +108,38 @@ class VehicleFrameCalibratorTest {
     }
 
     @Test
+    fun minEventsWithWideSpreadButAGoodSeed_fallsBackToSeededNotLearning() {
+        // Real Sydney drive, 2026-09-15: speed froze mid-tunnel even though the tablet had a good
+        // seed a moment earlier. Each of these four events is only 25 deg from the seed (well
+        // inside MAX_SEED_DISAGREEMENT_DEG, so all four count as evidence) but they alternate
+        // sides, so their spread against EACH OTHER is 50 deg -- past the 15 deg GOOD bar. Before
+        // the fix this discarded the seed for CalibrationQuality.LEARNING, which
+        // InertialSpeedEstimator treats exactly like no calibration at all and freezes the display.
+        val calibrator = newCalibrator()
+        seedEast(calibrator)
+        feedConfirmingEvents(calibrator, listOf(-25.0, 25.0, -25.0, 25.0))
+
+        val c = calibrator.calibration.value!!
+        assertEquals(VehicleFrameCalibrator.MIN_CALIBRATION_EVENTS, c.confirmingEventCount)
+        assertEquals(
+            "a noisy confirming spread must fall back to the seed, not discard it",
+            CalibrationQuality.SEEDED,
+            c.quality,
+        )
+        assertEquals("the seed's own east axis, not the noisy mean", 1.0, c.forwardTablet[0], 1e-6)
+    }
+
+    @Test
+    fun minEventsWithWideSpreadAndNoSeed_staysLearning() {
+        // The counterpart to the fix above: with no seed to fall back to, a noisy spread is
+        // genuinely nothing trustworthy and must still read LEARNING, same as before.
+        val calibrator = newCalibrator()
+        feedConfirmingEvents(calibrator, listOf(-25.0, 25.0, -25.0, 25.0))
+
+        assertEquals(CalibrationQuality.LEARNING, calibrator.calibration.value?.quality)
+    }
+
+    @Test
     fun mountDisturbance_invalidatesAGoodCalibration() {
         val calibrator = newCalibrator()
         feedConfirmingEvents(
