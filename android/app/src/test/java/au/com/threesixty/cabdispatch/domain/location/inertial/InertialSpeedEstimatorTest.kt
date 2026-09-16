@@ -224,6 +224,53 @@ class InertialSpeedEstimatorTest {
     }
 
     @Test
+    fun aQuietCruiseWindow_doesNotZuptOnceTheEstimateHasOnlyDriftedLowUnderLowConfidence() {
+        // Real field report, T5453, 2026-09-16: a real ~7.5 min M4 East blackout. No real
+        // deceleration ever happened -- the estimate drifted from 90 km/h down under the ZUPT gate
+        // purely from ~68s of small uncorrected integration error (sigmaV crossing into LOW
+        // confidence along the way, same as confidenceDegradesOverTimeBetweenZupts... below), then
+        // the very next quiet cruise window (light road vibration, exactly the 2026-09-14 pattern)
+        // read that drifted-low value as "already stopped" and zeroed it -- while the real car kept
+        // doing ~90 km/h. See isZeroVelocity's own doc for the fix and why it must not simply freeze
+        // the estimate instead (an explicit, separate owner decision).
+        val estimator = InertialSpeedEstimator()
+        estimator.seed(speedKmh = 90.0, headingDegOrNull = 0.0)
+
+        // Phase 1: a small, sustained bias -- not a real stop (magnitude stays over the ZUPT
+        // threshold the whole time, so nothing here could ZUPT on its own) -- drifts the estimate
+        // under ZUPT_SPEED_GATE_MPS (4 m/s) and sigmaV past the LOW-confidence threshold (3.0) by
+        // about the same time, matching the real drive's own timescale.
+        var t = 0L
+        var last = estimator.step(sample(t, forwardAccel = -0.31f), goodCalibration)
+        repeat(70) {
+            t += 1_000_000_000L
+            last = estimator.step(sample(t, forwardAccel = -0.31f), goodCalibration)
+        }
+        assertTrue("drift phase must bring the estimate under the ZUPT speed gate", last.speedKmh < 14.4)
+        assertEquals(
+            "drift phase must reach LOW confidence, same as the real blackout",
+            InertialConfidence.LOW,
+            last.confidence,
+        )
+
+        // Phase 2: an ordinary quiet cruise window -- the exact 2026-09-14 vibration pattern, no
+        // real deceleration.
+        val speedBeforeQuietWindow = last.speedKmh
+        repeat(20) {
+            t += 100_000_000L
+            last = estimator.step(sample(t, verticalAccel = if (it % 2 == 0) 0.2f else -0.2f), goodCalibration)
+        }
+
+        assertEquals(
+            "a quiet window must not zero an estimate that only drifted there under low confidence",
+            speedBeforeQuietWindow,
+            last.speedKmh,
+            0.5,
+        )
+        assertEquals(0, last.zuptCount)
+    }
+
+    @Test
     fun trueStillnessFloor_zuptsEvenIfTheIntegratedSpeedDriftedHigh() {
         // An estimate that drifted (say a missed brake) must still be corrected when the sensors
         // read a genuinely stationary tablet -- the stillness floor is the escape hatch.

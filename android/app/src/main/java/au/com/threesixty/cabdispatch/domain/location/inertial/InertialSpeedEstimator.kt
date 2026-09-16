@@ -165,8 +165,33 @@ class InertialSpeedEstimator {
         // would have seen -- so a quiet window only counts as a stop when the integrated speed is
         // already near zero, OR when the window is at the sensor's own stillness floor (a level a
         // moving car's mount never holds for a full window: engine + road always exceed it).
+        //
+        // Real field report, T5453, 2026-09-16 (M4 East, a real ~7.5 min blackout): the "already
+        // near zero" half of that fix is itself exploitable once vEstMps has drifted there on its
+        // own, with no real deceleration involved -- pure double-integration error, the SAME
+        // uncorrected drift this class's error budget (sigmaV) exists to flag, working alone for
+        // long enough on an ordinary highway cruise to walk the estimate under ZUPT_SPEED_GATE_MPS.
+        // The very next quiet window (routine at cruising speed, per the 2026-09-14 finding above)
+        // then read that drifted-low value as proof of a stop and hard-reset it to exactly zero --
+        // billed distance self-corrected afterwards from the known road geometry (BlackoutReconciler
+        // never trusts this estimate blindly), but the LIVE speed/position shown to the driver and
+        // the dispatcher dashboard was wrong for the rest of the blackout: decaying toward zero,
+        // then pinned at it, while the car kept doing ~90 km/h the whole time.
+        //
+        // The fix does NOT freeze or give up on the estimate once confidence degrades -- the owner
+        // explicitly rejected that trade on 2026-09-14 (see FareEngineImpl's own "DIRECT OWNER
+        // DECISION" comment: "never let the meter sit at a flat number through a blackout"). It
+        // narrows what ZUPT is allowed to TRUST: "the integrated speed already reads low" is only
+        // real evidence of a stop while sigmaV itself is still trustworthy (confidence above LOW) --
+        // once confidence has already degraded, a low vEstMps could just as easily be the drift, not
+        // the truth, so a quiet window must not be allowed to treat it as confirmation. The
+        // stillness-floor escape hatch is untouched: a fully stationary tablet's own sensor reading
+        // is real, independent physical evidence regardless of how much the estimate has drifted,
+        // and keeps correcting a genuine missed stop exactly as before.
+        val driftedLowReadingIsTrustworthy =
+            vEstMps < ZUPT_SPEED_GATE_MPS && confidenceFor(sigmaV) != InertialConfidence.LOW
         return quietWindow &&
-            (vEstMps < ZUPT_SPEED_GATE_MPS || windowMax(accelMagnitudeWindow) < ZUPT_STILLNESS_FLOOR_MPS2)
+            (driftedLowReadingIsTrustworthy || windowMax(accelMagnitudeWindow) < ZUPT_STILLNESS_FLOOR_MPS2)
     }
 
     /** The highest speed this estimator will ever report — task 4's bound: the GPS speed at the
