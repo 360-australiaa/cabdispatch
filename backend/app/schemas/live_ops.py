@@ -11,6 +11,7 @@ matching Create/Update pair tied to a table this domain owns -- see
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
@@ -127,6 +128,27 @@ class VehicleLiveRead(BaseModel):
         description="When the current shift started -- e.g. to show 'Driver X, on since 6:00am' "
         "in a fleet list."
     )
+    live_fare_total: Decimal | None = Field(
+        default=None,
+        description="Live estimated fare total for the trip currently running on this vehicle, "
+        "reported on the SAME periodic position heartbeat as lat/lng (2026-09-16, live trip "
+        "monitoring pass) -- see PositionPublishRequest.fare_total below. This is a live ESTIMATE "
+        "for dispatcher visibility only: the device's own fare engine recomputes it every heartbeat "
+        "while a fare runs, and it is never written back to the Trip row or used for billing -- "
+        "the trip's real, authoritative total is only known once the driver closes it and the app "
+        "syncs (POST /v1/trips/sync), same as every other financial figure in this codebase. None "
+        "when no trip is currently running on this vehicle, or none has been reported yet.",
+    )
+    live_distance_km: Decimal | None = Field(
+        default=None,
+        description="Live cumulative distance for the currently-running trip -- same "
+        "live-estimate-only, heartbeat-sourced, never-billed convention as live_fare_total above.",
+    )
+    live_tolls_total: Decimal | None = Field(
+        default=None,
+        description="Live cumulative tolls detected so far for the currently-running trip -- same "
+        "live-estimate-only, heartbeat-sourced, never-billed convention as live_fare_total above.",
+    )
 
 
 # --- drivers --------------------------------------------------------------------
@@ -210,6 +232,29 @@ class PositionPublishRequest(BaseModel):
         "Mirrors the Android PositionPublishRequestDto.estimated field; defaults False so every "
         "pre-existing publisher is unchanged.",
     )
+    fare_total: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Optional live fare total, reported on the same heartbeat as lat/lng while a "
+        "fare is running (2026-09-16, live trip monitoring pass) -- the device's own on-screen "
+        "meter total at the moment of this publish, straight passthrough, no server recomputation. "
+        "Purely live-cache-only, same as speed_kmh/heading above: never persisted to the Trip row, "
+        "never used for billing -- see VehicleLiveRead.live_fare_total's own doc for why. None on "
+        "every heartbeat published while no fare is running (the overwhelming majority), and on "
+        "every pre-existing publisher that doesn't send it.",
+    )
+    distance_km: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Optional live cumulative distance for the running fare -- same "
+        "live-cache-only, never-billed convention as fare_total above.",
+    )
+    tolls_total: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="Optional live cumulative tolls detected so far for the running fare -- same "
+        "live-cache-only, never-billed convention as fare_total above.",
+    )
 
 
 class PositionRead(BaseModel):
@@ -237,6 +282,15 @@ class PositionRead(BaseModel):
         default=False,
         description="See PositionPublishRequest.estimated -- carried through the cache and the "
         "WS /v1/fleet/live frame unchanged.",
+    )
+    fare_total: Decimal | None = Field(
+        default=None, description="See PositionPublishRequest.fare_total -- carried through unchanged."
+    )
+    distance_km: Decimal | None = Field(
+        default=None, description="See PositionPublishRequest.distance_km -- carried through unchanged."
+    )
+    tolls_total: Decimal | None = Field(
+        default=None, description="See PositionPublishRequest.tolls_total -- carried through unchanged."
     )
 
 

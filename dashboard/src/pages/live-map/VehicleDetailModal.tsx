@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { EntityLink } from "@/components/EntityLink";
 import { Badge, Button, Sheet, Spinner, Table, type TableColumn } from "@/components/ui";
+import { formatMoney } from "@/lib/format";
 import type { PositionHistoryItem, VehicleShiftHistoryItem } from "./types";
 import type { VehicleMapState } from "./FleetMapCanvas";
 import {
@@ -429,6 +430,33 @@ export function VehicleDetailModal({ vehicleId, open, onClose, mapState }: Vehic
               </div>
             )}
           </div>
+
+          {/* Live trip (2026-09-16, live trip monitoring pass): the trips domain only lands a
+              trip on the server once it CLOSES (one atomic, immutable record, by design), so
+              this rides the SAME position heartbeat as battery/speed above rather than a real
+              trip record -- see VehicleLiveRead.live_fare_total's own doc. A live ESTIMATE for
+              dispatcher visibility only; the authoritative fare is the closed, synced trip. Shown
+              only once the device has actually reported one -- a vehicle between fares, or on an
+              app build that predates this feature, simply omits the panel rather than showing a
+              misleading "$0.00". */}
+          {vehicle.live_fare_total != null && (
+            <div className="rounded-lg border border-border p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Live trip
+              </p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Live estimate from the meter — the final fare is set when the driver closes the
+                trip.
+              </p>
+              <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-sm">
+                <Field label="Fare so far">{formatMoney(vehicle.live_fare_total)}</Field>
+                <Field label="Distance">
+                  {vehicle.live_distance_km == null ? "—" : `${Number(vehicle.live_distance_km).toFixed(1)} km`}
+                </Field>
+                <Field label="Tolls">{formatMoney(vehicle.live_tolls_total)}</Field>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-lg border border-border p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

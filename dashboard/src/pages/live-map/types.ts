@@ -68,6 +68,19 @@ export interface VehicleLiveRead {
    * above): never a placeholder coordinate standing in for "unknown". */
   planned_dest_lat: number | null;
   planned_dest_lng: number | null;
+  /** Live estimated fare total for the trip currently running on this vehicle (2026-09-16, live
+   * trip monitoring pass) -- rides the same heartbeat as speed_kmh/heading above, reported only
+   * while the device's own fare engine has a trip open. This is a live ESTIMATE for dispatcher
+   * visibility only: never the trip's authoritative billed total, which is only known once the
+   * driver closes it and the app syncs -- see backend VehicleLiveRead.live_fare_total's own doc.
+   * Null whenever no trip is currently running, or none has been reported yet. */
+  live_fare_total: string | null;
+  /** Live cumulative distance for the currently-running trip -- same live-estimate-only
+   * convention as live_fare_total above. */
+  live_distance_km: string | null;
+  /** Live cumulative tolls detected so far for the currently-running trip -- same
+   * live-estimate-only convention as live_fare_total above. */
+  live_tolls_total: string | null;
 }
 
 /** One row of `GET /v1/drivers`, and the shape of `GET /v1/drivers/{id}`. */

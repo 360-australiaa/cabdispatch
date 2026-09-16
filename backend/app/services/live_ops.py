@@ -42,6 +42,18 @@ along on the existing position heartbeat" idea as battery/network above, but
 purely live-cache-only -- see `publish_position`'s docstring for why there is
 no paired-`Device` persistence for these two.
 
+`fare_total`/`distance_km`/`tolls_total` (2026-09-16, live trip monitoring pass): the dashboard
+had no way to see a fare in progress at all -- the trips domain's own sync design only lands a
+trip on the server once it CLOSES (`POST /v1/trips/sync`, by design: one atomic, immutable
+record, see that domain's own docs), so `GET /v1/vehicles`'s `open_trip` join was always empty
+for a real, currently-running fare. Rather than change that -- and risk the trip domain's own
+close/sync integrity guarantees for a dashboard convenience -- these three fields ride the SAME
+existing 5-second-while-hired position heartbeat (`LivePositionHeartbeat`, Android) as a THIRD
+live-cache-only enrichment, identical in shape to speed_kmh/heading: reported only while the
+device's own fare engine has a trip open, never persisted, never fed back into the Trip row or
+any billing path. The authoritative figures remain exactly what they always were -- the closed,
+synced trip -- these three are a live, dispatcher-facing ESTIMATE only.
+
 `live_status` priority-order fix (2026-09-05): before this pass,
 `_compose_vehicle_live` trusted `live_position["status"]` unconditionally
 whenever ANY position had ever been published for a vehicle, even one with a
@@ -86,6 +98,7 @@ import asyncio
 import itertools
 import logging
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -247,6 +260,9 @@ def build_position(
     speed_kmh: float | None = None,
     heading: float | None = None,
     estimated: bool = False,
+    fare_total: Decimal | None = None,
+    distance_km: Decimal | None = None,
+    tolls_total: Decimal | None = None,
 ) -> dict[str, Any]:
     return {
         "vehicle_id": vehicle_id,
@@ -258,6 +274,9 @@ def build_position(
         "speed_kmh": speed_kmh,
         "heading": heading,
         "estimated": estimated,
+        "fare_total": fare_total,
+        "distance_km": distance_km,
+        "tolls_total": tolls_total,
         "updated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -430,6 +449,9 @@ async def publish_position(
     speed_kmh: float | None = None,
     heading: float | None = None,
     estimated: bool = False,
+    fare_total: Decimal | None = None,
+    distance_km: Decimal | None = None,
+    tolls_total: Decimal | None = None,
 ) -> dict[str, Any]:
     """Validates the vehicle belongs to the caller's tenant, then publishes
     the position. Returns the broadcast position dict plus subscriber_count.
@@ -463,6 +485,9 @@ async def publish_position(
         speed_kmh=speed_kmh,
         heading=heading,
         estimated=estimated,
+        fare_total=fare_total,
+        distance_km=distance_km,
+        tolls_total=tolls_total,
     )
     delivered = await fleet_broadcaster.publish(tenant_id, position)
 
@@ -697,6 +722,15 @@ def _compose_vehicle_live(
     speed_kmh = (live_position or {}).get("speed_kmh")
     heading = (live_position or {}).get("heading")
 
+    # live_fare_total/live_distance_km/live_tolls_total (2026-09-16, live trip monitoring pass):
+    # same live-cache-only convention as speed_kmh/heading above -- these ride the SAME heartbeat
+    # publish, reported only while the device's own fare engine has a trip running, so they are
+    # naturally None whenever live_position is None or the vehicle isn't currently on a fare. See
+    # VehicleLiveRead.live_fare_total's own doc for why this is a live estimate, never billing data.
+    live_fare_total = (live_position or {}).get("fare_total")
+    live_distance_km = (live_position or {}).get("distance_km")
+    live_tolls_total = (live_position or {}).get("tolls_total")
+
     return {
         "id": vehicle.id,
         "tenant_id": vehicle.tenant_id,
@@ -727,6 +761,9 @@ def _compose_vehicle_live(
         "current_driver_name": current_driver_name if current_shift else None,
         "current_shift_id": current_shift.id if current_shift else None,
         "current_shift_start_at": current_shift.start_at if current_shift else None,
+        "live_fare_total": live_fare_total,
+        "live_distance_km": live_distance_km,
+        "live_tolls_total": live_tolls_total,
     }
 
 

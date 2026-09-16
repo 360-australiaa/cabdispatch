@@ -31,6 +31,9 @@ function vehicle(overrides: Partial<VehicleLiveRead>): VehicleLiveRead {
     current_shift_start_at: null,
     planned_dest_lat: null,
     planned_dest_lng: null,
+    live_fare_total: null,
+    live_distance_km: null,
+    live_tolls_total: null,
     ...overrides,
   };
 }

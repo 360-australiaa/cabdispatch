@@ -336,13 +336,14 @@ class LivePositionHeartbeat(
         val estimate = if (realStale) estimatedPositionSource?.locationFix?.value else null
         val fix = estimate ?: real ?: return PositionPublishOutcome.NO_FIX
         BatteryStatsCounters.recordHeartbeat()
+        val liveFare = currentLiveFare()
         return runCatching {
             apiService.publishPosition(
                 PositionPublishRequestDto(
                     vehicleId = vehicleUuid,
                     lat = fix.lat,
                     lng = fix.lng,
-                    status = HEARTBEAT_STATUS,
+                    status = if (liveFare != null) ON_TRIP_STATUS else HEARTBEAT_STATUS,
                     battery = DeviceTelemetry.readBatteryPercent(appContext),
                     network = DeviceTelemetry.readNetworkType(appContext),
                     // Straight passthrough of the same fix's own speed/heading — see
@@ -352,6 +353,9 @@ class LivePositionHeartbeat(
                     speedKmh = fix.speedKmh,
                     heading = fix.heading,
                     estimated = estimate != null,
+                    fareTotal = liveFare?.fareTotal,
+                    distanceKm = liveFare?.distanceKm,
+                    tollsTotal = liveFare?.tollsTotal,
                 ),
             )
         }.fold(
@@ -362,6 +366,29 @@ class LivePositionHeartbeat(
             onFailure = ::classifyPublishError,
         )
     }
+
+    /**
+     * The live meter's current fare/distance/tolls, as decimal strings ready for the wire, or
+     * `null` when no fare is currently running (2026-09-16, live trip monitoring pass — see
+     * [PositionPublishRequestDto.fareTotal]'s own doc). Read via the static [MeterController.instance]
+     * publication point rather than an injected [MeterController], same construction-order
+     * reasoning [duressActive] and [isHiredOrDuress] already give for this class.
+     *
+     * Deliberately keyed on [MeterController.activeClientUuid] specifically, not the broader
+     * [isHiredOrDuress] (which also covers a duress event with no trip open at all) -- there is
+     * nothing honest to report as a fare total outside an actual open trip.
+     */
+    private fun currentLiveFare(): LiveFareSnapshot? {
+        val controller = MeterController.instance?.takeIf { it.activeClientUuid != null } ?: return null
+        val state = controller.state.value
+        return LiveFareSnapshot(
+            fareTotal = state.breakdown.total.toPlainString(),
+            distanceKm = state.distanceKm.toPlainString(),
+            tollsTotal = state.breakdown.tolls.toPlainString(),
+        )
+    }
+
+    private data class LiveFareSnapshot(val fareTotal: String, val distanceKm: String, val tollsTotal: String)
 
     private companion object {
         private const val NANOS_PER_MILLI = 1_000_000L
@@ -387,9 +414,18 @@ class LivePositionHeartbeat(
         const val REBIND_INTERVAL_MS = 60_000L
 
         /** See this class's own doc ("Why 'shift open'...") for why this is a fixed placeholder
-         * rather than a real availability/on-trip status — no such signal exists to read from a
-         * process-lifetime singleton like this one yet. */
+         * rather than a real availability status — nothing here reads the driver's own
+         * available/break toggle. [currentLiveFare] IS a real signal this class can read cheaply
+         * (the same [MeterController.instance] publication point [isHiredOrDuress] already reads),
+         * so [publishOnce] reports [ON_TRIP_STATUS] instead of this placeholder whenever one is
+         * available — see that function's own doc. */
         const val HEARTBEAT_STATUS = "unknown"
+
+        /** Reported in place of [HEARTBEAT_STATUS] whenever [currentLiveFare] finds a trip
+         * actually running (2026-09-16, live trip monitoring pass) — a real, meaningful value the
+         * backend's `_compose_vehicle_live` priority order (`app/services/live_ops.py`) trusts
+         * verbatim, same as any other non-placeholder status this class could report. */
+        const val ON_TRIP_STATUS = "on_trip"
     }
 }
 

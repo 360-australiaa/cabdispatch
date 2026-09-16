@@ -706,6 +706,76 @@ async def test_publish_position_without_speed_or_heading_leaves_them_honestly_nu
     assert body["heading"] is None
 
 
+async def test_publish_position_with_live_fare_reaches_vehicle_list(client, session):
+    """fare_total/distance_km/tolls_total (2026-09-16, live trip monitoring pass) ride the same
+    heartbeat as speed_kmh/heading -- when given, they show up on the live cache AND on the
+    composed GET /v1/vehicles rollup, live_* prefixed there to be unmistakably an estimate, never
+    the trip's real billed total."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Fare")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-FARE")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={
+            "vehicle_id": vehicle.id,
+            "lat": -33.86,
+            "lng": 151.2,
+            "status": "on_trip",
+            "fare_total": "23.45",
+            "distance_km": "6.2",
+            "tolls_total": "4.75",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fare_total"] == "23.45"
+    assert resp.json()["distance_km"] == "6.2"
+    assert resp.json()["tolls_total"] == "4.75"
+
+    resp = await client.get(f"/v1/vehicles/{vehicle.id}", headers=headers)
+    body = resp.json()
+    assert body["live_fare_total"] == "23.45"
+    assert body["live_distance_km"] == "6.2"
+    assert body["live_tolls_total"] == "4.75"
+
+
+async def test_publish_position_without_live_fare_leaves_it_honestly_null(client, session):
+    """A plain heartbeat with no fare_total/distance_km/tolls_total (the overwhelming majority --
+    no fare currently running) must show None for all three -- never a fabricated 0, which is a
+    real, valid live fare/distance/tolls total (a fare that just started)."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant No Fare")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-NO-FARE")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fare_total"] is None
+    assert resp.json()["distance_km"] is None
+    assert resp.json()["tolls_total"] is None
+
+    resp = await client.get(f"/v1/vehicles/{vehicle.id}", headers=headers)
+    body = resp.json()
+    assert body["live_fare_total"] is None
+    assert body["live_distance_km"] is None
+    assert body["live_tolls_total"] is None
+
+
+async def test_publish_position_rejects_negative_live_fare(client, session):
+    """ge=0 bound on fare_total/distance_km/tolls_total -- 422, not a silently-clamped value."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Positions Tenant Bad Fare")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="TX-BAD-FARE")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": 0, "lng": 0, "status": "available", "fare_total": "-1.00"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 async def test_publish_position_rejects_out_of_range_speed_and_heading(client, session):
     """ge/le bounds on PositionPublishRequest.speed_kmh/heading -- 422, not a
     silently-clamped value."""

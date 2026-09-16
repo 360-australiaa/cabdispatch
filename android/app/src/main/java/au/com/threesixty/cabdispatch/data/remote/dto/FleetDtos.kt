@@ -201,6 +201,19 @@ data class PositionPublishRequestDto(
      * backend's `PositionPublishRequest.estimated`; defaults false so every pre-existing publish
      * is byte-identical. */
     val estimated: Boolean = false,
+    /** Live estimated fare total, distance and tolls for the trip currently running on this
+     * device, if any (2026-09-16, live trip monitoring pass) -- see
+     * [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.publishOnce]'s read site. `null`
+     * on every heartbeat published while no fare is running (the overwhelming majority), same
+     * honest-null posture as [battery]/[network]/[speedKmh] above. Wire names `fare_total`/
+     * `distance_km`/`tolls_total` -- must byte-for-byte match the backend's
+     * `PositionPublishRequest` (`app/schemas/live_ops.py`). Purely a live, dispatcher-facing
+     * ESTIMATE: never written to the trip's own Room row, never synced, never used for billing --
+     * the authoritative total is only ever the closed, synced trip, exactly as before this field
+     * existed. */
+    @SerialName("fare_total") val fareTotal: String? = null,
+    @SerialName("distance_km") val distanceKm: String? = null,
+    @SerialName("tolls_total") val tollsTotal: String? = null,
 )
 
 /** Response for [ApiService.publishPosition] — mirrors the backend's `PositionPublishResponse`
