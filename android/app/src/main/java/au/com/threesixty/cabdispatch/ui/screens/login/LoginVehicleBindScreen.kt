@@ -226,7 +226,7 @@ private fun DriverLoginStep(state: LoginVehicleBindUiState, viewModel: LoginVehi
             }
             Spacer(Modifier.height(20.dp))
             Text(
-                "PIN is numeric only — verified by the fleet server, cached 7 days for offline sign-in.",
+                "PIN is numeric only — verified by the fleet server. A connection is required to sign in.",
                 fontFamily = InterFamily,
                 fontSize = 15.sp,
                 color = CaptainPalette.textMuted,
