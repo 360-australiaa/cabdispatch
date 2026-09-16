@@ -663,8 +663,27 @@ async def _apply_entry_exit_hits(
                 # spot where the same on-ramp feeds different products (Lane Cove Tunnel: "just
                 # the tunnel" vs "tunnel and Military Road e-ramp"); until an exit says which,
                 # every co-located entry is a candidate for this section.
-                if gantry.id not in last["entries"] and await _co_located(session, gantry, last["entry"]):
+                if gantry.id in last["entries"]:
+                    continue
+                if await _co_located(session, gantry, last["entry"]):
                     last["entries"].append(gantry.id)
+                    continue
+                if await _same_interchange(session, gantry, last, exits_this_tick):
+                    # Not close to the section's OWN entry, but this interchange's own exit point
+                    # was also just recorded this same tick (e.g. Concord Road's entry sits beside
+                    # a co-located exit -- see the plain "driving through" case below): not a new
+                    # road, leave the section exactly as it was.
+                    continue
+                # Genuinely new entry, nowhere near the still-open section's own entry OR its own
+                # interchange: that section was abandoned by an exit Linkt had no through-price for
+                # at all (2026-09-16 field report -- see this function's own doc, "an exit Linkt
+                # does not price from any of this section's entries"). Before this fix the abandoned
+                # section stayed open forever and silently swallowed every later road's own entry
+                # too, billing a real, separately tolled crossing $0.00 with no evidence at all.
+                # Close it out (flagged, never silently dropped) so it stops blocking the rest of
+                # the trip, then open this entry's own section fresh.
+                unpriced.add(last["road"])
+                sections.append({"entry": gantry.id, "entries": [gantry.id], "exit": None, "road": road.id, "amount": None})
                 continue
             if last is not None and await _same_interchange(session, gantry, last, exits_this_tick):
                 continue  # driving through: this interchange's exit point was just recorded

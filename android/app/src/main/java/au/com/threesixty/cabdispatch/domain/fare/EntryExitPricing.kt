@@ -114,6 +114,20 @@ internal class EntryExitOutcome(
  * already on the motorway when the fare started) is flagged for the driver to add manually, never
  * guessed. Entries are processed before exits within one fix so a fare that starts at an
  * interchange opens its section before seeing that interchange's own exit point.
+ *
+ * **Abandoned sections (2026-09-16 field report)** -- real Sydney tablet trips, not the bench
+ * simulator, drove a section Linkt has genuinely no through-price for at all (Anzac Bridge <->
+ * Iron Cove Bridge within the Rozelle Interchange without continuing onto a WestConnex tunnel is
+ * FREE; not every entry a vehicle merely passes near turns into a paid trip). The exit that closes
+ * such a section is itself unremarkable -- ignored, same as any other exit "not ours" -- but until
+ * this fix that left the section [EntryExitSection.exitGantryId] `null` FOREVER, and because
+ * [openEntryExitSection] refuses to open a second section while one is still open, EVERY toll road
+ * entered for the REST OF THE TRIP was silently swallowed into that same abandoned section and
+ * never priced -- a real WestConnex/Harbour crossing billed $0.00 tolls with no evidence at all,
+ * not even an "unpriced, add manually" flag. [openEntryExitSection] now closes an abandoned section
+ * (flagging its road unpriced -- never silently dropped) the moment a genuinely new, non-co-located
+ * entry shows the vehicle has moved on, so later roads are detected normally.
+ *
  * [outcome] receives each touched road's new TOTAL across its sections, keyed by the entry
  * point's road id.
  */
@@ -132,7 +146,7 @@ internal fun applyEntryExitHits(
         val road = registry.roadsById[gantry.tollRoadId]
         if (road == null || road.pricingModel != "entry_exit" || road.id in state.dismissedRoadIds) continue
         when (gantry.ramp) {
-            "entry" -> state.openEntryExitSection(registry, gantry, road.id, exitsThisFix)
+            "entry" -> state.openEntryExitSection(registry, gantry, road.id, exitsThisFix, outcome)
             "exit" -> state.priceEntryExitSection(registry, gantry, road.id, ts, outcome)
         }
     }
@@ -156,26 +170,71 @@ private fun TollRegistrySnapshot.gantryDistanceM(gantryId: String, other: TollGa
     gantries.firstOrNull { it.id == gantryId }
         ?.let { tollHaversineM(it.latitude, it.longitude, other.latitude, other.longitude) }
 
+// ReturnCount: guard-clause style, same accepted pattern as elsewhere in this file's package
+// (e.g. InertialSpeedSource.maybeExtendLockAtFork) -- each clause is a distinct, named exit.
+@Suppress("ReturnCount")
+/** Whether [gantry] (an entry point) is at the same physical interchange as [last]'s own last
+ * exit, or as an exit point also confirmed THIS fix -- "driving through", never a new section.
+ * `false` with no [last] section at all. Split out of [openEntryExitSection] to keep that
+ * function's own branching within detekt's complexity budget. */
+private fun TollRegistrySnapshot.isSameInterchange(
+    last: EntryExitSection?,
+    gantry: TollGantryRef,
+    exitsThisFix: List<TollGantryRef>,
+): Boolean {
+    if (last == null) return false
+    val besideAnExitNow = exitsThisFix.any {
+        tollHaversineM(it.latitude, it.longitude, gantry.latitude, gantry.longitude) <= ENTRY_EXIT_CO_LOCATED_M
+    }
+    if (besideAnExitNow) return true
+    val lastExit = last.exitGantryId ?: return false
+    return (gantryDistanceM(lastExit, gantry) ?: Double.MAX_VALUE) <= ENTRY_EXIT_CO_LOCATED_M
+}
+
+// LongParameterList: six positional inputs, same accepted pattern as onFix in TollDetector.kt --
+// folding these into a data class would touch every caller for no clarity gain.
+// ReturnCount: guard-clause style, same accepted pattern as isSameInterchange above.
+@Suppress("LongParameterList", "ReturnCount")
+/**
+ * A still-open section (no exit yet) either folds [gantry] in as another candidate entry of the
+ * SAME interchange, or -- 2026-09-16 field report -- was abandoned by an earlier exit Linkt had no
+ * through-price for at all (see [applyEntryExitHits]' own doc). Before this fix that left the
+ * section open FOREVER, silently swallowing every later road's own entry for the rest of the trip.
+ * Now a genuinely new, non-co-located entry closes it out (flagged unpriced, never silently
+ * dropped) and opens its own section fresh instead.
+ */
+private fun TollDetectionState.continueOpenSection(
+    registry: TollRegistrySnapshot,
+    gantry: TollGantryRef,
+    roadId: String,
+    exitsThisFix: List<TollGantryRef>,
+    last: EntryExitSection,
+    outcome: EntryExitOutcome,
+) {
+    if (gantry.id in last.candidateEntryIds) return
+    val distanceM = registry.gantryDistanceM(last.entryGantryId, gantry) ?: Double.MAX_VALUE
+    if (distanceM <= ENTRY_EXIT_CO_LOCATED_M) {
+        last.candidateEntryIds += gantry.id
+        return
+    }
+    if (registry.isSameInterchange(last, gantry, exitsThisFix)) return
+    if (unpricedRoadIds.add(last.roadId)) outcome.newlyUnpriced.add(last.roadId)
+    entryExitSections += EntryExitSection(entryGantryId = gantry.id, roadId = roadId)
+}
+
 private fun TollDetectionState.openEntryExitSection(
     registry: TollRegistrySnapshot,
     gantry: TollGantryRef,
     roadId: String,
     exitsThisFix: List<TollGantryRef>,
+    outcome: EntryExitOutcome,
 ) {
     val last = entryExitSections.lastOrNull()
-    val lastExit = last?.exitGantryId
-    val stillOpen = last != null && lastExit == null
-    if (stillOpen && gantry.id !in last.candidateEntryIds) {
-        val distanceM = registry.gantryDistanceM(last.entryGantryId, gantry) ?: Double.MAX_VALUE
-        if (distanceM <= ENTRY_EXIT_CO_LOCATED_M) last.candidateEntryIds += gantry.id
+    if (last != null && last.exitGantryId == null) {
+        continueOpenSection(registry, gantry, roadId, exitsThisFix, last, outcome)
+        return
     }
-    val besideAnExitNow = exitsThisFix.any {
-        tollHaversineM(it.latitude, it.longitude, gantry.latitude, gantry.longitude) <= ENTRY_EXIT_CO_LOCATED_M
-    }
-    val besideLastExit = lastExit != null &&
-        (registry.gantryDistanceM(lastExit, gantry) ?: Double.MAX_VALUE) <= ENTRY_EXIT_CO_LOCATED_M
-    val sameInterchange = last != null && (besideAnExitNow || besideLastExit)
-    if (!stillOpen && !sameInterchange) {
+    if (!registry.isSameInterchange(last, gantry, exitsThisFix)) {
         entryExitSections += EntryExitSection(entryGantryId = gantry.id, roadId = roadId)
     }
 }

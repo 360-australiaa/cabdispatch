@@ -159,6 +159,72 @@ class EntryExitPricingTest {
     }
 
     @Test
+    fun `an abandoned section (exit Linkt has no through-price for) never blocks a later, unrelated road`() {
+        // 2026-09-16 field report: a real Sydney tablet trip drove Anzac Bridge <-> Iron Cove
+        // Bridge within the Rozelle Interchange without continuing onto a priced WestConnex
+        // section -- genuinely free, no pair exists for that exact combination -- then went on to
+        // drive a real, separately-priced Harbour crossing. Before this fix the abandoned Rozelle
+        // section stayed open forever and silently swallowed the Harbour crossing's own entry,
+        // billing it $0.00 with no evidence at all.
+        val rozelleEntry = TollGantryRef("LINKT:rozelle-only:entry", "ROZELLE", -33.8600, 151.1000, ramp = "entry")
+        val rozelleDeadEndExit = TollGantryRef("LINKT:rozelle-only:exit", "ROZELLE", -33.8605, 151.1005, ramp = "exit")
+        val shbEntry = TollGantryRef("LINKT:shb:entry", "SHB", -33.8700, 151.2000, ramp = "entry")
+        val shbExit = TollGantryRef("LINKT:shb:exit", "SHB", -33.8400, 151.2100, ramp = "exit")
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf(
+                "ROZELLE" to linktRoad("ROZELLE", "Rozelle Interchange"),
+                "SHB" to linktRoad("SHB", "Sydney Harbour Bridge & Tunnel"),
+            ),
+            gantries = listOf(rozelleEntry, rozelleDeadEndExit, shbEntry, shbExit),
+            // No pair at all for rozelle-only:entry -> rozelle-only:exit (genuinely free/uncaptured
+            // combination) -- only the unrelated SHB pair is priced.
+            pricePairs = listOf(pair(shbEntry, shbExit, "4.41")).associateBy { it.id },
+        )
+        val state = TollDetectionState()
+        assertTrue(drive(state, registry, rozelleEntry, "0.1").isEmpty)
+        // The exit Linkt has no price for: ignored for now -- not yet flagged, since the driver
+        // could still come back and cross an exit that DOES price this section.
+        val exitResult = drive(state, registry, rozelleDeadEndExit, "0.5")
+        assertTrue(exitResult.chargedRoadsChanged.isEmpty())
+        assertTrue(state.unpricedRoadIds.isEmpty())
+        // Far away, a genuinely separate road's entry: must open its OWN section, not be swallowed
+        // -- and flags the abandoned Rozelle section unpriced now that the trip has moved on.
+        val shbEntryResult = drive(state, registry, shbEntry, "5.0")
+        assertTrue(shbEntryResult.chargedRoadsChanged.isEmpty())
+        assertEquals(setOf("ROZELLE"), state.unpricedRoadIds)
+        val shbResult = drive(state, registry, shbExit, "9.0")
+        assertEquals(mapOf("SHB" to BigDecimal("4.41")), shbResult.chargedRoadsChanged)
+        assertEquals(BigDecimal("4.41"), state.chargedRoads["SHB"])
+    }
+
+    @Test
+    fun `a co-located sibling road's own entry+exit does not abandon the still-open section`() {
+        // A real seeded-registry regression (2026-09-16): King Georges Road hosts an M8/M5 East
+        // co-located entry AND exit right beside an M4 through-trip's own real exit. The M4 entry
+        // is far from that interchange, so it is not folded in as a co-located CANDIDATE -- but the
+        // interchange's own entry+exit both confirm in the SAME fix as the M4 trip's real exit, and
+        // that must not read as "the M4 section was abandoned, open a fresh one instead" (it very
+        // nearly did in the first cut of the backend mirror of this fix).
+        val m4Entry = TollGantryRef("LINKT:m4-concord-rd:entry", "M4", -33.83, 151.10, ramp = "entry")
+        val kgrEntry = TollGantryRef("LINKT:kgr:entry", "M5E", -33.90, 151.05, ramp = "entry")
+        val kgrExit = TollGantryRef("LINKT:kgr:exit", "M5E", -33.9001, 151.0501, ramp = "exit") // ~14 m away
+        val registry = TollRegistrySnapshot(
+            roadsById = mapOf(
+                "M4" to linktRoad("M4", "WestConnex M4"),
+                "M5E" to linktRoad("M5E", "WestConnex M5 East"),
+            ),
+            gantries = listOf(m4Entry, kgrEntry, kgrExit),
+            pricePairs = listOf(pair(m4Entry, kgrExit, "12.74")).associateBy { it.id },
+        )
+        val state = TollDetectionState()
+        assertTrue(drive(state, registry, m4Entry, "0.5").isEmpty)
+        // One fix: the King Georges Road entry AND exit both confirm together.
+        val result = onFix(state, registry, kgrExit.latitude, kgrExit.longitude, ts, BigDecimal("40.0"))
+        assertEquals(mapOf("M4" to BigDecimal("12.74")), result.chargedRoadsChanged)
+        assertTrue(state.unpricedRoadIds.isEmpty())
+    }
+
+    @Test
     fun `two Linkt entry points at one on-ramp are both candidates until the exit picks one`() {
         // Lane Cove Tunnel: "just the tunnel" and "tunnel + Military Road e-ramp" share an entry.
         val justTunnel = TollGantryRef("LINKT:just-lct:entry", "LCT", -33.8294, 151.2138, ramp = "entry")

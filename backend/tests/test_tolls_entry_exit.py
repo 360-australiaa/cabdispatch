@@ -139,6 +139,48 @@ async def test_a_second_section_on_the_same_road_adds_to_the_first(client: Async
     assert body["auto_tolled_roads"] == {road.id: "13.55"}
 
 
+async def test_an_abandoned_section_never_blocks_a_later_unrelated_road(client: AsyncClient, session: AsyncSession):
+    """2026-09-16 field report: a real Sydney tablet trip drove Anzac Bridge <-> Iron Cove Bridge
+    within the Rozelle Interchange without continuing onto a priced WestConnex section -- genuinely
+    free, no pair exists for that exact combination -- then went on to drive a real, separately
+    priced Harbour crossing. Before this fix the abandoned Rozelle section stayed open forever
+    (`_apply_entry_exit_hits`'s exit branch never sets `last["exit"]` when no pair matches) and
+    silently swallowed the Harbour crossing's own entry too, billing it $0.00 with no evidence at
+    all -- not even an "unpriced, add manually" flag.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    lat, lng = _next_zone()
+
+    dead_end_road = await _make_entry_exit_road(session, "TEST_DEAD_END")
+    dead_entry, dead_exit = (lat, lng), (lat, lng + 0.001)  # ~90 m apart: same interchange, no pair
+    await _point(session, road_id=dead_end_road.id, gantry_id="LINKT:dead:entry", role="entry", lat=dead_entry[0], lng=dead_entry[1])
+    await _point(session, road_id=dead_end_road.id, gantry_id="LINKT:dead:exit", role="exit", lat=dead_exit[0], lng=dead_exit[1])
+    # Deliberately no TollPricePair for dead:entry -> dead:exit: a genuine Linkt gap.
+
+    real_road = await _make_entry_exit_road(session, "TEST_REAL_CROSSING")
+    real_entry, real_exit = (lat, lng + 0.03), (lat, lng + 0.06)  # ~3 km / ~6 km east: unrelated
+    await _point(session, road_id=real_road.id, gantry_id="LINKT:real:entry", role="entry", lat=real_entry[0], lng=real_entry[1])
+    await _point(session, road_id=real_road.id, gantry_id="LINKT:real:exit", role="exit", lat=real_exit[0], lng=real_exit[1])
+    await _pair(session, "LINKT:real:entry", "LINKT:real:exit", [{"day": "all", "interval": "0000-2400", "price": 4.41}])
+
+    trip = await _create_trip(client, headers, tariff.id, start_lat=dead_entry[0], start_lng=dead_entry[1] - 0.01)
+    t0 = datetime.fromisoformat(trip["start_at"])
+
+    await _tick(client, headers, trip["id"], lat=dead_entry[0], lng=dead_entry[1], ts=t0 + timedelta(seconds=30))
+    body = await _tick(client, headers, trip["id"], lat=dead_exit[0], lng=dead_exit[1], ts=t0 + timedelta(seconds=60))
+    assert Decimal(body["tolls"]) == Decimal("0.00")
+    assert body["auto_tolled_roads"] == {}  # not yet flagged -- the trip might still come back
+
+    body = await _tick(client, headers, trip["id"], lat=real_entry[0], lng=real_entry[1], ts=t0 + timedelta(seconds=300))
+    assert body["unpriced_toll_road_ids"] == [dead_end_road.id]  # abandoned, closed out, flagged
+
+    body = await _tick(client, headers, trip["id"], lat=real_exit[0], lng=real_exit[1], ts=t0 + timedelta(seconds=600))
+    assert Decimal(body["tolls"]) == Decimal("4.41")
+    assert body["auto_tolled_roads"] == {real_road.id: "4.41"}
+
+
 def test_band_selection_follows_linkt_day_and_interval_in_nsw_time():
     bands = [
         {"day": "weekdays", "interval": "0630-0930", "price": 4.55},
