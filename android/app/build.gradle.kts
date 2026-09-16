@@ -270,8 +270,12 @@ android {
         // what AppUpdateChecker compares against a published release, so it MUST increase for a
         // build to reach a tablet over the air -- a build shipped at the same code is silently
         // skipped as "already up to date".
-        versionCode = 14
-        versionName = "0.7.2"
+        // 15 / 0.7.3 (2026-09-16): entry_exit toll fix -- an abandoned section (an exit Linkt had
+        // no through-price for) used to stay open forever and silently swallow every later road's
+        // own entry for the rest of the trip, billing a real crossing $0.00 with no evidence at
+        // all. See EntryExitPricing.kt's own doc.
+        versionCode = 15
+        versionName = "0.7.3"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
