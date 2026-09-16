@@ -121,6 +121,18 @@ class Settings(BaseSettings):
     LIVE_TRAFFIC_CAMERAS_REFRESH_MINUTES: int = 60
     LIVE_TRAFFIC_HAZARDS_REFRESH_MINUTES: int = 3
 
+    # --- Heartbeat-timeout auto-logout (owner decision, 2026-09-16) ---------
+    # "We must have to receive the heartbeat from the tablet, if the tablet is
+    # not responding driver automatically will be log off." Same lazy-sweep
+    # pattern as the block above: this backend has no scheduler to run a timer
+    # against, so a shift whose vehicle's device has gone this long without a
+    # heartbeat (`Device.last_seen_at`, updated by both `POST
+    # /v1/fleet/positions` and `POST /v1/fleet/devices/{id}/heartbeat`) gets
+    # force-closed the next time ANY of the read/write paths in
+    # `app.services.lazy_maintenance` runs for it -- see that module's
+    # `_check_heartbeat_timeout`.
+    DEVICE_HEARTBEAT_TIMEOUT_MINUTES: int = 30
+
     # --- CabCharge ---
     # Authorization -> Docket creation -> Settlement batch (blueprint 5.2.5).
     CABCHARGE_API_KEY: str = "cabcharge_test_placeholder"

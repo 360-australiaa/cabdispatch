@@ -1,5 +1,5 @@
-"""Fatigue + compliance-expiry checks, run lazily off paths that are NOT a
-trip tick.
+"""Fatigue + compliance-expiry checks, plus the heartbeat-timeout auto-logout
+check, run lazily off paths that are NOT a trip tick.
 
 WHY THIS MODULE EXISTS
 ----------------------
@@ -31,6 +31,18 @@ regularly for an on-shift vehicle.
   2. Shift reads (`GET /v1/shifts`, `GET /v1/shifts/{id}`) — so a dispatcher
      looking at who is on shift sees state that is correct as of the moment
      they looked, not as of the last tick.
+
+Owner decision, 2026-09-16, added a third check to the same two hooks:
+`_check_heartbeat_timeout` force-closes a shift whose vehicle's device has
+gone `settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES` without a heartbeat — "if we
+didn't get the ping from the driver in 30 minutes then we are going to log
+off automatically the driver". A genuinely-dead tablet never calls `POST
+/v1/fleet/positions` again for its own vehicle, so in practice this one is
+caught almost entirely by hook 2 (some *other* read, most commonly a
+dispatcher's `GET /v1/shifts`); hook 1 still runs it for symmetry, and covers
+the case of a tablet that is still publishing positions but has, for whatever
+reason, stopped reporting battery/network (the only two fields that refresh
+`Device.last_seen_at` — see `app.services.live_ops._persist_device_telemetry`).
 
 NEVER RAISES
 ------------
@@ -92,16 +104,21 @@ guessing at it and flooding the alerts table is worse than the gap.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.fleet import Vehicle
+from app.models.fleet import Device, Vehicle
 from app.models.shift import Shift
 from app.models.user import User
 from app.services import compliance_expiry as compliance_expiry_service
 from app.services import fatigue as fatigue_service
+from app.services.audit_log import record_audit
+from app.services.shift import end_shift
 
 logger = logging.getLogger("cab_dispatch.lazy_maintenance")
 
@@ -129,10 +146,87 @@ async def _open_shift_for_vehicle(
     return result.scalars().first()
 
 
+async def _check_heartbeat_timeout(session: AsyncSession, *, tenant_id: str, shift: Shift) -> None:
+    """Force-closes `shift` if its vehicle's device has gone longer than
+    `settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES` without a heartbeat. Owner
+    decision, 2026-09-16: "we must have to receive the heartbeat from the
+    tablet, if the tablet is not responding driver automatically will be log
+    off" — see that setting's own doc for the full context.
+
+    Fails open, deliberately, whenever staleness cannot actually be
+    established: no device is currently paired to the vehicle, or the device
+    has never sent a single heartbeat (`last_seen_at is None`) — same "null
+    means unknown, never blocks" convention `app.services.compliance_expiry`
+    already uses for missing expiry dates. A shift is only ever force-closed
+    against a REAL, stale timestamp, never against the absence of one.
+
+    Only reads `shift.tenant_id`/`.vehicle_id`/`.id` (plain scalar attributes,
+    already loaded, safe regardless of which session `shift` itself is bound
+    to — see this module's own ISOLATED SESSION note) and re-fetches the
+    `Shift` row fresh on `session` (this function's own `check_session`)
+    before writing to it, rather than mutating the possibly-foreign-session
+    `shift` object directly. The re-fetch also re-checks `end_at IS NULL`, so
+    a shift the driver (or another concurrent lazy sweep) already closed since
+    the caller loaded its own copy is not force-closed a second time.
+    """
+    result = await session.execute(
+        select(Device).where(Device.tenant_id == tenant_id, Device.vehicle_id == shift.vehicle_id)
+    )
+    device = result.scalars().first()
+    if device is None or device.last_seen_at is None:
+        return
+
+    last_seen = device.last_seen_at
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    timeout = timedelta(minutes=settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES)
+    if datetime.now(UTC) - last_seen < timeout:
+        return
+
+    fresh = await session.execute(
+        select(Shift).where(Shift.tenant_id == tenant_id, Shift.id == shift.id, Shift.end_at.is_(None))
+    )
+    open_shift = fresh.scalar_one_or_none()
+    if open_shift is None:
+        return
+
+    logger.info(
+        "shift %s (vehicle %s, driver %s) force-closed: no heartbeat from its device in over "
+        "%d minutes (last seen %s)",
+        open_shift.id,
+        open_shift.vehicle_id,
+        open_shift.driver_id,
+        settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES,
+        last_seen.isoformat(),
+    )
+    await end_shift(session, open_shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+    await record_audit(
+        session,
+        tenant_id=tenant_id,
+        actor_user_id=None,
+        action="shift_force_closed_heartbeat_timeout",
+        entity_type="shift",
+        entity_id=open_shift.id,
+        before={"end_at": None, "reconciled": False},
+        after={
+            "end_at": open_shift.end_at.isoformat() if open_shift.end_at else None,
+            "reconciled": False,
+            "reason": "device_heartbeat_timeout",
+            "device_id": device.id,
+            "last_seen_at": last_seen.isoformat(),
+        },
+    )
+
+
 async def _run_shift_checks(session: AsyncSession, *, tenant_id: str, shift: Shift) -> None:
-    """Fatigue checks that are a function of how long a shift has been open.
-    Both are idempotent per shift (they no-op once an alert of that kind
-    exists), so this is safe on every heartbeat."""
+    """Fatigue checks that are a function of how long a shift has been open,
+    plus the heartbeat-timeout auto-logout check. All are idempotent/safe to
+    repeat (the fatigue checks no-op once their alert already exists; the
+    heartbeat check no-ops once the shift is already closed), so this is safe
+    on every heartbeat. The heartbeat check runs FIRST so a shift closed on
+    this exact beat does not also raise a shift-duration/no-break alert for a
+    shift that is, by the end of this function, already over."""
+    await _check_heartbeat_timeout(session, tenant_id=tenant_id, shift=shift)
     await fatigue_service.check_shift_duration(session, tenant_id=tenant_id, shift=shift)
     await fatigue_service.check_no_break_taken(session, tenant_id=tenant_id, shift=shift)
 

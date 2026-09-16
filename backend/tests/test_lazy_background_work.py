@@ -30,7 +30,7 @@ from app.models.fatigue_alert import (
     FATIGUE_ALERT_SHIFT_DURATION_EXCEEDED,
     FatigueAlert,
 )
-from app.models.fleet import Vehicle, VehiclePositionHistory
+from app.models.fleet import Device, Vehicle, VehiclePositionHistory
 from app.models.shift import Shift
 from app.models.user import ROLE_DRIVER, User
 from app.services.audit_log import GENESIS_HASH, record_audit, verify_chain
@@ -418,6 +418,190 @@ async def test_position_heartbeat_still_succeeds_when_the_lazy_checks_blow_up(
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["vehicle_id"] == vehicle.id
+
+
+# ===========================================================================
+# 2b · Heartbeat-timeout auto-logout (owner decision, 2026-09-16)
+# ===========================================================================
+
+
+async def _seed_device(session: AsyncSession, *, tenant_id: str, vehicle_id: str, last_seen_at) -> Device:
+    device = Device(
+        tenant_id=tenant_id,
+        android_id=f"AND{uuid.uuid4().hex[:8]}",
+        vehicle_id=vehicle_id,
+        last_seen_at=last_seen_at,
+    )
+    session.add(device)
+    await session.commit()
+    await session.refresh(device)
+    return device
+
+
+async def test_shift_read_force_closes_shift_with_no_heartbeat_in_30_minutes(
+    client: AsyncClient, session: AsyncSession
+):
+    """The headline claim: "if we didn't get the ping from the driver in 30
+    minutes then we are going to log off automatically the driver". A shift
+    whose vehicle's device has gone stale is closed the next time a
+    dispatcher merely lists shifts — the same read-triggers-the-sweep hook
+    `test_shift_read_raises_fatigue_alert_for_driver_with_no_active_trip`
+    exercises for fatigue."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = _claims(headers)["tenant_id"]
+    driver_id = _claims(headers)["sub"]
+    vehicle = await _seed_vehicle(session, tenant_id=tenant_id)
+    stale_at = datetime.now(UTC) - timedelta(minutes=settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES + 5)
+    await _seed_device(session, tenant_id=tenant_id, vehicle_id=vehicle.id, last_seen_at=stale_at)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle.id, "start_at": datetime.now(UTC).isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    resp = await client.get("/v1/shifts?active_only=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    shift = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
+    await session.refresh(shift)
+    assert shift.end_at is not None, "a stale-heartbeat shift must be force-closed, not left open"
+    assert shift.reconciled is False
+    assert shift.psl_owed == Decimal(0)
+
+    audit = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.tenant_id == tenant_id,
+                AuditLog.entity_id == shift_id,
+                AuditLog.action == "shift_force_closed_heartbeat_timeout",
+            )
+        )
+    ).scalar_one()
+    assert audit.after_json["reason"] == "device_heartbeat_timeout"
+
+
+async def test_position_heartbeat_force_closes_a_different_vehicles_stale_shift(
+    client: AsyncClient, session: AsyncSession
+):
+    """Same claim via the other hook (`POST /v1/fleet/positions`), and proves
+    it is checked against THAT publish's own vehicle, not globally — a second,
+    healthy vehicle's heartbeat does not touch the first vehicle's shift."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = _claims(headers)["tenant_id"]
+    driver_id = _claims(headers)["sub"]
+    stale_vehicle = await _seed_vehicle(session, tenant_id=tenant_id)
+    stale_at = datetime.now(UTC) - timedelta(minutes=settings.DEVICE_HEARTBEAT_TIMEOUT_MINUTES + 5)
+    await _seed_device(session, tenant_id=tenant_id, vehicle_id=stale_vehicle.id, last_seen_at=stale_at)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={
+            "driver_id": driver_id,
+            "vehicle_id": stale_vehicle.id,
+            "start_at": datetime.now(UTC).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": stale_vehicle.id, "lat": -33.87, "lng": 151.21, "status": "unknown"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    shift = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
+    await session.refresh(shift)
+    assert shift.end_at is not None
+
+
+async def test_shift_read_does_not_close_a_shift_with_a_recent_heartbeat(
+    client: AsyncClient, session: AsyncSession
+):
+    """The other half of the claim: a driver whose tablet IS still checking in
+    must not be logged off."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = _claims(headers)["tenant_id"]
+    driver_id = _claims(headers)["sub"]
+    vehicle = await _seed_vehicle(session, tenant_id=tenant_id)
+    await _seed_device(
+        session, tenant_id=tenant_id, vehicle_id=vehicle.id, last_seen_at=datetime.now(UTC) - timedelta(minutes=2)
+    )
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle.id, "start_at": datetime.now(UTC).isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    resp = await client.get("/v1/shifts?active_only=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    shift = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
+    await session.refresh(shift)
+    assert shift.end_at is None
+
+
+async def test_shift_read_does_not_close_a_shift_whose_device_has_never_heartbeated(
+    client: AsyncClient, session: AsyncSession
+):
+    """Fail-open: a device that has never sent a single heartbeat
+    (`last_seen_at is None`) is unknown staleness, not proven staleness — same
+    "null means unknown, never blocks" convention `app.services
+    .compliance_expiry` already uses for missing expiry dates."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = _claims(headers)["tenant_id"]
+    driver_id = _claims(headers)["sub"]
+    vehicle = await _seed_vehicle(session, tenant_id=tenant_id)
+    await _seed_device(session, tenant_id=tenant_id, vehicle_id=vehicle.id, last_seen_at=None)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle.id, "start_at": datetime.now(UTC).isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    resp = await client.get("/v1/shifts?active_only=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    shift = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
+    await session.refresh(shift)
+    assert shift.end_at is None
+
+
+async def test_shift_read_does_not_close_a_shift_on_an_unpaired_vehicle(
+    client: AsyncClient, session: AsyncSession
+):
+    """Fail-open: no `Device` row at all for the vehicle (never paired, or
+    unpaired since) must not be treated as evidence of staleness either."""
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = _claims(headers)["tenant_id"]
+    driver_id = _claims(headers)["sub"]
+    vehicle = await _seed_vehicle(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": vehicle.id, "start_at": datetime.now(UTC).isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    shift_id = resp.json()["id"]
+
+    resp = await client.get("/v1/shifts?active_only=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    shift = (await session.execute(select(Shift).where(Shift.id == shift_id))).scalar_one()
+    await session.refresh(shift)
+    assert shift.end_at is None
 
 
 # ===========================================================================
