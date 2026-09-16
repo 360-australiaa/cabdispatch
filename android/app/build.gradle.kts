@@ -274,8 +274,12 @@ android {
         // no through-price for) used to stay open forever and silently swallow every later road's
         // own entry for the rest of the trip, billing a real crossing $0.00 with no evidence at
         // all. See EntryExitPricing.kt's own doc.
-        versionCode = 15
-        versionName = "0.7.3"
+        // 16 / 0.7.4 (2026-09-16): live trip monitoring -- the position heartbeat now carries the
+        // live fare/distance/tolls while a trip is running, so the dashboard's Live Map can show a
+        // running fare's price/km/tolls instead of only a moving dot. See
+        // LivePositionHeartbeat.currentLiveFare's own doc.
+        versionCode = 16
+        versionName = "0.7.4"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
