@@ -278,8 +278,12 @@ android {
         // live fare/distance/tolls while a trip is running, so the dashboard's Live Map can show a
         // running fare's price/km/tolls instead of only a moving dot. See
         // LivePositionHeartbeat.currentLiveFare's own doc.
-        versionCode = 16
-        versionName = "0.7.4"
+        // 17 / 0.7.5 (2026-09-16): a long real blackout's live speed no longer collapses toward
+        // zero from an ordinary quiet cruise window once the estimate has only drifted low under
+        // degraded confidence -- see InertialSpeedEstimator.isZeroVelocity's own doc (real T5453
+        // M4 East field report the same day).
+        versionCode = 17
+        versionName = "0.7.5"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
