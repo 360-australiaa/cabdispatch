@@ -53,4 +53,26 @@ internal object DeviceTelemetry {
             else -> "offline"
         }
     }.getOrNull()
+
+    /**
+     * Whether the tablet is currently drawing external power (car ignition/USB dock, mains, etc.)
+     * — [BatteryManager.isCharging] on the system [Context.BATTERY_SERVICE]. Needs no permission.
+     *
+     * Owner decision, 2026-09-16 field report: this fleet's tablets are permanently mounted and
+     * powered from the vehicle's own ignition circuit, so [RealLocationProvider]'s off-shift
+     * battery-saving mode (no location request at all — see that class's own doc) was starving the
+     * GPS status dot of any real signal to show whenever a driver checked it before starting a
+     * shift, which read as "GPS is broken" rather than "we deliberately aren't asking yet". A
+     * charging tablet has no battery budget to protect, so [RealLocationProvider] now keeps
+     * requesting fixes whenever this reads `true`, shift or not — see
+     * [RealLocationProvider.resolveLocationRequestMode]. Returns `false` (never throws) if the
+     * battery service is unavailable, the conservative default: this only ever widens WHEN the
+     * provider asks for fixes, so "couldn't tell" falling back to the original off-shift-saves-
+     * battery behaviour is the safe direction, not the risky one.
+     */
+    fun isCharging(appContext: Context): Boolean = runCatching {
+        val batteryManager = appContext.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: return false
+        batteryManager.isCharging
+    }.getOrDefault(false)
 }

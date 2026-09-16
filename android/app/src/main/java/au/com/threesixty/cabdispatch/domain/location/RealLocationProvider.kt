@@ -8,6 +8,7 @@ import android.location.Location
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
+import au.com.threesixty.cabdispatch.domain.DeviceTelemetry
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.MeterController
 import au.com.threesixty.cabdispatch.domain.SessionHolder
@@ -55,11 +56,20 @@ import kotlinx.coroutines.launch
  *   at [BALANCED_INTERVAL_MS] (5s). Enough for the Live Map ambient dot
  *   ([au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat] reads this same [locationFix]) —
  *   nobody bills money off a driver cruising between ranks.
- * - **Not on shift -> [LocationRequestMode.OFF]** — no request at all. This is the real fix: a
- *   parked, logged-off tablet used to run the same 1 Hz high-accuracy GPS radio wakeup as a live
- *   fare, for as long as the process stayed alive (which, on a kiosked field tablet, can be days).
- *   [locationFix]/[speedKmh] read `null`/`0.0` while OFF, the identical observable shape as no
- *   permission granted (see "Permission handling" below) — every consumer already handles that.
+ * - **Not on shift, tablet NOT charging -> [LocationRequestMode.OFF]** — no request at all. This
+ *   was the original fix: a parked, logged-off tablet used to run the same 1 Hz high-accuracy GPS
+ *   radio wakeup as a live fare, for as long as the process stayed alive (which, on a kiosked field
+ *   tablet, can be days). [locationFix]/[speedKmh] read `null`/`0.0` while OFF, the identical
+ *   observable shape as no permission granted (see "Permission handling" below) — every consumer
+ *   already handles that.
+ * - **Not on shift, tablet IS charging -> [LocationRequestMode.BALANCED]** — owner decision,
+ *   2026-09-16 field report: this fleet's tablets are permanently mounted and powered from the
+ *   vehicle's own ignition circuit, so a charging tablet has no battery budget the OFF tier was
+ *   protecting. Worse, the off-shift GPS status dot going dark by design read to a driver as
+ *   "GPS is broken" rather than "we deliberately aren't asking yet" — a real, reported confusion.
+ *   [charging] (see that constructor parameter's own doc) is what decides this, independent of
+ *   [onShift]/[hiredOrDuress] — a genuinely unplugged, logged-off tablet still gets the original
+ *   battery-saving OFF behaviour.
  *
  * [onShift]/[hiredOrDuress] are polled every [MODE_POLL_INTERVAL_MS] alongside the existing
  * permission poll (folded into the same loop rather than a second one — see [supervisePermission]),
@@ -134,6 +144,13 @@ class RealLocationProvider(
      * so this default is only ever exercised by a test/preview construction that never sets it.
      */
     private val hiredOrDuress: () -> Boolean = { MeterController.instance?.activeClientUuid != null },
+    /** `true` while the tablet is drawing external power — see [DeviceTelemetry.isCharging]'s own
+     * doc for the 2026-09-16 owner decision this exists for, and "Update rate and request
+     * priority" above for how it changes [resolveLocationRequestMode]. A plain function, same
+     * injectable-for-tests shape as [onShift]/[hiredOrDuress] above; defaults to the real device
+     * read via [context] (captured as [appContext] below, not the raw constructor parameter, so
+     * this default reads the same application-scoped context every other real default here uses). */
+    private val charging: () -> Boolean = { DeviceTelemetry.isCharging(context.applicationContext) },
 ) : SpeedSource {
 
     private val appContext: Context = context.applicationContext
@@ -182,7 +199,7 @@ class RealLocationProvider(
         // file's (LivePositionHeartbeat.kt) deliberate avoidance of this exact pitfall.
         while (scope.isActive) {
             val mode = if (hasPermission()) {
-                resolveLocationRequestMode(onShift = onShift(), hiredOrDuress = hiredOrDuress())
+                resolveLocationRequestMode(onShift = onShift(), hiredOrDuress = hiredOrDuress(), charging = charging())
             } else {
                 LocationRequestMode.OFF
             }
@@ -407,13 +424,20 @@ internal enum class LocationRequestMode {
  * `FusedLocationProviderClient` at all, the same "extract the fare-affecting decision into plain
  * Kotlin" convention [LocationFilteringTest]'s own doc already explains for this file's filters.
  *
- * [hiredOrDuress] is checked FIRST and unconditionally wins over [onShift] — see
+ * [hiredOrDuress] is checked FIRST and unconditionally wins over [onShift]/[charging] — see
  * [RealLocationProvider.hiredOrDuress]'s own constructor doc for why: a fare or a duress event
  * must never be starved of high-accuracy fixes by a stale/wrong shift-state read, even though in
- * the ordinary flow a trip cannot exist without a shift already being open.
+ * the ordinary flow a trip cannot exist without a shift already being open. [charging] is checked
+ * next, independent of [onShift] entirely — a charging tablet has no battery budget the off-shift
+ * OFF tier exists to protect, so it gets the same [LocationRequestMode.BALANCED] an on-shift,
+ * not-hired tablet does, own doc (2026-09-16 field report) on [RealLocationProvider]'s class doc.
  */
-internal fun resolveLocationRequestMode(onShift: Boolean, hiredOrDuress: Boolean): LocationRequestMode = when {
+internal fun resolveLocationRequestMode(
+    onShift: Boolean,
+    hiredOrDuress: Boolean,
+    charging: Boolean = false,
+): LocationRequestMode = when {
     hiredOrDuress -> LocationRequestMode.HIGH_ACCURACY
-    onShift -> LocationRequestMode.BALANCED
+    onShift || charging -> LocationRequestMode.BALANCED
     else -> LocationRequestMode.OFF
 }
