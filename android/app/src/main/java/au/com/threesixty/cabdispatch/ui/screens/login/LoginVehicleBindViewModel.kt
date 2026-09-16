@@ -12,7 +12,7 @@ import au.com.threesixty.cabdispatch.domain.DriverLoginResult
 import au.com.threesixty.cabdispatch.domain.DriverSession
 import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.ApiVehicleUuidResolver
-import au.com.threesixty.cabdispatch.domain.SharedPreferencesDriverAuthRepository
+import au.com.threesixty.cabdispatch.domain.OnlineDriverAuthRepository
 import au.com.threesixty.cabdispatch.domain.ShiftHandoverConflictException
 import au.com.threesixty.cabdispatch.domain.ShiftRepository
 import au.com.threesixty.cabdispatch.sync.TariffRefresh
@@ -168,7 +168,7 @@ class LoginVehicleBindViewModel @JvmOverloads constructor(
     /** Same reasoning again: [AppContainer.apiService] has a `private set` (only
      * [AppContainer.init] may assign it), which a test cannot do without standing up the whole
      * container — so the object built from it is injected instead of the property that feeds it. */
-    private val driverAuthRepository: DriverAuthRepository = SharedPreferencesDriverAuthRepository(application, AppContainer.apiService),
+    private val driverAuthRepository: DriverAuthRepository = OnlineDriverAuthRepository(AppContainer.apiService),
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(LoginVehicleBindUiState())
@@ -220,26 +220,38 @@ class LoginVehicleBindViewModel @JvmOverloads constructor(
         _uiState.update { it.copy(isLoggingIn = true, loginError = null) }
         viewModelScope.launch {
             val result = driverAuthRepository.completeMfaLogin(
-                driverId = state.driverIdInput.trim(),
-                pin = state.pinInput,
                 mfaToken = mfaToken,
                 code = state.mfaCodeInput.trim(),
             )
-            result.onSuccess(::onLoggedIn).onFailure { error ->
-                _uiState.update {
-                    it.copy(isLoggingIn = false, loginError = error.message ?: "Invalid or expired code")
-                }
-            }
+            result.fold(
+                onSuccess = { onLoggedIn(it) },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(isLoggingIn = false, loginError = error.message ?: "Invalid or expired code")
+                    }
+                },
+            )
         }
     }
 
-    private fun onLoggedIn(user: UserDto) {
+    /**
+     * Owner decision, 2026-09-16: pairing a DEVICE already binds it to a vehicle (an admin's
+     * pairing code, redeemed once at provisioning — see `Device.vehicle_id`), so an ordinary
+     * driver sign-in on an already-paired tablet must not ask them to bind a vehicle AGAIN. This
+     * skips straight to [LoginStep.INSPECTION] with the device's own known vehicle when there is
+     * one, and falls through to the existing QR/rego [LoginStep.VEHICLE_BIND] screen unchanged for
+     * the one case that still genuinely needs it: a device that has never been paired, or was
+     * paired but never bound to a vehicle by an admin.
+     */
+    private suspend fun onLoggedIn(user: UserDto) {
         // S5: login is the third tariff-refresh trigger (with reconnect and the periodic backstop).
         // It is the one moment we know the tablet is online AND about to start billing, so it is
         // the last chance to notice the depot changed the rates since this tablet last looked.
         // Best-effort and non-blocking — see [TariffRefresh]; a failure just means the existing
         // cached tariff stays in use, exactly as before.
         viewModelScope.launch { TariffRefresh.refreshBestEffort() }
+
+        val knownVehicle = resolveKnownDeviceVehicle()
 
         _uiState.update {
             it.copy(
@@ -248,10 +260,33 @@ class LoginVehicleBindViewModel @JvmOverloads constructor(
                 loggedInDriverId = user.id,
                 mfaToken = null,
                 mfaCodeInput = "",
-                step = LoginStep.VEHICLE_BIND,
+                step = if (knownVehicle != null) LoginStep.INSPECTION else LoginStep.VEHICLE_BIND,
+                boundVehicleId = knownVehicle?.rego ?: it.boundVehicleId,
+                resolvedVehicleUuid = knownVehicle?.uuid ?: it.resolvedVehicleUuid,
             )
         }
     }
+
+    /** This device's own known vehicle (fleet UUID + rego), or `null` when the device has never
+     * been paired, was paired but never bound to a vehicle, or the read simply failed (offline,
+     * server error) — every one of those cases falls through to the ordinary bind screen exactly
+     * as before this method existed, so failing closed here costs nothing but a redundant tap.
+     * [au.com.threesixty.cabdispatch.data.remote.ApiService.deviceMe] is the one read this can make
+     * off the device secret alone — no bearer token needed yet, so this works even on the very
+     * first login of a process, before [au.com.threesixty.cabdispatch.domain.DeviceCommandHeartbeat]'s
+     * own 60s poll has had a chance to run — see that endpoint's own doc. */
+    // ReturnCount: four independent "nothing known yet, fall through to the bind screen" guard
+    // clauses read far more clearly as early returns than nested when/let chains would.
+    @Suppress("ReturnCount")
+    private suspend fun resolveKnownDeviceVehicle(): KnownDeviceVehicle? {
+        val secret = AppContainer.devicePairingStore.getDeviceSecret() ?: return null
+        val device = runCatching { AppContainer.apiService.deviceMe(secret) }.getOrNull() ?: return null
+        val uuid = device.vehicleId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val rego = device.vehicleRego?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return KnownDeviceVehicle(uuid, rego)
+    }
+
+    private data class KnownDeviceVehicle(val uuid: String, val rego: String)
 
     fun scanQr(activity: android.app.Activity) {
         viewModelScope.launch {

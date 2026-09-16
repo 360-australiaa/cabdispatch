@@ -168,9 +168,8 @@ object SecurePrefs {
      * The plaintext file each store used before X3.
      *
      * These are the literal names that shipped, so they cannot change: `auth_tokens`
-     * ([TokenStore]), `device_pairing` ([DevicePairingStore]) and `driver_auth_cache`
-     * ([SharedPreferencesDriverAuthRepository]). The encrypted store reuses the same logical name,
-     * so the legacy file is distinguished by a suffix instead.
+     * ([TokenStore]) and `device_pairing` ([DevicePairingStore]). The encrypted store reuses the
+     * same logical name, so the legacy file is distinguished by a suffix instead.
      */
     private fun legacyName(name: String) = "${name}_plain_legacy"
 
@@ -218,15 +217,5 @@ object SecurePrefs {
         }
         editor.commit()
         appContext.deleteSharedPreferences(name)
-    }
-}
-
-/** Opens the offline driver-PIN cache. See [SecurePrefs]. */
-internal object AuthCachePrefs {
-    const val NAME = "driver_auth_cache"
-
-    fun open(context: Context): SharedPreferences {
-        SecurePrefs.stashLegacyPlaintext(context, NAME)
-        return SecurePrefs.open(context, NAME)
     }
 }

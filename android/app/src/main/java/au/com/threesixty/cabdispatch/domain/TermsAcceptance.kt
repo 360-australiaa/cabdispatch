@@ -12,10 +12,10 @@ import android.content.Context
  * flag would never re-surface the disclaimer even if a later release genuinely changes the terms
  * (new payment processor, new data-sharing clause, etc.) — re-prompting on every version bump is
  * the safer default for a compliance-adjacent screen, at the cost of one extra tap after every
- * app update. [android.content.SharedPreferences], same real, already-established pattern
- * [SharedPreferencesDriverAuthRepository] uses elsewhere in this codebase for small persisted
- * flags that do not need Room's query/relational surface — a plain key-value flag doesn't
- * justify a new Room entity/DAO/migration for one boolean-shaped fact.
+ * app update. [android.content.SharedPreferences], same real, already-established pattern this
+ * codebase uses elsewhere for small persisted flags that do not need Room's query/relational
+ * surface — a plain key-value flag doesn't justify a new Room entity/DAO/migration for one
+ * boolean-shaped fact.
  */
 object TermsAcceptance {
     private const val PREFS_NAME = "terms_disclaimer"

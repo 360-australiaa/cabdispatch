@@ -8,9 +8,8 @@ import android.content.Context
  * [au.com.threesixty.cabdispatch.ui.screens.pairing.PairMeterViewModel]). [SessionHolder.deviceId]
  * was a bare in-memory `var` with a standing TODO flagging exactly this gap: nothing ever set it,
  * and even once something does, an in-memory field means every app restart forgets the pairing and
- * heartbeat silently goes back to a no-op. Mirrors [SharedPreferencesDriverAuthRepository]'s own
- * `getSharedPreferences(..., MODE_PRIVATE)` pattern — the existing precedent for small durable
- * session state in this app, not a new persistence mechanism.
+ * heartbeat silently goes back to a no-op. Mirrors the encrypted-prefs pattern this app already
+ * uses for other small durable session state (see [SecurePrefs]), not a new persistence mechanism.
  */
 class DevicePairingStore(context: Context) {
     /**

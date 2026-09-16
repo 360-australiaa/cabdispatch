@@ -76,8 +76,7 @@ interface ShiftRepository {
  * from a real one.
  *
  * ### Which failures queue
- * Same distinction [SharedPreferencesDriverAuthRepository] draws for X1, for the same reason: an
- * [IOException] means we never reached the server, so queueing and retrying is right. A refusal the
+ * An [IOException] means we never reached the server, so queueing and retrying is right. A refusal the
  * server actually issued (a 4xx — the vehicle isn't yours, the driver is suspended) will be refused
  * identically on every retry, so it fails the shift start honestly instead of queueing a row that
  * would burn its five attempts and dead-letter.

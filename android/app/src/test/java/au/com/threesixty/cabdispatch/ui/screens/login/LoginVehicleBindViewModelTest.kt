@@ -33,7 +33,7 @@ import org.robolectric.annotation.Config
  * ### Why Robolectric
  * [LoginVehicleBindViewModel] is an [androidx.lifecycle.AndroidViewModel] that reads
  * `getApplication<Application>().contentResolver` inside [LoginVehicleBindViewModel.startShift]
- * (for `ShiftStartDto.deviceAndroidId`) and constructs a `SharedPreferencesDriverAuthRepository`
+ * (for `ShiftStartDto.deviceAndroidId`) and constructs an `OnlineDriverAuthRepository`
  * eagerly in its own constructor — both need a real (or Robolectric-shadowed) [Application], not
  * just a value that type-checks. This is this codebase's first ViewModel test; the pattern
  * (`@RunWith(RobolectricTestRunner::class)`, `@Config(manifest = Config.NONE, sdk = [34],
@@ -247,17 +247,13 @@ class LoginVehicleBindViewModelTest {
 
     /** login()/completeMfaLogin() are a separate flow this test never drives — see
      * [viewModel]'s own doc for why a throwing stub, not a real
-     * `SharedPreferencesDriverAuthRepository`, is what every scenario here needs. */
+     * `OnlineDriverAuthRepository`, is what every scenario here needs. */
     private object ThrowingDriverAuthRepository : DriverAuthRepository {
         override suspend fun login(driverId: String, pin: String): DriverLoginResult =
             error("not exercised by this test")
 
-        override suspend fun completeMfaLogin(
-            driverId: String,
-            pin: String,
-            mfaToken: String,
-            code: String,
-        ) = error("not exercised by this test")
+        override suspend fun completeMfaLogin(mfaToken: String, code: String) =
+            error("not exercised by this test")
     }
 
     private companion object {

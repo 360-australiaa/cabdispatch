@@ -428,7 +428,7 @@
     <ID>LongMethod:DeckHomeScreen.kt$@Composable fun DeckHomeScreen( navController: NavHostController, viewModel: WheelDashboardViewModel = viewModel(), dispatchViewModel: AvailableTripsWheelViewModel = viewModel(), // Phase A shell-integration (2026-09-03): [au.com.threesixty.cabdispatch.ui.navigation.CabDispatchRoutes.HIRED]'s // composable passes `true` here so a driver landing on this backstack entry via any of this // app's several "trip just started/accepted" hand-offs (Start Meter, Set Price, a dispatch // offer accepted from either the Dispatch wheel-content pane or the separate job-offer detail // screen) sees the Meter pane immediately — matching this file's own "one shell, swap embedded // content per rail item" pattern instead of Hired staying a separate full-screen takeover (see // this file's class doc, "Meter joins the shared shell"). Every existing // `navController.navigate(CabDispatchRoutes.HIRED)` call site keeps compiling and working // unchanged — none of them needed to change for this, since the route string itself didn't // move, only what it renders. startOnMeter: Boolean = false, )</ID>
     <ID>LongMethod:DeviceReadinessScreen.kt$@Composable fun DeviceReadinessScreen( onReady: () -&gt; Unit, viewModel: DeviceReadinessViewModel = viewModel(), )</ID>
     <ID>LongMethod:DeviceReadinessScreen.kt$@Composable private fun PairPanel( code: String, pairing: Boolean, error: String?, onCodeChange: (String) -&gt; Unit, onScan: () -&gt; Unit, onSubmit: () -&gt; Unit, autoFocus: Boolean = true, )</ID>
-    <ID>LongMethod:DriverAuthRepository.kt$SharedPreferencesDriverAuthRepository$override suspend fun login(driverId: String, pin: String): DriverLoginResult</ID>
+    <ID>LongMethod:DriverAuthRepository.kt$OnlineDriverAuthRepository$override suspend fun login(driverId: String, pin: String): DriverLoginResult</ID>
     <ID>LongMethod:DuressOverlays.kt$@Composable fun DuressTriggeredOverlay(secondsRemaining: Int, onCancel: () -&gt; Unit)</ID>
     <ID>LongMethod:EarningsWheelContent.kt$@Suppress("DEPRECATION") @Composable private fun EarningsTrendChart(trend: List&lt;DailyEarnings&gt;, modifier: Modifier = Modifier)</ID>
     <ID>LongMethod:FareEngine.kt$FareEngine$fun close( state: FareState, paymentMethod: String = "cash", surchargePct: BigDecimal? = null, cleaningFee: BigDecimal = BigDecimal.ZERO, includePsl: Boolean = false, ): FareBreakdown</ID>
@@ -951,8 +951,6 @@
     <ID>MagicNumber:NswPublicHolidays.kt$NswPublicHolidays$5</ID>
     <ID>MagicNumber:NswPublicHolidays.kt$NswPublicHolidays$6</ID>
     <ID>MagicNumber:NswPublicHolidays.kt$NswPublicHolidays$8</ID>
-    <ID>MagicNumber:OfflinePinHasher.kt$OfflinePinHasher$3</ID>
-    <ID>MagicNumber:OfflinePinHasher.kt$OfflinePinHasher$4</ID>
     <ID>MagicNumber:OfflineSyncScreen.kt$0.95f</ID>
     <ID>MagicNumber:OfflineSyncScreen.kt$120</ID>
     <ID>MagicNumber:OfflineSyncScreen.kt$8</ID>
@@ -1847,7 +1845,7 @@
     <ID>ReturnCount:CabDispatchNavHost.kt$fun postAuthDestination(): String</ID>
     <ID>ReturnCount:DeviceCommandHeartbeat.kt$DeviceCommandHeartbeat$private fun shouldAnswerLocate(locateRequested: Boolean): Boolean</ID>
     <ID>ReturnCount:DeviceCommandHeartbeat.kt$DeviceCommandHeartbeat$private suspend fun recoverDeviceIdFromSecret()</ID>
-    <ID>ReturnCount:DriverAuthRepository.kt$SharedPreferencesDriverAuthRepository$override suspend fun login(driverId: String, pin: String): DriverLoginResult</ID>
+    <ID>ReturnCount:DriverAuthRepository.kt$OnlineDriverAuthRepository$override suspend fun login(driverId: String, pin: String): DriverLoginResult</ID>
     <ID>ReturnCount:FareEngine.kt$FareEngine$fun tick( state: FareState, speedKmh: Number, distanceDeltaKm: Number, elapsedSeconds: Number, ): FareState</ID>
     <ID>ReturnCount:FareEngine.kt$FareEngineImpl$private fun detectTolls(cs: CalcFareState)</ID>
     <ID>ReturnCount:FareEngine.kt$fun resolveTimeClassFor(now: ZonedDateTime, area: AreaClass): TimeClass</ID>
@@ -1862,7 +1860,6 @@
     <ID>ReturnCount:MeterDial.kt$internal fun nightMultiplierLabel(tariff: TariffDto?): String?</ID>
     <ID>ReturnCount:MeterForegroundService.kt$MeterController$suspend fun restoreOpenTripIfAny()</ID>
     <ID>ReturnCount:MeterNavViewModel.kt$MeterNavViewModel$private fun onFix(fix: LocationFix)</ID>
-    <ID>ReturnCount:OfflinePinHasher.kt$OfflinePinHasher$fun verify(driverId: String, pin: String, record: String): Boolean</ID>
     <ID>ReturnCount:OutboxDrainer.kt$OutboxDrainer$private suspend fun drainTrips(rows: List&lt;SyncOutboxEntity&gt;): Tally</ID>
     <ID>ReturnCount:RatePassengerViewModel.kt$RatePassengerViewModel$fun submit()</ID>
     <ID>ReturnCount:RealLocationProvider.kt$RealLocationProvider$private fun passesFilter(candidate: LocationFix, previous: LocationFix?): Boolean</ID>
