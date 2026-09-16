@@ -282,8 +282,12 @@ android {
         // zero from an ordinary quiet cruise window once the estimate has only drifted low under
         // degraded confidence -- see InertialSpeedEstimator.isZeroVelocity's own doc (real T5453
         // M4 East field report the same day).
-        versionCode = 17
-        versionName = "0.7.5"
+        // 18 / 0.7.6 (2026-09-16): GPS is requested whenever the tablet is charging, not only
+        // while on shift -- these tablets are permanently powered from the vehicle ignition, so
+        // the off-shift battery-saving OFF tier was making the GPS dot read as broken before a
+        // shift started. See RealLocationProvider.resolveLocationRequestMode's own doc.
+        versionCode = 18
+        versionName = "0.7.6"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on
