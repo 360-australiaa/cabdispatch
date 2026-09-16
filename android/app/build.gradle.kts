@@ -286,8 +286,12 @@ android {
         // while on shift -- these tablets are permanently powered from the vehicle ignition, so
         // the off-shift battery-saving OFF tier was making the GPS dot read as broken before a
         // shift started. See RealLocationProvider.resolveLocationRequestMode's own doc.
-        versionCode = 18
-        versionName = "0.7.6"
+        // 19 / 0.7.7 (2026-09-17): owner decision -- 0.7.6's charging/on-shift gate on GPS
+        // requests is gone entirely. Location is now requested unconditionally (on shift or not,
+        // charging or on battery); only a live fare/duress still escalates the request to high
+        // accuracy. See RealLocationProvider's class doc, "DECISION HISTORY".
+        versionCode = 19
+        versionName = "0.7.7"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

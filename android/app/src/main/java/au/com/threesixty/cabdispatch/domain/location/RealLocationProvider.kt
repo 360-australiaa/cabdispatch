@@ -8,10 +8,8 @@ import android.location.Location
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import au.com.threesixty.cabdispatch.data.BatteryStatsCounters
-import au.com.threesixty.cabdispatch.domain.DeviceTelemetry
 import au.com.threesixty.cabdispatch.domain.LocationFix
 import au.com.threesixty.cabdispatch.domain.MeterController
-import au.com.threesixty.cabdispatch.domain.SessionHolder
 import au.com.threesixty.cabdispatch.domain.SpeedSource
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -39,42 +37,32 @@ import kotlinx.coroutines.launch
  * explicit no-GPS fallback for tests/previews and for what this class's own permission-denied
  * behaviour deliberately matches).
  *
- * ### Update rate and request priority (2026-09-12 optimisation plan, W4 task 2)
+ * ### Update rate and request priority (2026-09-12 optimisation plan, W4 task 2; simplified
+ * 2026-09-17 owner decision below)
  * [TICK_INTERVAL_MS] (1s) matches the fare engine's own 1 Hz tick loop (spec B6: "Tick loop
- * (1 Hz, driven by fused GPS)") — no point sampling location faster than the engine reads it. That
- * used to be the ONLY rate this class ever requested, for the entire process lifetime, the moment
- * `ACCESS_FINE_LOCATION` was granted — including a tablet sitting logged off overnight. [resolveLocationRequestMode]
- * now answers "should this class even be asking the location radio for fixes right now, and if
- * so how precisely/often" from the vehicle's actual state:
+ * (1 Hz, driven by fused GPS)") — no point sampling location faster than the engine reads it.
+ * [resolveLocationRequestMode] answers "how precisely/often should this class ask the location
+ * radio for fixes right now" from the vehicle's actual state:
  *
  * - **Hired or duress -> [LocationRequestMode.HIGH_ACCURACY]** — [Priority.PRIORITY_HIGH_ACCURACY]
- *   at [TICK_INTERVAL_MS] (1s), byte-for-byte what this class always requested. This is the one
- *   tier [FareEngineImpl] bills from, so it is deliberately unchanged — see [hiredOrDuress]'s own
- *   doc for why this branch is checked FIRST, ahead of the on-shift check, so a fare in progress
- *   can never be starved of 1 Hz fixes by a stale/wrong shift-state read.
- * - **On shift, not hired -> [LocationRequestMode.BALANCED]** — [Priority.PRIORITY_BALANCED_POWER_ACCURACY]
- *   at [BALANCED_INTERVAL_MS] (5s). Enough for the Live Map ambient dot
- *   ([au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat] reads this same [locationFix]) —
- *   nobody bills money off a driver cruising between ranks.
- * - **Not on shift, tablet NOT charging -> [LocationRequestMode.OFF]** — no request at all. This
- *   was the original fix: a parked, logged-off tablet used to run the same 1 Hz high-accuracy GPS
- *   radio wakeup as a live fare, for as long as the process stayed alive (which, on a kiosked field
- *   tablet, can be days). [locationFix]/[speedKmh] read `null`/`0.0` while OFF, the identical
- *   observable shape as no permission granted (see "Permission handling" below) — every consumer
- *   already handles that.
- * - **Not on shift, tablet IS charging -> [LocationRequestMode.BALANCED]** — owner decision,
- *   2026-09-16 field report: this fleet's tablets are permanently mounted and powered from the
- *   vehicle's own ignition circuit, so a charging tablet has no battery budget the OFF tier was
- *   protecting. Worse, the off-shift GPS status dot going dark by design read to a driver as
- *   "GPS is broken" rather than "we deliberately aren't asking yet" — a real, reported confusion.
- *   [charging] (see that constructor parameter's own doc) is what decides this, independent of
- *   [onShift]/[hiredOrDuress] — a genuinely unplugged, logged-off tablet still gets the original
- *   battery-saving OFF behaviour.
+ *   at [TICK_INTERVAL_MS] (1s). This is the one tier [FareEngineImpl] bills from.
+ * - **Otherwise -> [LocationRequestMode.BALANCED]** — [Priority.PRIORITY_BALANCED_POWER_ACCURACY]
+ *   at [BALANCED_INTERVAL_MS] (5s), unconditionally — on shift or not, charging or on battery.
  *
- * [onShift]/[hiredOrDuress] are polled every [MODE_POLL_INTERVAL_MS] alongside the existing
- * permission poll (folded into the same loop rather than a second one — see [supervisePermission]),
- * short enough that escalating to [LocationRequestMode.HIGH_ACCURACY] the moment a fare opens does
- * not visibly lag the fare engine's own 1 Hz tick.
+ * DECISION HISTORY: an earlier pass (2026-09-12) made this OFF entirely off-shift, to stop a
+ * parked, logged-off tablet running 1 Hz high-accuracy GPS for as long as the process stayed
+ * alive. A follow-up (2026-09-16) carved out an exception for a charging tablet, since this
+ * fleet's tablets are normally powered from the vehicle's ignition circuit. Both were replaced
+ * outright by owner decision (2026-09-17, field report): the OFF tier read to a driver as "GPS is
+ * broken" regardless of *why* it was off, and the fleet does not want that distinction at all —
+ * "it should work normally on battery and on charging, doesn't matter". [LocationRequestMode.OFF]
+ * now only ever happens for the genuinely separate reason of no location permission (see
+ * "Permission handling" below); [resolveLocationRequestMode] itself can no longer produce it.
+ *
+ * [hiredOrDuress] is polled every [MODE_POLL_INTERVAL_MS] alongside the existing permission poll
+ * (folded into the same loop rather than a second one — see [supervisePermission]), short enough
+ * that escalating to [LocationRequestMode.HIGH_ACCURACY] the moment a fare opens does not visibly
+ * lag the fare engine's own 1 Hz tick.
  *
  * ### Filtering (deliberately simple — spec B6 calls for `kalman(fused_location)`, this is not
  * a Kalman filter)
@@ -126,16 +114,12 @@ import kotlinx.coroutines.launch
 class RealLocationProvider(
     context: Context,
     private val scope: CoroutineScope,
-    /** `true` while [SessionHolder.session] has an open shift — see "Update rate and request
-     * priority" above. A plain function (rather than reading [SessionHolder] directly in
-     * [supervisePermission]) purely so a test can drive it without touching the real process-wide
-     * session singleton; defaults to the real check. */
-    private val onShift: () -> Boolean = { SessionHolder.session.value?.shiftId != null },
     /** `true` while there is a live meter accruing a fare OR a duress event is active — see
-     * "Update rate and request priority" above for why this OVERRIDES [onShift] rather than being
-     * gated by it (a trip cannot exist without a shift in the ordinary flow, but this class must
-     * never be the reason a fare loses 1 Hz fixes if that ever isn't true). Defaults to reading
-     * only the static [MeterController.instance] publication point (the "hired" half) — see
+     * "Update rate and request priority" above. A plain function (rather than reading
+     * [MeterController]/[au.com.threesixty.cabdispatch.domain.DuressController] directly in
+     * [supervisePermission]) purely so a test can drive it without touching the real
+     * process-wide singletons. Defaults to reading only the static [MeterController.instance]
+     * publication point (the "hired" half) — see
      * [au.com.threesixty.cabdispatch.domain.LivePositionHeartbeat.isHiredOrDuress]'s own doc for
      * why a static read, not an injected [MeterController], is the right shape between two
      * independent process-lifetime singletons.
@@ -144,13 +128,6 @@ class RealLocationProvider(
      * so this default is only ever exercised by a test/preview construction that never sets it.
      */
     private val hiredOrDuress: () -> Boolean = { MeterController.instance?.activeClientUuid != null },
-    /** `true` while the tablet is drawing external power — see [DeviceTelemetry.isCharging]'s own
-     * doc for the 2026-09-16 owner decision this exists for, and "Update rate and request
-     * priority" above for how it changes [resolveLocationRequestMode]. A plain function, same
-     * injectable-for-tests shape as [onShift]/[hiredOrDuress] above; defaults to the real device
-     * read via [context] (captured as [appContext] below, not the raw constructor parameter, so
-     * this default reads the same application-scoped context every other real default here uses). */
-    private val charging: () -> Boolean = { DeviceTelemetry.isCharging(context.applicationContext) },
 ) : SpeedSource {
 
     private val appContext: Context = context.applicationContext
@@ -199,7 +176,7 @@ class RealLocationProvider(
         // file's (LivePositionHeartbeat.kt) deliberate avoidance of this exact pitfall.
         while (scope.isActive) {
             val mode = if (hasPermission()) {
-                resolveLocationRequestMode(onShift = onShift(), hiredOrDuress = hiredOrDuress(), charging = charging())
+                resolveLocationRequestMode(hiredOrDuress = hiredOrDuress())
             } else {
                 LocationRequestMode.OFF
             }
@@ -407,10 +384,14 @@ class RealLocationProvider(
  * each tier.
  */
 internal enum class LocationRequestMode {
-    /** Not on shift: no location request at all. */
+    /** No location permission granted — see [RealLocationProvider]'s "Permission handling" doc.
+     * [resolveLocationRequestMode] itself never returns this; [RealLocationProvider.supervisePermission]
+     * substitutes it directly whenever [RealLocationProvider.hasPermission] is false. */
     OFF,
 
-    /** On shift, not hired/duress: [Priority.PRIORITY_BALANCED_POWER_ACCURACY]. */
+    /** Not hired/duress: [Priority.PRIORITY_BALANCED_POWER_ACCURACY] — the default, unconditional
+     * on shift/charging state (owner decision, 2026-09-17 — see [RealLocationProvider]'s class
+     * doc). */
     BALANCED,
 
     /** Hired or duress: [Priority.PRIORITY_HIGH_ACCURACY] at the fare engine's own 1 Hz — the
@@ -424,20 +405,11 @@ internal enum class LocationRequestMode {
  * `FusedLocationProviderClient` at all, the same "extract the fare-affecting decision into plain
  * Kotlin" convention [LocationFilteringTest]'s own doc already explains for this file's filters.
  *
- * [hiredOrDuress] is checked FIRST and unconditionally wins over [onShift]/[charging] — see
- * [RealLocationProvider.hiredOrDuress]'s own constructor doc for why: a fare or a duress event
- * must never be starved of high-accuracy fixes by a stale/wrong shift-state read, even though in
- * the ordinary flow a trip cannot exist without a shift already being open. [charging] is checked
- * next, independent of [onShift] entirely — a charging tablet has no battery budget the off-shift
- * OFF tier exists to protect, so it gets the same [LocationRequestMode.BALANCED] an on-shift,
- * not-hired tablet does, own doc (2026-09-16 field report) on [RealLocationProvider]'s class doc.
+ * Owner decision, 2026-09-17: location is requested unconditionally whenever [hiredOrDuress] is
+ * false too — no on-shift or charging/battery gate any more (see [RealLocationProvider]'s class
+ * doc, "DECISION HISTORY", for the two earlier, now-superseded tiers this replaced). A fare or a
+ * duress event still escalates to [LocationRequestMode.HIGH_ACCURACY] unconditionally, so it can
+ * never be starved of 1 Hz fixes by a stale/wrong read of anything else.
  */
-internal fun resolveLocationRequestMode(
-    onShift: Boolean,
-    hiredOrDuress: Boolean,
-    charging: Boolean = false,
-): LocationRequestMode = when {
-    hiredOrDuress -> LocationRequestMode.HIGH_ACCURACY
-    onShift || charging -> LocationRequestMode.BALANCED
-    else -> LocationRequestMode.OFF
-}
+internal fun resolveLocationRequestMode(hiredOrDuress: Boolean): LocationRequestMode =
+    if (hiredOrDuress) LocationRequestMode.HIGH_ACCURACY else LocationRequestMode.BALANCED
