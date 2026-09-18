@@ -25,7 +25,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
-from app.models.fatigue_alert import FatigueAlert
+from app.models.fatigue_alert import (
+    FATIGUE_ALERT_LICENSE_EXPIRED,
+    FATIGUE_ALERT_REGISTRATION_EXPIRED,
+    FatigueAlert,
+)
 from app.models.fleet import Vehicle
 from app.models.tariffs import Tariff as TariffRow
 from app.models.user import User
@@ -675,3 +679,90 @@ async def test_is_expired_flips_across_utc_day_boundary():
     # Sanity check on the old (buggy) UTC-date derivation this replaced:
     # it would have treated this licence as still valid.
     assert (expiry < now.date()) is False
+
+
+# --- duplicate unacknowledged rows are an ANSWER, not a fault ---------------
+# 2026-09-19. `_unacknowledged_alert_exists` used `scalar_one_or_none()` over a
+# filter with no uniqueness guard behind it, so the moment a driver or vehicle
+# had TWO unacknowledged alerts of one kind, the dedup lookup raised
+# `MultipleResultsFound` — from inside `run_*_compliance_checks`, which are
+# called on the trip-tick path, where an exception used to roll back the tick's
+# accrued fare. The predicate is "does at least one exist"; two is a fine yes.
+
+
+async def test_unacknowledged_alert_exists_tolerates_duplicate_driver_rows(
+    client: AsyncClient, session: AsyncSession
+):
+    from app.services.compliance_expiry import _unacknowledged_alert_exists
+
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+    driver_id = str(uuid.uuid4())
+
+    for _ in range(2):
+        session.add(
+            FatigueAlert(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                kind=FATIGUE_ALERT_LICENSE_EXPIRED,
+                triggered_at=datetime.now(UTC),
+                details_json={"expiry_date": "2020-01-01", "days_remaining": -1},
+                acknowledged=False,
+            )
+        )
+    await session.commit()
+
+    assert (
+        await _unacknowledged_alert_exists(
+            session, tenant_id=tenant_id, kind=FATIGUE_ALERT_LICENSE_EXPIRED, driver_id=driver_id
+        )
+        is True
+    )
+
+
+async def test_unacknowledged_alert_exists_tolerates_duplicate_vehicle_rows(
+    client: AsyncClient, session: AsyncSession
+):
+    from app.services.compliance_expiry import _unacknowledged_alert_exists
+
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+    vehicle_id = str(uuid.uuid4())
+
+    for _ in range(2):
+        session.add(
+            FatigueAlert(
+                tenant_id=tenant_id,
+                vehicle_id=vehicle_id,
+                kind=FATIGUE_ALERT_REGISTRATION_EXPIRED,
+                triggered_at=datetime.now(UTC),
+                details_json={"expiry_date": "2020-01-01", "days_remaining": -1},
+                acknowledged=False,
+            )
+        )
+    await session.commit()
+
+    assert (
+        await _unacknowledged_alert_exists(
+            session, tenant_id=tenant_id, kind=FATIGUE_ALERT_REGISTRATION_EXPIRED, vehicle_id=vehicle_id
+        )
+        is True
+    )
+
+
+async def test_unacknowledged_alert_exists_is_false_with_no_rows(client: AsyncClient, session: AsyncSession):
+    """The no-rows answer must not have changed along with the many-rows one."""
+    from app.services.compliance_expiry import _unacknowledged_alert_exists
+
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+
+    assert (
+        await _unacknowledged_alert_exists(
+            session,
+            tenant_id=tenant_id,
+            kind=FATIGUE_ALERT_LICENSE_EXPIRED,
+            driver_id=str(uuid.uuid4()),
+        )
+        is False
+    )

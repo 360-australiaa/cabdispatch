@@ -146,8 +146,27 @@ async def _unacknowledged_alert_exists(
         stmt = stmt.where(FatigueAlert.driver_id == driver_id)
     if vehicle_id is not None:
         stmt = stmt.where(FatigueAlert.vehicle_id == vehicle_id)
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none() is not None
+    # EXISTENCE, not uniqueness (2026-09-19). This used to end
+    # `result.scalar_one_or_none() is not None`, which raises
+    # `MultipleResultsFound` the moment TWO unacknowledged alerts of the same
+    # kind exist for the same driver/vehicle. Nothing forbids two: the filter
+    # above has no uniqueness guard behind it, and duplicate alert rows are a
+    # known, observed condition in this system — see the ISOLATED SESSION note
+    # in `app.services.lazy_maintenance`, which documents a production 500
+    # (request_id cd2486bb63374e4384e20cdde6dc3558) caused by exactly this
+    # shape of query meeting a duplicate row.
+    #
+    # The question this function is actually asked is "does AT LEAST ONE
+    # unacknowledged alert of this kind already exist" — a pure existence
+    # predicate, and two rows are a perfectly good "yes", not an error.
+    # `.limit(1)` + `.first()` answers that honestly and cheaply and can never
+    # raise on row count. Duplicate rows remain a data-hygiene problem worth
+    # fixing at the write end; they are no longer allowed to be a fault at the
+    # READ end, which is reached from the metered trip tick where a raised
+    # exception used to cost accrued fare (see `tick_trip` in
+    # `app/api/v1/trips.py`).
+    result = await session.execute(stmt.limit(1))
+    return result.scalars().first() is not None
 
 
 async def _raise_driver_alert(
