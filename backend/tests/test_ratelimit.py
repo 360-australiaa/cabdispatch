@@ -27,6 +27,7 @@ Two mechanics worth understanding before reading:
 from __future__ import annotations
 
 import uuid
+from unittest import mock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -581,3 +582,43 @@ async def test_correct_pin_does_not_advance_the_lockout(client, session):
         assert resp.json()["valid"] is True
 
     assert ratelimit.peek_exhausted(VERIFY_ADMIN_PIN_LOCKOUT, "admin-pin-lock", user_id) is False
+
+
+# --- the Redis probe's own kwargs (2026-09-18 production finding) ----------------
+
+
+def test_the_redis_probe_passes_kwargs_redis_py_actually_accepts():
+    """`_RateLimitBackend` used to pass `connection_timeout=0.5`, which redis-py
+    has never had a kwarg by that name. It landed in the client constructor's
+    **kwargs and raised there, so the `check()` probe returned False in 0.000s
+    without sending a packet, and production silently ran on the per-process
+    in-memory fallback while Redis sat there healthy and reachable.
+
+    Nothing caught it because every symptom pointed at the network. This asserts
+    the contract that actually broke: the kwarg names the probe uses must be ones
+    redis-py's own constructor accepts. It needs no live Redis -- constructing a
+    client does not connect.
+    """
+    import inspect
+
+    import redis
+
+    accepted = set(inspect.signature(redis.Redis.__init__).parameters)
+    for kwarg in ("socket_connect_timeout", "socket_timeout"):
+        assert kwarg in accepted, f"redis-py does not accept {kwarg!r}"
+    assert "connection_timeout" not in accepted, (
+        "redis-py grew a `connection_timeout` kwarg -- re-check which name the "
+        "probe in app/core/ratelimit.py should be using."
+    )
+
+
+def test_the_redis_probe_reports_honestly_when_redis_is_genuinely_down():
+    """The other half: a real unreachable Redis must still fall back, and must
+    say so. Port 1 is reserved and nothing listens there."""
+    from app.core.ratelimit import _RateLimitBackend
+
+    with mock.patch.object(ratelimit.settings, "REDIS_URL", "redis://127.0.0.1:1/0"):
+        backend = _RateLimitBackend()
+
+    assert backend.using_redis is False
+    assert backend.storage_uri == "memory://"

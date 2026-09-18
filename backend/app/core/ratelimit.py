@@ -121,8 +121,18 @@ class _RateLimitBackend:
 
         if settings.REDIS_URL:
             try:
+                # `socket_connect_timeout`, NOT `connection_timeout`. These are
+                # forwarded to redis-py, which has never had a kwarg by the
+                # latter name: it lands in the client constructor's **kwargs and
+                # blows up there, so `check()` below returned False in 0.000s
+                # without a single packet being sent. Found 2026-09-18 on the
+                # production box, where Redis was reachable the whole time
+                # (DNS fine, TCP fine, a raw PING returned True) while this
+                # silently ran the fleet on the in-memory fallback. Both
+                # timeouts are deliberately short: this runs once at startup
+                # and must not hold the process up if Redis really is down.
                 candidate = storage_from_string(
-                    settings.REDIS_URL, connection_timeout=0.5, socket_timeout=0.5
+                    settings.REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5
                 )
                 # `check()` actually round-trips to the server (PING). Without
                 # it, an unreachable Redis is only discovered on the first
