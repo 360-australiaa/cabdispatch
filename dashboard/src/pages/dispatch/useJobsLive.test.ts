@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ACCESS_TOKEN_KEY } from "@/lib/apiClient";
-import { useJobsLive } from "./useJobsLive";
+import { FRAME_TRUST_WINDOW_MS, useJobsLive } from "./useJobsLive";
 
 /** Same controllable `WebSocket` stand-in as `useDuressLiveGps.test.ts`. */
 class FakeWebSocket {
@@ -91,6 +91,39 @@ describe("useJobsLive", () => {
     act(() => socket.send("not json"));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dispatch-jobs"] });
     expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores the body of a frame type this build does not know, but still refetches the list", () => {
+    // The guard: a backend newer than this tab can push a type we have never
+    // heard of. We must not mine its body for ids (its shape is unknown) --
+    // refetching the list is always correct and cannot break.
+    renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    act(() =>
+      socket.send(JSON.stringify({ type: "job_cancelled", job: { id: "j9" } })),
+    );
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dispatch-jobs"] });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["dispatch-job", "j9"] });
+  });
+
+  it("reports deliveringFrames only after a frame actually arrives, and expires it", () => {
+    // An open socket proves a connection, not delivery: the jobs feed is
+    // driver-keyed, so a dispatcher opens it and hears nothing. Dispatch gates
+    // its 30 s band on this flag; see FRAME_TRUST_WINDOW_MS.
+    const { result } = renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    expect(result.current.state).toBe("open");
+    expect(result.current.deliveringFrames).toBe(false);
+
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    expect(result.current.deliveringFrames).toBe(true);
+
+    act(() => vi.advanceTimersByTime(FRAME_TRUST_WINDOW_MS + 1));
+    expect(result.current.deliveringFrames).toBe(false);
   });
 
   it("reports error/closed so the page can fall back to polling, and reconnects with backoff", () => {
