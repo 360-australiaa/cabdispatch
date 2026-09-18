@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ThemeProvider } from "@/lib/theme";
 import { AppShell } from "./AppShell";
@@ -22,23 +23,36 @@ vi.mock("@/hooks/useWhite-labelSettings", () => ({
 vi.mock("@/pages/fleet/api", () => ({
   useComplianceExpiry: () => ({ data: { items: [] } }),
 }));
+// AppShell now mounts DuressAlertsProvider, so the whole app carries the panic
+// alarm rather than just the Duress Desk page (see that provider's doc). Its
+// open-events poll is not what this error-boundary test is about; stubbing the
+// network call keeps the test hermetic while still exercising the real
+// provider, so a future break in its wiring still fails here.
+vi.mock("@/pages/duress/api", () => ({
+  listDuressEvents: () => Promise.resolve({ items: [], total: 0 }),
+}));
 
 function Boom(): never {
   throw new Error("this page exploded");
 }
 
 function renderShell(initialPath: string) {
+  // retry: false so a stubbed-network failure surfaces immediately rather than
+  // being retried past the end of the test.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <ThemeProvider>
-        <Routes>
-          <Route path="/" element={<AppShell />}>
-            <Route path="boom" element={<Boom />} />
-            <Route path="live-map" element={<h1>Live map page</h1>} />
-          </Route>
-        </Routes>
-      </ThemeProvider>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <ThemeProvider>
+          <Routes>
+            <Route path="/" element={<AppShell />}>
+              <Route path="boom" element={<Boom />} />
+              <Route path="live-map" element={<h1>Live map page</h1>} />
+            </Route>
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 

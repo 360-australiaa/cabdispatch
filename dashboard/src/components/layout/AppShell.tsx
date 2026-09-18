@@ -4,6 +4,7 @@ import { Menu } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ToastProvider } from "@/components/ui/Toast";
 import { useTenantQuery } from "@/hooks/useWhite-labelSettings";
+import { DuressAlertsProvider } from "@/pages/duress/DuressAlertsProvider";
 import { Sidebar } from "./Sidebar";
 
 /**
@@ -64,11 +65,16 @@ export function AppShell() {
   }, []);
 
   return (
-    // bg-background (not bg-brand-lavender): --brand-lavender is a surface tint,
-    // and page titles rendered straight onto it were unreadable in dark mode
-    // before D4 gave it a dark value. --background is the token that has always
-    // been maintained for both themes (the same one Card/Modal/Input use), so
-    // the shell stays consistent with the rest of the app.
+    // DuressAlertsProvider wraps the whole shell, not a page: the panic alarm
+    // has to reach an operator who is looking at the Live Map, not only one
+    // already on the Duress Desk. See that provider's own doc for the
+    // 2026-09-18 audit finding this fixes.
+    <DuressAlertsProvider>
+    {/* bg-background (not bg-brand-lavender): --brand-lavender is a surface tint,
+        and page titles rendered straight onto it were unreadable in dark mode
+        before D4 gave it a dark value. --background is the token that has always
+        been maintained for both themes (the same one Card/Modal/Input use), so
+        the shell stays consistent with the rest of the app. */}
     <div className="flex h-screen bg-background">
       {/* First tab stop on every page: jump past 22 nav links to the content. */}
       <a href="#main-content" className="skip-link rounded-md bg-brand-accent px-3 py-2 text-sm font-medium text-brand-accent-foreground">
@@ -101,5 +107,6 @@ export function AppShell() {
         </ToastProvider>
       </div>
     </div>
+    </DuressAlertsProvider>
   );
 }

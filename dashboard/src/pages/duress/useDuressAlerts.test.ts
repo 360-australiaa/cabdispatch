@@ -124,4 +124,53 @@ describe("useDuressAlerts", () => {
     expect(result.current.notifPermission).toBe("unsupported");
     expect(() => act(() => result.current.arm())).not.toThrow();
   });
+
+  // 2026-09-18 field audit: `armed` was plain useState(false) with nothing
+  // persisting it, so the audible alarm on a safety desk was OFF again after
+  // every single reload and the operator had to re-find a button. Four duress
+  // events had sat open 334-436 hours.
+  describe("arming survives a reload", () => {
+    beforeEach(() => window.localStorage.clear());
+
+    it("starts disarmed on a workstation that has never armed", () => {
+      const { result } = renderHook(() => useDuressAlerts(undefined));
+      expect(result.current.armed).toBe(false);
+    });
+
+    it("persists the choice so the next page load starts armed", () => {
+      const first = renderHook(() => useDuressAlerts(undefined));
+      act(() => first.result.current.arm());
+      expect(first.result.current.armed).toBe(true);
+
+      // A fresh mount is what a reload looks like to this hook.
+      first.unmount();
+      const second = renderHook(() => useDuressAlerts(undefined));
+      expect(second.result.current.armed).toBe(true);
+    });
+
+    it("beeps on a new event after a reload without the operator re-arming", () => {
+      window.localStorage.setItem("cabdispatch.duress.alertsArmed", "true");
+      const { rerender } = renderHook(({ events }) => useDuressAlerts(events), {
+        initialProps: { events: [] as DuressEvent[] | undefined },
+      });
+      // The browser only allows audio after a real gesture; the hook restores
+      // the AudioContext on the operator's first interaction of the session.
+      act(() => {
+        window.dispatchEvent(new Event("pointerdown"));
+      });
+      const oscillatorSpy = vi.spyOn(FakeAudioContext.prototype, "createOscillator");
+
+      rerender({ events: [makeEvent("new-one", "open")] });
+
+      expect(oscillatorSpy).toHaveBeenCalled();
+    });
+
+    it("degrades to disarmed rather than throwing when site data is blocked", () => {
+      const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("blocked");
+      });
+      expect(() => renderHook(() => useDuressAlerts(undefined))).not.toThrow();
+      getItem.mockRestore();
+    });
+  });
 });

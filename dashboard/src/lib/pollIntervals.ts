@@ -26,6 +26,22 @@
  * data immediately — the poll stops while nobody is looking, it does not go
  * stale once they look again.
  *
+ * ### That last sentence was false for three months — read before changing
+ * `App.tsx` set `refetchOnWindowFocus: false` on the global QueryClient, so
+ * the focus refetch this module's whole background-pause argument rests on
+ * never happened. A hidden tab stopped polling and then did NOT catch up on
+ * return: it sat on stale data until the next interval tick fired, and
+ * forever on any screen with no `refetchInterval` at all. That is the
+ * 2026-09-18 field report ("my dashboard is not real time, I have to reload
+ * everything"), reproduced as zero `/v1/*` requests over two minutes on a
+ * backgrounded Live Map.
+ *
+ * The pairing is load-bearing in BOTH directions. If you ever set
+ * `refetchOnWindowFocus: false` again, you must also drop
+ * `refetchIntervalInBackground: false` here, or the dashboard silently stops
+ * being live again — with no error, no failed request, and a green badge
+ * still claiming otherwise.
+ *
  * ## What is deliberately NOT here
  *
  * The three WebSocket surfaces (`useLiveMap`, `useMessagesLive`,

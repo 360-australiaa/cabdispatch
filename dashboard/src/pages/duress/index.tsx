@@ -24,7 +24,7 @@ import { IdentityLabel } from "./IdentityLabel";
 import { TriggerEventModal } from "./TriggerEventModal";
 import { formatDateTime, isStaleEvent, statusBadgeVariant } from "./format";
 import type { DuressEvent, DuressStatus } from "./types";
-import { useDuressAlerts } from "./useDuressAlerts";
+import { useDuressAlertsContext } from "./DuressAlertsProvider";
 import { useDuressLookups } from "./useDuressLookups";
 import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
@@ -92,7 +92,14 @@ export default function DuressPage() {
   });
 
   const lookups = useDuressLookups();
-  const { armed, notifPermission, arm } = useDuressAlerts(eventsQuery.data?.items);
+  // The alarm itself lives in DuressAlertsProvider (mounted in AppShell) so it
+  // reaches an operator on any screen, not just this one. This page only reads
+  // and drives that single instance -- mounting useDuressAlerts again here
+  // would give every new event two beeps and two notifications.
+  const alerts = useDuressAlertsContext();
+  const armed = alerts?.armed ?? false;
+  const notifPermission = alerts?.notifPermission ?? "unsupported";
+  const arm = alerts?.arm ?? (() => {});
 
   const { user } = useAuth();
   const canManage = !!user && MANAGE_ROLES.has(user.role);

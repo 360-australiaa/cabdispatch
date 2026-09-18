@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 
 /**
  * Data layer for the Trips module (`src/pages/trips`). Mirrors
@@ -335,6 +336,14 @@ export function useTripsQuery(filters: TripListFilters) {
       return res.data;
     },
     placeholderData: (prev) => prev,
+    // Field report, 2026-09-18: this list had no refetchInterval at all, so a
+    // trip closed by a driver never appeared until the operator hit reload —
+    // on one of the two screens they watch most. ROSTER (30 s), not a faster
+    // band: `GET /v1/trips` returns the full TripRead per row (fare
+    // breakdown, PSL, split payments), so this is one of the heavier reads in
+    // the product. `placeholderData` above keeps the table from flashing
+    // empty on each refetch.
+    ...pollingQueryOptions(POLL.ROSTER),
   });
 }
 

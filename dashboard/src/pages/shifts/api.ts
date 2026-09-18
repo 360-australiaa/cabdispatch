@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import apiClient from "@/lib/apiClient";
+import { POLL, pollingQueryOptions } from "@/lib/pollIntervals";
 import type {
   DriverLite,
   Shift,
@@ -23,6 +24,18 @@ export function useShiftsQuery(filters: ShiftListFilters) {
       return res.data;
     },
     placeholderData: (prev) => prev,
+    // Field report, 2026-09-18: no refetchInterval at all, so a shift that
+    // started, ended or was reconciled never showed until a manual reload.
+    //
+    // ROSTER (30 s) rather than anything faster ON PURPOSE. `GET /v1/shifts`
+    // is the most expensive read in the product: it runs the fatigue and
+    // compliance checks serially for every OPEN shift on the way through
+    // (app/services/lazy_maintenance.py, called from app/api/v1/shifts.py),
+    // measured at 167 ms for a 50-open-shift page. That cost scales with the
+    // number of open shifts, which is exactly what the heartbeat-timeout
+    // auto-logout exists to keep down. If you ever want a faster band here,
+    // move those checks off the read path first.
+    ...pollingQueryOptions(POLL.ROSTER),
   });
 }
 
