@@ -138,7 +138,7 @@ class InertialSpeedEstimator {
             // number two independent sources of truth. This branch's own job is only ever the speed.
         } else {
             val aForwardClamped = aForwardRaw.coerceIn(-MAX_FORWARD_ACCEL_MPS2, MAX_FORWARD_ACCEL_MPS2)
-            vEstMps = (vEstMps + aForwardClamped * dt).coerceIn(0.0, maxAllowedSpeedMps())
+            vEstMps = (vEstMps + aForwardClamped * dt).coerceIn(minAllowedSpeedMps(), maxAllowedSpeedMps())
             sigmaV += SIGMA_GROWTH_PER_SECOND * dt
             headingDeg = ((headingDeg ?: 0.0) + Math.toDegrees(gyroZ * dt)).mod(FULL_TURN_DEG)
         }
@@ -200,6 +200,41 @@ class InertialSpeedEstimator {
     private fun maxAllowedSpeedMps(): Double =
         minOf(seedSpeedMps + BOUND_MARGIN_KMH / KMH_PER_MPS, HARD_CEILING_KMH / KMH_PER_MPS)
 
+    /**
+     * The lowest speed pure integration is allowed to walk the estimate down to without a genuine
+     * ZUPT (a real, sensor-evidenced stop — see [isZeroVelocity], which sets [vEstMps] to exactly
+     * `0.0` directly and bypasses this floor entirely, same as it always has).
+     *
+     * Added 2026-09-18, real field report (T5453, two separate real M4 East/Rozelle Interchange
+     * drives): `zupt_count` on both was `0` — no ZUPT ever fired, ruling out the earlier
+     * quiet-window misfire this class already has two fixes for (see [isZeroVelocity]'s own doc) —
+     * yet the reconciled billed distance showed the device's own estimate had covered only 14-24%
+     * of the real road distance over an ~8 minute blackout. The only way that happens with zero
+     * ZUPTs is [aForwardClamped]-integration itself decaying the estimate for minutes on a small,
+     * sub-ZUPT-threshold negative bias/noise nothing was ever catching — `sigmaV`/[InertialConfidence]
+     * correctly flagged the result as untrustworthy, but nothing acted on that flag; the number was
+     * still published and driven, uncorrected, the whole time.
+     *
+     * The consequence was worse than a wrong number on a diagnostics panel: [InertialSpeedSource
+     * .displayFix] walks the *locked tunnel corridor's own geometry* by this same estimate's
+     * integrated distance, and [TunnelRegistry.extendAtFork] (chaining the lock onto the NEXT
+     * connected bore, e.g. Rozelle Interchange -> M4 East) only fires once that distance reaches
+     * the CURRENT bore's own length — which a collapsed estimate never does. The car was still
+     * genuinely on a real road the whole time; the puck was pinned at the first interchange's own
+     * portal for the rest of the drive while the vehicle went on through the tunnel beyond it —
+     * indistinguishable, from the driver's seat, from "lost the tunnel and wandered off toward the
+     * houses above it".
+     *
+     * Mirrors [maxAllowedSpeedMps]'s own "seed ± margin" shape exactly, using the SAME
+     * [BOUND_MARGIN_KMH] rather than a second, independently-tuned number: a vehicle can plausibly
+     * slow by up to the margin from pure road conditions (easing off before a bend, light traffic)
+     * without that being confused for sensor drift, same as it can plausibly speed up by the same
+     * margin. Floored at `0.0` (never negative) for a low-speed seed, matching [neverReportsNegativeSpeed]'s
+     * own contract — a seed already near zero has no room left to "decelerate" into.
+     */
+    private fun minAllowedSpeedMps(): Double =
+        (seedSpeedMps - BOUND_MARGIN_KMH / KMH_PER_MPS).coerceAtLeast(0.0)
+
     private fun confidenceFor(sigma: Double): InertialConfidence = when {
         sigma < HIGH_CONFIDENCE_SIGMA -> InertialConfidence.HIGH
         sigma < MEDIUM_CONFIDENCE_SIGMA -> InertialConfidence.MEDIUM
@@ -252,7 +287,10 @@ class InertialSpeedEstimator {
         /** Task 4 bounds: `|aForward| <= 4 m/s^2` — anything larger is mount vibration, clamped. */
         private const val MAX_FORWARD_ACCEL_MPS2 = 4.0
 
-        /** Task 4 bounds margin/ceiling: `0 <= vEst <= min(vGpsAtLoss + 30 km/h, 110 km/h)`. */
+        /** Task 4's own bound was `0 <= vEst <= min(vGpsAtLoss + 30 km/h, 110 km/h)` — an upper
+         * margin only. [minAllowedSpeedMps] (2026-09-18) reuses this exact figure as a symmetric
+         * LOWER margin too — see that function's own doc for the real production evidence this
+         * closes. */
         private const val BOUND_MARGIN_KMH = 30.0
         private const val HARD_CEILING_KMH = 110.0
 

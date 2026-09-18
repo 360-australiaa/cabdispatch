@@ -290,8 +290,18 @@ android {
         // requests is gone entirely. Location is now requested unconditionally (on shift or not,
         // charging or on battery); only a live fare/duress still escalates the request to high
         // accuracy. See RealLocationProvider's class doc, "DECISION HISTORY".
-        versionCode = 19
-        versionName = "0.7.7"
+        // 20 / 0.7.8 (2026-09-18): real field report -- the M4 East/Rozelle Interchange tunnel
+        // lock was engaging correctly (corridor_road_id populated on both real drives), but the
+        // on-device speed estimate had no lower bound, so minutes of small uncorrected integration
+        // drift (zupt_count 0 -- no ZUPT ever fired) walked it down toward zero with nothing to
+        // catch it -- 14-24% of the real road distance reconciled server-side. That starved the
+        // tunnel lock's own fork-chain advance (it only extends once the traveled distance reaches
+        // the current bore's own length), pinning the displayed position at the first interchange's
+        // portal for the rest of the drive while the car went on through the tunnel beyond it. Now
+        // bounded symmetrically to the existing upper bound (seed +/- 30 km/h) -- see
+        // InertialSpeedEstimator.minAllowedSpeedMps's own doc.
+        versionCode = 20
+        versionName = "0.7.8"
 
         // See apiBaseUrlOverride above -- set API_BASE_URL in your own
         // local.properties to point a debug build at a real device on

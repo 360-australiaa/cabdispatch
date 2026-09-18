@@ -94,6 +94,29 @@ class InertialSpeedEstimatorTest {
     }
 
     @Test
+    fun forwardDeceleration_neverDriftsBelowSeedMinusBoundMargin() {
+        // Real field report, 2026-09-18: two separate real M4 East/Rozelle Interchange blackouts
+        // (zupt_count 0 on both -- no ZUPT ever fired, so this is pure uncorrected integration
+        // drift, not a ZUPT misfire) reconciled at only 14-24% of the real road distance over an
+        // ~8 minute crossing. A small, sustained, sub-ZUPT-threshold negative bias -- never enough
+        // to trip isZeroVelocity, never a real detected stop -- must not be allowed to walk the
+        // estimate down toward zero over minutes; see minAllowedSpeedMps's own doc for the full
+        // chain (this also starved the tunnel-lock's own fork-chain advance, which is what actually
+        // put the displayed position on the wrong road).
+        val estimator = InertialSpeedEstimator()
+        estimator.seed(speedKmh = 90.0, headingDegOrNull = 0.0) // floor = max(60, 0) = 60 km/h
+
+        var t = 0L
+        var last = estimator.step(sample(t, forwardAccel = -0.31f), goodCalibration)
+        repeat(200) {
+            t += 1_000_000_000L
+            last = estimator.step(sample(t, forwardAccel = -0.31f), goodCalibration)
+        }
+
+        assertEquals(60.0, last.speedKmh, 0.01)
+    }
+
+    @Test
     fun zuptFires_whenStationaryAndQuiet_andResetsSpeedToZero() {
         val estimator = InertialSpeedEstimator()
         estimator.seed(speedKmh = 60.0, headingDegOrNull = 0.0)
@@ -226,15 +249,22 @@ class InertialSpeedEstimatorTest {
     @Test
     fun aQuietCruiseWindow_doesNotZuptOnceTheEstimateHasOnlyDriftedLowUnderLowConfidence() {
         // Real field report, T5453, 2026-09-16: a real ~7.5 min M4 East blackout. No real
-        // deceleration ever happened -- the estimate drifted from 90 km/h down under the ZUPT gate
-        // purely from ~68s of small uncorrected integration error (sigmaV crossing into LOW
-        // confidence along the way, same as confidenceDegradesOverTimeBetweenZupts... below), then
-        // the very next quiet cruise window (light road vibration, exactly the 2026-09-14 pattern)
-        // read that drifted-low value as "already stopped" and zeroed it -- while the real car kept
-        // doing ~90 km/h. See isZeroVelocity's own doc for the fix and why it must not simply freeze
-        // the estimate instead (an explicit, separate owner decision).
+        // deceleration ever happened -- the estimate drifted down under the ZUPT gate purely from
+        // ~68s of small uncorrected integration error (sigmaV crossing into LOW confidence along
+        // the way, same as confidenceDegradesOverTimeBetweenZupts... below), then the very next
+        // quiet cruise window (light road vibration, exactly the 2026-09-14 pattern) read that
+        // drifted-low value as "already stopped" and zeroed it. See isZeroVelocity's own doc for
+        // the fix and why it must not simply freeze the estimate instead (an explicit, separate
+        // owner decision).
+        //
+        // Seeded at 20 km/h, not the real drive's own 90: minAllowedSpeedMps (2026-09-18) now
+        // floors a 90 km/h seed's drift at 60 km/h, which this scenario's whole premise -- drifting
+        // UNDER the ~14.4 km/h ZUPT gate -- needs to get past. 20 km/h keeps the floor at its own
+        // pre-existing 0 (seed - 30 margin coerced up), so this phase's drift-to-near-zero behaviour
+        // is exactly what it was before that fix; [forwardDeceleration_neverDriftsBelowSeedMinusBoundMargin]
+        // above is what now covers the higher-speed, real-M4-East-distance side of this same finding.
         val estimator = InertialSpeedEstimator()
-        estimator.seed(speedKmh = 90.0, headingDegOrNull = 0.0)
+        estimator.seed(speedKmh = 20.0, headingDegOrNull = 0.0)
 
         // Phase 1: a small, sustained bias -- not a real stop (magnitude stays over the ZUPT
         // threshold the whole time, so nothing here could ZUPT on its own) -- drifts the estimate
