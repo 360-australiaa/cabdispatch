@@ -49,6 +49,8 @@ from app.core.security import (
     WebSocketAuthError,
     authenticate_websocket_token,
     get_current_tenant_id,
+    get_token_payload,
+    require_role,
     revocation_aware_pump,
 )
 from app.schemas.live_ops import (
@@ -62,8 +64,23 @@ from app.schemas.live_ops import (
 )
 from app.services import lazy_maintenance
 from app.services import live_ops as live_ops_service
+from app.services import shift as shift_service
 
 router = APIRouter(tags=["live-ops"])
+
+# Security audit, 2026-09-18. Every read on this surface used to be gated on
+# `get_current_tenant_id` ALONE, with no role check — so any driver's own
+# access token could enumerate the tenant's entire vehicle fleet and driver
+# roster and watch the whole fleet's live map. `app/api/v1/duress.py` already
+# gated its equivalent reads on exactly these three roles (`_DISPATCH_ROLES`
+# there), so this was an omission on this router, not a deliberate difference.
+#
+# Deliberately NOT applied to `POST /v1/fleet/positions`: that is the endpoint
+# the driver's own tablet publishes to, so it must stay reachable by a driver
+# token. Its own (separate, real) problem — that a tablet could publish for any
+# vehicle in the tenant, not just the one it is bound to — is fixed at that
+# endpoint instead, by `_require_publish_ownership` below.
+_DISPATCH_ROLES = ("owner", "admin", "dispatcher")
 
 
 def _live_ops_error_to_http(exc: live_ops_service.LiveOpsError) -> HTTPException:
@@ -88,6 +105,7 @@ async def list_vehicles(
     rego: str | None = Query(default=None, description="Case-insensitive partial match"),
     live_status: str | None = Query(default=None, description="e.g. available | on_trip | offline"),
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
     session: AsyncSession = Depends(get_session),
 ):
     items, total = await live_ops_service.list_vehicles_live(
@@ -107,6 +125,7 @@ async def list_vehicles(
 async def get_vehicle(
     vehicle_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -125,6 +144,7 @@ async def get_vehicle_position_history(
         "app.services.live_ops.position_history_retention_hours).",
     ),
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
     session: AsyncSession = Depends(get_session),
 ):
     """Durable position history for one vehicle -- the dispatcher "scrub back
@@ -159,6 +179,7 @@ async def list_drivers(
     status_filter: str | None = Query(default=None, alias="status", description="User.status"),
     on_shift: bool | None = Query(default=None),
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
     session: AsyncSession = Depends(get_session),
 ):
     items, total = await live_ops_service.list_drivers_live(
@@ -176,6 +197,7 @@ async def list_drivers(
 async def get_driver(
     driver_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
     session: AsyncSession = Depends(get_session),
 ):
     try:
@@ -189,10 +211,47 @@ async def get_driver(
 # ==================================================================================
 
 
+async def _require_publish_ownership(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str, token_payload: dict
+) -> None:
+    """The other half of the 2026-09-18 audit finding recorded on `_DISPATCH_ROLES`.
+
+    `POST /v1/fleet/positions` cannot take a role gate (a driver's tablet is its
+    main caller), so it was open to any authenticated caller in the tenant
+    publishing a position, speed and fare for ANY vehicle id — enough to walk a
+    rival's cab across the dispatcher's Live Map, or to hide one's own.
+
+    Dispatch roles keep unrestricted access: `PublishPositionModal` on the Live
+    Map is a real operator tool for exactly this, and every existing test client
+    authenticates as an admin. A driver may publish only for the vehicle they
+    are actually in, which the shifts table answers authoritatively (see
+    `shift_service.find_open_shift` — there is no denormalised "current driver"
+    field anywhere, deliberately). The tablet only runs its heartbeat while its
+    own session has an open shift (`LivePositionHeartbeat.start`), so this
+    matches real device behaviour rather than merely tolerating it.
+
+    Read from the raw token payload rather than `get_current_user`: this is a
+    once-per-heartbeat check on the hottest write path in the system, and the
+    role and subject are already in the token.
+    """
+    if token_payload.get("role") in _DISPATCH_ROLES:
+        return
+    driver_id = token_payload.get("sub")
+    open_shift = await shift_service.find_open_shift(
+        session, tenant_id=tenant_id, driver_id=driver_id, vehicle_id=vehicle_id
+    )
+    if open_shift is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only publish positions for the vehicle you are on shift in",
+        )
+
+
 @router.post("/v1/fleet/positions", response_model=PositionPublishResponse, status_code=status.HTTP_201_CREATED)
 async def publish_position(
     payload: PositionPublishRequest,
     tenant_id: str = Depends(get_current_tenant_id),
+    token_payload: dict = Depends(get_token_payload),
     session: AsyncSession = Depends(get_session),
 ):
     """Publishes one vehicle's current position/status: updates the in-memory
@@ -209,6 +268,9 @@ async def publish_position(
     it the right hook. It cannot fail this endpoint — see
     `app.services.lazy_maintenance`.
     """
+    await _require_publish_ownership(
+        session, tenant_id=tenant_id, vehicle_id=payload.vehicle_id, token_payload=token_payload
+    )
     try:
         published = await live_ops_service.publish_position(
             session,
@@ -240,6 +302,7 @@ async def publish_position(
 @router.get("/v1/fleet/positions", response_model=list[PositionRead])
 async def list_positions(
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
 ):
     """Every vehicle's latest cached position for this tenant. In-memory
     only — empty after a process restart until the next publish."""
@@ -251,6 +314,7 @@ async def list_positions(
 async def get_position(
     vehicle_id: str,
     tenant_id: str = Depends(get_current_tenant_id),
+    _user=Depends(require_role(*_DISPATCH_ROLES)),
 ):
     """The latest cached position for one vehicle. 404s if nothing has ever
     been published for it (this endpoint does not fall back to trip data —
@@ -286,6 +350,15 @@ async def _authenticate_ws(websocket: WebSocket) -> tuple[str, str | None]:
         auth = await authenticate_websocket_token(websocket)
     except WebSocketAuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.reason) from exc
+    # Same dispatch-role gate the seven HTTP read endpoints above carry, applied
+    # here by hand because a websocket route cannot take a `Depends(require_role(...))`
+    # parameter. Mirrors `duress.py`'s own websocket check. Without it a driver's
+    # tablet token opened the whole tenant's live position feed.
+    if auth.payload.get("role") not in _DISPATCH_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient role for the fleet live feed",
+        )
     return auth.tenant_id, auth.payload.get("jti")
 
 

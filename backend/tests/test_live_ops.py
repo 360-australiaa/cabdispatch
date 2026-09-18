@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 from starlette.testclient import TestClient
 
+from app.core import security
 from app.models import Tenant
 from app.models.fleet import Device, Vehicle, VehiclePositionHistory
 from app.models.jobs import DriverAvailability
@@ -33,6 +35,7 @@ from app.models.shift import Shift
 from app.models.trips import Trip
 from app.models.user import ROLE_DRIVER, User
 from app.services.live_ops import fleet_broadcaster, position_history_retention_hours
+from app.services.shift import end_shift
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -1229,3 +1232,130 @@ async def test_position_history_vehicle_not_found(client, session):
     _, headers = await _tenant_and_headers(client, session, tenant_name="History Tenant NotFound")
     resp = await client.get("/v1/vehicles/does-not-exist/position-history", headers=headers)
     assert resp.status_code == 404
+
+
+# --- RBAC + publish ownership (2026-09-18 security audit) ------------------------
+#
+# See `app/api/v1/live_ops.py`'s `_DISPATCH_ROLES` comment and
+# `_require_publish_ownership` for the two findings these lock in.
+
+
+def _driver_headers(driver, tenant_id):
+    token = security.create_access_token(user_id=driver.id, tenant_id=tenant_id, role=ROLE_DRIVER)
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_a_driver_token_cannot_read_the_fleet_or_driver_roster(client, session):
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="RBAC Roster Tenant")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    headers = _driver_headers(driver, tenant_id)
+
+    for path in ("/v1/vehicles", "/v1/drivers", "/v1/fleet/positions"):
+        resp = await client.get(path, headers=headers)
+        assert resp.status_code == 403, path
+
+
+async def test_a_driver_may_publish_for_the_vehicle_they_are_on_shift_in(client, session):
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish Own Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="OWN-01")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    await _make_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id)
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=_driver_headers(driver, tenant_id),
+    )
+    assert resp.status_code == 201
+
+
+async def test_a_driver_cannot_publish_a_position_for_someone_elses_cab(client, session):
+    """The spoofing hole itself: before this check, a driver's own tablet token
+    could walk any other cab in the fleet across the dispatcher's Live Map."""
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish Spoof Tenant")
+    mine = await _make_vehicle(session, tenant_id=tenant_id, rego="MINE-1")
+    theirs = await _make_vehicle(session, tenant_id=tenant_id, rego="THEIRS-1")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    await _make_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=mine.id)
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": theirs.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=_driver_headers(driver, tenant_id),
+    )
+    assert resp.status_code == 403
+
+
+async def test_a_driver_with_no_open_shift_cannot_publish_at_all(client, session):
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish No Shift Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="NOSH-1")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    await _make_shift(
+        session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id, end_at=datetime.now(UTC)
+    )
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=_driver_headers(driver, tenant_id),
+    )
+    assert resp.status_code == 403
+
+
+async def test_a_dispatcher_may_still_publish_for_any_vehicle(client, session):
+    """The Live Map's own `PublishPositionModal` is a real operator tool and
+    must keep working for a vehicle the dispatcher is obviously not driving."""
+    tenant_id, headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Publish Dispatcher Tenant"
+    )
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="DISP-1")
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "available"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+
+
+# --- ghost vehicles: ending a shift takes the cab off the Live Map ---------------
+
+
+async def test_ending_a_shift_marks_the_vehicle_offline_on_the_live_map(client, session):
+    """Before this, the last heartbeat of a finished shift stayed the newest
+    thing the broadcaster knew, so the Live Map showed knocked-off cabs as live
+    ones forever. See `live_ops.mark_vehicle_offline`."""
+    tenant_id, headers = await _tenant_and_headers(client, session, tenant_name="Ghost Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="GHOST-1")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    shift = await _make_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id)
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    assert fleet_broadcaster.get_latest(tenant_id, vehicle.id)["status"] == "on_trip"
+
+    await end_shift(session, shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+
+    cached = fleet_broadcaster.get_latest(tenant_id, vehicle.id)
+    assert cached["status"] == "offline"
+    # The marker keeps its last known position -- "off shift, and this is where
+    # it finished" beats dropping the dot entirely.
+    assert cached["lat"] == -33.86
+
+    resp = await client.get(f"/v1/vehicles/{vehicle.id}", headers=headers)
+    assert resp.json()["live_status"] == "offline"
+
+
+async def test_ending_a_shift_for_a_vehicle_that_never_published_is_a_no_op(client, session):
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Ghost Quiet Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="QUIET-1")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+    shift = await _make_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id)
+
+    await end_shift(session, shift, end_at=None, psl_owed=Decimal(0), reconciled=False)
+
+    assert fleet_broadcaster.get_latest(tenant_id, vehicle.id) is None

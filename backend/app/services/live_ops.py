@@ -436,6 +436,36 @@ async def _persist_position_history(
     await session.commit()
 
 
+async def mark_vehicle_offline(tenant_id: str, vehicle_id: str) -> bool:
+    """Flips a vehicle's cached live position to `DEFAULT_LIVE_STATUS` and fans
+    that out to every connected dashboard. Returns False when the vehicle had no
+    cached position at all (nothing to correct).
+
+    The ghost-vehicle fix, 2026-09-18. A tablet's heartbeat simply STOPS when a
+    shift ends — the last thing it ever published was an `"unknown"`/`"on_trip"`
+    dot at wherever the cab was at knock-off, and that stayed the newest thing
+    the broadcaster knew, so the Live Map showed finished shifts as live cabs
+    indefinitely. Correcting it from the tablet is not reliable (it would be one
+    best-effort request racing its own token teardown, and it cannot happen at
+    all for a shift the server force-closed on heartbeat timeout — the exact
+    case that produces the most ghosts), so the correction is asserted
+    server-side at the one choke point every close path goes through,
+    `shift_service.end_shift`.
+
+    Keeps the last known lat/lng: "this cab is off shift, and here is where it
+    finished" is more useful to a dispatcher than dropping the marker entirely,
+    and `_compose_vehicle_live` already treats the status as authoritative.
+    """
+    latest = fleet_broadcaster.get_latest(tenant_id, vehicle_id)
+    if latest is None:
+        return False
+    await fleet_broadcaster.publish(
+        tenant_id,
+        {**latest, "status": DEFAULT_LIVE_STATUS, "updated_at": datetime.now(UTC).isoformat()},
+    )
+    return True
+
+
 async def publish_position(
     session: AsyncSession,
     *,

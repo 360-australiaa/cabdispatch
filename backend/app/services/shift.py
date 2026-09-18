@@ -84,6 +84,14 @@ async def _find_open_shift(
     return result.scalar_one_or_none()
 
 
+#: Public name for `_find_open_shift`, for callers outside this module. The
+#: underscore form is the one the rest of this file uses and is kept as-is;
+#: this alias exists so other packages (notably `app.api.v1.live_ops`, which
+#: needs it to answer "is this driver really in this vehicle right now" before
+#: accepting a position publish) do not have to reach for a private name.
+find_open_shift = _find_open_shift
+
+
 async def _recompute_trip_aggregates(
     session: AsyncSession, *, tenant_id: str, shift_id: str
 ) -> tuple[int, Decimal, Decimal, Decimal]:
@@ -431,6 +439,17 @@ async def end_shift(
 
     await session.commit()
     await session.refresh(shift)
+
+    # The cab is no longer working: say so on the Live Map. Every close path in
+    # the system funnels through here (driver cash-up, auto-close, heartbeat
+    # timeout), which is why the correction lives at this choke point rather
+    # than in any one caller -- see `live_ops.mark_vehicle_offline` for the
+    # ghost-vehicle finding this fixes. Imported locally: `app.services.live_ops`
+    # is a heavier module that reads this package's own models, and a top-level
+    # import here would make that a mutual one.
+    from app.services.live_ops import mark_vehicle_offline
+
+    await mark_vehicle_offline(shift.tenant_id, shift.vehicle_id)
     return shift
 
 
