@@ -1042,3 +1042,175 @@ async def test_get_shifts_survives_duplicate_fatigue_alert_rows_for_open_shift(
             )
         )
         await session.commit()
+
+
+# --- rego -> vehicle UUID canonicalisation ----------------------------------
+# Regression cover for the defect fixed 2026-09-19: `start_shift` stored the
+# incoming vehicle_id verbatim, so the Android meter's
+# `resolvedVehicleUuid ?: vehicleId` fallback (it sends the REGO when it could
+# not resolve the UUID offline) wrote rego strings into `shifts.vehicle_id`.
+# 86 of 184 production shifts hold one. The serious consequence is the last
+# test here: every "which vehicle" query is a string equality, so the
+# double-assignment guard never saw a rego row and a UUID row as the same car.
+
+
+async def test_start_shift_by_rego_stores_the_vehicle_uuid(
+    client: AsyncClient, session: AsyncSession
+):
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-900")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": "TX-900"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == vehicle.id
+
+    # And it is the UUID that was PERSISTED, not just what the response echoed.
+    stored = (
+        await session.execute(select(Shift.vehicle_id).where(Shift.id == resp.json()["id"]))
+    ).scalar_one()
+    assert stored == vehicle.id
+
+
+async def test_start_shift_by_rego_is_case_insensitive(
+    client: AsyncClient, session: AsyncSession
+):
+    """Regos are stored upper-cased by VehicleBase._normalize_rego, and the
+    meter may send whatever the driver typed. Matches how `rego_exact` on
+    GET /v1/fleet/vehicles folds case."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-901")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": " tx-901 "},
+        headers=headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == vehicle.id
+
+
+async def test_start_shift_by_uuid_is_stored_unchanged(
+    client: AsyncClient, session: AsyncSession
+):
+    """A vehicle_id that is already a UUID must pass through untouched — the
+    canonicalisation must not become a second, silent lookup that could
+    reject or rewrite the overwhelmingly common case."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-902")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": vehicle.id},
+        headers=headers,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == vehicle.id
+
+
+async def test_start_shift_with_unknown_rego_is_rejected_not_stored(
+    client: AsyncClient, session: AsyncSession
+):
+    """An unresolvable rego means we do not know which car this shift is on.
+    404 "Vehicle not found" — the same shape the fleet routes use — and no
+    shift row at all, rather than the old behaviour of storing the string."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+    driver_id = str(uuid.uuid4())
+
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_id, "vehicle_id": "NO-SUCH"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Vehicle not found"
+
+    orphans = (
+        await session.execute(
+            select(Shift).where(Shift.tenant_id == tenant_id, Shift.driver_id == driver_id)
+        )
+    ).scalars().all()
+    assert orphans == []
+
+
+async def test_double_assignment_guard_sees_rego_and_uuid_as_the_same_vehicle(
+    client: AsyncClient, session: AsyncSession
+):
+    """THE safety case. Driver A starts by rego, driver B starts by UUID on
+    the same car. Before canonicalisation the two rows held different strings,
+    `_find_open_shift(vehicle_id=...)` matched neither against the other, and
+    both drivers held the same vehicle open at once with no 409 and no
+    handover — leaving trip attribution and incident liability for that car
+    ambiguous. The guard must now fire."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-903")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    driver_a = str(uuid.uuid4())
+    driver_b = str(uuid.uuid4())
+
+    first = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_a, "vehicle_id": "TX-903"},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_b, "vehicle_id": vehicle.id},
+        headers=headers,
+    )
+    assert second.status_code == 409, second.text
+    detail = second.json()["detail"]
+    assert detail["conflicting_shift_id"] == first.json()["id"]
+    assert detail["conflicting_driver_id"] == driver_a
+
+    # Exactly one shift is open on that vehicle, and it is still driver A's.
+    open_shifts = (
+        await session.execute(
+            select(Shift).where(
+                Shift.tenant_id == tenant_id,
+                Shift.vehicle_id == vehicle.id,
+                Shift.end_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    assert len(open_shifts) == 1
+    assert open_shifts[0].driver_id == driver_a
+
+    # And the explicit handover still works across the two spellings.
+    handover = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": driver_b, "vehicle_id": vehicle.id, "force_handover": True},
+        headers=headers,
+    )
+    assert handover.status_code == 201, handover.text
+    assert handover.json()["vehicle_id"] == vehicle.id

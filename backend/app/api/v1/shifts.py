@@ -35,6 +35,7 @@ from app.schemas.shift import (
 from app.services import lazy_maintenance
 from app.services.shift import (
     ShiftConflictError,
+    VehicleNotFoundError,
     build_report,
     end_shift,
     render_report_csv,
@@ -85,6 +86,14 @@ async def start(
     mismatch never blocks or alters the shift, it just sets
     `device_mismatch_warning` on the response and writes an audit-log row.
 
+    `vehicle_id` may be either a `Vehicle.id` or the vehicle's rego: the
+    meter falls back to sending the rego when it could not resolve the UUID
+    itself (no signal in a basement car park). It is canonicalised to the
+    real UUID server-side, case-insensitively, before anything is stored or
+    any conflict query runs — see app.services.shift._canonicalise_vehicle_id.
+    A rego that matches no vehicle in the tenant is a 404 "Vehicle not found",
+    the same shape the fleet routes use, rather than being stored verbatim.
+
     If `client_uuid` is supplied the call is idempotent on it: replaying the
     same start (an offline start drained from the meter's outbox, a retry, a
     racing second drain) returns the shift that uuid already opened rather
@@ -105,6 +114,16 @@ async def start(
             device_android_id=body.device_android_id,
             device_check_actor_user_id=user.id,
         )
+    except VehicleNotFoundError as exc:
+        # Same status and detail shape as the fleet routes' unknown-vehicle
+        # answer (app/api/v1/fleet.py), so a client that already handles
+        # "Vehicle not found" from GET/PATCH /v1/fleet/vehicles/{id} needs no
+        # new branch. Deliberately does NOT echo the rego back in the detail:
+        # the fleet routes don't either, and a 404 is all the meter can act on
+        # (re-pair, or ask the office to add the car).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found"
+        ) from exc
     except ShiftConflictError as exc:
         conflicting = exc.conflicting_shift
         driver_name_result = await session.execute(
