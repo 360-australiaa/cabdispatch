@@ -1276,7 +1276,11 @@ async def test_a_driver_cannot_publish_a_position_for_someone_elses_cab(client, 
     mine = await _make_vehicle(session, tenant_id=tenant_id, rego="MINE-1")
     theirs = await _make_vehicle(session, tenant_id=tenant_id, rego="THEIRS-1")
     driver = await _make_driver(session, tenant_id=tenant_id)
+    rival = await _make_driver(session, tenant_id=tenant_id, name="Rival Driver")
     await _make_shift(session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=mine.id)
+    # The cab being spoofed is genuinely in use -- that is what makes it provably
+    # not this driver's to publish for.
+    await _make_shift(session, tenant_id=tenant_id, driver_id=rival.id, vehicle_id=theirs.id)
 
     resp = await client.post(
         "/v1/fleet/positions",
@@ -1286,9 +1290,21 @@ async def test_a_driver_cannot_publish_a_position_for_someone_elses_cab(client, 
     assert resp.status_code == 403
 
 
-async def test_a_driver_with_no_open_shift_cannot_publish_at_all(client, session):
-    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish No Shift Tenant")
-    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="NOSH-1")
+async def test_a_driver_whose_shift_the_server_closed_keeps_publishing(client, session):
+    """The regression that shipped 2026-09-18 and was caught the same day.
+
+    `_check_heartbeat_timeout` force-closes a shift after a network blackout --
+    exactly when the cab is still being driven. The tablet is never told, so its
+    session still says on-shift and it keeps publishing. The first version of the
+    ownership check 403'd every one of those, and the client maps any non-404 to
+    a transient blip, so the cab went invisible to the dispatcher for the rest of
+    the shift with no recovery and nothing logged anywhere.
+
+    Losing sight of a moving taxi is a worse outcome than letting an ambiguous
+    publish through, so this must pass.
+    """
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish Closed Shift Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="CLOSED-1")
     driver = await _make_driver(session, tenant_id=tenant_id)
     await _make_shift(
         session, tenant_id=tenant_id, driver_id=driver.id, vehicle_id=vehicle.id, end_at=datetime.now(UTC)
@@ -1299,7 +1315,39 @@ async def test_a_driver_with_no_open_shift_cannot_publish_at_all(client, session
         json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
         headers=_driver_headers(driver, tenant_id),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+
+
+async def test_a_driver_with_no_shift_row_at_all_still_publishes(client, session):
+    """The offline-start flows: a shift queued on the sync outbox under a
+    synthetic `local-` id, or one whose row holds the rego while the heartbeat
+    publishes the resolved UUID. No server shift matches, and that must not cost
+    the depot sight of the cab."""
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish Offline Start Tenant")
+    vehicle = await _make_vehicle(session, tenant_id=tenant_id, rego="OFFL-1")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": vehicle.id, "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=_driver_headers(driver, tenant_id),
+    )
+    assert resp.status_code == 201
+
+
+async def test_a_stale_vehicle_id_still_404s_so_the_rebind_path_survives(client, session):
+    """The tablet's whole "keep the binding alive" mechanism keys on 404. The
+    first version of this check ran before the vehicle lookup, so a stale UUID
+    404 became a 403 and the rebind path became unreachable for every driver."""
+    tenant_id, _ = await _tenant_and_headers(client, session, tenant_name="Publish Stale Uuid Tenant")
+    driver = await _make_driver(session, tenant_id=tenant_id)
+
+    resp = await client.post(
+        "/v1/fleet/positions",
+        json={"vehicle_id": str(uuid.uuid4()), "lat": -33.86, "lng": 151.2, "status": "on_trip"},
+        headers=_driver_headers(driver, tenant_id),
+    )
+    assert resp.status_code == 404
 
 
 async def test_a_dispatcher_may_still_publish_for_any_vehicle(client, session):

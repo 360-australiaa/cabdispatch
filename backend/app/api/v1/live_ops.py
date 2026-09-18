@@ -223,12 +223,44 @@ async def _require_publish_ownership(
 
     Dispatch roles keep unrestricted access: `PublishPositionModal` on the Live
     Map is a real operator tool for exactly this, and every existing test client
-    authenticates as an admin. A driver may publish only for the vehicle they
-    are actually in, which the shifts table answers authoritatively (see
-    `shift_service.find_open_shift` — there is no denormalised "current driver"
-    field anywhere, deliberately). The tablet only runs its heartbeat while its
-    own session has an open shift (`LivePositionHeartbeat.start`), so this
-    matches real device behaviour rather than merely tolerating it.
+    authenticates as an admin.
+
+    ### Why this denies on "demonstrably someone else's" rather than "not proven mine"
+
+    The first version of this check required the publishing driver to hold an
+    open shift on that exact vehicle, and 403'd otherwise. That was wrong, and
+    it shipped to production. The justification was "the tablet only publishes
+    while it has an open shift", but `LivePositionHeartbeat.start` gates on the
+    CLIENT's belief (`session?.shiftId != null`), which legitimately diverges
+    from the shifts table in at least six flows — a shift started offline (the
+    row holds the rego, the heartbeat publishes the resolved UUID), a shift
+    still queued on the sync outbox with a synthetic `local-` id, the cash-up
+    window between the close draining and the driver tapping DONE, a stale UUID
+    mid-rebind, and — worst — a shift the server itself force-closed on
+    heartbeat timeout after a network blackout, which is precisely when the cab
+    is still being driven.
+
+    The client cannot recover from any of them: `classifyPublishError` maps
+    every non-404 to a transient transport failure and `publishOnce` swallows it
+    silently, so a 403'd tablet is indistinguishable from a healthy one and goes
+    invisible to the dispatcher for the rest of the shift. Tablets also update on
+    their own schedule, so a fix that depends on new client code does not help
+    the cabs already out there.
+
+    So the rule is inverted to deny only what is provably wrong: another driver
+    holds an open shift on that vehicle right now. That still blocks the attack
+    this exists for — walking a working rival's cab across the map — while every
+    ambiguous case above publishes, which is the honest default when the
+    alternative is losing sight of a moving taxi. It also restores the 404 the
+    rebind path depends on: an unknown or stale `vehicle_id` now reaches
+    `publish_position` and 404s there as it always did, instead of being masked
+    by a 403 the client has no handler for.
+
+    Residual, accepted: a driver can still publish for an IDLE vehicle nobody is
+    on shift in. That animates a parked cab; it cannot hijack or hide a working
+    one. Closing it properly needs the device identity in the token (the tablet
+    already has a `device_secret`, which `Device.vehicle_id` binds to a vehicle),
+    and that is a real change to token minting, not a tweak here.
 
     Read from the raw token payload rather than `get_current_user`: this is a
     once-per-heartbeat check on the hottest write path in the system, and the
@@ -237,13 +269,13 @@ async def _require_publish_ownership(
     if token_payload.get("role") in _DISPATCH_ROLES:
         return
     driver_id = token_payload.get("sub")
-    open_shift = await shift_service.find_open_shift(
-        session, tenant_id=tenant_id, driver_id=driver_id, vehicle_id=vehicle_id
+    occupant = await shift_service.find_open_shift(
+        session, tenant_id=tenant_id, vehicle_id=vehicle_id
     )
-    if open_shift is None:
+    if occupant is not None and occupant.driver_id != driver_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only publish positions for the vehicle you are on shift in",
+            detail="Another driver is currently on shift in that vehicle",
         )
 
 
