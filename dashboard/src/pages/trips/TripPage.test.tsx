@@ -214,17 +214,23 @@ function installHandlers(opts: HandlerOpts = {}) {
       expect(url.searchParams.get("trip_id")).toBe(TRIP_ID);
       return HttpResponse.json({ items: [PAYMENT], total: 1, skip: 0, limit: 50 });
     }),
+    // The Rating tab must ask the SERVER for this trip's rating
+    // (GET /v1/ratings?trip_id=, added 2026-09-19) rather than pull a page of
+    // the driver's ratings and match in the browser -- the old client-side
+    // match silently reported "No rating recorded" once a rating fell past
+    // the 200-row fetch. This handler therefore behaves like the endpoint:
+    // it filters on the trip_id it is given, so a tab that forgot to send it,
+    // or sent the wrong one, gets an empty page and fails the assertions.
     http.get(`${API}/v1/ratings`, ({ request }) => {
       const url = new URL(request.url);
       expect(url.searchParams.get("driver_id")).toBe(DRIVER_ID);
-      return HttpResponse.json({
-        items: opts.ratingsMatch
-          ? [{ id: "r1", tenant_id: "t1", trip_id: TRIP_ID, driver_id: DRIVER_ID, stars: 5, comment: "Great!", created_at: NOW_ISO }]
-          : [{ id: "r2", tenant_id: "t1", trip_id: "some-other-trip", driver_id: DRIVER_ID, stars: 3, comment: null, created_at: NOW_ISO }],
-        total: 1,
-        skip: 0,
-        limit: 200,
-      });
+      const requestedTripId = url.searchParams.get("trip_id");
+      expect(requestedTripId).toBe(TRIP_ID);
+      const rows = opts.ratingsMatch
+        ? [{ id: "r1", tenant_id: "t1", trip_id: TRIP_ID, driver_id: DRIVER_ID, stars: 5, comment: "Great!", created_at: NOW_ISO }]
+        : [{ id: "r2", tenant_id: "t1", trip_id: "some-other-trip", driver_id: DRIVER_ID, stars: 3, comment: null, created_at: NOW_ISO }];
+      const items = rows.filter((row) => row.trip_id === requestedTripId);
+      return HttpResponse.json({ items, total: items.length, skip: 0, limit: 200 });
     }),
     http.get(`${API}/v1/audit-log`, ({ request }) => {
       const url = new URL(request.url);
@@ -469,6 +475,22 @@ describe("TripPage", () => {
 
     await user.click(screen.getByRole("tab", { name: "Rating" }));
     expect(await screen.findByText("No rating recorded")).toBeInTheDocument();
+  });
+
+  it("asks the server for THIS trip's rating rather than filtering a driver page", async () => {
+    // Regression guard for the wrong answer operators saw: the tab used to
+    // request the driver's 200 most recent ratings and match trip_id in the
+    // browser, so a rated trip further back read "No rating recorded". The
+    // handler above filters by the trip_id query param exactly as the
+    // endpoint does, so the rating only renders if the tab sent it.
+    installHandlers({ ratingsMatch: true });
+    renderPage();
+    const user = userEvent.setup();
+    await screen.findByText("Fare breakdown");
+
+    await user.click(screen.getByRole("tab", { name: "Rating" }));
+    expect(await screen.findByText("Great!")).toBeInTheDocument();
+    expect(screen.queryByText("No rating recorded")).not.toBeInTheDocument();
   });
 
   it("shows Edit/Delete disabled with a tooltip for a dispatcher", async () => {

@@ -438,6 +438,13 @@ export interface TripRating {
 }
 
 export interface RatingListFilters {
+  /**
+   * `GET /v1/ratings?trip_id=` (added server-side 2026-09-19). Asks for one
+   * trip's rating directly; before it existed the trip page's Rating tab had
+   * to pull the driver's 200 most recent ratings and match in the browser,
+   * which showed "No rating recorded" for older trips that were in fact rated.
+   */
+  trip_id?: string;
   driver_id?: string;
   skip?: number;
   limit?: number;
@@ -453,6 +460,7 @@ export function useRatingsQuery(filters: RatingListFilters) {
         skip: filters.skip ?? 0,
         limit: filters.limit ?? 50,
       };
+      if (filters.trip_id) params.trip_id = filters.trip_id;
       if (filters.driver_id) params.driver_id = filters.driver_id;
       const res = await apiClient.get<Page<TripRating>>("/v1/ratings", { params });
       return res.data;

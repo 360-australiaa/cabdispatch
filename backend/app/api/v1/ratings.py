@@ -14,7 +14,7 @@ Two surfaces:
   by a sibling router" precedent as app.api.v1.live_ops) so app/api/v1/
   trips.py needs no edit at all. Allowed for the trip's own driver or a
   staff role; the trip must be closed; one rating per trip (409 on repeat).
-* `GET /v1/ratings` -- owner/admin paged list (filter by driver_id/stars,
+* `GET /v1/ratings` -- owner/admin paged list (filter by trip_id/driver_id/stars,
   real `total` via SELECT count(*)) for the dashboard's row-level table. A
   driver reads their own via GET /v1/me/rating.
 * `GET /v1/ratings/summary` -- owner/admin fleet-wide (or single-driver)
@@ -105,6 +105,7 @@ async def rate_trip(
 
 @router.get("/v1/ratings", response_model=Page[TripRatingRead])
 async def list_ratings(
+    trip_id: str | None = Query(default=None),
     driver_id: str | None = Query(default=None),
     stars: int | None = Query(default=None, ge=RATING_MIN_STARS, le=RATING_MAX_STARS),
     skip: int = Query(default=0, ge=0),
@@ -117,8 +118,20 @@ async def list_ratings(
     server-side rather than requiring the caller to fetch a page and filter
     it client-side — the latter used to silently disagree with `total`,
     since `total` counted every rating while the client-side filter only
-    ever ran over the current page."""
+    ever ran over the current page.
+
+    `trip_id` (added 2026-09-19) exists because the trip page's Rating tab
+    (`dashboard/src/pages/trips/tabs/RatingTab.tsx`) had no way to ask "what
+    is the rating for THIS trip": it fetched the driver's 200 most recent
+    ratings and matched `trip_id` client-side, so a trip whose rating had
+    since been pushed past that page displayed "No rating recorded" for a
+    trip that genuinely had one. `TripRating.trip_id` is unique per trip
+    (one rating per trip -- `rate_trip` above 409s on a repeat), so this
+    filter returns at most one row. Tenant-scoped like every other filter
+    here: a trip_id from another tenant matches nothing."""
     filters = [TripRating.tenant_id == tenant_id]
+    if trip_id is not None:
+        filters.append(TripRating.trip_id == trip_id)
     if driver_id is not None:
         filters.append(TripRating.driver_id == driver_id)
     if stars is not None:
