@@ -36,6 +36,7 @@ from app.services import lazy_maintenance
 from app.services.shift import (
     ShiftConflictError,
     build_report,
+    canonicalise_vehicle_id,
     end_shift,
     render_report_csv,
     render_report_pdf,
@@ -84,6 +85,21 @@ async def start(
     against that tablet's paired vehicle (`fleet.Device.vehicle_id`) — a
     mismatch never blocks or alters the shift, it just sets
     `device_mismatch_warning` on the response and writes an audit-log row.
+
+    `vehicle_id` may be either a `Vehicle.id` or the vehicle's rego: the
+    meter falls back to sending the rego when it could not resolve the UUID
+    itself (no signal in a basement car park). It is canonicalised to the
+    real UUID server-side -- ignoring case AND punctuation, since the meter's
+    rego pad has no space key -- before anything is stored or any conflict
+    query runs; see app.services.shift.canonicalise_vehicle_id.
+
+    This endpoint still has no not-found status, and deliberately so. A rego
+    that matches no vehicle is stored verbatim (the behaviour that predates
+    canonicalisation) and logged as a warning, because both deployed Android
+    consumers treat any non-IOException as terminal: one deletes the queued
+    outbox row on the spot, the other dead-letters it after five attempts and
+    orphans every trip closed under that shift's placeholder id. Introducing
+    a 404 here would destroy real shifts on tablets that cannot be updated.
 
     If `client_uuid` is supplied the call is idempotent on it: replaying the
     same start (an offline start drained from the meter's outbox, a retry, a
@@ -310,8 +326,21 @@ async def create_shift(
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
     """Generic create for CRUD completeness/admin backfill. The normal path for
-    opening a shift is `POST /v1/shifts/start`."""
-    shift = Shift(tenant_id=tenant_id, **body.model_dump())
+    opening a shift is `POST /v1/shifts/start`.
+
+    `vehicle_id` is canonicalised here too. `start_shift` is not the only way a
+    row lands in `shifts`, and every "which vehicle is this" query -- including
+    the double-assignment guard `_find_open_shift(vehicle_id=...)` -- is a
+    plain string equality, so a backfilled row holding a rego is invisible to
+    the guard in exactly the way the 2026-09-19 fix exists to prevent. This is
+    free of risk to deployed clients: `canonicalise_vehicle_id` never raises
+    and never rejects -- an unresolvable value is returned unchanged, so this
+    route's set of possible status codes is exactly what it was."""
+    fields = body.model_dump()
+    fields["vehicle_id"] = await canonicalise_vehicle_id(
+        session, tenant_id=tenant_id, vehicle_id=fields["vehicle_id"]
+    )
+    shift = Shift(tenant_id=tenant_id, **fields)
     session.add(shift)
     await session.commit()
     await session.refresh(shift)
@@ -340,8 +369,21 @@ async def update_shift(
     _user=Depends(require_role("owner", "admin", "dispatcher")),
     session: AsyncSession = Depends(get_session),
 ) -> Shift:
+    """Partial admin correction.
+
+    A `vehicle_id` supplied here is canonicalised for the same reason
+    `create_shift` above does it: an admin correction that writes a rego
+    string re-opens the double-assignment hole by the back door. Same
+    guarantee -- `canonicalise_vehicle_id` cannot fail, so the status codes
+    this route can return are unchanged.
+    """
     shift = await _get_owned_shift(session, tenant_id=tenant_id, shift_id=shift_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    if updates.get("vehicle_id") is not None:
+        updates["vehicle_id"] = await canonicalise_vehicle_id(
+            session, tenant_id=tenant_id, vehicle_id=updates["vehicle_id"]
+        )
+    for field, value in updates.items():
         setattr(shift, field, value)
     await session.commit()
     await session.refresh(shift)

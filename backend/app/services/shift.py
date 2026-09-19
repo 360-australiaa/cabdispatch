@@ -22,6 +22,7 @@ import csv
 import io
 import json
 import logging
+import uuid as uuid_module
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -30,7 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.fleet import Device
+from app.models.fleet import Device, Vehicle
 from app.models.shift import Shift
 from app.schemas.shift import ShiftReport
 from app.services.audit_log import record_audit
@@ -62,6 +63,169 @@ class ShiftConflictError(Exception):
             f"Vehicle {conflicting_shift.vehicle_id} already has an open shift "
             f"({conflicting_shift.id}) for driver {conflicting_shift.driver_id}"
         )
+
+
+def _looks_like_vehicle_uuid(value: str) -> bool:
+    """True if `value` parses as a UUID, i.e. it is already a Vehicle.id.
+
+    `Vehicle.id` is `str(uuid.uuid4())` (app/models/fleet.py), so "is this a
+    UUID" is the whole of "is this already canonical". A NSW rego is at most
+    six characters of letters and digits and cannot collide with any form
+    uuid.UUID accepts (36-char hyphenated, 32-char bare hex, urn/braces):
+    all of those are longer than the 20-char `Vehicle.rego` column.
+    """
+    try:
+        uuid_module.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def _rego_key(value: str) -> str:
+    """The comparison form of a rego: upper-cased, with every non-alphanumeric
+    character removed, so "khi-01", "KHI 01" and "KHI01" all compare equal.
+
+    Case alone is not enough, and getting that wrong strands a driver rather
+    than merely looking untidy. Regos are stored by
+    `VehicleBase._normalize_rego` (app/schemas/fleet.py) as `v.strip().upper()`
+    -- punctuation is PRESERVED on write, so a vehicle genuinely can sit in the
+    table as "KHI-01" or "ABC 123". Meanwhile the meter's manual rego pad
+    (`RegoKeyRows`, LoginVehicleBindScreen.kt) offers A-Z, 0-9 and a hyphen --
+    and no space key at all. A driver rebinding a car whose stored rego
+    contains a space cannot type the stored spelling, and a driver who omits
+    the hyphen on "KHI-01" types a string that never equalled it either.
+    Folding punctuation out on BOTH sides is what makes those spellings
+    resolve.
+    """
+    return "".join(ch for ch in value if ch.isalnum()).upper()
+
+
+async def _canonicalise_vehicle_id(
+    session: AsyncSession, *, tenant_id: str, vehicle_id: str
+) -> str:
+    """Returns the `Vehicle.id` for `vehicle_id`, resolving it by rego when it
+    is not already a UUID. Returns `vehicle_id` UNCHANGED when it resolves to
+    no vehicle -- see the "never a new failure mode" paragraph below.
+
+    WHY (2026-09-19): the Android meter sends `resolvedVehicleUuid ?: vehicleId`
+    -- it falls back to the REGO STRING whenever it could not resolve the UUID
+    itself, which is exactly the no-signal basement-bind case that the fallback
+    exists for. `LoginVehicleBindViewModel.kt` (~:449) carries a comment
+    asserting the backend canonicalises rego->UUID server-side. That comment was
+    false: `start_shift` stored whatever arrived, verbatim. Of 184 production
+    shifts, 86 hold a non-UUID `vehicle_id`. This function makes the Android
+    comment true.
+
+    The consequence was not cosmetic. Every "which vehicle is this" query in
+    the system is a plain string equality on `shifts.vehicle_id` -- including
+    `_find_open_shift(vehicle_id=...)`, which IS the double-assignment guard.
+    A shift opened as 'ABC12D' and a shift opened as the same car's UUID are
+    two different strings, so the guard never saw the collision: driver A on
+    the rego row and driver B on the UUID row could both hold the same car
+    open at once, with no 409 and no handover. Trip attribution and incident
+    liability for that car are ambiguous for as long as both are open.
+    Canonicalising on the way in is what closes that hole, which is why this
+    runs BEFORE the dangling-shift and vehicle-conflict queries below rather
+    than just before the INSERT.
+
+    NEVER A NEW FAILURE MODE (the 2026-09-19 review's correction). An earlier
+    draft of this raised VehicleNotFoundError on an unresolvable rego and the
+    API turned it into a 404. That was strictly worse than the defect it
+    replaced, because `POST /v1/shifts/start` had never been able to 404 and
+    both deployed Android consumers treat any non-IOException as TERMINAL:
+    `OutboxBackedShiftRepository.startShift` deletes the queued outbox row on
+    the spot (ShiftRepository.kt, "The server answered and said no"), and
+    `OutboxDrainer.drainShiftStarts` burns the row's five attempts and
+    dead-letters it -- at which point `rewriteShiftId` never runs and every
+    trip closed under the placeholder `local-<uuid>` shift id is ORPHANED.
+    Tablets in cabs run month-old code and update on the drivers' schedule, so
+    that 404 would destroy real queued shifts on clients that cannot be fixed.
+    An unresolvable rego therefore falls back to the pre-2026-09-19 behaviour
+    exactly: the value is stored verbatim, the shift opens, and we log a
+    warning for the office to chase. A shift on a fuzzily-identified car is a
+    degraded shift; a deleted shift is a lost one. This function can only ever
+    improve a `vehicle_id` or leave it alone.
+
+    Matching is two-step so the common path stays an index-usable equality:
+    first `Vehicle.rego == vehicle_id.strip().upper()` (the same folding
+    `GET /v1/fleet/vehicles`'s `rego_exact` filter uses), then, only if that
+    misses, a punctuation-insensitive comparison via `_rego_key` over the
+    tenant's vehicles. Fleets are tens of cars, so the fallback scan is cheap
+    and only runs for a rego that would otherwise have gone unresolved.
+
+    AMBIGUITY: two vehicles can normalise to the same key ("KHI-01" and
+    "KHI01"). We do not error -- erroring is the 404 failure mode above wearing
+    a different status code. We pick the LOWEST `Vehicle.id` among the
+    punctuation-folded matches: deterministic (so the same rego resolves to the
+    same car on every retry and every outbox replay, which is exactly what the
+    double-assignment guard needs), and independent of insertion order, row
+    order and the database's collation. An exact match always beats a folded
+    one, so an operator can always disambiguate by storing the rego exactly as
+    the driver types it.
+
+    Forward-only by design: 0 of the 86 affected production shifts are OPEN,
+    so there is nothing live to repair and no backfill migration is written.
+    Historical closed rows keep their rego strings.
+    """
+    if _looks_like_vehicle_uuid(vehicle_id):
+        return vehicle_id
+
+    rego = vehicle_id.strip().upper()
+    resolved = (
+        await session.execute(
+            select(Vehicle.id).where(
+                Vehicle.tenant_id == tenant_id, Vehicle.rego == rego
+            )
+        )
+    ).scalar_one_or_none()
+
+    if resolved is None:
+        # Punctuation-folded fallback. Ordered by id so the ambiguous case is
+        # decided deterministically (see AMBIGUITY above) rather than by
+        # whatever order the database happens to return rows in.
+        key = _rego_key(vehicle_id)
+        if key:
+            candidates = (
+                await session.execute(
+                    select(Vehicle.id, Vehicle.rego)
+                    .where(Vehicle.tenant_id == tenant_id)
+                    .order_by(Vehicle.id)
+                )
+            ).all()
+            for candidate_id, candidate_rego in candidates:
+                if candidate_rego is not None and _rego_key(candidate_rego) == key:
+                    resolved = candidate_id
+                    break
+
+    if resolved is None:
+        # Degrade, never destroy: this is the pre-2026-09-19 behaviour,
+        # unchanged, for exactly the clients that cannot be updated.
+        logger.warning(
+            "start_shift: vehicle_id %r is not a UUID and matches no vehicle rego "
+            "in tenant %s; storing it verbatim as before. The shift is opened on a "
+            "vehicle we cannot identify -- the double-assignment guard cannot see "
+            "this car under any other spelling until the office reconciles it.",
+            vehicle_id,
+            tenant_id,
+        )
+        return vehicle_id
+
+    logger.info(
+        "start_shift: canonicalised vehicle rego %r -> vehicle id %s (tenant %s). "
+        "The meter could not resolve the UUID itself; resolving server-side.",
+        vehicle_id,
+        resolved,
+        tenant_id,
+    )
+    return resolved
+
+
+# Public name for the API layer. The underscore-prefixed original stays as the
+# in-module spelling used by `start_shift` below; this alias exists so the
+# admin CRUD routes in app/api/v1/shifts.py can close the same hole on the
+# `POST /v1/shifts` and `PATCH /v1/shifts/{id}` backfill paths without
+# importing a private helper.
+canonicalise_vehicle_id = _canonicalise_vehicle_id
 
 
 async def _find_open_shift(
@@ -301,6 +465,18 @@ async def start_shift(
     Shift's transient `device_mismatch_warning` attribute (also exposed on
     `ShiftRead`) for the API layer to surface to the driver.
 
+    `vehicle_id` may arrive as a rego string rather than a `Vehicle.id`: the
+    Android meter sends `resolvedVehicleUuid ?: vehicleId` and falls back to
+    the rego when it could not resolve the UUID offline. It is canonicalised
+    to the real `Vehicle.id` up front (see `_canonicalise_vehicle_id`, which
+    folds case AND punctuation) -- without this, the guard in (2) compared two
+    different spellings of the same car and silently failed to fire. A rego
+    that still resolves to nothing is stored VERBATIM, exactly as it was
+    before canonicalisation existed, and logged as a warning: this call has
+    never been able to 404 and deployed meters treat any refusal as terminal,
+    deleting or dead-lettering the driver's queued shift. Degrading is safe,
+    refusing is not.
+
     If `client_uuid` is given this call is IDEMPOTENT on it (see
     `app.models.shift.Shift.client_uuid`), by exactly the same two-part
     pattern `app.api.v1.trips` uses for a trip's client_uuid: an up-front
@@ -324,6 +500,17 @@ async def start_shift(
                 existing.id,
             )
             return existing
+
+    # Canonicalise BEFORE anything reads or writes shifts by vehicle: both the
+    # dangling-shift auto-close and the vehicle-conflict guard below compare
+    # `shifts.vehicle_id` as a plain string, so a rego resolved afterwards
+    # would be compared in the wrong alphabet and the guard would keep
+    # missing double-bookings. Also placed after the client_uuid replay
+    # check, so replaying an old start whose vehicle has since been retired
+    # still returns the shift it already opened rather than 404-ing.
+    vehicle_id = await _canonicalise_vehicle_id(
+        session, tenant_id=tenant_id, vehicle_id=vehicle_id
+    )
 
     effective_start_at = start_at or datetime.now(UTC)
 
