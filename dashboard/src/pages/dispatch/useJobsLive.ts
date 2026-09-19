@@ -16,6 +16,48 @@ export interface JobOfferPushEvent {
 }
 
 /**
+ * The frame types this build knows how to interpret.
+ *
+ * As of 2026-09-19 the backend publishes exactly one: `app/services/jobs.py`
+ * does `job_offer_broadcaster.publish({"type": "job_offer", ...})` and
+ * nothing else, and `app/schemas/jobs.py` types it `Literal["job_offer"]`.
+ *
+ * A frame whose type is NOT in this set is deliberately not mined for
+ * `job`/`offer` ids: we refetch the jobs list (cheap, and always the right
+ * answer for "something changed") and ignore the rest of the body. That is
+ * the guard -- a backend that starts pushing, say, `job_cancelled` with a
+ * different shape cannot make this handler read fields that are not there,
+ * invalidate a query key built from the wrong id, or throw inside
+ * `onmessage` and kill the socket's message pump. Dashboard tabs are not
+ * redeployed in lockstep with the API, so "a frame type this build has never
+ * heard of" is an expected event, not a bug.
+ */
+const KNOWN_FRAME_TYPES = new Set<string>(["job_offer"]);
+
+/**
+ * How long one delivered frame is taken as proof that this socket actually
+ * feeds this user, before the page falls back to the fast poll band.
+ *
+ * WHY revert at all -- the decision this change had to make explicitly: the
+ * alternative ("one frame ever seen, stay slow forever") is wrong for the two
+ * failure modes that really happen here. A socket can go half-open (the
+ * connection survives, `onclose` never fires, frames simply stop), and the
+ * backend can be redeployed mid-shift with a narrower fan-out than the one
+ * that sent our last frame. In both cases `state === "open"` and a non-null
+ * `lastEventAt` would pin Dispatch to the 30 s band while nothing at all is
+ * arriving -- the same 10x staleness this change exists to remove, only
+ * harder to notice. Reverting costs at most a few extra `GET /v1/jobs` on a
+ * healthy-but-quiet feed; not reverting costs an operator up to half a minute
+ * of not seeing a live job move. Freshness wins.
+ *
+ * 90 s is deliberately three slow ticks: a feed that is merely quiet because
+ * nothing is happening is not punished for it (and the Dispatch poll is
+ * `whileActive`-gated, so it does not run at all with no live job), while a
+ * feed that has genuinely died is caught quickly.
+ */
+export const FRAME_TRUST_WINDOW_MS = 90_000;
+
+/**
  * Subscribes the Dispatch page to `WS /v1/jobs/live` and turns every frame
  * into a React Query invalidation of the jobs list, the pushed job's detail
  * and its offers -- the dashboard-side half of the loop the admin plan §3
@@ -28,12 +70,29 @@ export interface JobOfferPushEvent {
  * modes simple -- a missed or malformed frame costs at most one poll
  * interval, never a wrong row.
  *
- * Honest caveat, kept in `index.tsx`'s polling policy: the backend's feed is
- * driver-scoped today (it pushes offers addressed to the *connecting* user's
- * id, `app/api/v1/jobs.py::live`), so a dispatcher's socket may be open and
- * quiet. The parallel backend change widens it for owner/admin/dispatcher;
- * until then the page keeps a slow safety poll while the socket is open,
- * and falls back to the previous fast poll whenever it is not.
+ * ## `deliveringFrames` -- why the page must not trust an open socket
+ *
+ * 2026-09-19: Dispatch dropped its poll from 3 s to 30 s the moment this
+ * socket reached `open`. The backend feed is driver-scoped
+ * (`app/api/v1/jobs.py::live` subscribes the *connecting* user's id), so a
+ * dispatcher's socket opens, authenticates, and then never delivers a single
+ * frame -- and the page became TEN TIMES staler as a direct result of a
+ * useless socket connecting. An open socket proves a TCP connection; only a
+ * received frame proves this user is on the fan-out.
+ *
+ * So the hook reports `deliveringFrames`, true only while a frame has arrived
+ * within `FRAME_TRUST_WINDOW_MS`, and the page gates its slow band on that
+ * instead of on `state === "open"`.
+ *
+ * This is a PERMANENT SAFETY NET, not a workaround for today's narrow feed.
+ * The parallel backend change widens the fan-out to owner/admin/dispatcher;
+ * when it lands, dispatchers start receiving frames and this simply allows
+ * the slow band again -- no dashboard edit required. It must stay afterwards,
+ * because "the socket opened" will never be evidence that frames are flowing:
+ * a role change, a half-open connection, a proxy that holds the socket up
+ * while dropping traffic, or a future narrowing of the fan-out all reproduce
+ * the identical defect. The rule encoded here is the durable one: slow down
+ * only on evidence of delivery.
  *
  * Auth travels as `?token=` (browsers cannot set a header on the WS
  * handshake), same as `useFleetLiveSocket`. Reconnects with capped
@@ -44,11 +103,20 @@ export function useJobsLive(enabled = true) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<JobsLiveState>(enabled ? "connecting" : "disabled");
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
+  // Separate from `lastEventAt` on purpose. `lastEventAt` is informational --
+  // "something arrived on the wire". Only a frame this build actually
+  // UNDERSTOOD and acted on is evidence the feed works for this user, so the
+  // trust window is driven by its own clock. A backend pushing a type we have
+  // never heard of, or a proxy injecting junk, must not buy the slow band.
+  const [lastTrustedFrameAt, setLastTrustedFrameAt] = useState<number | null>(null);
+  const [deliveringFrames, setDeliveringFrames] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!enabled) {
       setState("disabled");
+      setDeliveringFrames(false);
+      setLastTrustedFrameAt(null);
       return;
     }
 
@@ -82,20 +150,56 @@ export function useJobsLive(enabled = true) {
           // A malformed frame still means the feed is alive; refetch the
           // list rather than crash the handler or ignore a real change.
         }
+        // Something arrived on the wire. Recorded for display/diagnostics; it
+        // is NOT what earns the slow poll band -- see below.
         setLastEventAt(Date.now());
         queryClient.invalidateQueries({ queryKey: ["dispatch-jobs"] });
-        const jobId = payload?.job?.id ?? payload?.offer?.job_id;
+
+        // Unknown or unparseable frame: the list refetch above already covers
+        // "something changed", so stop here rather than read a body whose
+        // shape this build does not know.
+        //
+        // It also does not earn the slow band. The two halves of this handler
+        // have to agree: we distrust an unknown frame enough to refuse to read
+        // its body, so we cannot simultaneously accept it as proof that the
+        // feed is healthy for this user. Unparseable JSON on a socket is, if
+        // anything, evidence something is WRONG. Only a frame this build
+        // understood and acted on counts; see `FRAME_TRUST_WINDOW_MS`.
+        if (!payload || !KNOWN_FRAME_TYPES.has(payload.type)) return;
+
+        // A frame we understood arrived on *this* user's socket. That -- not
+        // the socket being open, and not merely bytes on the wire -- is what
+        // earns the slow poll band.
+        setLastTrustedFrameAt(Date.now());
+        setDeliveringFrames(true);
+
+        const jobId = payload.job?.id ?? payload.offer?.job_id;
         if (jobId) {
           queryClient.invalidateQueries({ queryKey: ["dispatch-job", jobId] });
           queryClient.invalidateQueries({ queryKey: ["dispatch-job-offers", jobId] });
         }
       };
 
+      // A socket that has errored or closed is delivering nothing, right now
+      // and provably. Leaving `deliveringFrames` set here would be strictly
+      // WORSE than the code this replaced: a socket that dies one second after
+      // its first frame would pin Dispatch to the 30 s band for the rest of
+      // the 90 s trust window, where gating on `state === "open"` fell back to
+      // 3 s the instant the socket left `open`. The trust window exists for
+      // the silent-but-open case, where we have no signal; a close or an error
+      // IS the signal, so it revokes the trust immediately.
+      function revokeFrameTrust() {
+        setDeliveringFrames(false);
+        setLastTrustedFrameAt(null);
+      }
+
       socket.onerror = () => {
         setState("error");
+        revokeFrameTrust();
       };
 
       socket.onclose = () => {
+        revokeFrameTrust();
         if (cancelled) return;
         setState("closed");
         const delay = Math.min(15000, 1000 * 2 ** retryCount);
@@ -114,5 +218,18 @@ export function useJobsLive(enabled = true) {
     };
   }, [enabled, queryClient]);
 
-  return { state, lastEventAt };
+  // Expire the trust a frame bought us. Nothing else re-renders this hook
+  // when frames merely stop arriving, so this timer is what returns the page
+  // to the fast band on a silent-but-open socket.
+  useEffect(() => {
+    if (lastTrustedFrameAt === null) return;
+    const elapsed = Date.now() - lastTrustedFrameAt;
+    const timer = setTimeout(
+      () => setDeliveringFrames(false),
+      Math.max(0, FRAME_TRUST_WINDOW_MS - elapsed),
+    );
+    return () => clearTimeout(timer);
+  }, [lastTrustedFrameAt]);
+
+  return { state, lastEventAt, deliveringFrames };
 }

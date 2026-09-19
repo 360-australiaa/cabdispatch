@@ -43,16 +43,36 @@ export default function DispatchPage() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const live = useJobsLive();
-  const socketOpen = live.state === "open";
+  // Only a frame that actually arrived counts as "the socket is doing its
+  // job" -- see the policy on `pollInterval` below and `deliveringFrames` in
+  // `useJobsLive.ts`. `live.state === "open"` is deliberately NOT used to
+  // drive anything on this page: it is the exact signal that made Dispatch
+  // ten times staler for nothing.
+  const socketDelivering = live.deliveringFrames;
 
   const anyActiveJob = (jobs: Job[] | undefined) =>
     !!jobs && jobs.some((j) => !isTerminalJobStatus(j.status));
 
-  // Socket open: a slow safety poll only (the feed is driver-scoped on an
-  // older backend, so "open and quiet" must not mean "stale forever").
-  // Socket anything else (connecting / closed / error / no token): the
-  // previous fast poll, still only while a job is actually in flight.
-  const pollInterval = socketOpen ? POLL.ROSTER : POLL.REALTIME;
+  // Poll policy. 2026-09-19: this used to read `socketOpen ? ROSTER :
+  // REALTIME`, which made the page TEN TIMES staler (3 s -> 30 s) the instant
+  // a socket connected -- even though the backend feed is driver-scoped
+  // (`app/api/v1/jobs.py::live` subscribes the connecting user's own id), so a
+  // dispatcher's socket opens and then never delivers a frame. A useless
+  // socket was buying a 30 s staleness penalty.
+  //
+  // The gate is now delivery, not connection: slow down only while a frame has
+  // actually arrived recently (`FRAME_TRUST_WINDOW_MS`). Otherwise --
+  // connecting, closed, error, no token, or open-but-silent -- keep the fast
+  // poll, still only while a job is genuinely in flight (`whileActive`).
+  //
+  // This is a PERMANENT safety net, not a stopgap for the narrow feed. When
+  // the parallel backend change widens the fan-out to dispatchers, frames
+  // start arriving and this expression allows the slow band again on its own.
+  // It must not be simplified back to `socketOpen` afterwards: an open socket
+  // will never prove frames are flowing (half-open connections, a proxy
+  // holding the socket up, a role or fan-out change), and the failure is
+  // silent -- a green badge over data that stopped moving.
+  const pollInterval = socketDelivering ? POLL.ROSTER : POLL.REALTIME;
 
   const jobsQuery = useQuery({
     queryKey: ["dispatch-jobs", page, statusFilter],
@@ -122,7 +142,7 @@ export default function DispatchPage() {
         description="Create jobs and watch them broadcast to available drivers in real time — drivers answer on the Android app, or dispatch can accept or decline an offer on their behalf."
         actions={
           <div className="flex items-center gap-2">
-            <LiveFeedBadge state={live.state} />
+            <LiveFeedBadge state={live.state} delivering={socketDelivering} />
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               <Send className="h-4 w-4" /> New job
             </Button>
@@ -174,7 +194,15 @@ export default function DispatchPage() {
 
         <div className="lg:col-span-1">
           {selectedId ? (
-            <JobDetailPanel jobId={selectedId} onClose={() => setSelectedId(null)} live={socketOpen} />
+            // The panel gets the same delivery-based gate as the list. It is
+            // the MORE important half: this is the surface an operator watches
+            // one job move on, second by second, so an open-but-silent socket
+            // slowing it to 30 s costs more here than in the table.
+            <JobDetailPanel
+              jobId={selectedId}
+              onClose={() => setSelectedId(null)}
+              live={socketDelivering}
+            />
           ) : (
             <Card>
               <CardContent className="flex h-40 items-center justify-center text-center text-sm text-muted-foreground">
@@ -199,12 +227,35 @@ export default function DispatchPage() {
 }
 
 /** Tells the operator which path is keeping the table fresh, so "why did
- * that offer take ten seconds to appear" has an answer on screen. */
-function LiveFeedBadge({ state }: { state: ReturnType<typeof useJobsLive>["state"] }) {
+ * that offer take ten seconds to appear" has an answer on screen.
+ *
+ * The badge is keyed on DELIVERY, not connection, for the same reason the
+ * poll is. A green "Live" pill over a socket that has connected and then sent
+ * nothing is precisely the silent failure this change exists to remove -- the
+ * operator would read "Live" and trust the screen while the feed fed them
+ * nothing. An open-but-silent socket therefore reads "Polling", which is the
+ * literal truth: the page is being kept fresh by `GET /v1/jobs` at the fast
+ * band, and the socket is contributing nothing. `title` says so in full for
+ * anyone hovering to ask why.
+ */
+function LiveFeedBadge({
+  state,
+  delivering,
+}: {
+  state: ReturnType<typeof useJobsLive>["state"];
+  delivering: boolean;
+}) {
+  if (state === "open" && !delivering) {
+    return (
+      <Badge variant="accent" title="Live feed connected but sending nothing — polling instead">
+        Polling
+      </Badge>
+    );
+  }
   switch (state) {
     case "open":
       return (
-        <Badge variant="success" title="Connected to the live job feed">
+        <Badge variant="success" title="Live job feed connected and delivering">
           <Radio className="h-3 w-3" /> Live
         </Badge>
       );
