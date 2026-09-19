@@ -1049,9 +1049,16 @@ async def test_get_shifts_survives_duplicate_fatigue_alert_rows_for_open_shift(
 # incoming vehicle_id verbatim, so the Android meter's
 # `resolvedVehicleUuid ?: vehicleId` fallback (it sends the REGO when it could
 # not resolve the UUID offline) wrote rego strings into `shifts.vehicle_id`.
-# 86 of 184 production shifts hold one. The serious consequence is the last
-# test here: every "which vehicle" query is a string equality, so the
-# double-assignment guard never saw a rego row and a UUID row as the same car.
+# 86 of 184 production shifts hold one. The serious consequence is the
+# double-assignment test below: every "which vehicle" query is a string
+# equality, so the guard never saw a rego row and a UUID row as the same car.
+#
+# The canonicalisation is a one-way improvement and nothing more. It resolves
+# what it can (folding case AND punctuation, because the meter's rego pad has
+# no space key) and stores what it cannot resolve verbatim, exactly as this
+# code did before. It must never introduce a refusal: `POST /v1/shifts/start`
+# has no not-found status today and deployed meters delete or dead-letter a
+# queued shift on any non-IOException.
 
 
 async def test_start_shift_by_rego_stores_the_vehicle_uuid(
@@ -1129,14 +1136,25 @@ async def test_start_shift_by_uuid_is_stored_unchanged(
     assert resp.json()["vehicle_id"] == vehicle.id
 
 
-async def test_start_shift_with_unknown_rego_is_rejected_not_stored(
+async def test_start_shift_with_unknown_rego_is_stored_verbatim_not_rejected(
     client: AsyncClient, session: AsyncSession
 ):
-    """An unresolvable rego means we do not know which car this shift is on.
-    404 "Vehicle not found" — the same shape the fleet routes use — and no
-    shift row at all, rather than the old behaviour of storing the string."""
+    """THE deployed-client safety case, and the correction to this test's first
+    version, which asserted a 404.
+
+    `POST /v1/shifts/start` has never had a not-found status, and it must not
+    grow one. Both Android consumers treat any non-IOException as TERMINAL:
+    `OutboxBackedShiftRepository.startShift` deletes the queued outbox row the
+    moment the server refuses (ShiftRepository.kt, "The server answered and
+    said no"), and `OutboxDrainer.drainShiftStarts` burns five attempts and
+    dead-letters the row, after which `rewriteShiftId` never runs and every
+    trip closed under the placeholder `local-<uuid>` shift id is orphaned.
+    Tablets in cabs run month-old code, so a 404 here destroys real shifts on
+    clients nobody can fix. An unresolvable rego therefore degrades to the
+    pre-canonicalisation behaviour exactly: 201, stored verbatim, warning
+    logged.
+    """
     headers = await auth_headers(client, session, role="driver")
-    tenant_id = await _tenant_of(headers)
     driver_id = str(uuid.uuid4())
 
     resp = await client.post(
@@ -1145,15 +1163,140 @@ async def test_start_shift_with_unknown_rego_is_rejected_not_stored(
         headers=headers,
     )
 
-    assert resp.status_code == 404, resp.text
-    assert resp.json()["detail"] == "Vehicle not found"
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == "NO-SUCH"
 
-    orphans = (
+    stored = (
         await session.execute(
-            select(Shift).where(Shift.tenant_id == tenant_id, Shift.driver_id == driver_id)
+            select(Shift.vehicle_id).where(Shift.id == resp.json()["id"])
         )
-    ).scalars().all()
-    assert orphans == []
+    ).scalar_one()
+    assert stored == "NO-SUCH"
+
+
+async def test_start_shift_by_rego_ignores_punctuation_in_both_directions(
+    client: AsyncClient, session: AsyncSession
+):
+    """A case-fold alone is not enough. `VehicleBase._normalize_rego` only
+    strips and upper-cases, so punctuation SURVIVES on write and a car really
+    can be stored as "KHI-01" or "ABC 123". The meter's manual rego pad
+    (`RegoKeyRows`) has A-Z, 0-9 and a hyphen -- and NO space key -- so the
+    stored spelling can be literally untypeable. Both directions must fold:
+    a hyphenless entry against a hyphenated record, and a hyphenated entry
+    against a record stored with a space.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    hyphenated = Vehicle(tenant_id=tenant_id, rego="KHI-01")
+    spaced = Vehicle(tenant_id=tenant_id, rego="ABC 123")
+    session.add_all([hyphenated, spaced])
+    await session.commit()
+    await session.refresh(hyphenated)
+    await session.refresh(spaced)
+
+    # Typed without the hyphen (what the driver actually produces).
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": "KHI01"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == hyphenated.id
+
+    # Stored with a space the pad cannot type; the driver types a hyphen.
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": "abc-123"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == spaced.id
+
+
+async def test_start_shift_ambiguous_rego_picks_the_lowest_vehicle_id(
+    client: AsyncClient, session: AsyncSession
+):
+    """Two vehicles can fold to the same key ("KHI-01" and "KHI01"). Erroring
+    would be the 404 failure mode wearing a different status code, so we pick
+    deterministically instead: the lowest `Vehicle.id` among the folded
+    matches. Determinism is the point -- the same rego must resolve to the
+    same car on every retry and every outbox replay, or the double-assignment
+    guard is comparing a moving target. An exact match still wins outright.
+    """
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(headers)
+
+    a = Vehicle(tenant_id=tenant_id, id="00000000-aaaa-4000-8000-000000000001", rego="KHI-77")
+    b = Vehicle(tenant_id=tenant_id, id="00000000-bbbb-4000-8000-000000000002", rego="KHI77")
+    session.add_all([a, b])
+    await session.commit()
+
+    # "KHI 77" matches neither exactly, folds to both -> lowest id wins.
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": "KHI 77"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == a.id
+
+    # And an exact match is never overridden by the folded scan.
+    resp = await client.post(
+        "/v1/shifts/start",
+        json={"driver_id": str(uuid.uuid4()), "vehicle_id": "khi77"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["vehicle_id"] == b.id
+
+
+async def test_admin_create_and_patch_shift_canonicalise_vehicle_id(
+    client: AsyncClient, session: AsyncSession
+):
+    """`start_shift` is not the only way a row lands in `shifts`. A rego
+    written by admin backfill (POST /v1/shifts) or by an admin correction
+    (PATCH /v1/shifts/{id}) is invisible to `_find_open_shift(vehicle_id=...)`
+    in exactly the way canonicalisation exists to prevent, so both paths fold
+    too. An unresolvable value is still stored verbatim -- these routes gain
+    no new status code either.
+    """
+    headers = await auth_headers(client, session, role="admin")
+    tenant_id = await _tenant_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego="TX-904")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    created = await client.post(
+        "/v1/shifts",
+        json={
+            "driver_id": str(uuid.uuid4()),
+            "vehicle_id": "tx904",
+            "start_at": "2026-09-19T00:00:00+00:00",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["vehicle_id"] == vehicle.id
+
+    patched = await client.patch(
+        f"/v1/shifts/{created.json()['id']}",
+        json={"vehicle_id": " tx-904 "},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["vehicle_id"] == vehicle.id
+
+    # Unresolvable stays verbatim on the admin paths too -- no new refusal.
+    patched = await client.patch(
+        f"/v1/shifts/{created.json()['id']}",
+        json={"vehicle_id": "GHOST9"},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["vehicle_id"] == "GHOST9"
 
 
 async def test_double_assignment_guard_sees_rego_and_uuid_as_the_same_vehicle(
