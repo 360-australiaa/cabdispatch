@@ -31,7 +31,13 @@ from app.models.shift import Shift
 from app.models.tenant import Tenant
 from app.models.trips import Trip
 from app.models.user import ROLE_DRIVER, User
-from app.services.jobs import job_offer_broadcaster
+from app.services.jobs import (
+    EVENT_JOB_OFFER,
+    EVENT_OFFER_ACCEPTED,
+    EVENT_OFFER_DECLINED,
+    EVENT_OFFER_EXPIRED,
+    job_offer_broadcaster,
+)
 from tests.conftest import auth_headers
 
 pytestmark = pytest.mark.asyncio
@@ -623,11 +629,13 @@ def test_dispatcher_socket_hears_any_drivers_offer_and_drivers_stay_isolated(app
             assert job_one.status_code == 201, job_one.text
             job_one_id = job_one.json()["id"]
 
-            # The desk hears an offer addressed to a driver who is not the desk.
+            # The desk hears about a job it has no offer of its own on. ONE
+            # frame, for the job -- see `_publish_job_event` on why the desk is
+            # not given one frame per offer.
             desk_frame = ws_desk.receive_json()
             assert desk_frame["type"] == "job_offer"
             assert desk_frame["job"]["id"] == job_one_id
-            assert desk_frame["offer"]["driver_id"] == driver_a
+            assert desk_frame["offer"] is None
 
             # Now make B eligible and create a second job, so B legitimately has
             # a frame coming and we can read its FIRST one without blocking.
@@ -650,10 +658,21 @@ def test_dispatcher_socket_hears_any_drivers_offer_and_drivers_stay_isolated(app
                 "driver B heard about job 1, which was never offered to B"
             )
 
-            # The desk hears BOTH of job 2's offers, one frame per offer.
-            desk_second = [ws_desk.receive_json(), ws_desk.receive_json()]
-            assert {f["job"]["id"] for f in desk_second} == {job_two_id}
-            assert {f["offer"]["driver_id"] for f in desk_second} == {driver_a, driver_b}
+            # Job 2 fanned out to BOTH drivers, and the desk still hears
+            # exactly one frame for it. The proof that there is no second one
+            # queued behind it: the next frame the desk reads is the NEXT job.
+            desk_second = ws_desk.receive_json()
+            assert desk_second["job"]["id"] == job_two_id
+            assert desk_second["offer"] is None
+
+            job_three_id = tc.post("/v1/jobs", json=_job_body(), headers=_bearer(env["desk_token"])).json()[
+                "id"
+            ]
+            desk_third = ws_desk.receive_json()
+            assert desk_third["job"]["id"] == job_three_id, (
+                "the desk had a second frame for job 2 queued behind it -- the tenant "
+                "channel must coalesce a job's fan-out into one frame"
+            )
 
 
 def test_accept_and_decline_push_to_the_driver_and_the_desk(app):
@@ -680,8 +699,7 @@ def test_accept_and_decline_push_to_the_driver_and_the_desk(app):
         ) as ws_a, tc.websocket_connect(f"/v1/jobs/live?token={token_b}") as ws_b:
             job_id = tc.post("/v1/jobs", json=_job_body(), headers=desk_headers).json()["id"]
 
-            # Drain the two creation frames from the desk and one from each driver.
-            ws_desk.receive_json()
+            # One creation frame for the desk, one for each driver.
             ws_desk.receive_json()
             assert ws_a.receive_json()["offer"]["driver_id"] == driver_a
             assert ws_b.receive_json()["offer"]["driver_id"] == driver_b
@@ -696,15 +714,11 @@ def test_accept_and_decline_push_to_the_driver_and_the_desk(app):
             )
             assert declined.status_code == 200, declined.text
 
-            b_decline = ws_b.receive_json()
-            assert b_decline["type"] == "job_offer_declined"
-            assert b_decline["offer"]["id"] == offer_b["id"]
-            assert b_decline["offer"]["status"] == "declined"
-            assert b_decline["job"]["id"] == job_id
-
             desk_decline = ws_desk.receive_json()
             assert desk_decline["type"] == "job_offer_declined"
             assert desk_decline["offer"]["driver_id"] == driver_b
+            assert desk_decline["offer"]["status"] == "declined"
+            assert desk_decline["job"]["id"] == job_id
 
             # --- accept --------------------------------------------------------
             accepted = tc.post(
@@ -712,16 +726,23 @@ def test_accept_and_decline_push_to_the_driver_and_the_desk(app):
             )
             assert accepted.status_code == 200, accepted.text
 
-            a_accept = ws_a.receive_json()
-            assert a_accept["type"] == "job_offer_accepted"
-            assert a_accept["offer"]["id"] == offer_a["id"]
-            assert a_accept["job"]["status"] == "accepted"
-            assert a_accept["job"]["accepted_by_driver_id"] == driver_a
-
             desk_accept = ws_desk.receive_json()
             assert desk_accept["type"] == "job_offer_accepted"
             assert desk_accept["offer"]["driver_id"] == driver_a
             assert desk_accept["job"]["accepted_by_driver_id"] == driver_a
+
+            # Neither driver was pushed the echo of their OWN action -- see
+            # `_publish_job_event`, and the frame-budget test further down which
+            # counts this without needing a socket read that could block. The
+            # proof here that nothing is queued on A's socket: A's next frame is
+            # a brand-new job's offer, not the acceptance it just performed.
+            second_id = tc.post("/v1/jobs", json=_job_body(), headers=desk_headers).json()["id"]
+            a_next = ws_a.receive_json()
+            assert a_next["type"] == "job_offer", (
+                "driver A was pushed the echo of their own accept, which costs a "
+                "deployed tablet a full refresh burst for nothing"
+            )
+            assert a_next["job"]["id"] == second_id
 
 
 def test_cancel_pushes_the_job_and_every_dead_offer(app):
@@ -802,7 +823,8 @@ async def test_lazy_expiry_pushes_to_the_driver_and_the_desk(
 
     tenant_frame = tenant_queue.get_nowait()
     assert tenant_frame["type"] == "job_offer_expired"
-    assert tenant_frame["offer"]["driver_id"] == driver.id
+    assert tenant_frame["job"]["id"] == job_id
+    assert tenant_frame["offer"] is None, "the desk gets one frame per job, not per lapsed offer"
 
 
 async def test_a_drivers_channel_never_carries_another_tenants_or_drivers_events(
@@ -827,7 +849,7 @@ async def test_a_drivers_channel_never_carries_another_tenants_or_drivers_events
 
     assert queue_a.qsize() == 1, "driver A received more than their own offer"
     assert queue_b.qsize() == 1, "driver B received more than their own offer"
-    assert tenant_queue.qsize() == 2, "the desk should hear one frame per offer"
+    assert tenant_queue.qsize() == 1, "the desk should hear ONE frame per job, not one per offer"
 
     frame_a = queue_a.get_nowait()
     frame_b = queue_b.get_nowait()
@@ -907,20 +929,19 @@ async def test_every_transition_publishes_to_the_driver_and_the_desk(
     # --- decline ---------------------------------------------------------------
     resp = await client.post(f"/v1/jobs/{job_id}/offers/{offer_b['id']}/decline", json={}, headers=headers_b)
     assert resp.status_code == 200, resp.text
-    declined = queue_b.get_nowait()
+    declined = desk_queue.get_nowait()
     assert declined["type"] == "job_offer_declined"
     assert declined["offer"]["id"] == offer_b["id"]
-    assert desk_queue.get_nowait()["type"] == "job_offer_declined"
+    assert queue_b.empty(), "the decliner already has the 200 response; a push costs them a refresh burst"
     assert queue_a.empty(), "driver A must not hear driver B's decline"
 
     # --- accept ----------------------------------------------------------------
     resp = await client.post(f"/v1/jobs/{job_id}/offers/{offer_a['id']}/accept", json={}, headers=headers_a)
     assert resp.status_code == 200, resp.text
-    accepted = queue_a.get_nowait()
-    assert accepted["type"] == "job_offer_accepted"
-    assert accepted["job"]["accepted_by_driver_id"] == driver_a.id
     desk_accept = desk_queue.get_nowait()
     assert desk_accept["type"] == "job_offer_accepted"
+    assert desk_accept["job"]["accepted_by_driver_id"] == driver_a.id
+    assert queue_a.empty(), "the accepting driver already has the 200 response"
     assert queue_b.empty(), "driver B's offer was already declined, nothing more is addressed to B"
 
     # --- cancel ----------------------------------------------------------------
@@ -940,3 +961,306 @@ async def test_every_transition_publishes_to_the_driver_and_the_desk(
     dead_offer = queue_a.get_nowait()
     assert dead_offer["type"] == "job_offer_expired"
     assert dead_offer["offer"]["driver_id"] == driver_a.id
+
+
+# --- client-cost guards on the driver channel (2026-09-19 review) -----------------
+#
+# The first pass of this work proved that the driver channel is still KEYED by
+# driver_id, and stopped there. That is only half the promise a deployed tablet
+# needs. The other half is VOLUME: `AvailableTripsWheelViewModel.handleLiveFrame`
+# cannot decode the `{"type","offer","job"}` envelope, so it answers every frame
+# with a full `refresh()` -- `GET /v1/jobs?status=offered` plus one
+# `GET /v1/jobs/{id}/offers` per listed job, up to 51 requests. Tablets update on
+# the drivers' schedule, so "we will fix the client" is not available. The three
+# tests below therefore COUNT what a driver receives, rather than asserting that
+# individual frames are well-formed.
+
+
+async def test_a_driver_is_not_pushed_the_echo_of_their_own_accept_or_decline(
+    client: AsyncClient, session: AsyncSession
+):
+    """The frame budget, counted end to end over a whole offer lifecycle.
+
+    A driver who accepts, and a driver who declines, must each finish the
+    lifecycle having received exactly ONE frame -- their original offer --
+    which is exactly what they received before the transition publishes were
+    added. Everything they did after that, they did over HTTP and already have
+    the response for."""
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant Frame Budget"
+    )
+    driver_a, headers_a = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="Budget A"
+    )
+    driver_b, headers_b = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="Budget B"
+    )
+
+    # Subscribed BEFORE the job exists, so these queues hold the complete
+    # frame history for each driver, creation frame included.
+    queue_a = await job_offer_broadcaster.subscribe(driver_a.id)
+    queue_b = await job_offer_broadcaster.subscribe(driver_b.id)
+    desk_queue = await job_offer_broadcaster.subscribe_tenant(tenant_id)
+
+    job_id = (await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)).json()["id"]
+    offers = (await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)).json()
+    offer_a = next(o for o in offers if o["driver_id"] == driver_a.id)
+    offer_b = next(o for o in offers if o["driver_id"] == driver_b.id)
+
+    resp = await client.post(f"/v1/jobs/{job_id}/offers/{offer_b['id']}/decline", json={}, headers=headers_b)
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(f"/v1/jobs/{job_id}/offers/{offer_a['id']}/accept", json={}, headers=headers_a)
+    assert resp.status_code == 200, resp.text
+
+    assert queue_a.qsize() == 1, (
+        f"the accepting driver's tablet received {queue_a.qsize()} frames for one offer it "
+        "handled itself; before this commit it received 1, and each extra frame costs it a "
+        "jobs-list + per-job-offers refresh burst it cannot be patched out of"
+    )
+    assert queue_b.qsize() == 1, (
+        f"the declining driver's tablet received {queue_b.qsize()} frames for one offer it "
+        "handled itself; before this commit it received 1"
+    )
+    assert queue_a.get_nowait()["type"] == EVENT_JOB_OFFER
+    assert queue_b.get_nowait()["type"] == EVENT_JOB_OFFER
+
+    # The desk, which polls a browser and can be updated any day, hears all of it.
+    desk_types = []
+    while not desk_queue.empty():
+        desk_types.append(desk_queue.get_nowait()["type"])
+    assert desk_types == [EVENT_JOB_OFFER, EVENT_OFFER_DECLINED, EVENT_OFFER_ACCEPTED], desk_types
+
+
+async def test_a_losing_driver_hears_their_offer_die_but_not_who_won(
+    client: AsyncClient, session: AsyncSession
+):
+    """The one EXTRA driver frame this commit does add, and its limits.
+
+    A driver whose offer the server killed without them asking -- here, because
+    a colleague accepted first -- does get a frame, because nothing else would
+    ever tell them and their tablet would otherwise count down a card it can no
+    longer accept. That frame must not carry `accepted_by_driver_id`: losing a
+    job is not a licence to see which colleague took it, and no HTTP call that
+    driver can make would tell them either (the job leaves their
+    `status=offered` list the moment it is accepted)."""
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant Loser Privacy"
+    )
+    winner, winner_headers = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="Winner"
+    )
+    loser, loser_headers = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="Loser"
+    )
+
+    job_id = (await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)).json()["id"]
+    offers = (await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)).json()
+    winning_offer = next(o for o in offers if o["driver_id"] == winner.id)
+
+    # Subscribe after creation so only the acceptance fallout lands here.
+    loser_queue = await job_offer_broadcaster.subscribe(loser.id)
+    desk_queue = await job_offer_broadcaster.subscribe_tenant(tenant_id)
+
+    resp = await client.post(
+        f"/v1/jobs/{job_id}/offers/{winning_offer['id']}/accept", json={}, headers=winner_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert loser_queue.qsize() == 1
+    frame = loser_queue.get_nowait()
+    assert frame["type"] == EVENT_OFFER_EXPIRED
+    assert frame["offer"]["driver_id"] == loser.id
+    assert frame["offer"]["status"] == "expired"
+    assert frame["job"]["id"] == job_id
+    assert "accepted_by_driver_id" not in frame["job"], (
+        "the sibling-expiry frame told a losing driver which colleague won the job"
+    )
+    assert winner.id not in str(frame), "the winner's id leaked into a losing driver's frame"
+
+    # The desk, by contrast, is exactly who needs to know who won.
+    desk_frame = desk_queue.get_nowait()
+    assert desk_frame["type"] == EVENT_OFFER_ACCEPTED
+    assert desk_frame["job"]["accepted_by_driver_id"] == winner.id
+
+    # And the HTTP surface does not hand the loser the winner either, so the
+    # redaction above is not undone one request later.
+    listed = (await client.get("/v1/jobs?status=offered", headers=loser_headers)).json()
+    assert all(item["id"] != job_id for item in listed["items"])
+
+
+async def test_the_desk_gets_one_frame_per_job_not_one_per_offer(
+    client: AsyncClient, session: AsyncSession
+):
+    """`JobOfferBroadcaster`'s docstring promises the tenant channel coalesces a
+    job's fan-out into a single frame. `useJobsLive.ts` invalidates the same
+    three React Query keys for every frame it receives, so N frames for one new
+    job is N-1 redundant refetches of identical rows. Three drivers, so an
+    un-coalesced publish gives 3 and cannot pass by accident."""
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant Coalescing"
+    )
+    drivers = [
+        (await _available_driver(session=session, client=client, tenant_id=tenant_id, name=f"Coal {n}"))[0]
+        for n in ("A", "B", "C")
+    ]
+
+    desk_queue = await job_offer_broadcaster.subscribe_tenant(tenant_id)
+    driver_queues = {d.id: await job_offer_broadcaster.subscribe(d.id) for d in drivers}
+
+    resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+    job_id = resp.json()["id"]
+
+    assert desk_queue.qsize() == 1, (
+        f"the desk received {desk_queue.qsize()} frames for one new job offered to "
+        f"{len(drivers)} drivers; the tenant channel must coalesce them"
+    )
+    frame = desk_queue.get_nowait()
+    assert frame["type"] == EVENT_JOB_OFFER
+    assert frame["job"]["id"] == job_id
+    assert frame["offer"] is None
+
+    # Coalescing the desk's view must not have cost any driver their own offer.
+    for driver_id, queue in driver_queues.items():
+        assert queue.qsize() == 1, f"driver {driver_id} lost (or gained) their offer frame"
+        assert queue.get_nowait()["offer"]["driver_id"] == driver_id
+
+
+async def test_a_job_with_no_available_drivers_still_reaches_the_desk(
+    client: AsyncClient, session: AsyncSession
+):
+    """A queued job nobody could be offered is precisely the one a dispatcher
+    must see instantly. It published nothing at all before, because the only
+    publish site was inside the per-offer loop."""
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant No Drivers"
+    )
+    desk_queue = await job_offer_broadcaster.subscribe_tenant(tenant_id)
+
+    resp = await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)
+    assert resp.status_code == 201, resp.text
+
+    frame = desk_queue.get_nowait()
+    assert frame["type"] == EVENT_JOB_OFFER
+    assert frame["job"]["id"] == resp.json()["id"]
+    assert frame["job"]["status"] == "queued"
+    assert frame["offer"] is None
+
+
+async def test_decline_still_succeeds_when_the_job_lookup_fails_after_the_commit(
+    client: AsyncClient, session: AsyncSession, monkeypatch
+):
+    """The decline used to re-read the job with `get_job_or_404` AFTER its
+    commit, so any failure there surfaced as a 404 for an offer that had
+    already been declined -- the tablet reports "couldn't decline", the driver
+    taps again and gets a 409. Simulated by making the lookup blow up from the
+    moment the commit lands; the reordered code has already read the job by
+    then, so the decline reports the truth."""
+    from app.services import jobs as jobs_service
+
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant Decline Order"
+    )
+    driver, driver_headers = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="Decline Order"
+    )
+
+    job_id = (await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)).json()["id"]
+    offers = (await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)).json()
+    offer_id = offers[0]["id"]
+
+    real_get_job = jobs_service.get_job_or_404
+    real_commit = AsyncSession.commit
+    state = {"committed": False}
+
+    async def counting_commit(self):
+        result = await real_commit(self)
+        state["committed"] = True
+        return result
+
+    async def flaky_get_job(session_, **kwargs):
+        if state["committed"]:
+            raise jobs_service.JobNotFoundError(kwargs.get("job_id", "?"))
+        return await real_get_job(session_, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "commit", counting_commit)
+    monkeypatch.setattr(jobs_service, "get_job_or_404", flaky_get_job)
+
+    resp = await client.post(
+        f"/v1/jobs/{job_id}/offers/{offer_id}/decline", json={}, headers=driver_headers
+    )
+    monkeypatch.undo()
+
+    assert resp.status_code == 200, (
+        "a post-commit job lookup failure turned an already-committed decline into "
+        f"a {resp.status_code} for the tablet: {resp.text}"
+    )
+    assert resp.json()["status"] == "declined"
+
+    # And the row really did move, which is what made the old 404 a lie.
+    refetched = (await client.get(f"/v1/jobs/{job_id}/offers", headers=admin_headers)).json()
+    assert next(o for o in refetched if o["id"] == offer_id)["status"] == "declined"
+
+
+async def test_publishing_an_offer_does_not_re_select_it_for_a_column_nobody_serialises(
+    client: AsyncClient, session: AsyncSession
+):
+    """`_reload_if_needed` exists to stop a `MissingGreenlet` 500: `updated_at`
+    carries `onupdate=func.now()`, so SQLAlchemy post-fetches it and leaves it
+    expired after every UPDATE, and touching it later lazy-loads outside the
+    greenlet context. But `_offer_to_dict` never reads `updated_at` -- so the
+    first version of that helper, which refreshed whenever ANYTHING was
+    unloaded, spent one SELECT per published offer to load a column it then
+    threw away. This pins both halves: the refresh does not happen, and the
+    envelope is still complete.
+
+    `session.refresh` is replaced with something that raises, so a reappearing
+    SELECT cannot pass silently as a slow test."""
+    from app.services import jobs as jobs_service
+
+    tenant_id, admin_headers = await _tenant_and_headers(
+        client, session, role="dispatcher", tenant_name="Jobs Tenant No Extra Select"
+    )
+    driver, _headers = await _available_driver(
+        session=session, client=client, tenant_id=tenant_id, name="No Extra Select"
+    )
+    job_id = (await client.post("/v1/jobs", json=_job_body(), headers=admin_headers)).json()["id"]
+
+    offer = (
+        await session.execute(select(JobOffer).where(JobOffer.job_id == job_id))
+    ).scalars().one()
+    offer.status = "expired"
+    offer.responded_at = datetime.now(UTC)
+    await session.commit()
+
+    from sqlalchemy import inspect as sa_inspect
+
+    assert set(sa_inspect(offer).unloaded) == {"updated_at"}, (
+        "this test's premise changed: something other than `updated_at` is now left "
+        f"expired on a JobOffer after commit ({set(sa_inspect(offer).unloaded)})"
+    )
+
+    queue = await job_offer_broadcaster.subscribe(driver.id)
+
+    async def refuse(*args, **kwargs):
+        raise AssertionError("publishing an offer issued a SELECT for a column it never serialises")
+
+    original_refresh = AsyncSession.refresh
+    AsyncSession.refresh = refuse  # type: ignore[method-assign]
+    try:
+        await jobs_service._publish_job_event(
+            session,
+            event_type=jobs_service.EVENT_OFFER_EXPIRED,
+            tenant_id=tenant_id,
+            driver_id=driver.id,
+            job=None,
+            offer=offer,
+            to_tenant=False,
+        )
+    finally:
+        AsyncSession.refresh = original_refresh  # type: ignore[method-assign]
+
+    frame = queue.get_nowait()
+    assert frame["offer"]["id"] == offer.id
+    assert frame["offer"]["status"] == "expired"
+    assert frame["offer"]["responded_at"] is not None

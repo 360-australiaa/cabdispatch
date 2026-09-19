@@ -117,8 +117,11 @@ class JobOfferBroadcaster:
         every job event in its own tenant, which is the same fleet-wide view
         `live_ops._FleetBroadcaster` already takes for positions.
 
-    Every event is published to the addressed driver AND once to the tenant,
-    so a dispatcher watching one driver's offer sees a single frame, not N.
+    The two channels do NOT carry the same traffic, and that asymmetry is the
+    whole design (see `_publish_job_event`): the tenant channel gets exactly
+    ONE frame per job event -- one for a new job however many drivers it was
+    offered to -- while the driver channel gets only the frames that are
+    actionable for that one driver.
 
     Not Redis-backed, same tradeoff as the sibling GPS/position broadcasters:
     best-effort, in-process only, lost on restart (this backend runs a single
@@ -228,23 +231,45 @@ EVENT_OFFER_EXPIRED = "job_offer_expired"
 EVENT_JOB_CANCELLED = "job_cancelled"
 
 
-async def _reload_if_expired(session: AsyncSession, row) -> None:
-    """Re-loads `row` if the ORM has marked any of its columns unloaded.
+# The columns each serializer below actually reads. `_reload_if_needed` uses
+# these to decide whether an expired column is worth a SELECT: `updated_at` is
+# expired by SQLAlchemy after every UPDATE (it carries `onupdate=func.now()`,
+# so it is post-fetched), but only `_job_to_dict` ever reads it.
+_JOB_DICT_COLUMNS = frozenset(
+    {
+        "id", "tenant_id", "origin_lat", "origin_lng", "origin_address", "dest_lat",
+        "dest_lng", "dest_address", "status", "fare_estimate_low", "fare_estimate_high",
+        "requested_at", "created_by_user_id", "accepted_by_driver_id", "created_at",
+        "updated_at",
+    }
+)
+_OFFER_DICT_COLUMNS = frozenset(
+    {"id", "job_id", "tenant_id", "driver_id", "status", "offered_at", "expires_at", "responded_at"}
+)
 
-    This exists because of a real 500. `Job.updated_at` / `JobOffer.updated_at`
-    are refreshed by the database on UPDATE, so SQLAlchemy expires them after
-    the flush; reading one later lazy-loads. Inside an async session that
-    lazy-load happens OUTSIDE SQLAlchemy's greenlet context and raises
-    `MissingGreenlet` -- which, on `POST .../accept`, turned a working
-    acceptance into a 500 the instant the publish call was added. The fix is
-    to do the IO here, awaited, before `_job_to_dict` touches anything, rather
-    than to drop `updated_at` from the envelope.
 
-    Conditional on `inspect(...).unloaded` so the common case (nothing
-    expired, e.g. a row we just re-queried) costs no extra SELECT. These two
-    models declare no relationships, so `unloaded` only ever means expired
-    columns here."""
-    if row is not None and inspect(row).unloaded:
+async def _reload_if_needed(session: AsyncSession, row, columns: frozenset[str]) -> None:
+    """Re-loads `row` only if a column the caller is about to SERIALIZE is
+    unloaded.
+
+    This exists because of a real 500. `Job.updated_at` is refreshed by the
+    database on UPDATE, so SQLAlchemy expires it after the flush; reading it
+    later lazy-loads, and inside an async session that lazy-load happens
+    OUTSIDE SQLAlchemy's greenlet context and raises `MissingGreenlet` --
+    which, on `POST .../accept`, turned a working acceptance into a 500 the
+    instant the publish call was added.
+
+    Narrowed to `columns` on 2026-09-19 after review. The earlier version
+    refreshed whenever ANYTHING was unloaded, which meant a wasted SELECT per
+    published offer: measured on this code, the only column left unloaded on a
+    `JobOffer` after accept/cancel is `updated_at`, and `_offer_to_dict` never
+    reads it. `Job` still refreshes, because `_job_to_dict` does read it. The
+    intersection is the point -- this stays crash-proof if a future column is
+    added to either serializer, instead of trading the 500 back for a SELECT.
+
+    These two models declare no relationships, so `unloaded` only ever means
+    expired columns here."""
+    if row is not None and inspect(row).unloaded & columns:
         await session.refresh(row)
 
 
@@ -256,27 +281,65 @@ async def _publish_job_event(
     driver_id: str | None,
     job: Job | None,
     offer: JobOffer | None,
+    to_tenant: bool = True,
+    redact_accepted_driver: bool = False,
 ) -> None:
     """The one place a job event leaves this module. Publishes the SAME
-    envelope the original offer path used -- `{"type", "offer", "job"}` -- to
-    the addressed driver's channel (when the event is addressed to a driver at
-    all) and once to the tenant channel, so no frontend change is needed: the
-    dashboard hook already treats any frame as "this job moved, refetch" and
-    only reads `job.id` / `offer.job_id` out of it.
+    envelope the original offer path used -- `{"type", "offer", "job"}` -- so
+    no frontend change is needed: the dashboard hook already treats any frame
+    as "this job moved, refetch" and only reads `job.id` / `offer.job_id`.
+
+    `driver_id` / `to_tenant` pick the AUDIENCE, and every caller sets them
+    deliberately, because the two audiences have opposite cost profiles
+    (2026-09-19 review):
+
+    * **A driver frame is expensive and un-updatable.** The deployed Android
+      client cannot decode this envelope at all --
+      `AvailableTripsWheelViewModel.handleLiveFrame` tries
+      `decodeFromString<JobOfferDto>(raw)` on the whole frame, which does not
+      match the `{"type","offer","job"}` wrapper, and its fallback is a full
+      `refresh()`: one `GET /v1/jobs?status=offered` plus one
+      `GET /v1/jobs/{id}/offers` per listed job, up to 51 requests
+      (`JOB_PAGE_LIMIT` is 50). Tablets update on the DRIVERS' schedule, so
+      that cost cannot be patched away. A driver is therefore addressed ONLY
+      when the frame tells them something they could not already know: a new
+      offer, or the server killing an offer of theirs that they did not act
+      on. The echo of a driver's OWN accept or decline is not published to
+      them -- they already hold the HTTP response that caused it -- so this
+      pass does not raise any driver's frame count for a lifecycle they drive
+      themselves. `test_jobs.py` counts the frames rather than trusting this
+      paragraph.
+    * **A tenant frame is cheap and the desk wants all of them.** But exactly
+      ONE per job event: a new job offered to N drivers publishes N driver
+      frames and a single tenant frame, because `useJobsLive.ts` invalidates
+      the same three queries for every frame and N of them is N redundant
+      refetches of identical data.
+
+    `redact_accepted_driver` drops `job.accepted_by_driver_id` from the DRIVER
+    copy only. It is set on the sibling-expiry frames a losing driver gets when
+    someone else wins the job: a driver who lost has no business learning which
+    of their colleagues took it, and no HTTP path they can call would tell them
+    (the job is `accepted`, so it has left their `status=offered` list).
 
     ALWAYS call this AFTER `session.commit()`. A frame that arrives before the
     row is durable makes the dashboard refetch the PRE-transition state and
     then never hear about it again."""
-    await _reload_if_expired(session, job)
-    await _reload_if_expired(session, offer)
-    message = {
-        "type": event_type,
-        "offer": _offer_to_dict(offer) if offer is not None else None,
-        "job": _job_to_dict(job) if job is not None else None,
-    }
+    await _reload_if_needed(session, job, _JOB_DICT_COLUMNS)
+    await _reload_if_needed(session, offer, _OFFER_DICT_COLUMNS)
+    offer_dict = _offer_to_dict(offer) if offer is not None else None
+    job_dict = _job_to_dict(job) if job is not None else None
+
     if driver_id:
-        await job_offer_broadcaster.publish(driver_id, message)
-    await job_offer_broadcaster.publish_tenant(tenant_id, message)
+        driver_job = job_dict
+        if driver_job is not None and redact_accepted_driver:
+            driver_job = {k: v for k, v in driver_job.items() if k != "accepted_by_driver_id"}
+        await job_offer_broadcaster.publish(
+            driver_id, {"type": event_type, "offer": offer_dict, "job": driver_job}
+        )
+    if to_tenant:
+        await job_offer_broadcaster.publish_tenant(
+            tenant_id, {"type": event_type, "offer": offer_dict, "job": job_dict}
+        )
 
 
 # ==================================================================================
@@ -483,9 +546,8 @@ async def create_job_and_broadcast(
     for offer in offers:
         await session.refresh(offer)
 
-    # Same frames as before on the driver channel, byte for byte; the tenant
-    # channel is the new half (see `_publish_job_event`), which is what finally
-    # makes a dispatcher's socket say anything at all.
+    # Same frames as before on the driver channel, byte for byte -- one per
+    # offer, to that offer's own driver, and nothing else.
     for offer in offers:
         await _publish_job_event(
             session,
@@ -494,7 +556,24 @@ async def create_job_and_broadcast(
             driver_id=offer.driver_id,
             job=job,
             offer=offer,
+            to_tenant=False,
         )
+
+    # ONE frame for the desk, not one per offer (2026-09-19 review): the
+    # dashboard invalidates the same three queries per frame, so N frames for
+    # one new job is N-1 redundant refetches of identical rows. `offer` is
+    # null here because the event is about the JOB -- the desk's offers query
+    # refetches the whole fan-out anyway. Published even when nobody was
+    # available (`offers` empty), so a `queued` job with no takers still shows
+    # up on the board immediately instead of at the next poll.
+    await _publish_job_event(
+        session,
+        event_type=EVENT_JOB_OFFER,
+        tenant_id=tenant_id,
+        driver_id=None,
+        job=job,
+        offer=None,
+    )
 
     return job, offers
 
@@ -589,6 +668,20 @@ async def expire_stale_offers(session: AsyncSession, *, tenant_id: str, job_id: 
             driver_id=offer.driver_id,
             job=jobs_by_id.get(offer.job_id),
             offer=offer,
+            to_tenant=False,
+        )
+
+    # One desk frame per JOB, not per lapsed offer -- a job that fanned out to
+    # ten drivers and then timed out is one thing that happened, and the
+    # dashboard refetches that job's whole offer list from the first frame.
+    for expired_job in jobs_by_id.values():
+        await _publish_job_event(
+            session,
+            event_type=EVENT_OFFER_EXPIRED,
+            tenant_id=tenant_id,
+            driver_id=None,
+            job=expired_job,
+            offer=None,
         )
 
     return len(stale)
@@ -665,15 +758,21 @@ async def accept_offer(
     await session.commit()
     await session.refresh(offer)
 
-    # After the commit, never before -- see `_publish_job_event`. The winning
-    # driver and the dispatch desk hear the acceptance; each losing driver
-    # hears their own offer lapse (on their own channel only, so no tablet
-    # learns who won), and the desk hears those too.
+    # After the commit, never before -- see `_publish_job_event`.
+    #
+    # The desk hears the acceptance. The WINNER does not: this call IS the
+    # driver's own `POST .../accept`, whose 200 response carries the same
+    # offer, and a push here would cost that tablet a refresh burst at the
+    # exact moment it is handing off to the meter screen. Each LOSING driver
+    # does hear their offer lapse -- on their own channel, with the winner's
+    # id stripped out (`redact_accepted_driver`) -- because nothing else would
+    # ever tell them, and without it their tablet counts down a card it can no
+    # longer accept.
     await _publish_job_event(
         session,
         event_type=EVENT_OFFER_ACCEPTED,
         tenant_id=tenant_id,
-        driver_id=offer.driver_id,
+        driver_id=None,
         job=job,
         offer=offer,
     )
@@ -685,6 +784,8 @@ async def accept_offer(
             driver_id=sibling.driver_id,
             job=job,
             offer=sibling,
+            to_tenant=False,
+            redact_accepted_driver=True,
         )
     return offer
 
@@ -705,22 +806,30 @@ async def decline_offer(
     if offer.status != OFFER_STATUS_PENDING:
         raise OfferNotPendingError(offer.status)
 
+    # Loaded BEFORE the mutation and the commit (2026-09-19 review). It used to
+    # be read AFTER, which meant a job that vanished between the two -- or any
+    # transient lookup failure -- raised `JobNotFoundError` and turned an
+    # ALREADY-COMMITTED decline into a 404 on the tablet: the driver sees
+    # "couldn't decline", taps again, and gets a 409 because the row really did
+    # decline. A decline does not move the job row, so reading it early is also
+    # accurate: the envelope shows the same job either way.
+    job = await get_job_or_404(session, tenant_id=tenant_id, job_id=job_id)
+
     offer.status = OFFER_STATUS_DECLINED
     offer.responded_at = datetime.now(UTC)
 
     await session.commit()
     await session.refresh(offer)
 
-    # After the commit, never before -- see `_publish_job_event`. The job row
-    # is re-read rather than carried from above so the envelope shows the
-    # committed state; a declined offer does not move the job, but the desk
-    # still needs to see the pool shrink in real time.
-    job = await get_job_or_404(session, tenant_id=tenant_id, job_id=job_id)
+    # After the commit, never before -- see `_publish_job_event`. Desk only:
+    # the only driver this concerns is the one who just declined, and they hold
+    # the 200 response. Pushing it back would buy them nothing and cost a full
+    # refresh burst.
     await _publish_job_event(
         session,
         event_type=EVENT_OFFER_DECLINED,
         tenant_id=tenant_id,
-        driver_id=offer.driver_id,
+        driver_id=None,
         job=job,
         offer=offer,
     )
@@ -822,5 +931,6 @@ async def cancel_job(session: AsyncSession, *, tenant_id: str, job_id: str) -> J
             driver_id=offer.driver_id,
             job=job,
             offer=offer,
+            to_tenant=False,
         )
     return job

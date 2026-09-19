@@ -321,12 +321,22 @@ async def live(websocket: WebSocket) -> None:
 
     **Driver branch** (any role outside `_DISPATCH_ROLES`): subscribes to the
     connecting user's own id (`sub` from their token) and receives only
-    events on offers addressed to them — identical, deliberately and to the
-    letter, to what this route did before the dispatch branch existed. A
-    deployed tablet must never start hearing another driver's job traffic:
-    the Android app applies no client-side filter and updates on the
-    DRIVERS' schedule, so a server-side widening here would be a tenant-data
-    leak on devices nobody can patch. `tests/test_jobs.py` pins it.
+    events on offers addressed to them — the same channel, keyed the same
+    way, as before the dispatch branch existed. A deployed tablet must never
+    start hearing another driver's job traffic: the Android app applies no
+    client-side filter and updates on the DRIVERS' schedule, so a
+    server-side widening here would be a tenant-data leak on devices nobody
+    can patch. `tests/test_jobs.py` pins it.
+
+    The channel is only half of that promise, and the review of 2026-09-19
+    caught the other half missing. The VOLUME on it matters just as much: a
+    deployed tablet cannot decode this envelope, so it answers every single
+    frame with a full `refresh()` — one jobs list plus one offers call per
+    listed job. `app.services.jobs._publish_job_event` is therefore the place
+    that decides who hears what, and it addresses a driver only for a new
+    offer or for the server killing an offer of theirs that they did not act
+    on. The echo of a driver's own accept/decline goes to the desk only, so
+    no driver's frame count went up for a lifecycle they drive themselves.
 
     **Dispatch branch** (`owner`/`admin`/`dispatcher`): subscribes to the
     tenant channel and receives every job event in the tenant. These roles
