@@ -42,7 +42,14 @@ export function RatingTab({ tripId, driverId }: RatingTabProps) {
   // attributed to a different driver cannot surface on this driver's trip.
   const ratingsQuery = useRatingsQuery({ trip_id: tripId, driver_id: driverId, limit: 1 });
 
-  if (ratingsQuery.isLoading) {
+  // `useRatingsQuery` sets `placeholderData: (prev) => prev` (it is shared with
+  // the driver page's paged ratings table, where holding the previous page
+  // through a page change is the point). Here the query key varies by trip id,
+  // so on trip -> trip navigation `data` briefly still holds the PREVIOUS
+  // trip's page: rendering it would put another trip's stars and comment under
+  // this trip's header. A placeholder is not an answer about this trip, so it
+  // is treated exactly like loading.
+  if (ratingsQuery.isLoading || ratingsQuery.isPlaceholderData) {
     return <Skeleton className="h-24 w-full" />;
   }
 
@@ -56,7 +63,23 @@ export function RatingTab({ tripId, driverId }: RatingTabProps) {
     );
   }
 
-  const rating = ratingsQuery.data?.items[0];
+  // The `trip_id` filter is what makes `items[0]` this trip's rating, so the
+  // row is checked against the trip in view rather than trusted: if the param
+  // is ever dropped, renamed or ignored (an older backend that does not know
+  // the filter answers 200 with the driver's most recent rating, not 422),
+  // `items[0]` is some other trip's rating. Showing it under this trip's
+  // header is precisely the wrong answer this tab exists to stop, so a
+  // mismatch is surfaced, never rendered as this trip's rating.
+  const row = ratingsQuery.data?.items[0];
+  const rating = row && row.trip_id === tripId ? row : undefined;
+
+  if (row && !rating) {
+    return (
+      <ErrorBanner
+        message={`GET /v1/ratings?trip_id=${tripId} answered with the rating for trip ${row.trip_id}. That is not this trip's rating, so it is not shown -- the filter is being ignored (an older backend without the trip_id filter does exactly this).`}
+      />
+    );
+  }
 
   if (!rating) {
     return <EmptyState title="No rating recorded" description="No rating references this trip yet." />;

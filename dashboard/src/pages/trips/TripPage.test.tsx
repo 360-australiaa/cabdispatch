@@ -15,8 +15,8 @@ startMockServer();
  * Full-page tests for `/trips/:tripId` (dashboard command-centre plan §7).
  * Covers: header render (driver/vehicle links, status, payment method),
  * every tab's happy path with realistic MSW data, a defensive fallback
- * (ratings has no `trip_id` filter so the Rating tab must degrade to an
- * honest "no rating recorded" rather than crash), and a non-owner
+ * (a trip with no rating: the Rating tab must degrade to an honest "no
+ * rating recorded" rather than crash), and a non-owner
  * (dispatcher) seeing Edit/Delete disabled with a tooltip.
  */
 

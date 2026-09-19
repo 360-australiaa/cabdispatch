@@ -293,8 +293,11 @@ async def test_ratings_list_filters_by_trip_id_and_stays_tenant_scoped(client, s
     scoped = await client.get("/v1/ratings", params={"trip_id": wanted}, headers=admin)
     assert scoped.status_code == 200, scoped.text
     body = scoped.json()
-    # `total` must be the filtered count, not the tenant's 3 ratings: the tab
-    # reads `total` to decide whether the answer it shows is complete.
+    # `total` must be the filtered count, not the tenant's 3 ratings: a `total`
+    # counted over unfiltered rows would silently disagree with `items` (the
+    # endpoint's own docstring calls that out), and the dashboard's ratings
+    # table pages on it. The trip page's Rating tab does not read `total` at
+    # all -- it reads `items[0]` and checks that row's `trip_id`.
     assert body["total"] == 1
     assert [item["trip_id"] for item in body["items"]] == [wanted]
     assert body["items"][0]["stars"] == 3
