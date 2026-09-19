@@ -39,28 +39,107 @@ enum class PositionPublishOutcome {
     TRANSPORT_FAILURE,
 
     /**
-     * The server does not know this vehicle id (`404`). This is the ONLY outcome that says the
-     * binding itself is wrong, and the only one worth spending a roster lookup on.
+     * The server does not know this vehicle id (`404`). This outcome says the binding itself is
+     * wrong, and is worth spending a roster lookup on.
      */
     UNKNOWN_VEHICLE,
+
+    /**
+     * The server knows this vehicle but will not accept a position for it from this tablet
+     * (`403`). As of the 2026-09 backend, `POST /v1/fleet/positions` answers `403` for exactly one
+     * situation: ANOTHER driver holds an open shift on the vehicle this tablet is publishing for.
+     * Rare, but real — a relief driver who signed on before the previous one submitted their
+     * shift, or a tablet moved between cars without re-binding.
+     *
+     * Kept distinct from [UNKNOWN_VEHICLE] because the two mean different things and deserve
+     * different words in the log: `404` is "this uuid does not exist any more" (a fleet wipe),
+     * `403` is "this uuid exists and is not yours" (a roster/shift conflict). Kept distinct from
+     * [TRANSPORT_FAILURE] because *that* classification is the defect this outcome exists to fix
+     * — see [classifyPublishError]'s own doc, "The 403 hole" (2026-09-19).
+     */
+    NOT_MY_VEHICLE,
 }
 
 /**
  * Reads a publish failure as an outcome.
  *
- * Only `404` invalidates a binding. A `401` is an expired token (handled by AppContainer's
- * authenticator, retried transparently), a `422` would be a malformed body, and anything else —
- * including no HTTP response at all — is transport. Treating any of those as "the vehicle is gone"
- * would throw away a correct binding over a flat-spot in the mobile signal.
+ * A `401` is an expired token (handled by AppContainer's authenticator, retried transparently), a
+ * `422` would be a malformed body, and anything else — including no HTTP response at all — is
+ * transport. Treating any of those as "the vehicle is gone" would throw away a correct binding over
+ * a flat-spot in the mobile signal.
+ *
+ * ### The 403 hole (closed 2026-09-19)
+ * Until this pass every non-`404` status fell into [PositionPublishOutcome.TRANSPORT_FAILURE],
+ * whose contract is literally "try again next tick, the binding is not implicated" — and
+ * `LivePositionHeartbeat.publishOnce` swallowed the whole thing inside a `runCatching`. So a tablet
+ * that `403`s on EVERY heartbeat for a whole shift was indistinguishable, from inside the app,
+ * from a perfectly healthy one: no log line, no UI, no alert, no recovery, and a dispatcher looking
+ * at a Live Map with a car missing from it and no way to find out why. A permanent condition was
+ * being classified as a transient one. [NOT_MY_VEHICLE] separates them so the heartbeat can at
+ * minimum say so out loud (logging is the only signal that class has — it is deliberately silent to
+ * the driver, see its "Failure handling" doc) and re-resolve the binding, throttled by
+ * [RebindThrottle].
  */
 fun classifyPublishError(error: Throwable): PositionPublishOutcome =
-    if ((error as? HttpException)?.code() == HTTP_NOT_FOUND) {
-        PositionPublishOutcome.UNKNOWN_VEHICLE
-    } else {
-        PositionPublishOutcome.TRANSPORT_FAILURE
+    when ((error as? HttpException)?.code()) {
+        HTTP_NOT_FOUND -> PositionPublishOutcome.UNKNOWN_VEHICLE
+        HTTP_FORBIDDEN -> PositionPublishOutcome.NOT_MY_VEHICLE
+        else -> PositionPublishOutcome.TRANSPORT_FAILURE
     }
 
+private const val HTTP_FORBIDDEN = 403
 private const val HTTP_NOT_FOUND = 404
+
+/**
+ * How often to re-attempt a rego to UUID lookup while the binding is missing or rejected.
+ *
+ * Deliberately far slower than any `HeartbeatCadence` tier: this is a whole fleet-roster fetch, and
+ * the conditions it recovers from (no signal at bind time, a fleet re-seeded mid-shift, another
+ * driver's shift still open on this car) resolve on the scale of minutes, not seconds. 60s means a
+ * wiped-and-restored fleet is back on the dispatcher's map within a minute, without a roster fetch
+ * every 5 seconds all shift.
+ *
+ * Lives here rather than in `LivePositionHeartbeat`'s companion (where it used to) because
+ * [RebindThrottle], the thing that now enforces it, lives here with the rest of the binding logic.
+ */
+internal const val REBIND_INTERVAL_MS = 60_000L
+
+/**
+ * The [REBIND_INTERVAL_MS] gate on roster lookups, as a tiny piece of state with an injected clock.
+ *
+ * ### Why this had to become a real object
+ * `LivePositionHeartbeat.publishIfDue` used to answer `UNKNOWN_VEHICLE` by calling the roster
+ * resolver *immediately, every single time*. That was survivable only because of a second defect:
+ * the heartbeat recorded a failed publish as though it had succeeded, so the cadence timer pushed
+ * the next attempt 5–120s away and the roster fetches were incidentally spaced out. Fixing that
+ * (a failed publish must NOT reset the cadence — see `HeartbeatScheduler.recordAttempt`) removes
+ * the accidental spacing, and a tablet 403-ing or 404-ing on every tick would otherwise hammer
+ * `GET /v1/fleet/vehicles` at the poll cadence for the rest of the shift. The heartbeat's own
+ * failure backoff already limits publish attempts; this limits the much more expensive roster
+ * fetch on top of that, at the interval the class doc has claimed all along.
+ *
+ * Pure and clock-injected, for the same reason [matchVehicleUuid] and [classifyPublishError] are
+ * pure: it is the part with an edge case worth pinning in a unit test (`VehicleBindingTest`), and
+ * the coroutine around it has none.
+ */
+internal class RebindThrottle(private val nowMs: () -> Long = System::currentTimeMillis) {
+
+    private var lastAttemptAtMs: Long? = null
+
+    /** `true` when no lookup has been attempted yet (the first `403`/`404` of a shift recovers
+     * immediately, as it always did), or when [REBIND_INTERVAL_MS] has elapsed since the last one. */
+    fun shouldAttempt(): Boolean {
+        val last = lastAttemptAtMs
+        return last == null || nowMs() - last >= REBIND_INTERVAL_MS
+    }
+
+    /** Records that a roster lookup was just attempted — success or failure alike. A lookup that
+     * failed to resolve anything cost exactly as much network as one that succeeded, which is what
+     * this interval is rationing. */
+    fun recordAttempt() {
+        lastAttemptAtMs = nowMs()
+    }
+}
 
 /**
  * Picks the fleet-vehicle UUID for [rego] out of a roster page.

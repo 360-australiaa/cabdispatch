@@ -4,7 +4,9 @@ import au.com.threesixty.cabdispatch.data.remote.VehicleDto
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.HttpException
 import retrofit2.Response
@@ -72,6 +74,18 @@ class VehicleBindingTest {
     @Test
     fun `404 means the server does not know this vehicle`() {
         assertEquals(PositionPublishOutcome.UNKNOWN_VEHICLE, classifyPublishError(httpError(404)))
+    }
+
+    /**
+     * The 403 hole (2026-09-19). The backend answers `403` on `POST /v1/fleet/positions` when
+     * another driver holds an open shift on this vehicle. Classified as TRANSPORT_FAILURE -- whose
+     * contract is "try again next tick, the binding is not implicated" -- a tablet could 403 on
+     * every heartbeat of an entire shift and be indistinguishable from a healthy one: no log, no
+     * UI, no recovery. It must be its own outcome so the heartbeat can say so and re-resolve.
+     */
+    @Test
+    fun `403 means this vehicle is not ours, not a transport blip`() {
+        assertEquals(PositionPublishOutcome.NOT_MY_VEHICLE, classifyPublishError(httpError(403)))
     }
 
     /** An expired token is refreshed by the auth interceptor; it says nothing about the binding. */
@@ -188,5 +202,60 @@ class VehicleBindingTest {
     fun `the session's own rego is never overwritten, only the uuid`() {
         val healed = session.copy(vehicleId = "khi-01") // driver typed lowercase
         assertEquals("uuid-khi-v2", decideVehicleRebind(healed, "uuid-khi-v2", "KHI-01"))
+    }
+
+    // ---- RebindThrottle: the roster-fetch rationing (2026-09-19) ----
+    //
+    // A 403/404 on every heartbeat tick used to be spaced out only by accident -- the heartbeat
+    // recorded a failed publish as though it had succeeded, so the cadence timer pushed the next
+    // attempt 5-120s away. Fixing that leaves nothing holding the roster lookup back but this.
+
+    /** A mutable "now", advanced explicitly rather than slept. */
+    private class FakeClock(var nowMs: Long = 0L) {
+        fun advance(byMs: Long) {
+            nowMs += byMs
+        }
+    }
+
+    @Test
+    fun `the first rebind of a shift is attempted immediately`() {
+        val throttle = RebindThrottle { 0L }
+        assertTrue(throttle.shouldAttempt())
+    }
+
+    @Test
+    fun `a second rebind waits out the full rebind interval`() {
+        val clock = FakeClock()
+        val throttle = RebindThrottle { clock.nowMs }
+        throttle.recordAttempt()
+
+        clock.advance(REBIND_INTERVAL_MS - 1)
+        assertFalse("one millisecond short of the 60s interval", throttle.shouldAttempt())
+
+        clock.advance(1L)
+        assertTrue("exactly at the 60s interval", throttle.shouldAttempt())
+    }
+
+    /**
+     * The storm this exists to prevent, stated as a count: a tablet 403-ing on every one of the
+     * heartbeat's 1s poll ticks for ten minutes must cost at most ten whole-fleet roster fetches,
+     * not six hundred. (The heartbeat's own failure backoff means far fewer ticks than this even
+     * reach the throttle in practice; this pins the ceiling regardless of that.)
+     */
+    @Test
+    fun `ten minutes of rejected publishes cannot storm the roster endpoint`() {
+        val clock = FakeClock()
+        val throttle = RebindThrottle { clock.nowMs }
+        var lookups = 0
+
+        repeat(600) {
+            if (throttle.shouldAttempt()) {
+                throttle.recordAttempt()
+                lookups++
+            }
+            clock.advance(1_000L)
+        }
+
+        assertEquals(10, lookups)
     }
 }
