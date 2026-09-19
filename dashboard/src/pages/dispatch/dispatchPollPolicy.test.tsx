@@ -27,7 +27,16 @@ vi.mock("./api", () => ({
 vi.mock("@/pages/driver-engagement/hooks", () => ({
   useDriverOptionsQuery: () => ({ data: [] }),
 }));
-vi.mock("./JobDetailPanel", () => ({ JobDetailPanel: () => null }));
+/** Records the `live` prop the page hands the detail panel -- the panel is
+ * the other half of the same poll policy, and it was the half left on the
+ * connection-based gate. */
+const panelLiveProp = vi.hoisted(() => ({ value: undefined as boolean | undefined }));
+vi.mock("./JobDetailPanel", () => ({
+  JobDetailPanel: ({ live }: { live?: boolean }) => {
+    panelLiveProp.value = live;
+    return null;
+  },
+}));
 vi.mock("./CreateJobModal", () => ({ CreateJobModal: () => null }));
 
 import { listJobs } from "./api";
@@ -96,6 +105,7 @@ describe("Dispatch poll policy", () => {
     localStorage.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
+    panelLiveProp.value = undefined;
   });
 
   /** Let the pending `listJobs` promise settle under fake timers. */
@@ -148,6 +158,67 @@ describe("Dispatch poll policy", () => {
     const polls = vi.mocked(listJobs).mock.calls.length - before;
 
     expect(polls).toBe(0);
+  });
+
+  it("keeps the fast band on the whole page when a delivering socket then dies", async () => {
+    // The trust window exists for the silent-but-open case, where there is no
+    // signal. A close IS the signal: the page must fall back immediately, as
+    // the connection-gated code it replaced did.
+    render(<DispatchPage />, { wrapper });
+    await settle();
+    expect(screen.getByText("Wynyard")).toBeInTheDocument();
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    await settle();
+
+    act(() => socket.onclose?.());
+    await settle();
+
+    const before = vi.mocked(listJobs).mock.calls.length;
+    await advance(10_000);
+    const polls = vi.mocked(listJobs).mock.calls.length - before;
+
+    expect(polls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("gives the detail panel the delivery gate, not the connection gate", async () => {
+    render(<DispatchPage />, { wrapper });
+    await settle();
+
+    // Open the panel by selecting the row.
+    act(() => screen.getByText("Wynyard").click());
+    await settle();
+    expect(panelLiveProp.value).toBe(false);
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    await settle();
+    // Socket open, nothing delivered: the panel watching ONE job move must
+    // still be on the fast band.
+    expect(panelLiveProp.value).toBe(false);
+
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    await settle();
+    expect(panelLiveProp.value).toBe(true);
+  });
+
+  it("does not show a green Live badge over a socket delivering nothing", async () => {
+    render(<DispatchPage />, { wrapper });
+    await settle();
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    await settle();
+
+    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    expect(screen.getByText("Polling")).toBeInTheDocument();
+
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    await settle();
+
+    expect(screen.getByText("Live")).toBeInTheDocument();
   });
 
   it("returns to the fast band when a delivering socket goes silent", async () => {

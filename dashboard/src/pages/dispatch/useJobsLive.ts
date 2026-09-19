@@ -103,6 +103,12 @@ export function useJobsLive(enabled = true) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<JobsLiveState>(enabled ? "connecting" : "disabled");
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
+  // Separate from `lastEventAt` on purpose. `lastEventAt` is informational --
+  // "something arrived on the wire". Only a frame this build actually
+  // UNDERSTOOD and acted on is evidence the feed works for this user, so the
+  // trust window is driven by its own clock. A backend pushing a type we have
+  // never heard of, or a proxy injecting junk, must not buy the slow band.
+  const [lastTrustedFrameAt, setLastTrustedFrameAt] = useState<number | null>(null);
   const [deliveringFrames, setDeliveringFrames] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -110,6 +116,7 @@ export function useJobsLive(enabled = true) {
     if (!enabled) {
       setState("disabled");
       setDeliveringFrames(false);
+      setLastTrustedFrameAt(null);
       return;
     }
 
@@ -143,17 +150,28 @@ export function useJobsLive(enabled = true) {
           // A malformed frame still means the feed is alive; refetch the
           // list rather than crash the handler or ignore a real change.
         }
-        // A frame arrived on *this* user's socket. That -- not the socket
-        // being open -- is what earns the slow poll band; see
-        // `FRAME_TRUST_WINDOW_MS`.
+        // Something arrived on the wire. Recorded for display/diagnostics; it
+        // is NOT what earns the slow poll band -- see below.
         setLastEventAt(Date.now());
-        setDeliveringFrames(true);
         queryClient.invalidateQueries({ queryKey: ["dispatch-jobs"] });
 
         // Unknown or unparseable frame: the list refetch above already covers
         // "something changed", so stop here rather than read a body whose
         // shape this build does not know.
+        //
+        // It also does not earn the slow band. The two halves of this handler
+        // have to agree: we distrust an unknown frame enough to refuse to read
+        // its body, so we cannot simultaneously accept it as proof that the
+        // feed is healthy for this user. Unparseable JSON on a socket is, if
+        // anything, evidence something is WRONG. Only a frame this build
+        // understood and acted on counts; see `FRAME_TRUST_WINDOW_MS`.
         if (!payload || !KNOWN_FRAME_TYPES.has(payload.type)) return;
+
+        // A frame we understood arrived on *this* user's socket. That -- not
+        // the socket being open, and not merely bytes on the wire -- is what
+        // earns the slow poll band.
+        setLastTrustedFrameAt(Date.now());
+        setDeliveringFrames(true);
 
         const jobId = payload.job?.id ?? payload.offer?.job_id;
         if (jobId) {
@@ -162,11 +180,26 @@ export function useJobsLive(enabled = true) {
         }
       };
 
+      // A socket that has errored or closed is delivering nothing, right now
+      // and provably. Leaving `deliveringFrames` set here would be strictly
+      // WORSE than the code this replaced: a socket that dies one second after
+      // its first frame would pin Dispatch to the 30 s band for the rest of
+      // the 90 s trust window, where gating on `state === "open"` fell back to
+      // 3 s the instant the socket left `open`. The trust window exists for
+      // the silent-but-open case, where we have no signal; a close or an error
+      // IS the signal, so it revokes the trust immediately.
+      function revokeFrameTrust() {
+        setDeliveringFrames(false);
+        setLastTrustedFrameAt(null);
+      }
+
       socket.onerror = () => {
         setState("error");
+        revokeFrameTrust();
       };
 
       socket.onclose = () => {
+        revokeFrameTrust();
         if (cancelled) return;
         setState("closed");
         const delay = Math.min(15000, 1000 * 2 ** retryCount);
@@ -189,14 +222,14 @@ export function useJobsLive(enabled = true) {
   // when frames merely stop arriving, so this timer is what returns the page
   // to the fast band on a silent-but-open socket.
   useEffect(() => {
-    if (lastEventAt === null) return;
-    const elapsed = Date.now() - lastEventAt;
+    if (lastTrustedFrameAt === null) return;
+    const elapsed = Date.now() - lastTrustedFrameAt;
     const timer = setTimeout(
       () => setDeliveringFrames(false),
       Math.max(0, FRAME_TRUST_WINDOW_MS - elapsed),
     );
     return () => clearTimeout(timer);
-  }, [lastEventAt]);
+  }, [lastTrustedFrameAt]);
 
   return { state, lastEventAt, deliveringFrames };
 }

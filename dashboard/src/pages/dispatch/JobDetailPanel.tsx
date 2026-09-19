@@ -29,14 +29,23 @@ const DISPATCH_ROLES = new Set(["owner", "admin", "dispatcher"]);
 
 /**
  * Live updates come from the parent page's `WS /v1/jobs/live` subscription
- * (`useJobsLive`), which invalidates this panel's two queries on every
- * frame. `live` says whether that socket is open: when it is, both queries
- * drop to a slow safety poll (the feed is driver-scoped on an older backend,
- * so an open socket can be quiet); when it is not, they poll at the shared
- * `POLL.REALTIME` band the list uses -- same job, same states, no reason for
- * the panel to run faster than the list it was opened from. Both stop
- * entirely while the tab is hidden (see `lib/pollIntervals.ts`) and once the
- * job is terminal.
+ * (`useJobsLive`), which invalidates this panel's two queries on every frame.
+ *
+ * `live` says whether that socket is actually DELIVERING frames to this user
+ * (`useJobsLive().deliveringFrames`) -- deliberately not whether it is open.
+ * The jobs feed is driver-keyed (`app/api/v1/jobs.py::live` subscribes the
+ * connecting user's own id), so a dispatcher's socket opens, authenticates
+ * and then never delivers anything; keying on `open` dropped this panel from
+ * a 3 s poll to a 30 s one in exchange for a feed that fed it nothing. This
+ * is the surface an operator watches a single job move on, second by second,
+ * so that staleness is felt here more sharply than anywhere on the page.
+ *
+ * So: while frames are genuinely arriving, both queries drop to the slow
+ * safety poll; otherwise -- connecting, closed, errored, or open-but-silent
+ * -- they poll at the shared `POLL.REALTIME` band the list uses. Same job,
+ * same states, no reason for the panel to run faster or slower than the list
+ * it was opened from. Both stop entirely while the tab is hidden (see
+ * `lib/pollIntervals.ts`) and once the job is terminal.
  */
 
 export function JobDetailPanel({

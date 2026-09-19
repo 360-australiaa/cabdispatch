@@ -126,6 +126,60 @@ describe("useJobsLive", () => {
     expect(result.current.deliveringFrames).toBe(false);
   });
 
+  it("does not let an unparseable frame earn the slow poll band", () => {
+    // The two halves of this handler have to agree. We distrust junk enough
+    // to refuse to read its body; it cannot also be proof the feed is healthy.
+    const { result } = renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+
+    act(() => socket.send("not json"));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dispatch-jobs"] });
+    expect(result.current.deliveringFrames).toBe(false);
+  });
+
+  it("does not let a frame type this build does not know earn the slow poll band", () => {
+    const { result } = renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+
+    act(() => socket.send(JSON.stringify({ type: "job_cancelled", job: { id: "j9" } })));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dispatch-jobs"] });
+    expect(result.current.deliveringFrames).toBe(false);
+  });
+
+  it("revokes frame trust the moment the socket closes", () => {
+    // A socket that dies one second after its first frame must NOT pin the
+    // page to the 30 s band for the rest of the 90 s trust window -- gating on
+    // `state === "open"` fell back to the fast poll instantly, so anything
+    // slower here would be a regression against the code this replaced.
+    const { result } = renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    expect(result.current.deliveringFrames).toBe(true);
+
+    act(() => socket.onclose?.());
+
+    expect(result.current.state).toBe("closed");
+    expect(result.current.deliveringFrames).toBe(false);
+  });
+
+  it("revokes frame trust the moment the socket errors", () => {
+    const { result } = renderHook(() => useJobsLive(), { wrapper });
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    act(() => socket.send(JSON.stringify({ type: "job_offer", job: { id: "j1" } })));
+    expect(result.current.deliveringFrames).toBe(true);
+
+    act(() => socket.onerror?.());
+
+    expect(result.current.state).toBe("error");
+    expect(result.current.deliveringFrames).toBe(false);
+  });
+
   it("reports error/closed so the page can fall back to polling, and reconnects with backoff", () => {
     const { result } = renderHook(() => useJobsLive(), { wrapper });
     const socket = FakeWebSocket.instances[0];
