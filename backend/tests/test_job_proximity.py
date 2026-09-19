@@ -42,12 +42,15 @@ _ORIGIN_LNG = 151.2093
 def _reset_broadcasters():
     """Both broadcasters touched by this file are module-level singletons
     (see tests/test_jobs.py and tests/test_live_ops.py's identical fixtures)
-    and must be reset between tests."""
-    job_offer_broadcaster._subscribers.clear()
+    and must be reset between tests. `job_offer_broadcaster.reset()` clears
+    BOTH of its maps — since 2026-09-19 it keys subscribers by driver AND by
+    tenant, and clearing `_subscribers` alone would leak half the state into
+    the next test."""
+    job_offer_broadcaster.reset()
     fleet_broadcaster._latest.clear()
     fleet_broadcaster._subscribers.clear()
     yield
-    job_offer_broadcaster._subscribers.clear()
+    job_offer_broadcaster.reset()
     fleet_broadcaster._latest.clear()
     fleet_broadcaster._subscribers.clear()
 

@@ -35,8 +35,13 @@ Role policy:
     distinguishes "driver acting on their own offer" via role alone.
   - `DELETE /{id}` (cancel): restricted to `owner`/`admin`/`dispatcher`, per
     the task brief ("admin/dispatcher only").
-  - `WS /live`: any authenticated tenant user — a driver connects to hear
-    `job_offer` events addressed to their own user id.
+  - `WS /live`: any authenticated tenant user, but WHAT they hear depends on
+    their role (2026-09-19). A driver hears only events addressed to their own
+    user id, exactly as before. An `owner`/`admin`/`dispatcher` — who has no
+    offers of their own and therefore used to sit on a silent socket forever —
+    is subscribed to the tenant-wide channel instead and hears every job event
+    in their tenant. See `live`'s docstring below and the module comment on
+    `app.services.jobs.JobOfferBroadcaster`.
 """
 from __future__ import annotations
 
@@ -312,25 +317,62 @@ async def _authenticate_websocket(websocket: WebSocket) -> WebSocketAuth | None:
 
 @router.websocket("/live")
 async def live(websocket: WebSocket) -> None:
-    """Driver-side live feed: pushes every `job_offer` event addressed to the
-    connecting user's own id (i.e. `sub` from their token — a driver only
-    ever receives offers made to them, see
-    `app.services.jobs.create_job_and_broadcast`). Backed by the in-process
-    pub/sub in `app.services.jobs.JobOfferBroadcaster` (see that class's
-    docstring for the Redis swap-in path)."""
+    """Live job feed, with two shapes behind one URL (2026-09-19).
+
+    **Driver branch** (any role outside `_DISPATCH_ROLES`): subscribes to the
+    connecting user's own id (`sub` from their token) and receives only
+    events on offers addressed to them — the same channel, keyed the same
+    way, as before the dispatch branch existed. A deployed tablet must never
+    start hearing another driver's job traffic: the Android app applies no
+    client-side filter and updates on the DRIVERS' schedule, so a
+    server-side widening here would be a tenant-data leak on devices nobody
+    can patch. `tests/test_jobs.py` pins it.
+
+    The channel is only half of that promise, and the review of 2026-09-19
+    caught the other half missing. The VOLUME on it matters just as much: a
+    deployed tablet cannot decode this envelope, so it answers every single
+    frame with a full `refresh()` — one jobs list plus one offers call per
+    listed job. `app.services.jobs._publish_job_event` is therefore the place
+    that decides who hears what, and it addresses a driver only for a new
+    offer or for the server killing an offer of theirs that they did not act
+    on. The echo of a driver's own accept/decline goes to the desk only, so
+    no driver's frame count went up for a lifecycle they drive themselves.
+
+    **Dispatch branch** (`owner`/`admin`/`dispatcher`): subscribes to the
+    tenant channel and receives every job event in the tenant. These roles
+    have no offers of their own, so under the old driver-only keying their
+    socket connected and then stayed PERMANENTLY SILENT — the state
+    `dashboard/src/pages/dispatch/useJobsLive.ts` describes in its own
+    comment and keeps a safety poll for.
+
+    The role gate is read straight off the token, the same by-hand check
+    `app.api.v1.live_ops.live` and `app.api.v1.duress` make (a `WebSocket`
+    route cannot take `Depends(require_role(...))`). Unlike those two this is
+    a BRANCH, not a rejection: both kinds of user are still welcome here.
+
+    Backed by the in-process pub/sub in
+    `app.services.jobs.JobOfferBroadcaster` (see that class's docstring for
+    the Redis swap-in path)."""
     auth = await _authenticate_websocket(websocket)
     if auth is None:
         # rejected + closed inside _authenticate_websocket — that now includes
         # the "token has no tenant scope" case, which the shared rule refuses.
         return
 
-    driver_id = auth.payload.get("sub")
-    if not driver_id:
+    is_dispatch = auth.payload.get("role") in _DISPATCH_ROLES
+
+    subject = auth.payload.get("sub")
+    if not subject:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token has no subject")
         return
 
     await websocket.accept()
-    queue = await jobs_service.job_offer_broadcaster.subscribe(driver_id)
+
+    broadcaster = jobs_service.job_offer_broadcaster
+    if is_dispatch:
+        queue = await broadcaster.subscribe_tenant(auth.tenant_id)
+    else:
+        queue = await broadcaster.subscribe(subject)
     try:
         # D10: rechecks revocation every poll tick for the life of the
         # connection, not just at the handshake — a driver logged out (or
@@ -340,4 +382,7 @@ async def live(websocket: WebSocket) -> None:
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
-        await jobs_service.job_offer_broadcaster.unsubscribe(driver_id, queue)
+        if is_dispatch:
+            await broadcaster.unsubscribe_tenant(auth.tenant_id, queue)
+        else:
+            await broadcaster.unsubscribe(subject, queue)

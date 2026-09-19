@@ -41,7 +41,16 @@ pytestmark = pytest.mark.asyncio
 async def _tenant_and_admin(session) -> tuple[str, str]:
     """A tenant plus an `admin` user in it. Admin is used for every route
     because it is the only role accepted by all four: `duress` requires a
-    dispatch-side role, and `messages`/`jobs` accept a dispatcher fine."""
+    dispatch-side role, and `messages`/`jobs` accept a dispatcher fine.
+
+    Note for `jobs` (changed 2026-09-19): `/v1/jobs/live` now BRANCHES on the
+    token's role — an admin is subscribed to the tenant-wide channel instead
+    of to their own (non-existent) driver channel. That changes what an admin
+    *receives*; it does not change whether the handshake is accepted, which is
+    all this file asserts, so admin remains the right role here and the
+    positive control below still means what it says. What an admin actually
+    receives on that route is covered by
+    `tests/test_jobs.py::test_dispatcher_socket_hears_any_drivers_offer_and_drivers_stay_isolated`."""
     tenant = Tenant(name=f"WS Auth {uuid.uuid4().hex[:8]}", plan="standard")
     session.add(tenant)
     await session.commit()
