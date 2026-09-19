@@ -14,6 +14,7 @@ the sole multi-tenancy enforcement mechanism in this system.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -23,7 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_session
+from app.core.database import AsyncSessionLocal, get_session
 from app.core.security import get_current_tenant_id, get_current_user
 from app.models.fleet import Vehicle
 from app.models.shift import Shift
@@ -82,6 +83,8 @@ from app.services.trips import (
 )
 
 router = APIRouter(prefix="/v1/trips", tags=["trips"])
+
+logger = logging.getLogger("cab_dispatch.trips")
 
 # Roles permitted to clear ANY trip's review flag and to flag a trip they
 # don't themselves drive, mirroring the _DISPATCH_ROLES convention used by
@@ -776,6 +779,232 @@ async def delete_trip(
 # --- Tick -------------------------------------------------------------------
 
 
+async def _run_tick_advisory_checks(
+    *,
+    tenant_id: str,
+    driver_id: str,
+    vehicle_id: str,
+    shift_id: str | None,
+    points: list[TelemetryPoint],
+) -> None:
+    """The fatigue + compliance-expiry checks that hang off a trip tick, run
+    AFTER the tick's own fare-bearing commit and on a session of their own.
+    Cannot fail the tick endpoint, by contract — same contract, and the same
+    reasoning, as `app.services.lazy_maintenance` (read its NEVER RAISES and
+    ISOLATED SESSION sections; this is that module's pattern applied to the
+    one hook that predates it).
+
+    WHY THE FARE OUTRANKS THE ALERT. These checks are advisory: they raise
+    `FatigueAlert` rows a dispatcher looks at later. The tick is metrology —
+    distance and waiting time accrued by the fare engine against a regulated
+    meter, which cannot be re-derived once lost because the client will not
+    re-send those points (the replay guard in `tick_trip` deliberately
+    no-ops a retry of an already-anchored batch). An advisory check must
+    never be able to delete a measurement.
+
+    THE TRADE, EXPLICITLY: the alert row and the tick are no longer atomic.
+    There are now two commits where there was one, and a crash (or a failed
+    check) between them loses the alert while keeping the fare. That is
+    intended, but the cost is NOT uniform across the checks, and an earlier
+    version of this note overstated it. Precisely:
+
+      * shift_duration_exceeded and no_break_taken DO recover. Both are a
+        pure function of how long the shift has been open, both dedup per
+        shift, and both are re-run off `POST /v1/fleet/positions` (~every 5s
+        per on-shift tablet) and off `GET /v1/shifts` — see
+        `app.services.lazy_maintenance._run_shift_checks`. A row lost here is
+        re-raised on the next beat, seconds later.
+      * The driver-licence/authority and vehicle-registration/insurance
+        expiry alerts DO recover, for the same reason: the condition is a
+        date fact that stays true until the document is renewed, the dedup is
+        "an unacknowledged alert of this kind already exists", and
+        `lazy_maintenance` re-runs both passes off those same two endpoints.
+      * speed_exceeded does NOT recover. It is LOST FOR GOOD. It is
+        deliberately neither deduped nor idempotent — it is evidence about
+        one individual telemetry point ("every telemetry point over threshold
+        raises its own alert", `app.services.fatigue`) — and nothing else in
+        the system will ever re-raise it: `lazy_maintenance` explicitly does
+        NOT run `check_speed` off the position heartbeat (its WHAT IS
+        DELIBERATELY *NOT* CHECKED HERE section says why), no shift read runs
+        it, and the tablet cannot re-send the points because `tick_trip`'s
+        replay guard answers a retry of an already-anchored batch as a no-op.
+        A crash in the window below therefore permanently loses the record
+        that this vehicle was doing >120km/h at that instant.
+
+    That last one is a real, accepted loss, not a deferred one. It is
+    accepted because the alternative is strictly worse on both axes: under
+    the old ordering the SAME failure lost the overspeed alert *as well as*
+    the fare, since the check that raised took the whole transaction with it.
+    Nothing recovers a lost speed alert, but a lost half-kilometre of billed
+    distance is both destroyed metrology and money the operator cannot
+    invoice. Between two unrecoverable losses, keep the one that is regulated
+    measurement.
+
+    EACH CHECK IS INDIVIDUALLY NON-FATAL, AND EACH RUNS IN ITS OWN SAVEPOINT.
+    One failing check must not suppress the others, so each is wrapped on its
+    own rather than the whole block being wrapped once. A bare `try/except`
+    is not enough to deliver that, though: a check that fails on a FLUSH
+    (`IntegrityError` against the partial unique index on `fatigue_alerts`, a
+    NOT NULL, a FK) leaves the whole transaction in a must-rollback state, so
+    every later check raises `PendingRollbackError` on first use and the final
+    `commit()` fails too -- "one failure cannot suppress the others" would
+    hold only for the benign errors that leave the transaction usable. Each
+    check therefore runs inside `begin_nested()`: the failure rolls back to
+    that check's SAVEPOINT only, the transaction is usable again immediately,
+    and alerts already added by EARLIER checks in this tick survive. Same
+    idiom, and the same reason, as
+    `app.services.fatigue._insert_alert_if_new`. Failures are logged at
+    ERROR, never swallowed silently.
+
+    POOL HEADROOM (checked 2026-09-19). Holding this session while the
+    request session is still open means a tick occupies TWO pooled
+    connections, not one. `app.core.database` builds the engine on
+    SQLAlchemy's defaults, i.e. `AsyncAdaptedQueuePool` with pool_size=5 and
+    max_overflow=10 -- a hard ceiling of 15 connections -- in ONE uvicorn
+    worker (docker-compose pins the worker count to one, deliberately and
+    permanently; see the comment there). So the ceiling on genuinely
+    concurrent ticks drops from 15 to 7, and the position heartbeat
+    (`app.services.lazy_maintenance`) and live-traffic refresh
+    (`app.services.live_traffic`) already take a second connection the same
+    way on their own hot paths. Two things keep that comfortable: this
+    session is opened only AFTER the fare commit, so it never overlaps the
+    fare-bearing transaction's critical section, and it is short-lived (a
+    handful of small statements, no external I/O). If this path is ever
+    measured against pool exhaustion, the fix is to size the pool explicitly
+    at the engine rather than to move these checks back inside the fare
+    transaction -- that ordering is what this function exists to prevent.
+
+    OWN SESSION, and only plain scalars passed in. Everything this function
+    needs arrives as a `str`/`None`/`TelemetryPoint` local snapshotted by the
+    caller from the already-loaded `Trip` — no ORM object bound to the
+    request session crosses this boundary. That matters: a failure in here
+    ends with an uncommitted session being closed, and had that been the
+    request's own session the implicit rollback would have EXPIRED `trip`,
+    whose attributes FastAPI is about to read synchronously while
+    serializing `TripRead` — a lazy reload outside the greenlet context,
+    i.e. `MissingGreenlet`, i.e. a 500 on the exact path this function exists
+    to protect. That is not a hypothetical either: it is the production
+    incident recorded in `app.services.lazy_maintenance`'s docstring
+    (request_id cd2486bb63374e4384e20cdde6dc3558).
+    """
+    try:
+        async with AsyncSessionLocal() as check_session:
+            for point in points:
+                try:
+                    # SAVEPOINT per check -- see EACH CHECK IS INDIVIDUALLY
+                    # NON-FATAL above. Rolling back to it is what makes the
+                    # `except` below survivable for a failure that has
+                    # invalidated the transaction.
+                    async with check_session.begin_nested():
+                        await fatigue_service.check_speed(
+                            check_session,
+                            tenant_id=tenant_id,
+                            driver_id=driver_id,
+                            shift_id=shift_id,
+                            speed_kmh=point.speed_kmh,
+                            ts=point.ts,
+                        )
+                except Exception:  # broad on purpose — see this function's docstring
+                    logger.exception(
+                        "tick advisory check_speed failed for driver %s (tenant %s); the "
+                        "tick's fare is already committed and is unaffected",
+                        driver_id,
+                        tenant_id,
+                    )
+
+            if shift_id is not None:
+                try:
+                    async with check_session.begin_nested():
+                        shift = await fatigue_service.get_shift_or_none(
+                            check_session, tenant_id=tenant_id, shift_id=shift_id
+                        )
+                except Exception:  # broad on purpose — see this function's docstring
+                    logger.exception(
+                        "tick advisory shift lookup failed for shift %s (tenant %s)",
+                        shift_id,
+                        tenant_id,
+                    )
+                    shift = None
+                if shift is not None:
+                    try:
+                        async with check_session.begin_nested():
+                            await fatigue_service.check_shift_duration(
+                                check_session, tenant_id=tenant_id, shift=shift
+                            )
+                    except Exception:  # broad on purpose — see this function's docstring
+                        logger.exception(
+                            "tick advisory check_shift_duration failed for shift %s (tenant %s)",
+                            shift_id,
+                            tenant_id,
+                        )
+                    try:
+                        async with check_session.begin_nested():
+                            await fatigue_service.check_no_break_taken(
+                                check_session, tenant_id=tenant_id, shift=shift
+                            )
+                    except Exception:  # broad on purpose — see this function's docstring
+                        logger.exception(
+                            "tick advisory check_no_break_taken failed for shift %s (tenant %s)",
+                            shift_id,
+                            tenant_id,
+                        )
+
+            try:
+                async with check_session.begin_nested():
+                    driver_result = await check_session.execute(
+                        select(User).where(User.id == driver_id, User.tenant_id == tenant_id)
+                    )
+                    driver = driver_result.scalar_one_or_none()
+                    if driver is not None:
+                        await compliance_expiry_service.run_driver_compliance_checks(
+                            check_session, tenant_id=tenant_id, driver=driver
+                        )
+            except Exception:  # broad on purpose — see this function's docstring
+                logger.exception(
+                    "tick advisory driver compliance checks failed for driver %s (tenant %s)",
+                    driver_id,
+                    tenant_id,
+                )
+
+            try:
+                async with check_session.begin_nested():
+                    vehicle_result = await check_session.execute(
+                        select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.tenant_id == tenant_id)
+                    )
+                    vehicle = vehicle_result.scalar_one_or_none()
+                    if vehicle is not None:
+                        await compliance_expiry_service.run_vehicle_compliance_checks(
+                            check_session, tenant_id=tenant_id, vehicle=vehicle
+                        )
+            except Exception:  # broad on purpose — see this function's docstring
+                logger.exception(
+                    "tick advisory vehicle compliance checks failed for vehicle %s (tenant %s)",
+                    vehicle_id,
+                    tenant_id,
+                )
+
+            await check_session.commit()
+    except Exception:  # broad on purpose — see this function's docstring
+        # Outer net: session open/commit itself failing, or anything the
+        # per-check wrappers above did not sit around. The tick's fare is
+        # already committed and stays committed; only the alerts are lost.
+        logger.exception(
+            "tick advisory checks failed wholesale for trip driver %s / vehicle %s (tenant %s); "
+            "the tick's fare is already committed and is unaffected, but no alert was raised "
+            "on this tick",
+            driver_id,
+            vehicle_id,
+            tenant_id,
+        )
+        # Nothing to roll back on the REQUEST session here -- the checks above
+        # ran entirely on `check_session`, which this function opened, owns,
+        # and whose uncommitted work is discarded when the `async with` block
+        # exits. Same reasoning, spelled out the same way, as the except block
+        # in `app.services.lazy_maintenance.run_checks_for_vehicle`. Rolling
+        # the request session back would be actively harmful: it would expire
+        # `trip`, which FastAPI is about to serialize.
+
+
 @router.patch("/{trip_id}/tick", response_model=TripRead)
 async def tick_trip(
     trip_id: str,
@@ -788,17 +1017,24 @@ async def tick_trip(
     every tick, via `app.services.fatigue`: a per-point speed_exceeded check
     against each telemetry point in this batch, and (if the trip is attached
     to a shift) a shift_duration_exceeded check against that shift's elapsed
-    open time. Both write FatigueAlert rows into the same transaction as the
-    tick itself — see that module for thresholds/simplifications and
-    `app/api/v1/fatigue_alerts.py` for how they're surfaced/acknowledged.
+    open time. Both write FatigueAlert rows on a SEPARATE session, committed
+    AFTER — and never in the same transaction as — the tick's own commit
+    (2026-09-19; it used to be one transaction, and that is precisely the bug
+    `_run_tick_advisory_checks` below exists to fix). See that module for
+    thresholds/simplifications and `app/api/v1/fatigue_alerts.py` for how
+    they're surfaced/acknowledged.
 
     Also runs driver-license/authority and vehicle-registration/insurance
     compliance-expiry checks (blueprint 7.2.3/7.2.4/10.1) via
-    `app.services.compliance_expiry`, in the same transaction — this is the
-    "wherever fatigue checks are already triggered" call site for that pass.
-    Fails open (silently skips) if `trip.driver_id`/`trip.vehicle_id` don't
-    resolve to a real row, same reasoning as the shift lookup above (Trip's
-    cross-domain refs are unconstrained — see app.models.trips)."""
+    `app.services.compliance_expiry` — this is the "wherever fatigue checks
+    are already triggered" call site for that pass. Fails open (silently
+    skips) if `trip.driver_id`/`trip.vehicle_id` don't resolve to a real row,
+    same reasoning as the shift lookup above (Trip's cross-domain refs are
+    unconstrained — see app.models.trips).
+
+    All of those checks now run AFTER the tick's own commit and on their own
+    session — see `_run_tick_advisory_checks` below for why, and for the
+    atomicity trade that buys."""
     trip = await _get_trip_or_404(trip_id, tenant_id, session)
     _require_trip_write_access(current_user, driver_id=trip.driver_id, action="tick")
     if trip.status != TRIP_STATUS_OPEN:
@@ -839,38 +1075,34 @@ async def tick_trip(
     except UnknownTariffError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    for point in accepted_points:
-        await fatigue_service.check_speed(
-            session,
-            tenant_id=tenant_id,
-            driver_id=trip.driver_id,
-            shift_id=trip.shift_id,
-            speed_kmh=point.speed_kmh,
-            ts=point.ts,
-        )
-
-    if trip.shift_id is not None:
-        shift = await fatigue_service.get_shift_or_none(session, tenant_id=tenant_id, shift_id=trip.shift_id)
-        if shift is not None:
-            await fatigue_service.check_shift_duration(session, tenant_id=tenant_id, shift=shift)
-            await fatigue_service.check_no_break_taken(session, tenant_id=tenant_id, shift=shift)
-
-    driver_result = await session.execute(
-        select(User).where(User.id == trip.driver_id, User.tenant_id == tenant_id)
-    )
-    driver = driver_result.scalar_one_or_none()
-    if driver is not None:
-        await compliance_expiry_service.run_driver_compliance_checks(session, tenant_id=tenant_id, driver=driver)
-
-    vehicle_result = await session.execute(
-        select(Vehicle).where(Vehicle.id == trip.vehicle_id, Vehicle.tenant_id == tenant_id)
-    )
-    vehicle = vehicle_result.scalar_one_or_none()
-    if vehicle is not None:
-        await compliance_expiry_service.run_vehicle_compliance_checks(session, tenant_id=tenant_id, vehicle=vehicle)
-
+    # --- FARE COMMIT BOUNDARY (2026-09-19) -----------------------------
+    # This commit used to sit BELOW the advisory fatigue/compliance checks,
+    # which meant every one of those checks ran inside the same, still-open
+    # transaction as the tick. Any exception out of any of them unwound the
+    # request and rolled the tick back with it, so the distance and waiting
+    # time `apply_tick` had just accrued were silently destroyed — on a
+    # metrology-regulated meter that is destroyed measurement data, and the
+    # tablet had already moved on past those telemetry points (they are at or
+    # before the trip's continuity anchor now, so the client's retry is
+    # answered by the replay guard above and never re-bills them). It was not
+    # hypothetical: `app.services.compliance_expiry._unacknowledged_alert_exists`
+    # used `scalar_one_or_none()` over a filter with no uniqueness guard, so a
+    # driver or vehicle with two unacknowledged alerts of one kind raised
+    # `MultipleResultsFound` from inside `run_*_compliance_checks` and took
+    # that tick's fare with it (that query is fixed too, but being ONE bug
+    # away from losing fare is not an acceptable structure for this path).
+    #
+    # Fare first, advisory second. Nothing between `apply_tick` and this line.
     await session.commit()
     await session.refresh(trip)
+
+    await _run_tick_advisory_checks(
+        tenant_id=tenant_id,
+        driver_id=trip.driver_id,
+        vehicle_id=trip.vehicle_id,
+        shift_id=trip.shift_id,
+        points=list(accepted_points),
+    )
     return trip
 
 

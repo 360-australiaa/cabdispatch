@@ -3737,3 +3737,304 @@ async def test_owner_fare_correction_sets_total_and_keeps_the_audit_trail(client
     assert Decimal(body["gst_component"]) == round_half_up(Decimal("59.03") / Decimal(11))
     assert "fare-of-record" in body["review_notes"]
     assert "-> 59.03" in body["review_notes"]
+
+
+# --- tick: advisory checks must never cost accrued fare ---------------------
+# Workstream (2026-09-19): `PATCH /v1/trips/{id}/tick` used to run its
+# fatigue/compliance side checks on the REQUEST session, all of them BEFORE the
+# `session.commit()` that persists the tick. Any check that raised unwound the
+# whole request and took the distance and waiting time `apply_tick` had just
+# accrued with it — destroyed metrology data on a regulated meter, and not
+# recoverable by a client retry (the replay guard answers a retry of an
+# already-anchored batch as a no-op). See `_run_tick_advisory_checks` in
+# `app/api/v1/trips.py`.
+#
+# These are STRUCTURAL tests: they say nothing about what any individual check
+# decides, only that the fare is already durable by the time any of them runs.
+# Each one forces exactly one advisory check to raise and then asserts the tick
+# still answered 200 AND that the distance/waiting is in the DATABASE (read
+# back on a fresh session, not from the response body — the response could in
+# principle be serialized from an object whose transaction never landed).
+#
+# NEGATIVE CONTROL (recorded 2026-09-19): with the commit moved back below the
+# checks, every one of these fails with a 500 and a trip still at distance_m=0.
+
+
+_ADVISORY_CHECKS = [
+    ("app.services.fatigue", "check_speed"),
+    ("app.services.fatigue", "get_shift_or_none"),
+    ("app.services.fatigue", "check_shift_duration"),
+    ("app.services.fatigue", "check_no_break_taken"),
+    ("app.services.compliance_expiry", "run_driver_compliance_checks"),
+    ("app.services.compliance_expiry", "run_vehicle_compliance_checks"),
+]
+
+
+async def _advisory_fixture(client: AsyncClient, session: AsyncSession) -> tuple[dict, dict]:
+    """A trip on which EVERY advisory check in `_ADVISORY_CHECKS` is actually
+    reached. This matters more than it looks: the default `_trip_payload` above
+    carries `shift_id=None` and random `driver_id`/`vehicle_id` uuids, so the
+    shift-duration, no-break, driver-compliance and vehicle-compliance checks
+    are all skipped before they are ever called — a test built on it would pass
+    identically against the unfixed code, proving nothing. So this builds a real
+    open shift, attributes the trip to the authenticated driver's own real User
+    row, and points it at a real Vehicle row."""
+    headers = await auth_headers(client, session, role="driver")
+    tenant_id = await _tenant_of(client, headers)
+    tariff = await _seed_tariff(session, tenant_id=tenant_id)
+    driver_id = _user_id_of(headers)
+
+    vehicle = Vehicle(tenant_id=tenant_id, rego=f"AD-{uuid.uuid4().hex[:6].upper()}")
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+
+    shift_resp = await client.post(
+        "/v1/shifts/start",
+        json={
+            "driver_id": driver_id,
+            "vehicle_id": vehicle.id,
+            "start_at": (datetime.now(UTC) - timedelta(hours=2)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert shift_resp.status_code == 201, shift_resp.text
+
+    trip = await _create_trip(
+        client,
+        headers,
+        tariff.id,
+        driver_id=driver_id,
+        vehicle_id=vehicle.id,
+        shift_id=shift_resp.json()["id"],
+        start_lat=-33.8688,
+        start_lng=151.2093,
+    )
+    return headers, trip
+
+
+@pytest.mark.parametrize("module_name,attr", _ADVISORY_CHECKS)
+async def test_tick_fare_survives_a_failing_advisory_check(
+    client: AsyncClient, session: AsyncSession, monkeypatch, module_name: str, attr: str
+):
+    import importlib
+
+    headers, trip = await _advisory_fixture(client, session)
+
+    module = importlib.import_module(module_name)
+    assert hasattr(module, attr), f"{module_name}.{attr} no longer exists — this test is stale"
+    called = {"hit": False}
+
+    async def _boom(*args, **kwargs):
+        called["hit"] = True
+        raise RuntimeError(f"forced failure in {module_name}.{attr}")
+
+    monkeypatch.setattr(module, attr, _boom)
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.8600,
+                    "lng": 151.2093,
+                    "speed_kmh": 40,
+                    "ts": (t0 + timedelta(seconds=60)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+
+    # Reachability guard for LESSON 1: if the forced failure was never even
+    # called, this test proves nothing about the ordering it claims to test.
+    assert called["hit"], f"{module_name}.{attr} was never reached — fixture does not exercise it"
+    assert resp.status_code == 200, resp.text
+
+    # The fare must be on DISK, read back on a session that knows nothing about
+    # the request's transaction.
+    await session.commit()  # drop this session's own snapshot before re-reading
+    row = (
+        await session.execute(select(Trip).where(Trip.id == trip["id"]))
+    ).scalar_one()
+    await session.refresh(row)
+    assert row.distance_m > 0, "the tick's accrued distance was rolled back by a failing advisory check"
+    assert row.moving_s == 60
+    assert Decimal(row.dist_amount) > 0
+
+
+async def test_tick_fare_survives_duplicate_unacknowledged_compliance_rows(
+    client: AsyncClient, session: AsyncSession
+):
+    """The confirmed real-world trigger, end to end, with nothing monkeypatched.
+
+    Two unacknowledged alerts of the SAME kind for the same driver made
+    `compliance_expiry._unacknowledged_alert_exists` raise
+    `MultipleResultsFound` (it used `scalar_one_or_none()` over a filter with
+    no uniqueness guard). On the old ordering that exception rolled the tick
+    back and the fare for that batch was gone.
+    """
+    from app.models.fatigue_alert import FATIGUE_ALERT_LICENSE_EXPIRED, FatigueAlert
+    from app.models.user import User
+
+    headers, trip = await _advisory_fixture(client, session)
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    # Make the driver's licence genuinely expired, so the compliance check gets
+    # as far as the dedup lookup rather than returning early.
+    driver = (
+        await session.execute(select(User).where(User.id == driver_id))
+    ).scalar_one()
+    driver.driver_license_expiry = date(2020, 1, 1)
+
+    # Two rows, same kind, same driver, both unacknowledged. Nothing in the
+    # schema forbids this (the only uniqueness guard on fatigue_alerts is a
+    # partial index over the two bounded-per-shift fatigue kinds — see
+    # app.models.fatigue_alert.__table_args__), and it is an observed
+    # production condition.
+    for _ in range(2):
+        session.add(
+            FatigueAlert(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                kind=FATIGUE_ALERT_LICENSE_EXPIRED,
+                triggered_at=datetime.now(UTC),
+                details_json={"expiry_date": "2020-01-01", "days_remaining": -1},
+                acknowledged=False,
+            )
+        )
+    await session.commit()
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.8600,
+                    "lng": 151.2093,
+                    "speed_kmh": 40,
+                    "ts": (t0 + timedelta(seconds=60)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    await session.commit()
+    row = (
+        await session.execute(select(Trip).where(Trip.id == trip["id"]))
+    ).scalar_one()
+    await session.refresh(row)
+    assert row.distance_m > 0
+    assert row.moving_s == 60
+
+
+async def test_one_advisory_check_failing_its_flush_does_not_suppress_the_later_checks(
+    client: AsyncClient, session: AsyncSession, monkeypatch
+):
+    """`_run_tick_advisory_checks` claims "one failing check must not suppress
+    the others". A plain `try/except` only delivers that for errors that leave
+    the transaction USABLE. The interesting failures do not: an advisory check
+    that blows up on a FLUSH (IntegrityError against the partial unique index
+    on fatigue_alerts, a NOT NULL, a FK) leaves the session in a
+    must-rollback state, so every later check dies on `PendingRollbackError`
+    and the final `commit()` dies too — the whole tick raises NO alerts at
+    all, silently, for a fault in the FIRST one.
+
+    So: force the speed check to fail on a flush, and assert the LATER
+    driver-compliance check still landed its licence-expired row in the
+    database. Each check runs in its own SAVEPOINT for exactly this reason.
+
+    NEGATIVE CONTROL (recorded 2026-09-19): with the `begin_nested()` wrappers
+    removed from `_run_tick_advisory_checks` (plain `await` under the same
+    `try/except`), this fails — no license_expired row is written, because the
+    tick-wide commit itself raises PendingRollbackError and is swallowed by
+    the outer net.
+    """
+    from app.models.fatigue_alert import FATIGUE_ALERT_LICENSE_EXPIRED, FatigueAlert
+    from app.models.user import User
+    from app.services import fatigue as fatigue_module
+
+    headers, trip = await _advisory_fixture(client, session)
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    # Give the compliance pass something real to raise, so "no alert" can only
+    # mean suppression.
+    driver = (await session.execute(select(User).where(User.id == driver_id))).scalar_one()
+    driver.driver_license_expiry = date(2020, 1, 1)
+    await session.commit()
+
+    flushed = {"hit": False}
+
+    async def _bad_flush(check_session, **kwargs):
+        # A transaction-INVALIDATING failure, not a benign one: kind is NOT
+        # NULL, so this fails at the database on flush.
+        flushed["hit"] = True
+        check_session.add(
+            FatigueAlert(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                kind=None,
+                triggered_at=datetime.now(UTC),
+                acknowledged=False,
+            )
+        )
+        await check_session.flush()
+
+    monkeypatch.setattr(fatigue_module, "check_speed", _bad_flush)
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.8600,
+                    "lng": 151.2093,
+                    "speed_kmh": 40,
+                    "ts": (t0 + timedelta(seconds=60)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert flushed["hit"], "the forced flush failure was never reached"
+
+    await session.commit()  # drop this session's snapshot before re-reading
+
+    # The later check's alert survived the earlier check's poisoned flush.
+    alerts = (
+        await session.execute(
+            select(FatigueAlert).where(
+                FatigueAlert.tenant_id == tenant_id,
+                FatigueAlert.driver_id == driver_id,
+                FatigueAlert.kind == FATIGUE_ALERT_LICENSE_EXPIRED,
+            )
+        )
+    ).scalars().all()
+    assert len(alerts) == 1, (
+        "a flush failure in the FIRST advisory check suppressed a LATER one — "
+        "the per-check SAVEPOINT is missing or not rolling back"
+    )
+
+    # ... and the half-written row from the failed check did NOT land.
+    bad = (
+        await session.execute(
+            select(FatigueAlert).where(
+                FatigueAlert.tenant_id == tenant_id,
+                FatigueAlert.kind.is_(None),
+            )
+        )
+    ).scalars().all()
+    assert bad == []
+
+    # The fare, as ever, is on disk.
+    row = (await session.execute(select(Trip).where(Trip.id == trip["id"]))).scalar_one()
+    await session.refresh(row)
+    assert row.distance_m > 0
