@@ -3931,3 +3931,110 @@ async def test_tick_fare_survives_duplicate_unacknowledged_compliance_rows(
     await session.refresh(row)
     assert row.distance_m > 0
     assert row.moving_s == 60
+
+
+async def test_one_advisory_check_failing_its_flush_does_not_suppress_the_later_checks(
+    client: AsyncClient, session: AsyncSession, monkeypatch
+):
+    """`_run_tick_advisory_checks` claims "one failing check must not suppress
+    the others". A plain `try/except` only delivers that for errors that leave
+    the transaction USABLE. The interesting failures do not: an advisory check
+    that blows up on a FLUSH (IntegrityError against the partial unique index
+    on fatigue_alerts, a NOT NULL, a FK) leaves the session in a
+    must-rollback state, so every later check dies on `PendingRollbackError`
+    and the final `commit()` dies too — the whole tick raises NO alerts at
+    all, silently, for a fault in the FIRST one.
+
+    So: force the speed check to fail on a flush, and assert the LATER
+    driver-compliance check still landed its licence-expired row in the
+    database. Each check runs in its own SAVEPOINT for exactly this reason.
+
+    NEGATIVE CONTROL (recorded 2026-09-19): with the `begin_nested()` wrappers
+    removed from `_run_tick_advisory_checks` (plain `await` under the same
+    `try/except`), this fails — no license_expired row is written, because the
+    tick-wide commit itself raises PendingRollbackError and is swallowed by
+    the outer net.
+    """
+    from app.models.fatigue_alert import FATIGUE_ALERT_LICENSE_EXPIRED, FatigueAlert
+    from app.models.user import User
+    from app.services import fatigue as fatigue_module
+
+    headers, trip = await _advisory_fixture(client, session)
+    tenant_id = await _tenant_of(client, headers)
+    driver_id = _user_id_of(headers)
+
+    # Give the compliance pass something real to raise, so "no alert" can only
+    # mean suppression.
+    driver = (await session.execute(select(User).where(User.id == driver_id))).scalar_one()
+    driver.driver_license_expiry = date(2020, 1, 1)
+    await session.commit()
+
+    flushed = {"hit": False}
+
+    async def _bad_flush(check_session, **kwargs):
+        # A transaction-INVALIDATING failure, not a benign one: kind is NOT
+        # NULL, so this fails at the database on flush.
+        flushed["hit"] = True
+        check_session.add(
+            FatigueAlert(
+                tenant_id=tenant_id,
+                driver_id=driver_id,
+                kind=None,
+                triggered_at=datetime.now(UTC),
+                acknowledged=False,
+            )
+        )
+        await check_session.flush()
+
+    monkeypatch.setattr(fatigue_module, "check_speed", _bad_flush)
+
+    t0 = datetime.fromisoformat(trip["start_at"])
+    resp = await client.patch(
+        f"/v1/trips/{trip['id']}/tick",
+        json={
+            "points": [
+                {
+                    "lat": -33.8600,
+                    "lng": 151.2093,
+                    "speed_kmh": 40,
+                    "ts": (t0 + timedelta(seconds=60)).isoformat(),
+                }
+            ]
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert flushed["hit"], "the forced flush failure was never reached"
+
+    await session.commit()  # drop this session's snapshot before re-reading
+
+    # The later check's alert survived the earlier check's poisoned flush.
+    alerts = (
+        await session.execute(
+            select(FatigueAlert).where(
+                FatigueAlert.tenant_id == tenant_id,
+                FatigueAlert.driver_id == driver_id,
+                FatigueAlert.kind == FATIGUE_ALERT_LICENSE_EXPIRED,
+            )
+        )
+    ).scalars().all()
+    assert len(alerts) == 1, (
+        "a flush failure in the FIRST advisory check suppressed a LATER one — "
+        "the per-check SAVEPOINT is missing or not rolling back"
+    )
+
+    # ... and the half-written row from the failed check did NOT land.
+    bad = (
+        await session.execute(
+            select(FatigueAlert).where(
+                FatigueAlert.tenant_id == tenant_id,
+                FatigueAlert.kind.is_(None),
+            )
+        )
+    ).scalars().all()
+    assert bad == []
+
+    # The fare, as ever, is on disk.
+    row = (await session.execute(select(Trip).where(Trip.id == trip["id"]))).scalar_one()
+    await session.refresh(row)
+    assert row.distance_m > 0
