@@ -8,8 +8,6 @@ export interface RatingTabProps {
   driverId: string;
 }
 
-const RATINGS_FETCH_LIMIT = 200;
-
 function StarRow({ value }: { value: number }) {
   return (
     <span className="inline-flex items-center gap-0.5">
@@ -24,49 +22,67 @@ function StarRow({ value }: { value: number }) {
 }
 
 /**
- * Trip page Rating tab (dashboard command-centre plan §7). `GET /v1/ratings`
- * (`backend/app/api/v1/ratings.py::list_ratings`) filters by `driver_id` and
- * `stars` only -- there is no `trip_id` query param, and `TripRating` does
- * carry a real `trip_id` field (set on create), so rather than omitting this
- * tab outright this fetches the driver's most recent ratings (capped at 200,
- * the endpoint's server-side max) and finds the one row whose `trip_id`
- * matches this trip -- a real, driver-scoped server query with an honest
- * client-side match, not a guessed or fabricated figure. A driver with more
- * than 200 ratings since this trip could in principle fall outside that
- * page; the empty state below says so rather than silently claiming "no
- * rating" when the query simply didn't reach far enough back.
+ * Trip page Rating tab (dashboard command-centre plan §7). Asks the server
+ * for this trip's rating directly: `GET /v1/ratings?trip_id=`
+ * (`backend/app/api/v1/ratings.py::list_ratings`).
+ *
+ * Until 2026-09-19 that endpoint filtered by `driver_id`/`stars` only, so this
+ * tab fetched the driver's 200 most recent ratings (the endpoint's own
+ * server-side max) and matched `trip_id` in the browser. For a driver with
+ * more than 200 ratings since the trip in view, the rating fell off that page
+ * and the tab rendered "No rating recorded" for a trip that genuinely had one
+ * -- a wrong answer shown to the operator, not a hedged one.
+ * `TripRating.trip_id` is unique per trip (one rating per trip; the create
+ * endpoint 409s on a repeat), so the filtered page holds at most one row and
+ * an empty page now means exactly what it says.
  */
 export function RatingTab({ tripId, driverId }: RatingTabProps) {
-  const ratingsQuery = useRatingsQuery({ driver_id: driverId, limit: RATINGS_FETCH_LIMIT });
+  // `driver_id` is still sent alongside `trip_id`: it costs nothing and is an
+  // additional AND over the same tenant-scoped query, so a rating somehow
+  // attributed to a different driver cannot surface on this driver's trip.
+  const ratingsQuery = useRatingsQuery({ trip_id: tripId, driver_id: driverId, limit: 1 });
 
-  if (ratingsQuery.isLoading) {
+  // `useRatingsQuery` sets `placeholderData: (prev) => prev` (it is shared with
+  // the driver page's paged ratings table, where holding the previous page
+  // through a page change is the point). Here the query key varies by trip id,
+  // so on trip -> trip navigation `data` briefly still holds the PREVIOUS
+  // trip's page: rendering it would put another trip's stars and comment under
+  // this trip's header. A placeholder is not an answer about this trip, so it
+  // is treated exactly like loading.
+  if (ratingsQuery.isLoading || ratingsQuery.isPlaceholderData) {
     return <Skeleton className="h-24 w-full" />;
   }
 
   if (ratingsQuery.isError) {
     return (
       <ErrorBanner
-        message={`Failed to load ratings for this driver (GET /v1/ratings?driver_id=): ${errorMessage(
+        message={`Failed to load this trip's rating (GET /v1/ratings?trip_id=): ${errorMessage(
           ratingsQuery.error,
         )}`}
       />
     );
   }
 
-  const rating = ratingsQuery.data?.items.find((r) => r.trip_id === tripId);
+  // The `trip_id` filter is what makes `items[0]` this trip's rating, so the
+  // row is checked against the trip in view rather than trusted: if the param
+  // is ever dropped, renamed or ignored (an older backend that does not know
+  // the filter answers 200 with the driver's most recent rating, not 422),
+  // `items[0]` is some other trip's rating. Showing it under this trip's
+  // header is precisely the wrong answer this tab exists to stop, so a
+  // mismatch is surfaced, never rendered as this trip's rating.
+  const row = ratingsQuery.data?.items[0];
+  const rating = row && row.trip_id === tripId ? row : undefined;
 
-  if (!rating) {
-    const total = ratingsQuery.data?.total ?? 0;
+  if (row && !rating) {
     return (
-      <EmptyState
-        title="No rating recorded"
-        description={
-          total > RATINGS_FETCH_LIMIT
-            ? `This driver has ${total} ratings on record -- more than the ${RATINGS_FETCH_LIMIT} most recent this tab checks (GET /v1/ratings has no trip_id filter). This trip's rating may exist further back.`
-            : "No rating references this trip yet."
-        }
+      <ErrorBanner
+        message={`GET /v1/ratings?trip_id=${tripId} answered with the rating for trip ${row.trip_id}. That is not this trip's rating, so it is not shown -- the filter is being ignored (an older backend without the trip_id filter does exactly this).`}
       />
     );
+  }
+
+  if (!rating) {
+    return <EmptyState title="No rating recorded" description="No rating references this trip yet." />;
   }
 
   return (

@@ -262,6 +262,91 @@ async def test_rating_average_and_validation(client, session):
     assert all(item["stars"] == 4 for item in fours.json()["items"])
 
 
+async def test_ratings_list_filters_by_trip_id_and_stays_tenant_scoped(client, session):
+    """`GET /v1/ratings?trip_id=` must return that trip's rating and nothing
+    else (2026-09-19).
+
+    Before this filter existed the trip page's Rating tab
+    (`dashboard/src/pages/trips/tabs/RatingTab.tsx`) could only ask for the
+    driver's 200 most recent ratings and match `trip_id` in the browser, so a
+    trip whose rating had since been pushed past that page rendered "No
+    rating recorded" for a trip that genuinely had one. The filter is also a
+    tenant boundary: a caller must not be able to read another tenant's
+    rating by guessing its trip id, so the cross-tenant half below is the
+    point of the test, not a formality.
+    """
+    tenant_id = await _tenant(session, name="Rating Trip Filter A")
+    _admin_id, admin = await _user(session, tenant_id=tenant_id, role="admin")
+    driver_id, driver = await _user(session, tenant_id=tenant_id, role="driver")
+
+    trips = [
+        await _trip(session, tenant_id=tenant_id, driver_id=driver_id, end_at=datetime.now(UTC))
+        for _ in range(3)
+    ]
+    for trip_id, stars in zip(trips, (5, 3, 2), strict=True):
+        resp = await client.post(
+            f"/v1/trips/{trip_id}/rating", json={"stars": stars}, headers=driver
+        )
+        assert resp.status_code == 201, resp.text
+
+    wanted = trips[1]
+    scoped = await client.get("/v1/ratings", params={"trip_id": wanted}, headers=admin)
+    assert scoped.status_code == 200, scoped.text
+    body = scoped.json()
+    # `total` must be the filtered count, not the tenant's 3 ratings: a `total`
+    # counted over unfiltered rows would silently disagree with `items` (the
+    # endpoint's own docstring calls that out), and the dashboard's ratings
+    # table pages on it. The trip page's Rating tab does not read `total` at
+    # all -- it reads `items[0]` and checks that row's `trip_id`.
+    assert body["total"] == 1
+    assert [item["trip_id"] for item in body["items"]] == [wanted]
+    assert body["items"][0]["stars"] == 3
+
+    # Combining trip_id with the existing filters keeps working (same style as
+    # driver_id + stars above).
+    both = await client.get(
+        "/v1/ratings", params={"trip_id": wanted, "driver_id": driver_id}, headers=admin
+    )
+    assert both.json()["total"] == 1
+    mismatch = await client.get(
+        "/v1/ratings", params={"trip_id": wanted, "stars": 5}, headers=admin
+    )
+    assert mismatch.json()["total"] == 0
+
+    # An unrated trip of the same tenant -> an honest empty page, not the
+    # tenant's other ratings.
+    unrated = await _trip(session, tenant_id=tenant_id, driver_id=driver_id, end_at=datetime.now(UTC))
+    assert (await client.get("/v1/ratings", params={"trip_id": unrated}, headers=admin)).json()[
+        "total"
+    ] == 0
+
+    # Tenant scope: tenant B's admin asking for tenant A's trip id sees
+    # nothing, and vice versa.
+    other_tenant_id = await _tenant(session, name="Rating Trip Filter B")
+    _b_admin_id, b_admin = await _user(session, tenant_id=other_tenant_id, role="admin")
+    b_driver_id, b_driver = await _user(session, tenant_id=other_tenant_id, role="driver")
+    b_trip = await _trip(
+        session, tenant_id=other_tenant_id, driver_id=b_driver_id, end_at=datetime.now(UTC)
+    )
+    assert (
+        await client.post(f"/v1/trips/{b_trip}/rating", json={"stars": 1}, headers=b_driver)
+    ).status_code == 201
+
+    leak = await client.get("/v1/ratings", params={"trip_id": wanted}, headers=b_admin)
+    assert leak.status_code == 200
+    assert leak.json()["total"] == 0
+    assert leak.json()["items"] == []
+
+    reverse_leak = await client.get("/v1/ratings", params={"trip_id": b_trip}, headers=admin)
+    assert reverse_leak.json()["total"] == 0
+
+    # ...and tenant B's own admin does see its own trip's rating, so the zero
+    # above is the tenant filter and not a broken query.
+    own = await client.get("/v1/ratings", params={"trip_id": b_trip}, headers=b_admin)
+    assert own.json()["total"] == 1
+    assert own.json()["items"][0]["trip_id"] == b_trip
+
+
 async def test_ratings_summary_is_a_real_aggregate_not_a_capped_page(client, session):
     """`GET /v1/ratings/summary` must compute its average/distribution/
     per-driver breakdown as a real SQL aggregate over every matching row --
